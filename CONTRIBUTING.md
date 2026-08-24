@@ -153,7 +153,7 @@ them — not in anticipation that one might.
 | `pnpm arch`             | `archkeep check` — the core/action boundary, judged mechanically                                                                  |
 | `pnpm test`             | Vitest, with coverage thresholds                                                                                                  |
 | `pnpm test:tools`       | `node --test` over `tools/**` and `scripts/**` — the gates that check the gates                                                   |
-| `pnpm check-docs-links` | Every markdown link and prose `docs/…` citation resolves                                                                          |
+| `pnpm check-docs-links` | Every markdown link, prose `docs/…` citation, and path named in a `.yml`/`.yaml` resolves                                         |
 | `pnpm check-anchors`    | Every `(file#fragment)` link resolves against a heading that is really there — duplicate headings included                        |
 | `pnpm check-uses-refs`  | Every documented `uses: ecoma-io/action-agents/<action>@<ref>` resolves against a tag that exists, and an action that ships at it |
 | `pnpm check-skills`     | The vendored `arch-*` skills are byte-identical in both agent directories and match the pinned `@ecoma-io/archkeep`               |
@@ -166,6 +166,22 @@ before you push; a shorter local run just moves the red to the pull request.
 
 Notice what is **not** on that list: there is no `build`, and no step that
 produces an artifact. That is the point of the previous two sections.
+
+### When a reference gate is wrong, say so on the line
+
+Two of those gates resolve a reference against the tree, and both can meet a
+reference that is legitimately unresolvable. Neither takes an ignore file: the
+waiver goes on the line it applies to, so it is read by whoever next reads the
+line rather than in a list nobody opens.
+
+| Marker            | Gate               | What it claims                                                                       |
+| ----------------- | ------------------ | ------------------------------------------------------------------------------------ |
+| `# roadmap ref`   | `check-uses-refs`  | This `uses:` names a version this repository has not published yet                   |
+| `# consumer path` | `check-docs-links` | This path is read in the CONSUMER's repository, and its absence here is not a defect |
+
+Both are counted and reported by the run that honours them, so a growing number
+of them is visible rather than quiet. A marker is a claim someone wrote down; if
+you cannot write the sentence that justifies it, the gate is probably right.
 
 ## The architecture skills your agent already has
 

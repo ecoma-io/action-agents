@@ -9,8 +9,3 @@
 
 # The lockfile is generated — collapse it in diffs and reviews.
 pnpm-lock.yaml linguist-generated=true -diff
-
-# So is the action bundle. It stays reviewable on demand (esbuild runs
-# unminified for exactly that reason) but it is not what a reviewer should be
-# reading a pull request through.
-dist/index.js linguist-generated=true -diff

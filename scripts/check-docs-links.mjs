@@ -15,6 +15,35 @@
 //      strings and in `.md` prose — resolved from the workspace root when they
 //      begin with `docs/`, from the carrying file when they begin with `../` or
 //      `./`.
+//   3. Path references in `.yml`/`.yaml` — a workflow input, a glob, a comment
+//      citing a file. A reference counts as a claim about THIS tree only when
+//      its first segment is a real entry at the repository root; that one test
+//      is what keeps `actions/checkout@…`, `repos/$REPO/git/refs/…` and
+//      `/usr/bin/bash` out of the judgment without a list of exceptions to
+//      maintain. Judged from the repository root, and a glob is judged by the
+//      longest prefix before its first wildcard.
+//
+//      A reference is judged only when it names a FILE — it carries an
+//      extension, or a wildcard. `core/action` in the prose "the core/action
+//      boundary" is two English words with a slash between them, and no rule
+//      about repository paths can tell it from a path; requiring an extension
+//      is what separates them, and the cost is that a bare directory
+//      reference like `.github/semgrep` goes unjudged. Comments stay in scope
+//      deliberately: a comment citing a workflow that was renamed is the same
+//      lie as an input naming it.
+//
+//      A path that belongs to the CONSUMER's repository rather than to this
+//      one is marked `# consumer path` on its line — `review/action.yaml`'s
+//      `instructions-path` default is the case that exists, and its own
+//      description says missing is fine. The marker is a claim someone wrote
+//      down, the way `tools/check-uses-refs.mjs` takes `# roadmap ref`.
+//
+// Shape 3 exists because of a specific failure. `analysis.yml` carried
+// `config-file: .github/codeql/config.yml` — a file inherited from a previous
+// repository and never created here. Every local gate passed, and CodeQL went
+// red on the first push with "the configuration file does not exist". The gate
+// that should have caught it was reading `.md`, `.mjs` and `.js` only, so the
+// one reference shape a workflow uses was the one shape nothing read.
 //
 // WHY this script exists. The docs live in docs/, and a reader of docs/ is a
 // docs reader: a page there must not link out to a root markdown file or a
@@ -53,8 +82,10 @@ import GithubSlugger from "github-slugger";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Tracked files whose content is a candidate for either reference shape.
-export const SCANNED_EXTENSIONS = [".md", ".mjs", ".js"];
+// Tracked files whose content is a candidate for any reference shape.
+export const SCANNED_EXTENSIONS = [".md", ".mjs", ".js", ".yml", ".yaml"];
+// The subset judged by shape 3 rather than by shapes 1 and 2.
+export const YAML_EXTENSIONS = [".yml", ".yaml"];
 // Tracked files that deliberately look broken and must not fail the gate:
 // the gates' own test files, whose failure-direction cases hand them
 // references that do not resolve on purpose (a gone target is the input,
@@ -74,6 +105,10 @@ export const IGNORED_PREFIXES = [
 ];
 // The directory a docs/ page may link into — and only into.
 export const DOCS_DIR = "docs";
+// Marks a path reference as naming a file in the CONSUMER's repository rather
+// than in this one, so the gate counts it and does not resolve it. Written on
+// the same line as the reference.
+export const EXEMPT_MARKER = "# consumer path";
 
 /**
  * Extracts the local targets of every `[text](target)` markdown link in text.
@@ -119,6 +154,80 @@ export function parseDocCitations(text) {
     citations.push({ target, line: text.slice(0, match.index).split("\n").length });
   }
   return citations;
+}
+
+/**
+ * The part of a path that can be resolved before its first wildcard, so a glob
+ * is judged by the directory it is rooted in rather than by a literal string
+ * that can never exist. `.claude/skills/**` is a claim that `.claude/skills`
+ * is there; `docs/**' + '/*.md` is a claim about `docs`.
+ *
+ * @param {string} target a path reference, possibly containing wildcards
+ * @returns {string} the longest wildcard-free prefix, `""` if the first
+ *   segment is itself a wildcard
+ */
+export function globPrefix(target) {
+  const segments = target.split("/");
+  const wildcard = segments.findIndex((segment) => /[*?[\]{}]/.test(segment));
+  return wildcard === -1 ? target : segments.slice(0, wildcard).join("/");
+}
+
+/**
+ * Extracts every path-shaped reference from a YAML file, with its line.
+ *
+ * Three removals come first, and each is a class of text that reads like a
+ * repository path without being one. `${{ … }}` is a value GitHub computes on
+ * the runner, so `${{ runner.temp }}/results.sarif` is a claim about the
+ * runner rather than about this tree. A URL carries a `host/path` pair that is
+ * indistinguishable from a repository path once the scheme is gone. Both are
+ * blanked rather than deleted, so every line number below still counts the
+ * lines the file actually has.
+ *
+ * Then a leading `/` that follows a quote, a bracket or whitespace is dropped:
+ * that is how semgrep's `paths:` globs anchor at the repository root, and
+ * without this `/.github/workflows/**` would be skipped by a scan whose whole
+ * subject is `.github/workflows`. `/usr/bin/bash` survives the same treatment
+ * and is refused later, by the first-segment test rather than by a special
+ * case for it.
+ *
+ * Deciding which references are about THIS repository is deliberately NOT done
+ * here: it needs the set of paths that exist, which is `evaluate`'s argument
+ * and not this function's business.
+ *
+ * @param {string} text contents of a `.yml` or `.yaml` file
+ * @returns {{target: string, line: number, exempt: boolean}[]} path references
+ */
+export function parseYamlPathReferences(text) {
+  const blank = (matched) => matched.replace(/[^\n]/g, " ");
+  const scannable = text
+    .replace(/\$\{\{[\s\S]*?\}\}/g, blank)
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, blank)
+    .replace(/(^|["'\s([])\/(?=[\w.])/gm, "$1");
+
+  const lines = text.split("\n");
+  const references = [];
+  // The lookbehind is what keeps a match from starting mid-path: without it
+  // `actions/checkout` would also yield `checkout` alone from a later offset,
+  // and `a@b/c` would yield `b/c`.
+  const re = /(?<![\w@$/-])((?:[\w.*-]+\/)+[\w.*-]+)/g;
+  let match;
+  while ((match = re.exec(scannable))) {
+    // Prose puts a path at the end of a sentence; the punctuation is the
+    // sentence's, not the path's.
+    const target = match[1].replace(/[.,;:]+$/, "");
+    if (target === "") continue;
+    // Only a reference that names a file is judged. Without this, English
+    // prose with a slash in it (`the core/action boundary`) is indistinguishable
+    // from a path, and the gate spends its credibility on wording.
+    if (!/\.[a-z0-9]+$/i.test(globPrefix(target)) && !/[*?[\]{}]/.test(target)) continue;
+    const line = scannable.slice(0, match.index).split("\n").length;
+    references.push({
+      target,
+      line,
+      exempt: (lines[line - 1] ?? "").includes(EXEMPT_MARKER),
+    });
+  }
+  return references;
 }
 
 /**
@@ -209,7 +318,7 @@ function insideDocs(resolved, docsDir) {
  * list must mean "no broken reference", and nothing else.
  *
  * @param {object} input
- * @param {{path: string, links: {target: string, line: number}[], citations: {target: string, line: number}[], headings: Set<string>}[]} input.files
+ * @param {{path: string, links: {target: string, line: number}[], citations: {target: string, line: number}[], paths?: {target: string, line: number}[], headings: Set<string>}[]} input.files
  *   per-file references and same-file heading anchors
  * @param {Set<string>} input.existingPaths absolute paths that exist on disk
  * @param {string} input.root absolute path of the repository root
@@ -218,13 +327,14 @@ function insideDocs(resolved, docsDir) {
 export function evaluate({ files, existingPaths, root }) {
   const lines = [];
   const failures = [];
+  let exempt = 0;
 
   if (files.length === 0) {
     failures.push(
       "no files were scanned — the gate found nothing to judge, which reads as " +
         "a clean run but means the docs could have broken links in them. If " +
-        "this repository has no tracked `.md`/`.mjs`/`.js` files, say so " +
-        "explicitly instead of relying on an empty scan.",
+        "this repository has no tracked `.md`/`.mjs`/`.js`/`.yml`/`.yaml` " +
+        "files, say so explicitly instead of relying on an empty scan.",
     );
     return { lines, failures };
   }
@@ -282,10 +392,40 @@ export function evaluate({ files, existingPaths, root }) {
         );
       }
     }
+    for (const reference of file.paths ?? []) {
+      const { target, line } = reference;
+      // The whole noise filter, in one test. A first segment that names no
+      // real entry at the repository root means the reference is not about
+      // this tree — `actions/checkout`, `repos/$REPO/git/refs`, `usr/bin/bash`
+      // — and judging it would be judging someone else's namespace. Stating it
+      // as "the root entry must exist" rather than as a list of hosts and
+      // prefixes is what keeps the filter from needing maintenance every time
+      // a workflow gains a new third-party action.
+      if (reference.exempt) {
+        exempt += 1;
+        continue;
+      }
+      const first = target.split("/")[0];
+      if (first === undefined || first === "" || !existingPaths.has(join(root, first))) continue;
+      const probe = globPrefix(target);
+      if (probe === "") continue;
+      const resolved = join(root, probe);
+      if (existingPaths.has(resolved)) continue;
+      failures.push(
+        `${file.path}:${line} names \`${target}\`` +
+          (probe === target ? "" : ` (glob rooted at \`${probe}\`)`) +
+          `, which resolves to ${resolved} — and that does not exist. A workflow ` +
+          `input or glob naming a path this repository does not have fails on a ` +
+          `runner, not here, which is the whole reason this is checked here.`,
+      );
+    }
   }
 
   lines.push(
-    failures.length === 0 ? "no broken doc references" : `${failures.length} broken doc references`,
+    (failures.length === 0
+      ? "no broken doc references"
+      : `${failures.length} broken doc references`) +
+      (exempt === 0 ? "" : ` (${exempt} path(s) exempt by marker)`),
   );
   return { lines, failures };
 }
@@ -319,11 +459,16 @@ function readFacts() {
     if (!SCANNED_EXTENSIONS.some((ext) => path.endsWith(ext))) continue;
     if (IGNORED_PREFIXES.some((prefix) => path.startsWith(prefix))) continue;
     const text = readFileSync(join(root, path), "utf8");
+    const isMarkdown = path.endsWith(".md");
+    // YAML is judged by shape 3 alone. Running the citation scan over it too
+    // would report one bad `docs/…/x.md` twice, under two names, for one line.
+    const isYaml = YAML_EXTENSIONS.some((ext) => path.endsWith(ext));
     files.push({
       path,
-      links: path.endsWith(".md") ? parseMarkdownLinks(text) : [],
-      citations: parseDocCitations(text),
-      headings: path.endsWith(".md") ? headingAnchors(text) : new Set(),
+      links: isMarkdown ? parseMarkdownLinks(text) : [],
+      citations: isYaml ? [] : parseDocCitations(text),
+      paths: isYaml ? parseYamlPathReferences(text) : [],
+      headings: isMarkdown ? headingAnchors(text) : new Set(),
     });
   }
   return { files, existingPaths };

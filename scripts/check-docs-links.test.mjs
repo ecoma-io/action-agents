@@ -19,9 +19,11 @@ import assert from "node:assert/strict";
 import {
   evaluate,
   githubSlug,
+  globPrefix,
   headingAnchors,
   parseDocCitations,
   parseMarkdownLinks,
+  parseYamlPathReferences,
   withDirectories,
 } from "./check-docs-links.mjs";
 
@@ -96,8 +98,13 @@ test("withDirectories adds every parent directory of a path", () => {
   assert.ok(withDirectories(paths).has("/repo"));
 });
 
-function file(path, { links = [], citations = [], headings = new Set() } = {}) {
-  return { path, links, citations, headings };
+function file(path, { links = [], citations = [], paths = [], headings = new Set() } = {}) {
+  return { path, links, citations, paths, headings };
+}
+
+/** A shape-3 reference, exempt unless a test says otherwise. */
+function ref(target, line, exempt = false) {
+  return { target, line, exempt };
 }
 
 /** The absolute path a repo-relative `path` resolves to under `/repo`. */
@@ -306,4 +313,159 @@ test("evaluate reports every broken reference, not just the first", () => {
     root: "/repo",
   });
   assert.equal(failures.length, 2);
+});
+
+// ── Shape 3: path references in YAML ────────────────────────────────────────
+//
+// The case that motivated all of it is `evaluate FAILS a workflow input naming
+// a file this repository does not have`: `analysis.yml` carried
+// `config-file: .github/codeql/config.yml`, every local gate passed, and CodeQL
+// went red on a runner. Each parser test below is a class of text that reads
+// like a repository path without being one — the gate's credibility is spent
+// entirely on getting those wrong.
+
+test("globPrefix returns the path when there is no wildcard", () => {
+  assert.equal(globPrefix(".github/codeql/config.yml"), ".github/codeql/config.yml");
+});
+
+test("globPrefix roots a glob at the last directory before the wildcard", () => {
+  assert.equal(globPrefix(".claude/skills/**"), ".claude/skills");
+  assert.equal(globPrefix("docs/**/*.md"), "docs");
+});
+
+test("globPrefix returns empty when the first segment is itself a wildcard", () => {
+  assert.equal(globPrefix("**/*.yml"), "");
+});
+
+test("parseYamlPathReferences finds a workflow input path with its line", () => {
+  const text = `jobs:
+  codeql:
+    steps:
+      - with:
+          config-file: .github/codeql/config.yml`;
+  assert.deepEqual(parseYamlPathReferences(text), [
+    { target: ".github/codeql/config.yml", line: 5, exempt: false },
+  ]);
+});
+
+test("parseYamlPathReferences drops a path built from a runner expression", () => {
+  // `${{ runner.temp }}/results.sarif` is a claim about the runner, not this
+  // tree, and a gate that judged it would fail every artifact path there is.
+  const text = "      path: ${{ runner.temp }}/results.sarif";
+  assert.deepEqual(parseYamlPathReferences(text), []);
+});
+
+test("parseYamlPathReferences blanks expressions without shifting line numbers", () => {
+  const text = `a: \${{ github.sha }}
+b: .github/workflows/ci.yml`;
+  assert.deepEqual(parseYamlPathReferences(text), [
+    { target: ".github/workflows/ci.yml", line: 2, exempt: false },
+  ]);
+});
+
+test("parseYamlPathReferences drops URLs, whose host/path reads like a repo path", () => {
+  const text = "  url: https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/x.tar.gz";
+  assert.deepEqual(parseYamlPathReferences(text), []);
+});
+
+test("parseYamlPathReferences un-anchors a leading slash, as semgrep paths are written", () => {
+  const text = '      include:\n        - "/.github/workflows/**"';
+  assert.deepEqual(parseYamlPathReferences(text), [
+    { target: ".github/workflows/**", line: 2, exempt: false },
+  ]);
+});
+
+test("parseYamlPathReferences ignores prose that merely contains a slash", () => {
+  // "the core/action boundary" is two English words. No rule about repository
+  // paths can tell it from one; requiring an extension is what can.
+  const text = "      # The core/action boundary, judged mechanically.";
+  assert.deepEqual(parseYamlPathReferences(text), []);
+});
+
+test("parseYamlPathReferences keeps a glob even though it has no extension", () => {
+  const text = "        - .claude/skills/**";
+  assert.deepEqual(parseYamlPathReferences(text), [
+    { target: ".claude/skills/**", line: 1, exempt: false },
+  ]);
+});
+
+test("parseYamlPathReferences marks a line carrying the consumer-path marker", () => {
+  const text = "    default: .github/review-instructions.md # consumer path";
+  assert.deepEqual(parseYamlPathReferences(text), [
+    { target: ".github/review-instructions.md", line: 1, exempt: true },
+  ]);
+});
+
+test("evaluate FAILS a workflow input naming a file this repository does not have", () => {
+  // The real bug, reduced: green locally, red on a runner.
+  const { failures } = evaluate({
+    files: [
+      file(".github/workflows/analysis.yml", {
+        paths: [ref(".github/codeql/config.yml", 88)],
+      }),
+    ],
+    existingPaths: new Set([abs(".github")]),
+    root: "/repo",
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /analysis\.yml:88/);
+  assert.match(failures[0], /\.github\/codeql\/config\.yml/);
+});
+
+test("evaluate passes a workflow input whose target exists", () => {
+  const { failures } = evaluate({
+    files: [file("lefthook.yml", { paths: [ref(".github/workflows/ci.yml", 11)] })],
+    existingPaths: new Set([abs(".github"), abs(".github/workflows/ci.yml")]),
+    root: "/repo",
+  });
+  assert.equal(failures.length, 0);
+});
+
+test("evaluate ignores a reference whose first segment is not a repository entry", () => {
+  // `actions/checkout@sha`, `repos/$REPO/git/refs`, `usr/bin/bash`. Judging
+  // these would be judging someone else's namespace, and the alternative to
+  // this one test is a list of hosts that needs a commit per new action.
+  const { failures } = evaluate({
+    files: [
+      file(".github/workflows/ci.yml", {
+        paths: [ref("actions/checkout.yml", 3), ref("usr/bin/bash.sh", 4)],
+      }),
+    ],
+    existingPaths: new Set([abs(".github")]),
+    root: "/repo",
+  });
+  assert.equal(failures.length, 0);
+});
+
+test("evaluate judges a glob by its prefix, not by its literal text", () => {
+  const { failures } = evaluate({
+    files: [file("lefthook.yml", { paths: [ref(".claude/skills/**", 2)] })],
+    existingPaths: new Set([abs(".claude"), abs(".claude/skills")]),
+    root: "/repo",
+  });
+  assert.equal(failures.length, 0);
+});
+
+test("evaluate FAILS a glob whose rooting directory is gone", () => {
+  const { failures } = evaluate({
+    files: [file("lefthook.yml", { paths: [ref(".claude/gone/**", 2)] })],
+    existingPaths: new Set([abs(".claude")]),
+    root: "/repo",
+  });
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /glob rooted at/);
+});
+
+test("evaluate waives a marked consumer path and says how many it waived", () => {
+  const { lines, failures } = evaluate({
+    files: [
+      file("review/action.yaml", {
+        paths: [ref(".github/review-instructions.md", 25, true)],
+      }),
+    ],
+    existingPaths: new Set([abs(".github")]),
+    root: "/repo",
+  });
+  assert.equal(failures.length, 0);
+  assert.match(lines.at(-1) ?? "", /1 path\(s\) exempt by marker/);
 });
