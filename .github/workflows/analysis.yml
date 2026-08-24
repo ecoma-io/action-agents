@@ -1,0 +1,295 @@
+name: Analysis
+
+# Static analysis, not "security" — the name matters because what runs here is
+# wider than vulnerabilities, and it is the name a reader chasing "what analysis
+# is in place?" will look for.
+#
+# Three analysers share one workflow because they answer parts of the same
+# question — what this code does (CodeQL), what this code does that we have
+# specifically decided it must not (Semgrep), and what secrets leaked into the
+# tree (Gitleaks) — and a reader chasing "what analysis is in place?" should
+# find all of it in one file.
+#
+# CodeQL's `actions` leg is not optional here the way it is elsewhere. This
+# repository IS a GitHub Action, and the classes that leg reports — expression
+# injection of `github.event.*` into a `run:` block, an untrusted checkout under
+# `pull_request_target`, a job with no `permissions:` — are precisely the
+# mistakes this action's own consumers will make in the workflows they copy from
+# our README. An analyser that reads our workflow files is the closest thing we
+# have to reviewing theirs.
+#
+# Nothing is declared above the jobs except read permissions, and each job's
+# extra write stays at its own job level — a job-level `permissions` block
+# REPLACES the workflow-level one rather than merging with it, so read access
+# has to be restated there.
+
+on:
+  push:
+    branches: [main]
+  # Unfiltered, unlike `ci.yml`'s `pull_request: branches: [main]`:
+  # `analysis-gate` is a required status check, and a `branches: [main]` filter
+  # here would skip this workflow entirely on a stacked pull request — leaving
+  # that check pending forever rather than failing, which is a block with
+  # nothing to fix.
+  pull_request:
+  # And present on `merge_group` for the same reason `ci-gate` is: the queue
+  # waits for every required check to report against the queued ref, so a
+  # required check whose workflow does not trigger there never arrives.
+  merge_group:
+  # One weekly cron covers every job in this workflow, which is a consequence
+  # of the merge rather than a coincidence: a workflow's schedule triggers each
+  # job in it, so two crons would mean each analysis running twice a week under
+  # the other's name.
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+# A push to main gets a run of its own per commit; a new push to a pull request
+# supersedes the in-flight run for it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: read-all
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only this job uploads SARIF, so the write stays here rather than at the
+    # top level, where any job added later would silently inherit it.
+    # A job-level `permissions` block REPLACES the workflow-level one rather
+    # than merging with it, so read access has to be restated: omit it and
+    # checkout loses read access to the repository.
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          # `none` is the only mode `actions` has: workflow files are read as
+          # data, never built.
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # No `config-file:`. There is nothing in this tree to exclude — the
+          # only generated directories are gitignored and never reach the
+          # checkout — and a config file carrying nothing but boilerplate is a
+          # second place to look that answers no question. Add one at the
+          # moment there is an exclusion to justify it, not before.
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    # Written as `tag@digest` so the version stays readable while the digest is
+    # what actually resolves — the analyser cannot change under a rerun, and
+    # Renovate bumps both halves together.
+    container:
+      image: semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `.github/semgrep/` holds the rules AND their fixtures — files whose
+      # entire job is to be reported — so it is excluded from every scan of the
+      # repository and checked by `semgrep --test` instead. This runs first: a
+      # rule that has quietly stopped matching passes every scan below by
+      # finding nothing.
+      - name: Test the rules against their fixtures
+        run: semgrep --test --config .github/semgrep .github/semgrep
+
+      # Reporting pass. `p/javascript` is the one registry pack carried, and it
+      # is carried for the half of this repository that executes: the runtime
+      # walks a workspace tree that a pull request can add to, and shells out
+      # over what it finds.
+      - name: Scan
+        run: >-
+          semgrep scan --config .github/semgrep --config p/javascript
+          --exclude .github/semgrep --sarif --output semgrep.sarif
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      # Blocking pass, and deliberately the repository's own rules only: a
+      # registry pack can gain a rule overnight and turn main red for a change
+      # nobody made, whereas everything under `.github/semgrep/` is reviewed here
+      # and pinned by a test. Runs after the upload so findings reach the
+      # Security tab even when this step fails the job.
+      - name: Enforce the repository's own rules
+        run: >-
+          semgrep scan --config .github/semgrep --exclude .github/semgrep
+          --error --quiet
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # The OSS binary is driven directly rather than through
+      # gitleaks/gitleaks-action: the wrapper demands a license key for any
+      # repository owned by an organization (ECOMA_GITLEAKS_LICENSE), and
+      # secrets other than GITHUB_TOKEN are not injected on `pull_request`
+      # events raised from forks — so every external contribution died at the
+      # wrapper's validation, red, before a single commit was scanned. Worse,
+      # the wrapper does not support `merge_group` at all, so the one event the
+      # merge queue actually waits on could never satisfy this required check.
+      # The engine behind the wrapper is this same binary and needs no secret
+      # at all. The version is pinned and verified against the checksum the
+      # release publishes; Renovate does not manage a raw URL, so a bump edits
+      # URL and digest together.
+      #
+      # Scans the whole history on every trigger, not just the diff or the
+      # pushed range, because a secret removed in a later commit is still a
+      # leak while it sits in the tree.
+      #
+      # Exit contract, matching the binary's own: 0 clean · 2 leaks · anything
+      # else a scan that did not complete, which fails loudly — never dressed
+      # up as green.
+      - name: Install gitleaks 8.30.1
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" \
+            --output "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" \
+            | sha256sum --check --strict -
+          tar --extract --gzip --file "$RUNNER_TEMP/gitleaks.tar.gz" --directory "$RUNNER_TEMP" gitleaks
+
+      # The wrapper's `GITLEAKS_ENABLE_COMMENTS` put a finding as a comment on
+      # the pull request; the binary has no equivalent, and nothing here
+      # reimplements it. A finding still surfaces in two places a reviewer
+      # will look: the job log (`--verbose`, though `--redact` keeps the
+      # secret itself out of it) and, on a leak, the table appended to the job
+      # summary below plus the SARIF artifact — that trade is judged worth the
+      # inline comment to unblock every fork PR and the merge queue.
+      - name: Scan for secrets
+        env:
+          GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
+          REPORT_PATH: ${{ runner.temp }}/results.sarif
+        run: |
+          rc=0
+          "$GITLEAKS_BIN" detect \
+            --source="$GITHUB_WORKSPACE" \
+            --redact --verbose \
+            --exit-code=2 \
+            --report-format=sarif \
+            --report-path="$REPORT_PATH" || rc=$?
+          case "$rc" in
+            0)
+              echo "No leaks detected"
+              ;;
+            2)
+              {
+                echo "## Gitleaks detected secrets"
+                echo ""
+                echo "| Rule | File | Line | Commit |"
+                echo "| ---- | ---- | ---- | ------ |"
+              } >> "$GITHUB_STEP_SUMMARY"
+              jq -r '
+                .runs[0].results[]
+                | [
+                    .ruleId,
+                    .locations[0].physicalLocation.artifactLocation.uri,
+                    (.locations[0].physicalLocation.region.startLine | tostring),
+                    .partialFingerprints.commitSha
+                  ]
+                | @tsv' "$REPORT_PATH" \
+                | awk -F "\t" \
+                  '{ printf "| `%s` | `%s` | %s | %s |\n", $1, $2, $3, substr($4, 1, 12) }' \
+                >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Leaks detected — every finding is printed above and in the job summary."
+              exit 2
+              ;;
+            *)
+              echo "::error::gitleaks exited with code $rc — the scan did not complete, and an incomplete scan is not a clean pass."
+              exit "$rc"
+              ;;
+          esac
+
+      # Uploaded unconditionally: a finding's machine-readable report is
+      # useful long after its log lines and job-summary table scroll away.
+      - name: Upload the findings report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-results.sarif
+          path: ${{ runner.temp }}/results.sarif
+          if-no-files-found: ignore
+
+  analysis-gate:
+    name: analysis-gate
+    # The single check name a branch ruleset requires, mirroring `ci-gate`: the
+    # required-check name stays stable while the job list is not — add a job to
+    # `needs` and the gate tightens without editing repository settings, and
+    # forgetting to add it is the only way to widen what green means.
+    # `needs` names the job IDs, so the matrix job `codeql` is one entry even
+    # though it reports two check contexts (one per language).
+    needs: [codeql, semgrep, gitleaks]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # This asserted every dependency reached `success` by enumerating the ways
+      # one can fail — `contains(needs.*.result, 'failure') || … 'cancelled' ||
+      # … 'skipped'` on a step running `exit 1`. `ci-gate` carried the identical
+      # guard and it went green over a red pipeline: on run 31118985640 attempt
+      # 1, during a GitHub Actions outage, its dependency failed at `Set up job`
+      # and `needs` reached the gate carrying no result the guard recognised, so
+      # every disjunct was false, so the step that would have failed the build
+      # was skipped. `ci-gate` was inverted after that; this gate mirrored its
+      # `needs` list but not its fix, which is the only reason the same hole
+      # survived here.
+      #
+      # A deny-list fails open on any state it does not know, and
+      # `needs.*.result` is not a value this repository controls. So name the
+      # one state that means "safe" and let everything else fail, and run the
+      # step unconditionally — a step that decides whether to run is a step that
+      # can decline to.
+      - name: Fail unless every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs results: ${RESULTS:-<empty>}"
+          if [ -z "$RESULTS" ]; then
+            echo "::error::analysis-gate got no result from its dependencies. Refusing to pass."
+            exit 1
+          fi
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a required job reported '$result' rather than success."
+              exit 1
+            fi
+          done
+          echo "Every required job succeeded."

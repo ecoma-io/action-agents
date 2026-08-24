@@ -1,0 +1,126 @@
+name: Bug report
+description: An action fails, or behaves differently from what it documents.
+title: "bug: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this.
+
+        **Write your answers in whatever language you are comfortable in.** The
+        questions are in English because they are the form's structure, not
+        because your report has to be. There is a Vietnamese version of this
+        form in the chooser — _Báo lỗi_ — if you would rather read it there.
+
+        **Do not report a security vulnerability through this form.** Follow
+        [SECURITY.md](https://github.com/ecoma-io/action-agents/blob/main/SECURITY.md)
+        instead. That includes anything an issue body, a comment or a diff can
+        make an action do.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I redacted my API key from everything I am about to paste.
+          required: true
+
+  - type: dropdown
+    id: action
+    attributes:
+      label: Which action
+      options:
+        - triage
+        - review
+        - harmonise
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happens
+    attributes:
+      label: What happens
+      description: The behaviour you observed, without interpretation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-should-happen
+    attributes:
+      label: What should happen instead
+      description: And where that expectation comes from — the README, the action's `action.yaml`, or another part of it behaving differently.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Your workflow file
+      description: The job that runs this action, with secrets redacted. This is the single most useful thing in the report.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Run log
+      description: |
+        The step's output, with the key redacted. Re-running the job with
+        `ACTIONS_STEP_DEBUG` set to `true` in repository secrets gives a far more
+        useful log — do that first if you can.
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where does it go wrong?
+      description: A best guess is fine — "not sure" is a real answer and is never held against a report.
+      options:
+        - Reading the issue, pull request or diff from GitHub
+        - Reading the repository's configuration
+        - Calling the model provider
+        - The model's output came back unusable
+        - It ran and finished, but the decision it made is wrong
+        - Writing the result back to the thread or the repository
+        - The action never ran at all
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      description: Which OpenAI-compatible endpoint, and whether it is keyless. Never paste the key.
+      placeholder: e.g. api.openai.com, a self-hosted llama.cpp, a keyless free tier
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Read these from the run rather than from memory.
+      value: |
+        - Action version (the ref in `uses:`):
+        - Model configured:
+        - Languages configured:
+        - Trigger (`issues`, `pull_request`, …):
+        - Repository visibility (public / private):
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: A link to the affected issue or pull request if it is public. Paste text as text rather than as an image where you can.
+    validations:
+      required: false

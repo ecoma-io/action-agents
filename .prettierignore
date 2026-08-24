@@ -1,0 +1,28 @@
+node_modules/
+coverage/
+pnpm-lock.yaml
+
+# esbuild's output, committed because the runner needs it. Reformatting a
+# generated file only makes the next build's diff noisier.
+dist/
+
+# Verbatim third-party legal text — reflowing it would alter a document that is
+# only valid unmodified.
+LICENSE
+
+# Written by release-please, and rewritten on every release. Prettier disagrees
+# with its output, so leaving these in would turn every release pull request red
+# on files no human edits — and the fix each time would be a formatting commit
+# that release-please overwrites on the next run.
+CHANGELOG.md
+.release-please-manifest.json
+
+# Vendored copies of the arch-* agent skills from ecoma-io/lattice, in the two
+# directories the three supported agents scan. They are held byte-identical to
+# an upstream release by scripts/check-skills.mjs, so reformatting one here
+# would turn `pnpm format` and `pnpm check-skills` into two gates that cannot
+# both be green — and the resolution would be to un-format a file this
+# repository does not own. They already match this configuration today; that is
+# a coincidence of two repositories sharing a .prettierrc, not a guarantee.
+.claude/skills/
+.agents/skills/

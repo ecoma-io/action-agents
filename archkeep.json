@@ -1,0 +1,58 @@
+{
+  "projects": {
+    "declared": [
+      {
+        "name": "core",
+        "root": "core",
+        "tags": ["layer:core", "scope:shared"]
+      },
+      {
+        "name": "triage",
+        "root": "triage",
+        "tags": ["layer:action", "scope:triage"]
+      },
+      {
+        "name": "review",
+        "root": "review",
+        "tags": ["layer:action", "scope:review"]
+      },
+      {
+        "name": "harmonise",
+        "root": "harmonise",
+        "tags": ["layer:action", "scope:harmonise"]
+      }
+    ]
+  },
+  "coverage": {
+    "exempt": [
+      {
+        "path": "module-boundaries.config.mjs",
+        "reason": "The boundary law itself, which no project owns"
+      },
+      {
+        "path": "eslint.config.mjs",
+        "reason": "Repository-wide lint configuration, owned by no action"
+      },
+      {
+        "path": "commitlint.config.mjs",
+        "reason": "Repository-wide commit-message configuration, owned by no action"
+      },
+      {
+        "path": "vitest.config.mjs",
+        "reason": "Repository-wide test configuration, owned by no action"
+      },
+      {
+        "path": "scripts/**",
+        "reason": "Repository gates that run on a maintainer's machine and in CI, never inside an action"
+      },
+      {
+        "path": "tools/**",
+        "reason": "Repository gates that run on a maintainer's machine and in CI, never inside an action"
+      },
+      {
+        "path": ".opencode/plugins/**",
+        "reason": "opencode's editor-gate plugin, loaded by the agent host and never by an action"
+      }
+    ]
+  }
+}

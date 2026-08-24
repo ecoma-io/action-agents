@@ -1,0 +1,33 @@
+name: Triage
+description: Classify issues and pull requests, apply semantic labels, and manage their lifecycle with any OpenAI-compatible model.
+author: Mai Ngọc Hóa (John Martin)
+
+branding:
+  icon: tag
+  color: blue
+
+inputs:
+  github-token:
+    description: Token the action writes with. `${{ secrets.GITHUB_TOKEN }}` is enough; the workflow's `permissions:` block is what actually bounds it.
+    required: true
+  api-url:
+    description: Base URL of an OpenAI-compatible endpoint, e.g. https://api.openai.com/v1
+    required: true
+  api-key:
+    description: Key for that endpoint. Leave unset for a keyless endpoint — that is a supported configuration, not a degraded one.
+    required: false
+  model:
+    description: Model id to ask.
+    required: true
+  labels:
+    description: Comma-separated labels this action is allowed to apply. Empty means every label already defined in the repository.
+    required: false
+    default: ""
+  dry-run:
+    description: Decide and log, write nothing. Defaults to true, so a first run cannot surprise anyone.
+    required: false
+    default: "true"
+
+runs:
+  using: node24
+  main: src/index.mjs

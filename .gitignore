@@ -1,0 +1,29 @@
+node_modules/
+coverage/
+
+# There is no `dist/` to decide about: every action is `runs.using: node24`
+# pointing straight at `src/index.mjs`, so what a consumer runs is the source
+# in the tag and nothing is generated into this tree.
+
+# Nothing in this repository reads a `.env`, and this line is here so that
+# stays true by accident as well as by design — a model API key pasted into
+# one while debugging must not become a commit.
+.env
+
+# Editors / OS
+.DS_Store
+*.local
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Claude Code local overrides — the shared settings.json IS tracked.
+.claude/settings.local.json
+
+# Agent worktrees
+.claude/worktrees/

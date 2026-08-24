@@ -1,0 +1,37 @@
+name: Review
+description: Review a pull request as an agent — it decides what to read, verifies before it claims, and comments its findings.
+author: Mai Ngọc Hóa (John Martin)
+
+branding:
+  icon: search
+  color: purple
+
+inputs:
+  github-token:
+    description: Token the action writes with. `${{ secrets.GITHUB_TOKEN }}` is enough; the workflow's `permissions:` block is what actually bounds it.
+    required: true
+  api-url:
+    description: Base URL of an OpenAI-compatible endpoint, e.g. https://api.openai.com/v1
+    required: true
+  api-key:
+    description: Key for that endpoint. Leave unset for a keyless endpoint — that is a supported configuration, not a degraded one.
+    required: false
+  model:
+    description: Model id to ask.
+    required: true
+  instructions-path:
+    description: Markdown file holding the repository's review rubric. Missing is fine — the built-in rubric applies alone.
+    required: false
+    default: .github/review-instructions.md
+  max-turns:
+    description: Ceiling on agent turns. Reaching it ends the review and says so; it never posts a partial review as if it were complete.
+    required: false
+    default: "30"
+  context-window:
+    description: Token budget of the configured model. The agent compacts its transcript before reaching it.
+    required: false
+    default: "128000"
+
+runs:
+  using: node24
+  main: src/index.mjs

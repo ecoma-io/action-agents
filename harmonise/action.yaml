@@ -1,0 +1,36 @@
+name: Harmonise
+description: Keep the multilingual versions of a repository's documentation semantically in step with one another.
+author: Mai Ngọc Hóa (John Martin)
+
+branding:
+  icon: book
+  color: green
+
+inputs:
+  github-token:
+    description: Token the action writes with. `${{ secrets.GITHUB_TOKEN }}` is enough; the workflow's `permissions:` block is what actually bounds it.
+    required: true
+  api-url:
+    description: Base URL of an OpenAI-compatible endpoint, e.g. https://api.openai.com/v1
+    required: true
+  api-key:
+    description: Key for that endpoint. Leave unset for a keyless endpoint — that is a supported configuration, not a degraded one.
+    required: false
+  model:
+    description: Model id to ask.
+    required: true
+  source-language:
+    description: BCP 47 tag of the language that is the source of truth. Every other version is judged against it.
+    required: true
+  documents:
+    description: Comma-separated globs naming the documents to keep in step.
+    required: false
+    default: docs/**/*.md
+  dry-run:
+    description: Report drift, write nothing. Defaults to true — this action edits files, not comments.
+    required: false
+    default: "true"
+
+runs:
+  using: node24
+  main: src/index.mjs

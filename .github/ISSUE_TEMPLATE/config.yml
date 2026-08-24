@@ -1,0 +1,19 @@
+# A blank issue skips every question the forms ask, and the answers to those
+# questions are what make a report actionable.
+#
+# The forms are English, and so is every label and title prefix they set —
+# those are data the maintainer sorts on. These two links are the exception and
+# carry both languages, English first: they are the only place in the issue
+# chooser a reader lands before any form, and getting a security report to the
+# right place matters more than consistency about which language it arrives in.
+#
+# There is deliberately no "ask a question" link here: questions have their own
+# form. One destination per kind of thing, or nobody knows where to go and the
+# maintainer watches two inboxes.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability · Báo cáo lỗ hổng bảo mật
+    url: https://github.com/ecoma-io/action-agents/security/advisories/new
+    about: >
+      Never open a public issue for a vulnerability — these actions run in other
+      people's repositories with a write token.

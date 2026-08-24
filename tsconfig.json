@@ -1,0 +1,23 @@
+{
+  "$comment": "There is no build. `tsc` never emits here \u2014 it reads the JSDoc annotations on plain .js sources and reports type errors, which is the whole of `pnpm typecheck`. `allowJs` + `checkJs` is what makes that possible without a single .ts file in the tree, and `noEmit` is what keeps the promise that the source is the thing that runs.",
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["core/**/*.mjs", "triage/**/*.mjs", "review/**/*.mjs", "harmonise/**/*.mjs"],
+  "exclude": ["node_modules", "coverage"]
+}

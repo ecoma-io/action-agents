@@ -1,0 +1,56 @@
+# Local gates, version-controlled rather than left to whatever hooks a
+# contributor's own git config happens to have. `pnpm install` runs `prepare`
+# (`lefthook install`), which wires the jobs below into `.git/hooks` for
+# everyone who clones the repository — a hook that only exists on one
+# machine catches nothing on anyone else's.
+#
+# These two hooks exist to catch the mistakes that have nothing to do with
+# what a commit changes: a message conventional-commits can't parse, and a
+# staged file that isn't formatted or doesn't lint. Everything that depends
+# on *what* changed — typecheck, test, the architecture boundary — stays in
+# CI's Verify gate (.github/workflows/ci.yml), never here. A hook slow enough
+# to notice is a hook contributors learn to skip with --no-verify, which
+# defeats it more thoroughly than not having it at all.
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      # Same rules CI re-checks the pull request title against
+      # (commitlint.config.mjs) — one definition of a valid message, not
+      # two. `{1}` is the path lefthook passes a commit-msg hook: the file
+      # git already wrote the draft message into.
+      run: pnpm exec commitlint --edit {1}
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: prettier
+      glob: "*.{ts,mts,cts,js,mjs,cjs,json,yml,yaml,md}"
+      exclude:
+        # Vendored agent skills, held byte-identical to an upstream
+        # Archkeep release by `check-skills` below. They are not this
+        # repository's text to format, and .prettierignore already excludes
+        # them.
+        - ".claude/skills/**"
+        - ".agents/skills/**"
+      run: pnpm exec prettier --check {staged_files}
+
+    - name: eslint
+      glob: "*.{ts,mts,cts,js,mjs,cjs}"
+      run: pnpm exec eslint {staged_files}
+
+    - name: doc-links
+      # A broken reference can be in a file untouched by this commit — the
+      # failure is the tree, not a staged path — so this gate runs on every
+      # commit rather than on a glob. It fails a docs/ page that links outside
+      # docs/ and any markdown link or prose citation to a path that does not
+      # exist; the same gate also runs at edit time through the editor hooks.
+      run: pnpm check-docs-links
+
+    - name: skills
+      # Same reasoning as doc-links: the failure is the tree, not a staged
+      # path. An `@ecoma-io/archkeep` bump in package.json goes stale against
+      # vendored skill files this commit never touched, so a glob would let
+      # exactly the drift that has no diff through. Reads five small files and
+      # a manifest — fast enough that nobody learns to skip it.
+      run: pnpm check-skills
