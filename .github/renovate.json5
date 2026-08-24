@@ -1,0 +1,79 @@
+// Dependency updates run through Renovate, covering the two ecosystems that
+// live here: npm/pnpm (the single root package.json + pnpm-lock.yaml) and
+// github-actions (.github/workflows/*.yml) — both auto-detected by Renovate's
+// default managers.
+//
+// Activation: this file alone does nothing. Renovate only runs once the
+// official Renovate GitHub App (Mend) is installed on the repository by someone
+// with organisation admin rights — https://github.com/apps/renovate. Chosen
+// over self-hosting Renovate as a scheduled workflow because a self-hosted run
+// needs its own PAT or App token to let its pull requests trigger the required
+// checks (the default GITHUB_TOKEN cannot trigger other workflows, so every
+// single Renovate PR would need a manual "Approve workflows to run"). The App
+// has no such gap, and it avoids introducing a long-lived credential this
+// repository does not otherwise hold.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  timezone: "UTC",
+  // Weekly, not continuous. This is a small, single-maintainer action; a drip
+  // of pull requests through the day would be noise rather than signal.
+  schedule: ["before 6am on monday"],
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 6am on monday"],
+  },
+  // Must satisfy the commitlint gate (CONTRIBUTING.md): Conventional Commits,
+  // with a scope drawn from commitlint.config.mjs's enum.
+  semanticCommits: "enabled",
+  semanticCommitType: "chore",
+  semanticCommitScope: "deps",
+  packageRules: [
+    {
+      // Actions are pinned to a full commit SHA — the reason a tag is not a
+      // fixed reference, and what `.github/semgrep/workflows.yaml`'s
+      // `workflow-action-not-pinned-to-sha` rule enforces on every pull
+      // request. Renovate keeps the `# vX.Y.Z` comment beside the SHA in step
+      // with what it bumps.
+      matchManagers: ["github-actions"],
+      semanticCommitScope: "ci",
+      pinDigests: true,
+    },
+    {
+      // This repository has no `dependencies` block and adding one is a design
+      // decision rather than a convenience — AGENTS.md rule 2, and the reason
+      // every action is `runs.using: node24` pointing straight at source with
+      // no install on the consumer's runner. The rule is kept against the day
+      // that decision is made: a runtime dependency is code shipped into
+      // someone else's repository beside a write token, which is a different
+      // risk profile from a devDependency, so it would never be grouped with
+      // anything else nor merged without reading what changed.
+      matchDepTypes: ["dependencies"],
+      semanticCommitScope: "deps",
+      groupName: null,
+      minimumReleaseAge: "3 days",
+    },
+    {
+      // TypeScript stays on 5.x. TypeScript 7 is the native (tsgo) rewrite and
+      // typescript-eslint refuses to load against it outright — "typescript-eslint
+      // does not support TS 7.0" — which turns `pnpm lint` red on every file at
+      // once. Lift this rule when it has shipped support, not when the bump is
+      // offered.
+      matchPackageNames: ["typescript"],
+      allowedVersions: "<6",
+    },
+    {
+      // Formatter and linter bumps arrive together, because a Prettier release
+      // that reflows files and an ESLint release that re-reports them are one
+      // review, not two.
+      matchPackageNames: [
+        "prettier",
+        "eslint",
+        "eslint-config-prettier",
+        "typescript-eslint",
+        "@eslint/js",
+      ],
+      groupName: "lint and format toolchain",
+    },
+  ],
+}

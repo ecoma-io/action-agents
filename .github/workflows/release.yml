@@ -1,0 +1,217 @@
+name: Release
+
+# The delivery half. Unlike a library, an action has no package registry in the
+# picture: consumers write `uses: ecoma-io/action-agents/triage@v0.1.0` and GitHub
+# resolves that straight to a git ref in this repository. So "publish" here means
+# exactly two things — a release exists at the exact tag, and a floating tag points
+# at it — and both are things this workflow can actually do. There is no rehearsal
+# step and no credential to provision.
+#
+# Version numbers are not chosen by hand. release-please reads the conventional
+# commits since the last release, opens a pull request carrying the bump and the
+# changelog entry, and cuts the release when that pull request merges. The
+# maintainer act is reviewing and merging it, not remembering what `feat:` means
+# for the second digit.
+#
+# **Everything lives in this one workflow.** The steps that must follow a
+# release key off the release step's own `release_created` output on the same
+# push that merged the release pull request; a separate `on: push: tags:`
+# workflow would split that signal for no gain. Under the plain workflow token
+# such a trigger could never fire at all — GitHub refuses to start runs from
+# events its own token caused. Under the App token minted below it could, so
+# none is defined: by choice now, not by impossibility.
+#
+# Marketplace listing is the one part that is not automatable: the first
+# publication is a checkbox on the release page, done once by a maintainer. Once
+# ticked, every later release from this workflow updates the listing on its own.
+#
+# There is no signing half, and that is a consequence of there being no build
+# rather than a corner cut. Provenance answers "did these bytes really come
+# from that repository at that commit?" — a question that only exists when the
+# bytes travelled through something that could have changed them: a build, a
+# registry, a publisher. This repository ships no artifact. `uses:` resolves to
+# a git ref and GitHub serves the tree at that ref, so GitHub is the authority
+# for the source and for the transport alike, and an attestation would attest
+# to exactly what the transport already guarantees.
+#
+# Nor would it defend against the threat people reach for it to solve. A moved
+# tag is signed like any other: the attestation is produced by this workflow,
+# for whatever commit the tag points at. What actually pins bytes is pinning a
+# commit SHA, which is what SECURITY.md tells a consumer to do and what
+# `.github/renovate.json5` does to every `uses:` in this tree.
+#
+# What is genuinely given up is a machine-checkable claim — "read the source"
+# does not satisfy a policy engine. If that day comes, GitHub's immutable
+# actions publish an action to GHCR as an OCI package with attestations, which
+# would recreate a real artifact and a real role for provenance. It is not
+# adopted here because `actions/publish-immutable-action` is still at v0.0.4.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Two merges landing close together must not race for the same release pull
+# request. Never cancel: a run stopped between "release created" and "floating
+# tag moved" would leave consumers pinned to the previous version with no
+# signal that a release happened.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Committing the version bump, creating the tag and the release, and
+      # moving the floating tag.
+      contents: write
+      # Opening and updating the release pull request.
+      pull-requests: write
+    # Hoisted so the App-token step's `if:` has something it is allowed to
+    # read — secrets cannot be referenced directly in step conditionals, and
+    # attempting it is a startup failure with zero jobs and no log. Only the
+    # id is lifted: the private key is passed straight into the action's
+    # `with:`, where the `secrets` context IS available, so it never becomes
+    # an environment variable any later step in this job could read.
+    env:
+      RELEASE_APP_ID: ${{ secrets.ECOMA_APP_ID }}
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+      major: ${{ steps.release.outputs.major }}
+      minor: ${{ steps.release.outputs.minor }}
+    steps:
+      # release-please authenticates as the organisation's GitHub App when its
+      # credentials exist (`ECOMA_APP_ID`, `ECOMA_APP_KEY` — organisation
+      # secrets, not variables): the release commit, tag and pull request then
+      # carry the App identity, and events they raise start workflow runs the
+      # way a contributor's do. Events from `GITHUB_TOKEN` are suppressed by
+      # GitHub's recursion prevention, which is what leaves a release pull
+      # request opened on the workflow token with no CI run at all.
+      #
+      # The gate reads `env` rather than `secrets`, and empty credentials skip
+      # only this step: release-please's own input falls back with
+      # `|| github.token`, so an organisation without the secrets configured
+      # degrades to today's behaviour instead of failing red.
+      - name: Mint a GitHub App token
+        id: app-token
+        if: env.RELEASE_APP_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ECOMA_APP_ID }}
+          private-key: ${{ secrets.ECOMA_APP_KEY }}
+
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Everything below runs only on the push that merged a release pull
+      # request. On every other push to `main` the step above has just opened or
+      # refreshed that pull request, and there is nothing to deliver.
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release.outputs.release_created
+        with:
+          ref: ${{ steps.release.outputs.sha }}
+          persist-credentials: false
+
+      # There is no bundle to prove correct any more — what a consumer runs is
+      # the JavaScript in this tag. What can still break silently is the shape a
+      # pin depends on: `uses: ecoma-io/action-agents/triage@v0.1` resolves a
+      # DIRECTORY, and a release whose directory carries no `action.yaml`, or
+      # whose manifest names an entry point that is not there, fails inside the
+      # consumer's repository rather than here.
+      #
+      # Checked both ways, as the archive step this replaces was. A named action
+      # whose manifest is missing fails; a directory carrying a manifest this
+      # list does not name fails too, because that is how an action ships
+      # unannounced, undocumented and unpinnable.
+      #
+      # A failure here leaves the release created with no floating tag pointing
+      # at it, which is the recoverable order: delete the release, fix the tree,
+      # release again.
+      - name: Verify every action resolves at this tag
+        if: steps.release.outputs.release_created
+        run: |
+          set -euo pipefail
+          actions="triage review harmonise"
+          for action in $actions; do
+            manifest="$action/action.yaml"
+            if [ ! -f "$manifest" ]; then
+              echo "::error::'$action' has no $manifest — refusing to cut a release that would break its pin."
+              exit 1
+            fi
+            # `runs.main` is resolved by the runner relative to the action
+            # directory, so that is where it is checked from.
+            main="$(sed -n 's/^ *main: *//p' "$manifest" | head -1)"
+            if [ -z "$main" ] || [ ! -f "$action/$main" ]; then
+              echo "::error::$manifest names entry point '${main:-<none>}', which does not exist at this tag."
+              exit 1
+            fi
+          done
+          for found in */action.yaml; do
+            dir="${found%/action.yaml}"
+            case " $actions " in
+              *" $dir "*) ;;
+              *)
+                echo "::error::'$dir' carries $found but is not in this step's action list — add it here and to README.md, or its bytes ship undocumented."
+                exit 1
+                ;;
+            esac
+          done
+          echo "Every action resolves at this tag."
+
+  # The floating tag is what a consumer pins to get fixes without editing their
+  # workflow, so what it is allowed to deliver decides its shape.
+  #
+  # From 1.0.0 on that is `v1`: semver promises a major line adds features and
+  # fixes bugs without breaking anyone.
+  #
+  # Below 1.0.0 no such promise exists. `bump-minor-pre-major` in the
+  # release-please config sends breaking changes to the minor digit, which is
+  # what keeps these actions out of a premature 1.0 — and it is exactly why `v0`
+  # must not exist. Anyone pinned to it would take a breaking change silently on
+  # the next minor. So the floating tag is `v0.1`, `v0.2`, and so on: the widest
+  # ref that can still only ever deliver patches. Both cases are read off the
+  # version just released rather than configured anywhere.
+  #
+  # A job of its own, and deliberately the last thing that happens. Moving the
+  # tag is what silently updates every consumer pinned to it, so it may not fire
+  # until the release it points at is complete and every action in it was proved
+  # to resolve. The recoverable order is a release nobody is pointed at yet; the
+  # unrecoverable one is consumers already running a tag that resolves to
+  # nothing.
+  floating-tag:
+    name: Move the floating tag
+    needs: [release]
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Move the floating tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.release.outputs.sha }}
+          MAJOR: ${{ needs.release.outputs.major }}
+          MINOR: ${{ needs.release.outputs.minor }}
+        run: |
+          if [ "$MAJOR" = "0" ]; then
+            FLOATING="v0.$MINOR"
+          else
+            FLOATING="v$MAJOR"
+          fi
+          echo "Pointing $FLOATING at $SHA"
+          gh api -X PATCH "repos/$REPO/git/refs/tags/$FLOATING" -f sha="$SHA" -F force=true \
+            || gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$FLOATING" -f sha="$SHA"

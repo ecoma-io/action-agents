@@ -1,0 +1,103 @@
+name: Feature request
+description: Propose a capability, an input, or a change to how an action behaves.
+title: "feat: "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Write your answers in whatever language you are comfortable in.** A
+        Vietnamese version of this form — _Đề xuất tính năng_ — is in the chooser.
+
+        Each action here is **general**. Ecoma dogfoods them, which is a good way
+        to find out whether they work and a bad reason to shape them — so a
+        proposal is judged on whether it would still be right for a repository
+        whose languages, provider and conventions are nothing like ours.
+
+        Two questions below carry most of the decision: whether it holds for
+        languages nobody has configured yet, and whether it still helps someone
+        running a keyless free tier.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I read the action's `action.yaml` and no existing input already does this.
+          required: true
+
+  - type: dropdown
+    id: action
+    attributes:
+      label: Which action
+      options:
+        - triage
+        - review
+        - harmonise
+        - A new action
+        - The shared runtime under all of them
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation you are in, not the solution you have in mind. What can you not do today, and what are you doing instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you are proposing
+      description: If it adds or changes an input, write the `action.yaml` entry you would want and the workflow snippet that uses it. A rough sketch is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: general
+    attributes:
+      label: Does this hold for languages neither of us has thought about?
+      description: |
+        Anything language-specific has to be derivable from configuration. A rule
+        that reads "if the text is Chinese" cannot exist here. If your proposal
+        needs a language fact, say which one and where it would come from.
+    validations:
+      required: true
+
+  - type: textarea
+    id: free-tier
+    attributes:
+      label: Does this still help someone on a weak or keyless model?
+      description: Or does it assume a good model? Both are answerable — but a change that only pays off on a strong model has to say so, because that is not the configuration these actions are built around.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including doing nothing, and configuring your way there with what already exists.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: breaking
+    attributes:
+      label: Compatibility
+      description: Consumers pin a floating tag, so a change to an `action.yaml` reaches all of them on their next run.
+      options:
+        - label: As far as I can tell this needs no existing consumer to edit their workflow.
+          required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to open a pull request for this.
+          required: false

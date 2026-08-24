@@ -1,0 +1,233 @@
+name: CI
+
+on:
+  # Deliberately unfiltered, for the reason `analysis.yml` gives for the same
+  # choice: `ci-gate` is a required status check, and a `branches: [main]`
+  # filter here means a pull request based on another branch never triggers
+  # this workflow at all — so nothing runs, and the one required check sits
+  # pending forever while `Analysis` reports green beside it. Nothing reaches
+  # `main` untested either way (`merge_group` and `push` below cover that), so
+  # the filter was never protecting anything; it only let a stacked pull
+  # request look reviewed.
+  pull_request:
+  # The merge queue re-runs these checks against `main + every pull request
+  # ahead in the queue + this one`, which is the only place a semantic conflict
+  # between two independently-green pull requests can surface. GitHub reports
+  # the result against the required check name below, so `ci-gate` must exist on
+  # this event or the queue waits forever.
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # A merge-queue run must never be cancelled: the queue is blocked on exactly
+  # this run, and cancelling it ejects the batch. `github.ref` is already unique
+  # per queued batch, and `cancel-in-progress` is true only for pull requests.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The documented-uses-refs guard resolves `uses: …@<tag>` against real
+          # git tags, and the anchor guard walks every docs heading — both need
+          # the full history, not the default shallow clone.
+          fetch-depth: 0
+
+      # Reads the pnpm version from `packageManager` in package.json, so the
+      # runner uses the same pnpm a contributor's Corepack fetches.
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      # `--ignore-scripts`, and it is a decision rather than a workaround.
+      #
+      # pnpm 11 fails an install outright when a dependency's build scripts are
+      # ignored (ERR_PNPM_IGNORED_BUILDS). Neither documented escape works here:
+      # `onlyBuiltDependencies` and `ignoredBuiltDependencies` are both read —
+      # `pnpm config list` shows them resolved — and the install fails anyway on
+      # 11.20.0, in `pnpm-workspace.yaml` and in `package.json` alike. The only
+      # other switch is `dangerously-allow-all-builds`, which permits every
+      # dependency to execute code at install time.
+      #
+      # That switch is the wrong direction for this repository specifically. The
+      # whole promise of these actions is that nothing runs before the action
+      # does — no install, no build, no dependency code on a consumer's runner.
+      # A CI job that hands every transitive devDependency an install-time shell
+      # would be arguing the opposite in the one place anyone can check.
+      #
+      # Nothing here needs those scripts. The only package that has one is
+      # lefthook, whose script wires git hooks: verified working without it
+      # (`lefthook version` and `lefthook install` both succeed after an
+      # `--ignore-scripts` install), and pointless on a runner that never
+      # commits. The flag also skips this package's own `prepare`, which is that
+      # same hook installation — so what is skipped is exactly what CI does not
+      # want, and every gate below was run against a tree installed this way
+      # before the flag was added.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Every pull request lands as a squash, and the squash commit's subject is
+      # the pull request title — so the title is the one commit message that
+      # never reaches the `commit-msg` hook: no commit carrying that text exists
+      # until GitHub writes it at merge time. Same commitlint configuration as
+      # the hook, so a valid message has one definition rather than two.
+      #
+      # The title arrives through the environment, never through `${{ }}`
+      # interpolation into the script: interpolation pastes it into the shell
+      # source, where a title containing `$(...)` or a backtick would run.
+      - name: Check the pull request title
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint
+
+      # Skipped in the merge queue, and it is the only check that is. Prettier's
+      # verdict is a pure function of each file's own bytes: merging other pull
+      # requests into this one cannot unformat a file that was formatted, so
+      # re-running it would re-prove what the pull-request run already proved.
+      # Everything below can change under a merge — a type, a test, a boundary —
+      # which is the entire reason the queue exists.
+      - name: Check formatting
+        if: github.event_name != 'merge_group'
+        run: pnpm format:check
+
+      # Type-aware, so a verdict here depends on files this branch never
+      # touched: a signature another queued pull request changed can turn a call
+      # site in this one into an unsafe-argument error that neither branch shows
+      # alone. That interference is exactly what the queue re-runs to catch.
+      - run: pnpm lint
+
+      - run: pnpm typecheck
+
+      # The core/action boundary, judged mechanically rather than remembered
+      # during review. `module-boundaries.config.mjs` carries the law and the
+      # argument for it; this runs it.
+      #
+      # A step rather than a job of its own because it takes seconds: a whole
+      # runner for a check that outruns its own checkout is waste, and `Verify`
+      # already carries several distinct questions for the same reason.
+      #
+      # Both halves of the boundary are live here: the layering, and the ban on
+      # an action building its own route to the network or the forge. That needed
+      # cross-project imports to stop being relative — they are Node subpath
+      # imports now (`#core/…`), declared in `package.json` and understood by
+      # every resolver this repository uses.
+      - name: Check the architecture boundary
+        run: pnpm arch
+
+      - run: pnpm test
+
+      # `pnpm test` runs the vitest suite, which discovers only `*/src/**`. The
+      # guards in `tools/` and `scripts/` are plain `node --test` files outside
+      # that tree, so without this line the 74 tests holding the CI guards
+      # themselves honest would run nowhere — and a broken guard is invisible
+      # precisely because a broken guard reports success.
+      - run: pnpm test:tools
+      # Resolves every `uses: ecoma-io/action-agents/<action>@<ref>` in
+      # README/docs against tags that actually exist, so a pin like `@v0.1` for
+      # an action that only shipped at `v0.2` fails here rather than reaching a
+      # first-contact user as a working example. A ref the repository does not
+      # publish yet is exempted by a `# roadmap ref` marker on the line, which
+      # is a claim someone wrote down rather than a silent pass.
+      - name: Check documented uses refs
+        run: pnpm check-uses-refs
+
+      # Holds every action.yaml and the code behind it to the same list of
+      # inputs, in both directions. The runner enforces neither: an input a
+      # workflow passes that the manifest never declared is a warning nobody
+      # reads, and one the manifest declares that no code reads is silently
+      # ignored. Lint, typecheck, arch and test were all green while
+      # `review/src/index.mjs` read a `dry-run` its manifest did not offer.
+      - name: Check action manifests against their code
+        run: pnpm check-action-inputs
+
+      # Resolves every `(path#frag)` link in docs against the headings in the
+      # target file, using the same github-slugger GitHub renders with — a dead
+      # anchor fails CI instead of a reader's click.
+      - name: Check documentation anchors
+        run: pnpm check-anchors
+
+      # Resolves every docs reference the list above does not cover: markdown
+      # link targets must exist and, for pages INSIDE docs/, land only within
+      # docs/; prose `docs/…` citations must resolve; and a bare `#anchor` must
+      # match a heading in the same file. The same gate runs on every agent
+      # edit and in pre-commit, so CI checks the same health against main +
+      # queued pull requests instead of fresh eyes.
+      - name: Check docs links and containment
+        run: pnpm check-docs-links
+
+      # The five arch-* skills are vendored from @ecoma-io/archkeep into the two
+      # directories the three supported agents scan — `.claude/skills/` for
+      # Claude Code, `.agents/skills/` for Codex and opencode. Both copies are
+      # checked against the hashes in `scripts/skills-manifest.json`, and that
+      # manifest against the version `package.json` pins.
+      #
+      # It runs here rather than only in pre-commit because the drift that
+      # matters most has no diff of its own: a dependency bump — a Renovate
+      # pull request that touches nothing but `package.json` and the lockfile —
+      # leaves the copies describing a CLI this repository no longer installs,
+      # and both copies stay perfectly consistent while it happens. The gate is
+      # the only thing that reads those two facts together.
+      - name: Check the vendored agent skills
+        run: pnpm check-skills
+
+  ci-gate:
+    name: ci-gate
+    # The single check name a branch ruleset requires, on pull requests and in
+    # the merge queue alike. It exists so the required-check name is stable
+    # while the job list is not: add a job to `needs` and the gate tightens
+    # without anyone editing repository settings — and forgetting to add it is
+    # the only way to widen what green means, which is visible in this file.
+    needs: [verify]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The gate asserts every dependency reached `success`, rather than
+      # enumerating the ways one can fail. Those are not the same claim, and the
+      # difference was measured rather than reasoned.
+      #
+      # This was a `contains(needs.*.result, 'failure') || ... 'cancelled' || ...
+      # 'skipped'` guard on a step that ran `exit 1`. On run 31118985640 attempt
+      # 1 — during a GitHub Actions major outage — `Verify` failed at `Set up
+      # job` before a single line of it ran, and `ci-gate` reported **success**
+      # with that step **skipped**: the `needs` context reached it carrying no
+      # result the guard recognised, so every disjunct was false, so the step
+      # that would have failed the build never ran. The one required check went
+      # green over a red pipeline.
+      #
+      # A deny-list of known-bad states fails open on any state it does not
+      # know, and `needs.*.result` is not a value this repository controls. So
+      # the condition is inverted: name the single state that means "safe", and
+      # let everything else — including whatever that outage produced — fail.
+      # The step runs unconditionally, because a step that decides whether to
+      # run is a step that can decline to.
+      - name: Fail unless every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs results: ${RESULTS:-<empty>}"
+          if [ -z "$RESULTS" ]; then
+            echo "::error::ci-gate got no result from its dependencies. Refusing to pass."
+            exit 1
+          fi
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a required job reported '$result' rather than success."
+              exit 1
+            fi
+          done
+          echo "Every required job succeeded."

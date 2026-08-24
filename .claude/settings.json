@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/editor-hooks/format-edited-file.mjs",
+            "statusMessage": "Formatting edited file"
+          },
+          {
+            "type": "command",
+            "command": "node scripts/editor-hooks/lint-edited-file.mjs",
+            "statusMessage": "Linting edited file"
+          },
+          {
+            "type": "command",
+            "command": "node scripts/editor-hooks/check-docs-links-edited-file.mjs",
+            "statusMessage": "Checking doc references"
+          }
+        ]
+      }
+    ]
+  }
+}

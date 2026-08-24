@@ -1,0 +1,67 @@
+name: Question
+description: You want to do something with one of these actions and are not sure how.
+title: "question: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Write in whatever language you are comfortable in.** A Vietnamese
+        version of this form — _Đặt câu hỏi_ — is in the chooser.
+
+        **How this form is handled**, so nothing about it is a surprise: it is
+        labelled `question`, and it is closed once it has been answered. An open
+        question means one nobody has answered yet — that is the whole reason
+        questions get their own form rather than sharing the queue with defects.
+        There is no response-time commitment; this project is maintained by one
+        person.
+
+        If the answer turns out to be "the action should do that and does not",
+        it becomes a bug or a feature request and gets moved. You do not have to
+        work out which one first.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Before asking
+      options:
+        - label: This is not a security vulnerability. (Those never go in a public issue — see SECURITY.md.)
+          required: true
+
+  - type: dropdown
+    id: action
+    attributes:
+      label: Which action
+      options:
+        - triage
+        - review
+        - harmonise
+        - General — more than one, or none in particular
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: The outcome you want, in your own words. Not the setting you think you need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Your workflow file, with secrets redacted, if there is one. Saying "nothing yet, I do not know where to start" is a perfectly good answer.
+      render: yaml
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Action version
+      description: The ref in `uses:`, if you have got that far.
+      placeholder: e.g. v0.1
+    validations:
+      required: false

@@ -1,0 +1,76 @@
+{
+  "name": "@ecoma-io/action-agents",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AI-powered GitHub Actions for repository maintenance, triage, review and harmonise, each one a self-contained action against any OpenAI-compatible model.",
+  "keywords": [
+    "github-action",
+    "maintenance",
+    "automation",
+    "triage",
+    "code-review",
+    "multilingual",
+    "i18n",
+    "llm",
+    "agent",
+    "openai-compatible",
+    "ecoma"
+  ],
+  "homepage": "https://github.com/ecoma-io/action-agents#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ecoma-io/action-agents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ecoma-io/action-agents/issues"
+  },
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Mai Ngọc Hóa (John Martin)",
+    "email": "john.itvn@gmail.com"
+  },
+  "type": "module",
+  "imports": {
+    "#core/*.mjs": "./core/src/*.mjs"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=11"
+  },
+  "scripts": {
+    "prepare": "lefthook install",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "arch": "archkeep check",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "test:tools": "node --test \"tools/**/*.test.mjs\" \"scripts/**/*.test.mjs\"",
+    "check-docs-links": "node scripts/check-docs-links.mjs",
+    "check-anchors": "node tools/check-anchors.mjs",
+    "check-uses-refs": "node tools/check-uses-refs.mjs",
+    "check-action-inputs": "node tools/check-action-inputs.mjs",
+    "check-skills": "node scripts/check-skills.mjs",
+    "sync-skills": "node scripts/sync-skills.mjs"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
+    "@ecoma-io/archkeep": "0.13.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/eslint-plugin": "^1.6.27",
+    "eslint": "^10.9.0",
+    "eslint-config-prettier": "^10.1.8",
+    "github-slugger": "^2.0.0",
+    "globals": "^17.11.0",
+    "lefthook": "^2.1.10",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  }
+}
