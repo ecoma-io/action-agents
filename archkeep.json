@@ -1,4 +1,5 @@
 {
+  "tsConfig": "tsconfig.json",
   "projects": {
     "declared": [
       {

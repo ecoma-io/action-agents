@@ -10,6 +10,19 @@
 //
 // The tags come from `archkeep.json`. Adding an action means adding its project
 // there and its `scope:` row here; there is no third place to remember.
+//
+// `archkeep.json` also sets `"tsConfig": "tsconfig.json"`, and that line is
+// load-bearing rather than decorative. Archkeep defaults to
+// `tsconfig.base.json` — an Nx convention, and a file this repository does not
+// have. Without the override it reads no compiler options at all, and every
+// cross-project import here goes through a Node subpath import (`#core/…`)
+// that then resolves to nothing. An unresolved import is reported as
+// `allowed`, so the run said "✔ no boundary violations" over a graph with
+// ZERO edges: the rows below had never once been applied to a real import.
+// Measured, not reasoned — `archkeep graph` showed `0 edges` before and
+// `3 edges` after, and an illegal `triage → review` import was ruled allowed
+// before and is a violation after. If that field is ever dropped, this whole
+// file goes quiet without failing.
 
 /** @param {string} name @returns {object} */
 function actionRow(name) {
