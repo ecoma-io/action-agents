@@ -1,0 +1,52 @@
+name: Triage
+
+# Dogfood: this repository's own `triage` action, classifying its own
+# issues and pull requests. The first phase is a dry run — the action
+# decides and logs, writes nothing — so the whole job runs with read-only
+# permissions and the classifications are read in the run logs.
+#
+# No checkout anywhere: the action is named by ref (the commit under test,
+# which under `pull_request` is the merge commit of this repository's code
+# and the pull request's), and it reads everything through the API. The
+# trade that shape makes, stated rather than hidden: a pull request raised
+# from within this repository runs its own triage code with the LLM gateway
+# key in reach. A fork's pull request gets no secrets and a read-only
+# token, which is exactly the arrangement SECURITY.md documents for
+# `review`; the residual exposure is a same-repo branch, which here means a
+# maintainer's own push. Flip `dry-run` to false only with that understood.
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  workflow_dispatch:
+
+# Dry-run needs no write at all: the action reads its config, the sheet's
+# labels and the thread, and writes to the log. When the dry-run phase
+# ends, `issues: write` and `pull-requests: write` join this block — the
+# block itself is the security boundary, which is the point of the design.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+# One triage run per thread: a rapid sequence of edits to the same issue
+# replaces the queued run rather than stacking classifications of stale
+# text. Runs for different threads are independent.
+concurrency:
+  group: triage-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: ecoma-io/action-agents/triage@${{ github.sha }} # the commit under test
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
+          api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
+          model: triage
+          dry-run: true

@@ -21,6 +21,16 @@ jobs:
       - uses: actions/checkout@v4
       # ok: workflow-action-not-pinned-to-sha
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # A dogfood run pins the commit under test through an expression; the
+      # ref resolves to a SHA at run time, which is what the rule asks for.
+      # ok: workflow-action-not-pinned-to-sha
+      - uses: ecoma-io/action-agents/triage@${{ github.sha }}
+      # ok: workflow-action-not-pinned-to-sha
+      - uses: ecoma-io/action-agents/triage@${{ github.event.pull_request.head.sha }}
+      # A local path is refused with the rest: the expression form reaches the
+      # same commit without a checkout of the triggering ref.
+      # ruleid: workflow-action-not-pinned-to-sha
+      - uses: ./triage
 
       # ok: workflow-action-not-pinned-to-sha
       # A comment containing the literal text `uses: actions/checkout@v4` must
