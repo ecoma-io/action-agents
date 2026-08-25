@@ -31,13 +31,13 @@ workflow's choice, and `dry-run` needs no write at all.
 | `api-url`      | base URL of an OpenAI-compatible endpoint                                                                                                                                                                     |
 | `api-key`      | key for that endpoint; empty is a supported keyless configuration                                                                                                                                             |
 | `model`        | model id to ask                                                                                                                                                                                               |
-| `config-path`  | overrides `.github/action-agents/triage.json5` / `.json` — see the configuration page                                                                                                                         |
+| `config-path`  | overrides `.github/action-agents/triage/triage.json5` / `.json` — see the configuration page                                                                                                                  |
 | `labels`       | narrows the sheet the config file declares, for this call site only; a name the file does not declare is a startup error, and so is a `labels:` input with no file at all, because there is nothing to narrow |
 | `dry-run`      | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                            |
 
 ## The config file
 
-`.github/action-agents/triage.json5`, in full:
+`.github/action-agents/triage/triage.json5`, in full:
 
 ```json5
 {

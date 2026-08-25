@@ -34,8 +34,8 @@ function fakeForge(files) {
   };
 }
 
-const JSON5_PATH = ".github/action-agents/triage.json5";
-const JSON_PATH = ".github/action-agents/triage.json";
+const JSON5_PATH = ".github/action-agents/triage/triage.json5";
+const JSON_PATH = ".github/action-agents/triage/triage.json";
 
 describe("loadConfigFile", () => {
   it("reads the .json5 location from the default branch", async () => {

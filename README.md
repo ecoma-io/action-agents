@@ -84,8 +84,8 @@ jobs:
 ```
 
 Behaviour that belongs to the repository rather than to one workflow lives in
-`.github/action-agents/<action>.json5` — one file per action, mirroring the
-directory it configures. It is read from the default branch, so a pull request
+`.github/action-agents/<action>/<action>.json5` — one file per action, colocated
+with its action-specific files. It is read from the default branch, so a pull request
 cannot edit the policy that governs it, and every action runs without its
 file: the file adds policy, it never gates execution — `harmonise` is the
 exception, refusing rather than running green on nothing, for the reason its
