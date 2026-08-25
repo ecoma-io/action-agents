@@ -84,6 +84,13 @@ export class ForgeError extends Error {
 const PER_PAGE = 100;
 
 /**
+ * The client `createForge` returns, named so an action's JSDoc can say
+ * `import("#core/forge.mjs").Forge` instead of restating the shape.
+ *
+ * @typedef {ReturnType<typeof createForge>} Forge
+ */
+
+/**
  * @param {ForgeConfig} config
  * @returns {{
  *   whoami: () => Promise<{ login: string }>,

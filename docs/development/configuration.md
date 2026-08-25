@@ -1,9 +1,8 @@
 # Development — the configuration mechanism
 
-Design, not behaviour: no reader exists yet. This page records the mechanism
-every action shares for repository-level configuration, written before any of
-it is built. `triage` is its first consumer; the per-action pages beside this
-one record each schema.
+The mechanism every action shares for repository-level configuration, written
+before any of it was built and kept current with it. `triage` is its first
+consumer; the per-action pages beside this one record each schema.
 
 ## Where the file lives
 
@@ -24,8 +23,8 @@ A consumer's repository-level policy for an action is one file:
   green — `harmonise`, for the reason its page carries.
 - A `config-path` input on each action names a different file — location and
   name both. When it is set, only that path is read, and the default locations
-  are not consulted. No seed `action.yaml` carries `config-path` yet; it lands
-  on all three together with the first implementation.
+  are not consulted; a configured path that does not exist on the default
+  branch is a startup error rather than a silently empty policy.
 
 ## The default branch, not the working tree
 

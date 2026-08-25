@@ -58,6 +58,13 @@ describe("readInputs", () => {
     });
   });
 
+  it("reads a configured config-path, empty for the default locations", () => {
+    expect(readInputs(runner).configPath).toBe("");
+    expect(readInputs({ ...runner, "INPUT_CONFIG-PATH": "p/review.json5" }).configPath).toBe(
+      "p/review.json5",
+    );
+  });
+
   it("refuses a turn ceiling of zero, which would review nothing and say nothing", () => {
     expect(() => readInputs({ ...runner, "INPUT_MAX-TURNS": "0" })).toThrow(/at least 1/);
   });

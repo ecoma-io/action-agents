@@ -57,6 +57,13 @@ describe("readInputs", () => {
     expect(() => readInputs(missing)).toThrow(/'source-language'/);
   });
 
+  it("reads a configured config-path, empty for the default locations", () => {
+    expect(readInputs(runner).configPath).toBe("");
+    expect(readInputs({ ...runner, "INPUT_CONFIG-PATH": "p/harmonise.json5" }).configPath).toBe(
+      "p/harmonise.json5",
+    );
+  });
+
   it("defaults the document globs, and reads a comma-separated override", () => {
     expect(readInputs(runner).documents).toEqual(["docs/**/*.md"]);
     expect(readInputs({ ...runner, INPUT_DOCUMENTS: "a/**.md, b/**.md" }).documents).toEqual([

@@ -1,8 +1,8 @@
 # Development — `triage`
 
-Design, not behaviour: nothing on this page runs yet. This is the architecture
-`triage` is to be built to, written before implementation starts. The shared
-mechanism it rests on — file discovery, the default branch, precedence — is in
+The architecture `triage` is built to, written before its implementation
+started and kept current with it. The shared mechanism it rests on — file
+discovery, the default branch, precedence — is in
 [the configuration page](configuration.md); this page is the schema, the
 prompt and the pipeline.
 

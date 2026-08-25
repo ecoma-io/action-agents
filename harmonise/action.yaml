@@ -19,6 +19,10 @@ inputs:
   model:
     description: Model id to ask.
     required: true
+  config-path:
+    description: Overrides `.github/action-agents/harmonise.json5` / `.json`, read from the default branch. When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
+    required: false
+    default: ""
   source-language:
     description: BCP 47 tag of the language that is the source of truth. Every other version is judged against it.
     required: true

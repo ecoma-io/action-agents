@@ -31,7 +31,7 @@ import {
 export const ACTION = "review";
 
 /**
- * @typedef {SharedInputs & { instructionsPath: string, maxTurns: number, contextWindow: number, dryRun: boolean }} Inputs
+ * @typedef {SharedInputs & { configPath: string, instructionsPath: string, maxTurns: number, contextWindow: number, dryRun: boolean }} Inputs
  */
 
 /**
@@ -41,6 +41,9 @@ export const ACTION = "review";
 export function readInputs(env = process.env) {
   return {
     ...readSharedInputs(env),
+    // Read and validated here so the manifest's promise and the code agree;
+    // the reader that consumes it lands with review's implementation.
+    configPath: getInput("config-path", {}, env),
     instructionsPath: getInput(
       "instructions-path",
       { default: ".github/review-instructions.md" },
