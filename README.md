@@ -83,11 +83,15 @@ jobs:
           model: ${{ vars.LLM_MODEL }}
 ```
 
-Behaviour that belongs to the repository rather than to one workflow will live
-in `.github/action-agents.json` — that file is not designed yet, and every
-action is meant to run without it. Prose settings — a review rubric, the
-language a document is harmonised against — are markdown files an input points
-at, because prose belongs in a document.
+Behaviour that belongs to the repository rather than to one workflow lives in
+`.github/action-agents/<action>.json5` — one file per action, mirroring the
+directory it configures. It is read from the default branch, so a pull request
+cannot edit the policy that governs it, and every action runs without its
+file: the file adds policy, it never gates execution — `harmonise` is the
+exception, refusing rather than running green on nothing, for the reason its
+development page carries. Prose settings — a review rubric, the language a
+document is harmonised against — are markdown files the action's config file
+points at, because prose belongs in a document.
 
 ## The actions
 

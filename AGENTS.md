@@ -85,12 +85,15 @@ point of it firing at edit time rather than at commit time.
 
 An action here runs in someone else's repository holding a token that can write
 to their issues and pull requests, with a model API key in the same process.
-Three ceilings follow, and none is negotiable in a diff:
+Three ceilings follow, and none is negotiable in a diff — with a fourth,
+confining file access to the workspace for any action that reads files,
+stated in the security policy at the repository root:
 
 - **Model output never composes an API call.** It may only pick from a set the
-  workflow author enumerated — `triage`'s `labels:` input is the one that
-  exists — and a value that is not in that set is refused, not coerced. Declare
-  no set and comment text is all an action can produce.
+  repository's config file declares — `triage`'s labels sheet is the one that
+  exists — and a value that is not in that set is refused, not coerced. The
+  `labels:` input narrows the set for one call site; with no sheet, comment
+  text is all an action can produce.
 - **An operation only reaches that set if it is reversible in one click, visible
   where the work is, and notifies nobody.** Labels qualify. Closing a thread,
   assigning, `@mention`, a review verdict, a merge, a push, a permission change

@@ -51,19 +51,28 @@ A **ceiling** is a limit that must hold no matter which action is running,
 because a consumer's safety rests on it and a per-action copy would be three
 chances to get it wrong instead of one.
 
+One boundary case is worth making explicit: `untrusted.mjs` produces prompt
+content, and the security policy says ceilings are enforced in code rather than
+asked for in a prompt — what makes it a ceiling is that one code path fixes how
+untrusted content may appear in any prompt, and no action may frame evidence its
+own way; the framing is determinism, not persuasion, and no ceiling rests on the
+words around the evidence (the ceilings that bite are exact match and the
+sanitiser downstream).
+
 Read as a table, with what is already written and what the end state needs:
 
-| `core/`         | Kind     | What it is for                                                                           |
-| --------------- | -------- | ---------------------------------------------------------------------------------------- |
-| `runtime.mjs`   | protocol | Reading inputs, writing workflow commands, masking secrets, reading the runner's context |
-| `inputs.mjs`    | protocol | The four inputs every action takes, validated once                                       |
-| `http.mjs`      | protocol | Timeouts, retries, and the failure shapes a provider really returns                      |
-| `chat.mjs`      | protocol | The chat-completions request — the whole of what crosses the seam to a model             |
-| `forge.mjs`     | protocol | The GitHub calls these actions make, as an explicit list rather than a general client    |
-| `untrusted.mjs` | ceiling  | Wrapping a thread, a diff or a file as evidence, so it never reads as instruction        |
-| `sanitise.mjs`  | ceiling  | What model output must survive before it can become comment text                         |
-| `workspace.mjs` | ceiling  | Path resolution confined to `GITHUB_WORKSPACE`, with `.git` refused outright             |
-| `comment.mjs`   | ceiling  | Marker-based upsert — the one route by which model text reaches a repository             |
+| `core/`           | Kind     | What it is for                                                                           |
+| ----------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `runtime.mjs`     | protocol | Reading inputs, writing workflow commands, masking secrets, reading the runner's context |
+| `inputs.mjs`      | protocol | The four inputs every action takes, validated once                                       |
+| `json5-parse.mjs` | protocol | JSON5 — config files and model answers, parsed by one implementation                     |
+| `http.mjs`        | protocol | Timeouts, retries, and the failure shapes a provider really returns                      |
+| `chat.mjs`        | protocol | The chat-completions request — the whole of what crosses the seam to a model             |
+| `forge.mjs`       | protocol | The GitHub calls these actions make, as an explicit list rather than a general client    |
+| `untrusted.mjs`   | ceiling  | Wrapping a thread, a diff or a file as evidence, so it never reads as instruction        |
+| `sanitise.mjs`    | ceiling  | What model output must survive before it can become comment text                         |
+| `workspace.mjs`   | ceiling  | Path resolution confined to `GITHUB_WORKSPACE`, with `.git` refused outright             |
+| `comment.mjs`     | ceiling  | Marker-based upsert — the one route by which model text reaches a thread                 |
 
 The test is not "would a second action want this?" — a second action wants
 everything eventually, which is exactly how the rot happens. The test is
@@ -89,7 +98,8 @@ provider and there is one right answer.
 
 The ceilings in the security policy are the reason `core/` has a ceiling half at
 all. They are stated there as rules; here is the same thing as a route, because
-what makes them true is that no other route exists:
+what makes them true is that the routes are enumerable — each one is drawn, and
+each is bounded where it lands:
 
 ```text
   an issue body · a pull-request description · a diff hunk · a file in the repo
@@ -103,13 +113,18 @@ what makes them true is that no other route exists:
                                   │
               ┌───────────────────┴───────────────────┐
               ▼                                       ▼
-       core/comment.mjs                a closed set the workflow author
-    one comment, created or                enumerated — triage's
-    updated by its marker                    `labels:` input
+       core/comment.mjs                a closed set the repository declared
+    one comment, created or            in its config file — triage's sheet,
+    updated by its marker              narrowed per call site, never widened
               │                                       │
               ▼                                       ▼
    the model chose the text                 the model chose an entry;
    and nothing about the call               the action built the call
+
+  `harmonise` takes a third route, and it leaves the sanitiser on purpose:
+  the rewritten document is written verbatim into a commit the action itself
+  assembled — no sheet, and the human at the pull request is the control.
+  Its development page carries the argument for why verbatim.
 ```
 
 Two properties of that picture are the whole design:
@@ -125,6 +140,15 @@ Two properties of that picture are the whole design:
   do not — and no configuration opens them, because a maintainer enumerating
   something they should not have is a failure that enumeration alone still
   allows.
+
+A sheet is declared in one place: `.github/action-agents/<action>.json5` on
+the default branch. A workflow input may narrow it for one call site — an
+entry the file does not declare is refused at startup, with both names in the
+message — and nothing widens it, ever. With no file there is no sheet at all:
+the classification becomes the marker comment, and a `labels:` input set with
+no sheet to narrow is refused too. The working tree is evidence, never
+configuration: a pull request cannot edit the policy that governs its own
+triage.
 
 The security policy at the repository root carries the table that second point
 is read off, along with the threat model it answers. It is the authority; this
@@ -151,13 +175,10 @@ being a question with a short answer, asked every time something is proposed for
 
 Stated so it is not mistaken for settled:
 
-- **`.github/action-agents.json`.** Repository-level configuration is promised
-  in the README and has no schema, no reader and no test. Designing it before
-  one action does real work would be guessing at what needs configuring.
 - **Per-action versioning.** All three actions share one version and one
   floating tag today, which means a fix in one moves the tag a consumer of
   another is pinned to. The trade is written down in the contributing guide; it
   is not permanent.
-- **Where `review`'s tool surface stops.** The loop lives in `review/`, but
-  which reads it may perform — and how a tool result is framed as evidence — is
-  a ceiling question that has not been answered in code.
+
+The development pages carry each action's design and the contracts of the
+ceilings they share.

@@ -45,13 +45,15 @@ talked into something_, which has no reliable answer, but **what is the worst a
 model that has already been talked into something can reach.** Four ceilings
 answer it, and each is enforced in code rather than asked for in a prompt:
 
-1. **Model output never composes an API call. It may only choose from a set the
-   workflow author enumerated, and that set — never the prompt — is the
+1. **Model output never composes an API call. It may only choose from a set a
+   human declared outside the prompt, and that set — never the prompt — is the
    ceiling.** A model that has been talked into demanding something is answering
    a printed multiple-choice sheet rather than writing on a blank page: an
    answer that is not on the sheet is refused and logged, and never becomes a
-   request. `triage`'s `labels:` input is that sheet, and declaring none leaves
-   comment text as the whole of what the action can produce.
+   request. `triage`'s sheet is the `labels` its config file declares on the
+   default branch; the workflow's `labels:` input narrows it for one call site
+   and nothing widens it. With no file there is no sheet, and comment text is
+   the whole of what the action can produce.
 
 2. **What may go on the sheet is bounded in turn, and no input widens it.**
    Enumeration alone would only move the risk out of our prompt and into a
@@ -83,6 +85,10 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    `review` comments its findings and never files a verdict, because a verdict
    sits below it; `harmonise` proposes an edit as a pull request and never
    pushes, for the same reason.
+
+   The table records what may be _offered_, not what is — `triage`'s size is
+   never on any sheet, because it is measured from the diff; that row is
+   permission, not practice.
 
 3. **Everything read from a thread, a diff or a repository file is untrusted
    data, never instruction.** An action that lets a pull-request body change
@@ -117,7 +123,16 @@ Particularly in scope:
 - **anything that reads outside the workspace** — a path escape, a followed
   symlink, a read of `.git`, or a tool that accepts an absolute path;
 - **anything that leaks the configured `api-key`** into logs, into a comment, or
-  into a request to a host other than the configured `api-url`.
+  into a request to a host other than the configured `api-url`;
+- **anything that lets a commit be made that a maintainer did not intend** —
+  `harmonise` writes model text verbatim into a commit by design, bounded by
+  the pairing the action itself enumerated (the model never names a path) and
+  controlled by the human at the pull request; a route around that pairing is
+  the report;
+- **anything that lets untrusted content make a run not finish** — a search,
+  a tool result, a provider response with no bound on the work or the bytes it
+  causes; every surface that consumes untrusted bytes is capped, and a missing
+  cap is a gap, not a style point.
 
 Out of scope:
 
