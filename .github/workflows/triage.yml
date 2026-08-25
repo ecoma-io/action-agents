@@ -5,15 +5,16 @@ name: Triage
 # decides and logs, writes nothing — so the whole job runs with read-only
 # permissions and the classifications are read in the run logs.
 #
-# No checkout anywhere: the action is named by ref (the commit under test,
-# which under `pull_request` is the merge commit of this repository's code
-# and the pull request's), and it reads everything through the API. The
-# trade that shape makes, stated rather than hidden: a pull request raised
-# from within this repository runs its own triage code with the LLM gateway
-# key in reach. A fork's pull request gets no secrets and a read-only
-# token, which is exactly the arrangement SECURITY.md documents for
-# `review`; the residual exposure is a same-repo branch, which here means a
-# maintainer's own push. Flip `dry-run` to false only with that understood.
+# The action is referenced as `./triage` from the checkout of the ref that
+# triggered the run, which under `pull_request` is the merge commit of this
+# repository's code and the pull request's — a pull request classifies
+# itself with the code it carries. The trade that shape makes, stated
+# rather than hidden: a pull request raised from within this repository
+# runs its own triage code with the LLM gateway key in reach. A fork's pull
+# request gets no secrets and a read-only token, which is exactly the
+# arrangement SECURITY.md documents for `review`; the residual exposure is
+# a same-repo branch, which here means a maintainer's own push. Flip
+# `dry-run` to false only with that understood.
 
 on:
   issues:
@@ -43,7 +44,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: ecoma-io/action-agents/triage@${{ github.sha }} # the commit under test
+      # The checkout exists so the runner can find the action at `./triage`;
+      # triage itself reads everything through the API, never the working
+      # tree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: ./triage
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
