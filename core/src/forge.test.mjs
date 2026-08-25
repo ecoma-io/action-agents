@@ -79,14 +79,51 @@ describe("nextLink", () => {
 });
 
 describe("whoami", () => {
-  it("returns the token's login", async () => {
-    const client = forge("o", "r", { "GET /user": json({ login: "action-agents[bot]" }) });
-    await expect(client.whoami()).resolves.toEqual({ login: "action-agents[bot]" });
+  it("returns the GITHUB_ACTOR environment variable value", async () => {
+    const actor = "action-agents[bot]";
+    const client = createForge({
+      owner: "o",
+      repo: "r",
+      token: "ghs_x",
+      fetchImpl: routed({}),
+      getActor: () => actor,
+      ...FAST,
+    });
+    await expect(client.whoami()).resolves.toEqual({ login: actor });
   });
 
-  it("refuses a response with no login", async () => {
-    const client = forge("o", "r", { "GET /user": json({}) });
+  it("uses default GITHUB_ACTOR when getActor is not provided", async () => {
+    const originalActor = process.env.GITHUB_ACTOR;
+    process.env.GITHUB_ACTOR = "github-actions[bot]";
+    try {
+      const client = forge("o", "r", {});
+      await expect(client.whoami()).resolves.toEqual({ login: "github-actions[bot]" });
+    } finally {
+      process.env.GITHUB_ACTOR = originalActor;
+    }
+  });
+
+  it("refuses an empty actor", async () => {
+    const client = createForge({
+      owner: "o",
+      repo: "r",
+      token: "ghs_x",
+      fetchImpl: routed({}),
+      getActor: () => "",
+      ...FAST,
+    });
     await expect(client.whoami()).rejects.toThrow(ForgeError);
+  });
+
+  it("falls back to default when GITHUB_ACTOR is not set", async () => {
+    const originalActor = process.env.GITHUB_ACTOR;
+    delete process.env.GITHUB_ACTOR;
+    try {
+      const client = forge("o", "r", {});
+      await expect(client.whoami()).resolves.toEqual({ login: "github-actions[bot]" });
+    } finally {
+      process.env.GITHUB_ACTOR = originalActor;
+    }
   });
 });
 
