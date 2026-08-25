@@ -35,8 +35,12 @@ rules:
     # generator was the only `uses:` in this repository that could not be
     # pinned, and it went with the provenance job — `release.yml`'s header
     # records why. A workflow here that runs this repository's own action on
-    # itself pins the commit under test (`@${{ github.event.pull_request.head.sha }}`
-    # is a SHA), so dogfooding needs no carve-out either.
+    # itself pins the commit under test — `@${{ github.sha }}` and
+    # `@${{ github.event.pull_request.head.sha }}` resolve to a SHA at run
+    # time, so dogfooding needs no carve-out either. The `not-regex` accepts
+    # both spellings for exactly that reason; a `./local` path is refused
+    # with the rest, because the expression form reaches the same commit
+    # without a checkout of the triggering ref.
     paths:
       include:
         - "/.github/workflows/**"
@@ -54,7 +58,7 @@ rules:
       - metavariable-pattern:
           metavariable: $REF
           patterns:
-            - pattern-not-regex: "@[0-9a-fA-F]{40}$"
+            - pattern-not-regex: '@(?:[0-9a-fA-F]{40}|\$\{\{[^}]*sha[^}]*\}\})$'
 
   - id: workflow-expression-interpolated-into-run
     languages: [yaml]

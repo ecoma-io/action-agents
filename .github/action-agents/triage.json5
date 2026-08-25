@@ -1,0 +1,47 @@
+{
+  // This repository's own triage policy — the dogfood configuration, and a
+  // live example of the schema docs/development/triage.md documents.
+  //
+  // The sheet is split three ways: `universal` applies to every thread;
+  // `issues` and `pr` are added to it according to what is classified.
+  // The label names must exist in this repository — a sheet naming a label
+  // the repository does not have is refused at startup.
+  labels: {
+    universal: {
+      bug: "Reproducible incorrect behaviour — it worked before, or should have.",
+      documentation: "Documentation or examples only; no runtime code is affected.",
+      enhancement: "A new capability, or an improvement to one that exists.",
+      question: "Asking how something works or is meant to be used, not reporting that it is broken.",
+    },
+    issues: {
+      "good first issue": "Small, self-contained, and needs no prior context with this repository.",
+    },
+    pr: {
+      // Size is measured from the diff and never offered to the model; the
+      // rung labels are declared here because a size label is applied like
+      // any other and must be on the PR sheet.
+      "size/xs": "",
+      "size/s": "",
+      "size/m": "",
+      "size/l": "",
+      "size/xl": "",
+    },
+  },
+
+  // Review effort, not raw magnitude: a lockfile nobody reads line by line
+  // does not make a pull request large to review.
+  size: {
+    exclude: ["pnpm-lock.yaml", "coverage/**"],
+    ladder: [
+      { upTo: 10, label: "size/xs" },
+      { upTo: 50, label: "size/s" },
+      { upTo: 200, label: "size/m" },
+      { upTo: 500, label: "size/l" },
+      { label: "size/xl" },
+    ],
+  },
+
+  instructions: {
+    instruction: ".github/action-agents/triage/instruction.md",
+  },
+}
