@@ -20,7 +20,7 @@ inputs:
     description: Model id to ask.
     required: true
   config-path:
-    description: Overrides `.github/action-agents/review.json5` / `.json`, read from the default branch. When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
+    description: Overrides `.github/action-agents/review/review.json5` / `.json`, read from the default branch. When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
     required: false
     default: ""
   instructions-path:

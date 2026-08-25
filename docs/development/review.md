@@ -42,7 +42,7 @@ finished saying.
 | `api-url`        | base URL of an OpenAI-compatible endpoint                                                        |
 | `api-key`        | key for that endpoint; empty is a supported keyless configuration                                |
 | `model`          | model id to ask                                                                                  |
-| `config-path`    | overrides `.github/action-agents/review.json5` / `.json` — see the configuration page            |
+| `config-path`    | overrides `.github/action-agents/review/review.json5` / `.json` — see the configuration page     |
 | `max-turns`      | ceiling on agent turns — reaching it ends the review and says so; the default is 30              |
 | `context-window` | the configured model's token budget — the agent compacts before reaching it; default 128000      |
 | `dry-run`        | review and log, comment nothing — default false, because the comment is the action's only output |
@@ -53,7 +53,7 @@ reshaped now rather than deprecated later.
 
 ## The config file
 
-`.github/action-agents/review.json5`, in full:
+`.github/action-agents/review/review.json5`, in full:
 
 ```json5
 {

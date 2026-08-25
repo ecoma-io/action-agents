@@ -47,8 +47,8 @@ export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
 export const MAX_INSTRUCTION_BYTES = 8 * 2 ** 10;
 
 const DEFAULT_LOCATIONS = [
-  ".github/action-agents/triage.json5",
-  ".github/action-agents/triage.json",
+  ".github/action-agents/triage/triage.json5",
+  ".github/action-agents/triage/triage.json",
 ];
 
 const DEFAULT_INSTRUCTION_PATHS = {

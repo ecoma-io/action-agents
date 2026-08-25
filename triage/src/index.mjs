@@ -339,7 +339,7 @@ function commentBody(answer, marker) {
     "",
     rationale.text === "" ? "" : `> ${rationale.text}`,
     "",
-    "_Classified by the `triage` action. No label sheet is configured in this repository, so the classification is posted as a comment — configure `.github/action-agents/triage.json5` to apply labels instead._",
+    "_Classified by the `triage` action. No label sheet is configured in this repository, so the classification is posted as a comment — configure `.github/action-agents/triage/triage.json5` to apply labels instead._",
   ]
     .filter((line, index, all) => !(line === "" && all[index - 1] === ""))
     .join("\n");

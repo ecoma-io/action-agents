@@ -102,11 +102,11 @@ describe("getContents", () => {
     const client = forge(
       "o",
       "r",
-      { "GET /repos/o/r/contents/.github/action-agents/triage.json5": json(PAYLOAD) },
+      { "GET /repos/o/r/contents/.github/action-agents/triage/triage.json5": json(PAYLOAD) },
       recorder,
     );
 
-    await expect(client.getContents(".github/action-agents/triage.json5")).resolves.toEqual({
+    await expect(client.getContents(".github/action-agents/triage/triage.json5")).resolves.toEqual({
       content: "labels: {}",
     });
     expect(recorder.calls?.[0]?.url).not.toContain("ref=");

@@ -141,7 +141,7 @@ Two properties of that picture are the whole design:
   something they should not have is a failure that enumeration alone still
   allows.
 
-A sheet is declared in one place: `.github/action-agents/<action>.json5` on
+A sheet is declared in one place: `.github/action-agents/<action>/<action>.json5` on
 the default branch. A workflow input may narrow it for one call site — an
 entry the file does not declare is refused at startup, with both names in the
 message — and nothing widens it, ever. With no file there is no sheet at all:

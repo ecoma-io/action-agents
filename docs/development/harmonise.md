@@ -38,14 +38,14 @@ workflow's `permissions:` block is the bound on both.
 | `api-url`         | base URL of an OpenAI-compatible endpoint                                                                                                                        |
 | `api-key`         | key for that endpoint; empty is a supported keyless configuration                                                                                                |
 | `model`           | model id to ask                                                                                                                                                  |
-| `config-path`     | overrides `.github/action-agents/harmonise.json5` / `.json` — see the configuration page                                                                         |
+| `config-path`     | overrides `.github/action-agents/harmonise/harmonise.json5` / `.json` — see the configuration page                                                               |
 | `source-language` | overrides `sourceLanguage`; must name a language the file declares. Today `required: true` — implementation relaxes it to _required unless the file names it_    |
 | `documents`       | glob filter over the source-document set; empty = all of them. Today's default `docs/**/*.md` becomes empty at implementation, because the map defines the space |
 | `dry-run`         | report drift, propose nothing — the default, because the output of a real run is a pull request                                                                  |
 
 ## The config file
 
-`.github/action-agents/harmonise.json5`, in full:
+`.github/action-agents/harmonise/harmonise.json5`, in full:
 
 ```json5
 {

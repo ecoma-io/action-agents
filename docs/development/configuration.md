@@ -9,7 +9,7 @@ consumer; the per-action pages beside this one record each schema.
 A consumer's repository-level policy for an action is one file:
 
 ```text
-.github/action-agents/<action>.json5   or   .github/action-agents/<action>.json
+.github/action-agents/<action>/<action>.json5   or   .github/action-agents/<action>/<action>.json
 ```
 
 - Either extension is accepted, and both are parsed by the same JSON5 parser —

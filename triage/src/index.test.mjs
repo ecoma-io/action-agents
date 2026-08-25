@@ -92,7 +92,7 @@ function prEvent(thread = {}) {
  * @param {Error} [options.writeFailure] thrown by every write
  */
 function fakeForge(options = {}) {
-  const files = options.files ?? { ".github/action-agents/triage.json5": CONFIG };
+  const files = options.files ?? { ".github/action-agents/triage/triage.json5": CONFIG };
   const repoLabels = options.repoLabels ?? REPO_LABELS;
   /** @type {string[]} */
   const reads = [];
@@ -544,7 +544,7 @@ describe("run — where configuration is read from", () => {
 
     await run(inputs(), readContext(runner), world);
 
-    expect(world.forge.reads).toContain(".github/action-agents/triage.json5");
+    expect(world.forge.reads).toContain(".github/action-agents/triage/triage.json5");
   });
 
   it("sends the model only through the seam, with the evidence wrapped", async () => {
