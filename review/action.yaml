@@ -8,7 +8,7 @@ branding:
 
 inputs:
   github-token:
-    description: Token the action writes with. `${{ secrets.GITHUB_TOKEN }}` is enough; the workflow's `permissions:` block is what actually bounds it.
+    description: Token the action writes with. `secrets.GITHUB_TOKEN` is enough; the workflow's `permissions:` block is what actually bounds it.
     required: true
   api-url:
     description: Base URL of an OpenAI-compatible endpoint, e.g. https://api.openai.com/v1
