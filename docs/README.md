@@ -17,12 +17,12 @@ a link that goes nowhere.
 | `triage`, `review`, `harmonise`                            | One page per action: what it decides, and what it is not allowed to decide            |
 | Providers                                                  | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless               |
 
-Doctrine comes first deliberately. The rows below it describe behaviour, and no
-action does its work yet — a getting-started page written now would document a
-step that refuses. What is settled is the design those actions are being built
-toward: the doctrine for the whole, and the development pages for each action's
-architecture and for the ceilings they share, written before the working code
-exists.
+Doctrine comes first deliberately. The rows below it describe behaviour, and
+only `triage` does its work so far — `review` and `harmonise` still refuse
+loudly until their implementation lands, which is why a getting-started page
+would document steps that refuse. What is settled is the design those actions
+are being built toward: the doctrine for the whole, and the development pages
+for each action's architecture and for the ceilings they share.
 
 Alongside it, the three documents at the repository root are the whole of what
 else exists, and each is complete on its own:

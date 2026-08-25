@@ -22,6 +22,12 @@
 
 import { randomBytes } from "node:crypto";
 
+/**
+ * The wrapper factory `createEvidence` returns, named for import elsewhere.
+ *
+ * @typedef {ReturnType<typeof createEvidence>} Evidence
+ */
+
 /** The most evidence one block carries; the cut is marked, never silent. */
 export const MAX_EVIDENCE_BYTES = 64 * 2 ** 10;
 

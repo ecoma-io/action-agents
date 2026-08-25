@@ -19,6 +19,10 @@ inputs:
   model:
     description: Model id to ask.
     required: true
+  config-path:
+    description: Overrides `.github/action-agents/triage.json5` / `.json`, read from the default branch. When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
+    required: false
+    default: ""
   labels:
     description: Comma-separated subset of the label sheet declared in `.github/action-agents/triage.json5`, for this call site only; a name the file does not declare is a startup error, and so is setting this with no file at all, because there is nothing to narrow; empty means no narrowing — with no file there is no sheet and the classification is written as a comment. See SECURITY.md. # consumer path
     required: false

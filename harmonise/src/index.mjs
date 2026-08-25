@@ -31,7 +31,7 @@ import {
 export const ACTION = "harmonise";
 
 /**
- * @typedef {SharedInputs & { sourceLanguage: string, documents: string[], dryRun: boolean }} Inputs
+ * @typedef {SharedInputs & { configPath: string, sourceLanguage: string, documents: string[], dryRun: boolean }} Inputs
  */
 
 /**
@@ -41,6 +41,9 @@ export const ACTION = "harmonise";
 export function readInputs(env = process.env) {
   return {
     ...readSharedInputs(env),
+    // Read and validated here so the manifest's promise and the code agree;
+    // the reader that consumes it lands with harmonise's implementation.
+    configPath: getInput("config-path", {}, env),
     sourceLanguage: getInput("source-language", { required: true }, env),
     documents: getListInput("documents", { default: ["docs/**/*.md"] }, env),
     dryRun: getBooleanInput("dry-run", { default: true }, env),

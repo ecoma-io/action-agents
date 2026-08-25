@@ -4,11 +4,11 @@ The rules that decide where a new piece of code goes, and what an action is
 allowed to become. Written down because the alternative is re-deriving them in
 each pull request, and arriving somewhere slightly different every time.
 
-This page is about design rather than behaviour. At the time of writing no
-action does its work yet — all three read and validate their inputs and refuse
-loudly — so nothing here describes something you can run. It describes what the
-running version is being built toward, and the constraints it is not allowed to
-escape on the way.
+This page is about design rather than behaviour. `triage` does its work; the
+other two actions read and validate their inputs and refuse loudly until their
+implementation lands. Nothing here describes something you can run on its own —
+it describes the shape the running code is built to, and the constraints it is
+not allowed to escape on the way.
 
 ## The shape
 
