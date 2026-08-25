@@ -1,9 +1,12 @@
 name: Triage
 
 # Dogfood: this repository's own `triage` action, classifying its own
-# issues and pull requests. The first phase is a dry run — the action
-# decides and logs, writes nothing — so the whole job runs with read-only
-# permissions and the classifications are read in the run logs.
+# issues and pull requests and applying the labels its own sheet declares.
+# The dry-run phase is over: five real threads — three issues including an
+# adversarial one, two pull requests — classified correctly with nothing
+# written, the adversarial body refused, size measured from a real diff, and
+# the key masked in every log line. Real runs write labels, and only labels;
+# the action's whole write surface is labels and, with no sheet, one comment.
 #
 # The action is referenced as `./triage` from the checkout of the ref that
 # triggered the run, which under `pull_request` is the merge commit of this
@@ -23,14 +26,17 @@ on:
     types: [opened, edited, synchronize, reopened]
   workflow_dispatch:
 
-# Dry-run needs no write at all: the action reads its config, the sheet's
-# labels and the thread, and writes to the log. When the dry-run phase
-# ends, `issues: write` and `pull-requests: write` join this block — the
-# block itself is the security boundary, which is the point of the design.
+# Exactly what a real run writes and nothing more: labels on issues and
+# pull requests. `contents` stays read-only — the config file is read, never
+# written. The block itself is the security boundary, which is the point of
+# the design: a fork's pull request gets a read-only token under
+# `pull_request`, so a real run there fails loudly rather than silently
+# skipping — the posture the action documents, and `continue-on-error`
+# remains a workflow choice nobody has made here.
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
+  issues: write
+  pull-requests: write
 
 # One triage run per thread: a rapid sequence of edits to the same issue
 # replaces the queued run rather than stacking classifications of stale
@@ -58,4 +64,4 @@ jobs:
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
           model: triage
-          dry-run: true
+          dry-run: false
