@@ -15,6 +15,28 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended"],
+  // Every update waits three days after publish before Renovate offers it —
+  // every manager, every dependency type. Malware shipped in a compromised
+  // release is usually detected and yanked within the first days, so the
+  // delay is the cheap half of supply-chain defence; the expensive half is
+  // everything else this repository already does (pinned SHAs, no runtime
+  // dependencies, --ignore-scripts installs).
+  //
+  // Three days also sits comfortably above pnpm 11's own one-day default:
+  // pnpm refuses to install any package younger than that, re-verifying even
+  // entries already pinned in pnpm-lock.yaml on every install, `--frozen-
+  // lockfile` included — which is exactly what CI's first Verify step runs.
+  // Without a floor here Renovate offered releases inside pnpm's window and
+  // CI failed them at install: PR #18 (@types/node 26.3.0) missed the cutoff
+  // by 42 minutes on a diff touching nothing but the lockfile.
+  //
+  // Renovate measures age when it creates the branch and CI runs strictly
+  // later, so anything offered here is already old enough for pnpm to
+  // accept — the two policies cannot race. When a specific young release
+  // must be accepted anyway, the sanctioned path is
+  // `minimumReleaseAgeExclude` in pnpm-workspace.yaml (see the internal
+  // @ecoma-io/archkeep entry there).
+  minimumReleaseAge: "3 days",
   timezone: "UTC",
   // Weekly, not continuous. This is a small, single-maintainer action; a drip
   // of pull requests through the day would be noise rather than signal.
@@ -50,8 +72,9 @@
       // anything else nor merged without reading what changed.
       matchDepTypes: ["dependencies"],
       semanticCommitScope: "deps",
+      // Not grouped with anything else and never merged without reading what
+      // changed — the top-level three-day floor applies here too.
       groupName: null,
-      minimumReleaseAge: "3 days",
     },
     {
       // TypeScript stays on 5.x. TypeScript 7 is the native (tsgo) rewrite and
