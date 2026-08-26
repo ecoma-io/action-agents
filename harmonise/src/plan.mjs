@@ -191,11 +191,19 @@ export async function translatePair(input) {
  * only; any HTML in prose is either accidental or adversarial.
  *
  * Preserved: fenced code blocks, inline code, safe block-level HTML
- * (tables, details, summary). Stripped: script, iframe, object, embed,
+ * (tables, details, summary). Blanked: script, iframe, object, embed,
  * form, input, textarea, select, button, link, meta, base, svg, math,
- * foreignObject, and any on* event-handler attributes. Also strips
+ * foreignObject, and any on* event-handler attributes. Also blanks
  * javascript: URI schemes in href/src attributes and `<!-- harmonise:`
  * directive comments that a model could inject as persistent artifacts.
+ *
+ * "Blanked" is deliberate, and it is what makes the strip sound: every
+ * construct is overwritten in place with spaces of the same length rather
+ * than deleted, so nothing can re-form from the leftovers. Deleting
+ * `<script>` from `<scr<script>ipt>` leaves `<script>` behind — the
+ * incomplete-sanitization class CodeQL flags — while overwriting leaves
+ * `<scr        ipt>`. Same-length overwriting also keeps the masked line's
+ * byte offsets valid, which the code-span restore below depends on.
  *
  * @param {string} text the restored translation
  * @returns {string} sanitised text safe to commit
@@ -211,41 +219,92 @@ export function sanitizeTranslationHtml(text) {
       result[i] = lines[i] ?? "";
       continue;
     }
-    // Mask code spans to protect their interiors from the HTML regex, then
-    // unmask: the NUL replacement is a scanning aid, not a preservation format.
-    const masked = maskCodeSpans(lines[i] ?? "");
-    let line = masked;
-    line = line.replace(
-      /<\s*\/?\s*(?:script|iframe|object|embed|form|input|textarea|select|button|link|meta|base|svg|math|foreignObject)\b[^>]*>/gi,
-      "",
-    );
-    line = line.replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
-    line = line.replace(
-      /(?:href|src)\s*=\s*(?:"[^"]*javascript:[^"]*"|'[^']*javascript:[^']*'|[^\s>]*javascript:[^\s>]*)/gi,
-      "",
-    );
-    line = line.replace(/<!--\s*harmonise:/g, "<!-- ");
-    // Restore code span interiors from the original line using byte offsets.
-    result[i] = unmaskCodeSpans(line, lines[i] ?? "", masked);
+    // Mask code spans to protect their interiors from the HTML regex, blank
+    // the visible text in place, then restore the interiors: the NUL
+    // replacement is a scanning aid, not a preservation format.
+    const line = lines[i] ?? "";
+    const masked = maskCodeSpans(line);
+    const stripped = stripDangerousHtml(masked);
+    result[i] = unmaskCodeSpans(stripped, line, masked);
   }
   return result.join("\n");
 }
 
 /**
+ * Elements and attribute shapes that execute or navigate on their own: the
+ * element list, on* event handlers, and href/src values in the javascript:
+ * scheme, plus the directive-comment prefix a model could forge to steer a
+ * later run. Hoisted to module scope because the fixpoint loop in
+ * `stripDangerousHtml` is part of their contract.
+ */
+const DANGEROUS_TAG =
+  /<\s*\/?\s*(?:script|iframe|object|embed|form|input|textarea|select|button|link|meta|base|svg|math|foreignObject)\b[^>]*>/gi;
+const EVENT_HANDLER = /\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+const SCRIPT_URI =
+  /(?:href|src)\s*=\s*(?:"[^"]*javascript:[^"]*"|'[^']*javascript:[^']*'|[^\s>]*javascript:[^\s>]*)/gi;
+const DIRECTIVE_COMMENT = /<!--\s*harmonise:/g;
+
+/**
+ * Blanks one match in place: same length, all spaces.
+ *
+ * @param {string} match
+ * @returns {string}
+ */
+function blank(match) {
+  return " ".repeat(match.length);
+}
+
+/**
+ * Neutralises a `<!-- harmonise:` directive prefix while keeping the comment
+ * it rode in on — and the line's length, which the code-span restore needs.
+ *
+ * @param {string} match
+ * @returns {string}
+ */
+function blankDirective(match) {
+  return "<!-- " + " ".repeat(match.length - 5);
+}
+
+/**
+ * Blanks every dangerous construct out of one masked prose line, repeating
+ * until nothing changes. In-place overwriting already cannot reconstruct
+ * what it removes; the loop is the second belt — the shape sanitisation
+ * reviewers (CodeQL's incomplete-sanitization rule among them) recognise as
+ * correct for patterns that could ever overlap themselves.
+ *
+ * @param {string} masked
+ * @returns {string}
+ */
+function stripDangerousHtml(masked) {
+  let current = masked;
+  let previous;
+  do {
+    previous = current;
+    current = current
+      .replace(DANGEROUS_TAG, blank)
+      .replace(EVENT_HANDLER, blank)
+      .replace(SCRIPT_URI, blank)
+      .replace(DIRECTIVE_COMMENT, blankDirective);
+  } while (current !== previous);
+  return current;
+}
+
+/**
  * Restores code span interiors from the original line. `masked` has NUL
  * characters where the interiors were; `original` has the real content.
- * Because `maskCodeSpans` preserves byte length, a NUL in `masked` at
- * position i corresponds to the same position in `original`.
+ * Because `maskCodeSpans` preserves byte length and the strip blanks in
+ * place, a NUL in `masked` at position i corresponds to the same position
+ * in `original` and in `stripped`.
  *
- * @param {string} sanitized the line after HTML stripping on the masked version
+ * @param {string} stripped the line after in-place blanking on the masked version
  * @param {string} original the untouched source line
  * @param {string} masked the NUL-masked version used for scanning
  * @returns {string}
  */
-function unmaskCodeSpans(sanitized, original, masked) {
+function unmaskCodeSpans(stripped, original, masked) {
   let out = "";
-  for (let i = 0; i < sanitized.length; i++) {
-    out += (masked[i] === "\u0000" ? original[i] : sanitized[i]) ?? "";
+  for (let i = 0; i < stripped.length; i++) {
+    out += (masked[i] === "\u0000" ? original[i] : stripped[i]) ?? "";
   }
   return out;
 }

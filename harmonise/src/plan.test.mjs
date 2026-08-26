@@ -2,9 +2,10 @@
 //
 // The sanitiser is a defence against HARM-001: model translation output
 // committed verbatim can carry HTML that executes if the repository serves
-// translated docs through GitHub Pages or similar. The sanitiser strips
-// dangerous HTML from prose while preserving fenced code blocks and code
-// spans unchanged.
+// translated docs through GitHub Pages or similar. The sanitiser blanks
+// dangerous HTML from prose in place — overwriting with same-length spaces,
+// never deleting, so a construct cannot re-form from the leftovers — while
+// preserving fenced code blocks and code spans unchanged.
 
 import { describe, expect, it } from "vitest";
 
@@ -63,8 +64,9 @@ describe("sanitizeTranslationHtml", () => {
     const input = "Text\n<!-- harmonise:skip -->\nMore text.";
     const result = sanitizeTranslationHtml(input);
     expect(result).not.toContain("harmonise:skip");
-    // The directive prefix is stripped but the comment delimiters remain.
-    expect(result).toContain("<!-- skip -->");
+    // The directive prefix is blanked in place: the comment survives with
+    // its content whitespace-padded, and the line keeps its length.
+    expect(result).toMatch(/<!--\s+skip -->/);
   });
 
   it("preserves safe HTML like tables and details", () => {
@@ -100,5 +102,47 @@ describe("sanitizeTranslationHtml", () => {
     const input = "# Title\n\nNo HTML here.\n\n- item 1\n- item 2";
     const result = sanitizeTranslationHtml(input);
     expect(result).toBe(input);
+  });
+
+  it("cannot reconstruct a stripped tag from nested leftovers", () => {
+    // A deleting strip turns <scr<script>ipt> into <script> — the inner tag
+    // removed, the outer one re-formed from the leftovers. Blanking in place
+    // leaves <scr        ipt>, from which nothing re-forms.
+    const input = "<scr<script>ipt>alert(1)</scr</script>ipt>";
+    const result = sanitizeTranslationHtml(input);
+    expect(result.toLowerCase()).not.toContain("script");
+  });
+
+  it("blanks nested event-handler spellings whole", () => {
+    const input = "<div ononfocus=alert(1)>text</div>";
+    const result = sanitizeTranslationHtml(input);
+    expect(result).not.toContain("onfocus");
+    expect(result).not.toContain("ononfocus");
+    expect(result).toContain("text");
+  });
+
+  it("preserves code spans on a line where HTML was blanked", () => {
+    // Regression: a deleting strip shifted the mask's byte offsets, so the
+    // restore wrote NUL bytes where the span interior belonged.
+    const input = "a <script>alert(1)</script> and `code` here";
+    const result = sanitizeTranslationHtml(input);
+    expect(result).not.toContain("<script");
+    expect(result).toContain("`code`");
+    expect(result).not.toContain(String.fromCharCode(0));
+  });
+
+  it("keeps every line's length — the code-span restore aligns by column", () => {
+    const input = [
+      "# Title",
+      "",
+      "<script>alert(1)</script>",
+      "Text with `code` and <iframe src=x></iframe>.",
+      "<!-- harmonise:skip -->",
+    ].join("\n");
+    const resultLines = sanitizeTranslationHtml(input).split("\n");
+    const inputLines = input.split("\n");
+    for (const [index, line] of inputLines.entries()) {
+      expect(resultLines[index]?.length).toBe(line.length);
+    }
   });
 });
