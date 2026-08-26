@@ -72,6 +72,16 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
       // fr: ".github/action-agents/harmonise/fr-instruction.md",
     },
   },
+
+  // Optional. The commit subject and pull-request title a run publishes,
+  // when this repository's own law differs from the built-in convention.
+  // `{n}` is how many documents the run proposes; `{sourceLanguage}` is the
+  // configured source language — those two placeholders are all there is,
+  // substituted deterministically at publish time, never by the model.
+  // Absent, the built-in shape stands unchanged.
+  pullRequest: {
+    title: "docs(i18n): sync {n} documents from {sourceLanguage}",
+  },
 }
 ```
 
@@ -88,6 +98,11 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
 - the `documents` input, when set, must match at least one source document —
   narrowing to nothing is a misconfiguration, not an empty schedule;
 - every `glossary` entry must be a non-empty string;
+- a `pullRequest.title` template, when present, may carry only `{n}` and
+  `{sourceLanguage}` — any other brace group, unpaired brace or empty
+  placeholder is refused; the template is non-empty, non-whitespace, and
+  within the title length cap. The pull-request **body** is not customisable:
+  it stays action-authored.
 - all instruction documents, if present, must be ≤ 8 KiB — prose past the cap
   is refused rather than silently truncated.
 
@@ -426,11 +441,13 @@ Real runs write one commit to one branch and maintain one pull request:
 
 ```text
 branch   harmonise/<source-language>            — force-updated each run to the
-                                                  default branch's current HEAD
-commit   "chore(harmonise): sync <n> document(s) with <source-language>"
-         conventional-commits shape, because the pull request title is this
-         repository's commit subject and commitlint judges it like any
-         other — "harmonise" is a scope here, never a type. One commit,
+                                                   default branch's current HEAD
+commit   the run's one title, as its subject —
+         by default "chore(harmonise): sync <n> document(s) with <source-language>",
+         or the repository's own `pullRequest.title` template rendered with
+         <n> and <source-language>. Conventional-commits shape, because this
+         repository's commitlint judges its pull-request title like any other
+         — "harmonise" is a scope here, never a type. One commit,
          every changed file:
          - updated existing translations
          - new missing translations
@@ -561,7 +578,7 @@ This specification represents a substantial foundation for `harmonise`, but the 
 - Zero pairs discovered (valid config with no matches)
 - Pattern overlap leading to dual classification
 - Language key ref-name validation
-- Commit/PR attribution and title format
+- ~~Commit/PR attribution and title format~~ — settled: the title is the repository's own via `pullRequest.title` (issue #30)
 - Dry-run report format and destination
 
 **Link rewriting complexity:** Relative link recomputation across directories is specified; complex paths (deep nesting, encoded segments) resolve through the same deterministic algorithm, but exotic destinations — angle-bracket destinations, backslash separators — pass through untouched in v1.
@@ -574,6 +591,7 @@ The specification is living text, and changes to it are recorded here rather tha
 
 - **PR2:** Localized internal image references are specified and supported (the earlier "image rewriting removed" v1 limitation is superseded). Inventory completeness is a refusal contract: a truncated tree listing fails the run instead of being processed. Skip-directive syntax, protected-span boundaries, and pattern-overlap refusal are made exact.
 - **Correctness hardening:** Glossary detection is specified as whole-word — a term flanked by a letter, digit or underscore never matches — and its scope excludes link machinery: inline link and image destinations, reference-definition destinations, angle autolinks, and bare scheme URLs. Newline handling is pinned by test: protected content round-trips byte-for-byte under LF, CRLF, mixed newlines, and a missing final newline. Document resolution is answered from the inventory's own index rather than a per-link scan of `pairs`.
+- **Title customization (#30):** The commit subject and pull-request title — one line, always — may be renamed by the repository through the optional `pullRequest.title` config key. `{n}` and `{sourceLanguage}` are its only placeholders, substituted deterministically at publish time; absent, the built-in convention stands byte-for-byte unchanged. The pull-request body stays action-authored.
 
 ## Acceptance criteria
 

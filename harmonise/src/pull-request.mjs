@@ -6,6 +6,7 @@
  * report a reviewer reads before deciding.
  */
 
+import { MAX_TITLE_CHARS } from "./config.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
 /** @typedef {import("./inventory.mjs").Inventory} Inventory */
@@ -21,6 +22,37 @@ import { sanitiseCommentText } from "#core/sanitise.mjs";
 
 /** How much of any one summary line survives into the body. */
 const MAX_SUMMARY_CHARS = 300;
+
+/**
+ * The run's one title — the commit subject and the pull-request title are the
+ * same line, whatever convention the repository keeps. Without a configured
+ * template the built-in shape stands, pluralized code-side exactly as it
+ * always was; with one, `{n}` and `{sourceLanguage}` substitute
+ * deterministically from facts this run already derived, and the template's
+ * own wording owns singular/plural. No model ever sees this decision.
+ *
+ * @param {import("./config.mjs").HarmoniseConfig} config
+ * @param {number} count how many documents this run proposes
+ * @returns {string}
+ */
+export function renderPullRequestTitle(config, count) {
+  const template = config.pullRequest?.title;
+  const title =
+    template === undefined
+      ? `chore(harmonise): sync ${String(count)} ` +
+        `${count === 1 ? "document" : "documents"} with ${config.sourceLanguage}`
+      : template
+          .replaceAll("{n}", String(count))
+          .replaceAll("{sourceLanguage}", config.sourceLanguage);
+
+  if (title.length > MAX_TITLE_CHARS) {
+    throw new Error(
+      `the rendered title is ${String(title.length)} characters, past the ` +
+        `${String(MAX_TITLE_CHARS)}-character cap — shorten the template`,
+    );
+  }
+  return title;
+}
 
 /**
  * @param {PullRequestReport} report

@@ -33,7 +33,7 @@ import { loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
 import { buildInventory } from "./inventory.mjs";
 import { matchGlob } from "./glob.mjs";
 import { MAX_SOURCE_BYTES, preparationRefusal, preparePair, translatePair } from "./plan.mjs";
-import { buildPullRequestBody } from "./pull-request.mjs";
+import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -344,12 +344,11 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   }
 
   const branch = branchName(config.sourceLanguage);
-  // Conventional-commits shape, because the pull request title is this
-  // repository's commit subject and commitlint judges it like any other:
-  // "harmonise" is a scope here, never a type.
-  const title =
-    `chore(harmonise): sync ${String(proposed.length)} ` +
-    `${proposed.length === 1 ? "document" : "documents"} with ${config.sourceLanguage}`;
+  // One title for the commit subject and the pull request alike: the
+  // repository's own convention when its config names one, the built-in
+  // conventional-commits shape otherwise — "harmonise" is a scope there,
+  // never a type.
+  const title = renderPullRequestTitle(config, proposed.length);
 
   // Blobs first, then exactly one tree layered over the audited base, one
   // commit on top, one branch pointing at it, one request carrying it.
