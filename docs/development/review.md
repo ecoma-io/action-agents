@@ -1,10 +1,12 @@
 # Development — `review`
 
 Design, not behaviour: nothing on this page runs yet. This is the architecture
-`review` is to be built to, written before implementation starts. The shared
-mechanism it rests on — file discovery, the default branch, precedence — is in
-[the configuration page](configuration.md). The design was benchmarked against
-the configuration surfaces of the two established AI reviewers, CodeRabbit and
+`review` is to be built to, written before implementation starts — and, since
+implementation is now planned, it doubles as the implementation contract: every
+behaviour below is stated precisely enough to test. The shared mechanism it
+rests on — file discovery, the default branch, precedence — is in [the
+configuration page](configuration.md). The design was benchmarked against the
+configuration surfaces of the two established AI reviewers, CodeRabbit and
 cubic; where an option of theirs is absent here, the reason is recorded rather
 than left to look like an oversight.
 
@@ -25,7 +27,19 @@ because a fork's pull request gets a read-only token and no secrets. Combining
 `pull_request_target` with a checkout of the pull request's head is the
 "pwn request" pattern; the security policy at the repository root carries that
 argument, and this action is designed so that nothing about it encourages the
-arrangement.
+arrangement. A fork's pull request reaches the action, but disarmed twice: the
+token the event carries is read-only, and the endpoint's secrets are not
+passed at all, so `api-url` arrives empty and [startup
+validation](#inputs) refuses the run before the provider is contacted — a red
+cross on a run that read nothing, judged nothing, and wrote nothing.
+
+Activity types: `opened`, `synchronize`, `reopened`, `ready_for_review`.
+`edited` is deliberately absent — a re-worded description does not change the
+code under review, and re-reviewing it would only churn the comment.
+`ready_for_review` is present so a pull request first opened as a draft is
+reviewed the moment it is declared ready. An event that reaches the action
+under any other name is a red refusal, not a silent success — the same posture
+as `triage`'s thread reader.
 
 Permissions: `contents: read` and `pull-requests: write` — a comment is the
 whole write surface.
@@ -33,6 +47,64 @@ whole write surface.
 A draft pull request is skipped with a log line and nothing else: a draft says
 "not ready", and reviewing it anyway reviews something the author has not
 finished saying.
+
+## The reviewed snapshot
+
+The review target is a pair of commits: the pull request's head SHA and its
+base SHA, both taken from a single `GET /pulls/{number}` read at the start of
+the run. Everything the review consumes belongs to that snapshot: the pull
+request's metadata, the changed-file inventory, the per-file diff patches, and
+every workspace read. Nothing is re-read from a moving branch; the head SHA is
+pinned once and compared again once, before publication (see
+[Pull request state](#pull-request-state)).
+
+Under `pull_request` the checked-out tree is the merge preview — head merged
+onto base — not the head commit itself, and the spec says so rather than
+pretending otherwise: **the workspace is declared to be the merge preview of
+the reviewed head onto the pinned base**, and every workspace read reflects
+that. For a file the pull request changes and base does not touch — the common
+case — the preview is byte-identical to head. Where both sides modified a file
+without a textual conflict, reads show the merged result, which is also what
+will ship; finding anchors are validated against that same copy, so anchor and
+evidence can never disagree about what a line contains. No byte-hash
+comparison against head blobs is attempted: it would false-red on ordinary
+checkouts (`.gitattributes` EOL smudging, LFS smudging) and would have to read
+committed symlinks to work at all. What pins the review to a commit is the API
+side — inventory and patches come from the pinned head SHA — and what prevents
+stale publication is the pre-publication guard below.
+
+Every touch of the working tree goes through one confined resolver, tools and
+non-tool reads alike: the path resolves through `realpath`, the resolved
+location must land inside `GITHUB_WORKSPACE`, anything under `.git` is
+refused outright, and only regular files are ever opened. A changed file that
+is a symlink or a directory in the checkout carries no readable snapshot
+content; its anchors are refused with a log line, never followed. A second
+resolution after opening is not attempted: the threat model in `SECURITY.md`
+at the repository root covers untrusted _content_, not a concurrent
+local attacker rewriting the runner's own checkout mid-review.
+
+## Pull request state
+
+At the start of the run, one read fixes the state:
+
+- draft → skip: a green run, a log line, nothing written;
+- closed or merged → skip, same shape;
+- open → the review proceeds.
+
+State changing _during_ the run is handled by the pre-publication guard, not
+by polling: the review completes its work, then checks once more, immediately
+before writing, that the pull request is still open and still at the reviewed
+head SHA. Either check failing abandons the publication — a green run whose
+log says the pull request moved underneath it. Commenting review of commit A
+on a pull request now sitting at commit B is the one outcome here that would
+be worse than no comment, and two independent guards stand against it: this
+pre-publication re-check first, and core's marker head-guard at the write
+itself. The guards share one honest limitation, stated rather than hidden:
+the marker guard compares GitHub-server timestamps against the runner's own
+clock, so a sufficiently skewed clock narrows it. That is why there are two
+guards and why the pre-publication check — which compares SHAs read seconds
+apart, no clocks involved — is the load-bearing one. A skip and an abandonment
+are honest no-ops: no work was claimed, so nothing is red.
 
 ## Inputs
 
@@ -49,7 +121,7 @@ finished saying.
 
 The seed `action.yaml` carries an `instructions-path` input; the config file's
 instruction documents supersede it. Nothing has shipped, so the input is
-reshaped now rather than deprecated later.
+removed when `review` ships rather than deprecated later.
 
 ## The config file
 
@@ -105,6 +177,64 @@ reshaped now rather than deprecated later.
 - a rule that matches no changed file in a given pull request is dormant, not
   an error — rules are declared for the repository, not for one diff.
 
+Validation runs before the first model call. An invalid configuration is a red
+refusal that never reaches the provider.
+
+### Ignore is a universe filter
+
+`ignore` defines what does not exist for this review. A path matching the
+ignore set is excluded from all of these, before anything else happens:
+
+- the changed-file inventory the model sees;
+- the `maxDiffLines` basis;
+- rule matching — a rule whose only matches are ignored is dormant;
+- the diff evidence handed to the model;
+- tool visibility. This is the strong half, and it is deliberate: `read_file`
+  on an ignored path is refused with a tool error saying so, `list_files`
+  omits ignored entries, and `search` skips ignored files. There is no path
+  where a file is excluded from the count yet discoverable anyway — an ignore
+  set that only hid files from the summary would be bookkeeping, not a
+  ceiling.
+
+Patterns use the one glob dialect of [the configuration
+page](configuration.md). A file's membership is decided by the path it has at
+the reviewed head — the new path for a rename, the recorded path for a
+deletion. The old path of a rename is never consulted: renamed out of the
+ignore set, the file is reviewed under its new name; renamed into it, the
+file is gone, whatever it used to be called. Negation (`!`) composes with
+this exactly as the dialect's last-match-wins rule says it does.
+
+### Rules
+
+All rules whose `include` matches at least one non-ignored changed file apply,
+in config order, each contributing its instruction document. Rules are
+additive: several may apply at once, and none overrides another, the system
+contract, or the output contract — a rule document is guidance for judging,
+never a grant of capability (see [the trust hierarchy](#the-trust-hierarchy)).
+No matching rule is dormancy, not an error.
+
+## Diff accounting
+
+`maxDiffLines` is counted, never asked for. The count is the sum of
+`additions + deletions` over the changed files that survive the ignore filter,
+taken straight from GitHub's files API — the model is never in a position to
+supply or influence the number. Renames contribute their own additions and
+deletions; binary files, mode-only changes and submodule bumps contribute what
+GitHub reports for them (normally zero).
+
+When the count exceeds `maxDiffLines` the review is refused outright, red,
+naming the counted total and the excluded remainder. The split is
+deterministic: files accumulate in ascending path order — byte-wise, UTF-8
+byte order, the only collation this document means wherever it says "sorted" —
+until the budget breaks; that file and everything after it in that order is
+the remainder. A half-reviewed diff presented as a complete review is
+refused, not truncated.
+
+Each non-ignored changed file's patch enters the prompt as its own evidence
+block, capped at 64 KiB like any tool result. Where GitHub supplies no patch —
+binary files, oversized diffs — the block says so instead of inventing one,
+and the model can fall back to `read_file`.
+
 ## The tool surface
 
 The doctrine raises this as a ceiling question; here is the answer. The loop's
@@ -112,20 +242,100 @@ tools are **fixed in code, and no input and no config key adds one** — a tool
 an author cannot add is a tool an attacker cannot aim.
 
 ```text
-read_file   one file's content, by path relative to the workspace
-list_files  the files under a path
-search      lines containing a fixed substring, with file and line
+read_file   { "path": string }
+list_files  { "path": string }
+search      { "query": string, "path"?: string }
 ```
 
-All three are read-only. Every path is resolved through `realpath` and refused
-unless it lands inside `GITHUB_WORKSPACE`; `.git` is refused outright, because
-it holds the credential the checkout was performed with. No shell, no network,
-no write, ever. Each tool result enters the transcript wrapped as evidence —
-a file's content is data about the change, never an instruction to the
-reviewer. Every tool result is capped (64 KiB) and the cut is marked, never
-silent; `search` matches a fixed substring, not a regular expression — a pattern
-language is an unbounded compute surface, and a bounded tool is the point of a
-fixed list; at most 200 matches per search.
+`path` is relative to the workspace root; `search`'s `path` narrows the scan
+to a subtree and defaults to the whole workspace.
+
+### Call validation
+
+Every call is checked against its schema before anything executes:
+
+- unknown tool name, missing argument, wrong-typed argument, or an extra
+  property → a tool error result the model sees, naming the defect. The turn
+  still counts. Malformed calls are never repaired, coerced or guessed at;
+- a path longer than 4096 bytes or a query longer than 512 bytes → the same
+  kind of tool error result;
+- violations of the wire contract itself — `arguments` that is not valid JSON,
+  duplicate tool-call ids in one response, a result id that answers no
+  outstanding call → provider failure, red. Those are defects in the
+  conversation protocol, not in the model's manners, and the distinction is
+  held: manners errors come back as tool results; protocol defects kill the
+  run.
+
+Several tool calls may arrive in one response. They execute sequentially in
+the order given, each validated and capped on its own, each counted against
+the per-run tool ceiling. Prose accompanying tool calls is carried in the
+transcript verbatim and treated as data.
+
+### What each tool does
+
+- `read_file` — one file's content. Refused, with a reason, for: paths that
+  resolve outside `GITHUB_WORKSPACE`; anything under `.git` (the checkout's
+  credentials live there); ignored paths; directories; symlinks and any other
+  non-regular file; binary content — a NUL byte in the first 8 KiB marks a
+  file binary. Text is returned as-is otherwise; the 64 KiB evidence cap
+  applies with its visible cut.
+- `list_files` — every regular file beneath the directory, recursively, one
+  path per line relative to the workspace root, sorted byte-wise. Capped at
+  500 entries with a marked cut. Ignored paths and `.git` are omitted.
+  Symlinks are never followed while listing — a symlink is not a regular
+  file, so it appears as nothing at all — which makes traversal cycles
+  impossible by construction rather than by detection.
+- `search` — lines containing a fixed substring, case-sensitive. Not a
+  regular expression: a pattern language is an unbounded compute surface, and
+  a bounded tool is the point of a fixed list. At most 200 matches, then a
+  marked cut; results grouped by file in byte-wise path order, each match
+  carrying its 1-based line number and the trimmed line text. The scan itself
+  is bounded too — at most 8 MiB of bytes read per search, then a marked cut
+  naming how much was scanned — because capping matches caps the output, not
+  the work, and untrusted content must not be able to make the run spend
+  forever reading. Binary files, ignored files and `.git` are skipped.
+
+Every result enters the transcript wrapped as evidence — a file's content is
+data about the change, never an instruction to the reviewer. Symlink policy is
+uniform and strict: a final-component symlink is never followed — `read_file`
+refuses it by type, and listing and search skip it — so a link aimed outside
+the workspace cannot leak what it points at, because nothing ever reads
+through a link. Resolving through `realpath` stays as the containment
+backstop for intermediate links, and anything under `.git` in the resolved
+path is refused. No shell, no network, no write, ever.
+
+## Hard ceilings
+
+The user-facing knobs are `max-turns`, `context-window` and `maxDiffLines`.
+Underneath them sit universal ceilings, fixed in code, not exposed as inputs —
+a ceiling an input could raise is a preference, not a ceiling:
+
+| Ceiling                  | Value                   | Fires when                                         |
+| ------------------------ | ----------------------- | -------------------------------------------------- |
+| tool calls per review    | 200                     | the loop has executed 200 tool calls               |
+| cumulative tool evidence | 512 KiB                 | wrapped tool results have carried 512 KiB in total |
+| per-result size          | 64 KiB                  | one tool result exceeds it — cut, marked           |
+| search matches           | 200                     | one search — see above                             |
+| bytes scanned per search | 8 MiB                   | one search — see above                             |
+| listed entries           | 500                     | one `list_files` — see above                       |
+| findings per review      | 50                      | the answer declares more                           |
+| message length           | 1000 chars              | sanitiser truncation, visible                      |
+| summary length           | 300 chars               | sanitiser truncation, visible                      |
+| initial prompt budget    | half the context window | the assembled prompt would exceed it               |
+
+The last row closes the gap the others cannot see: the diff evidence enters
+the prompt before any tool runs, so the cumulative-evidence ceiling never
+counts it. Before the first model call, the fully assembled messages are
+estimated (see [the loop](#the-loop-and-the-prompt) for the estimator) and a
+prompt past half the configured window is refused, red, with the estimate
+named — a review that cannot fit is refused, not silently truncated into a
+smaller-looking one.
+
+Reaching the tool-call or cumulative-evidence ceiling ends the reading phase
+exactly as reaching `max-turns` does: the loop makes one finalisation request
+(see below) and the review concludes partial. The log names the ceiling that
+fired. None of these ceilings can be lifted by configuration, by an
+instruction document, or by anything the model says.
 
 ## The loop, and the prompt
 
@@ -133,20 +343,84 @@ Assembled in one order, then extended as the loop runs:
 
 ```text
 1  system    the task, the output contract, the repository's name and
-             description, the pull request's title and base…head range
+             description, the base…head range under review
 2  custom    the instruction document, if it exists
-3  rules     every rule whose include matches a changed file, its document
-4  evidence  the diff — then, as the loop runs, each tool result
+3  rules     every rule whose include matches a changed file, its document,
+             in config order
+4  evidence  the pull request's title and body, the per-file diff patches,
+             then, as the loop runs, each tool result
 ```
 
-The model asks for tools until it stops asking or `max-turns` is reached. The
-transcript is compacted before `context-window`, deterministically — an
-inventory of what was read (paths and ranges) replaces the raw results, and
-findings so far are kept verbatim. Compaction is code, not a model call: a
-summary a model wrote is never allowed to become context the loop trusts.
-Reaching `max-turns` ends the review and **the comment says it is partial**; a
-partial review presented as a complete one is the one dishonesty this design
-refuses.
+The tiers map onto the protocol's three roles exactly once, so no implementer
+guesses: tiers 1–3 are concatenated, in that order, into the single `system`
+message — several providers reject multiple system messages, and one message
+leaves no ordering ambiguity. Tier 4 opens the single `user` message as
+wrapped evidence blocks; from then on each tool result rides in a `tool`
+message of its own, as the chat-completions wire format requires.
+
+One thing is placed deliberately low: the pull request's title and body are
+attacker-authored text, so they enter as wrapped evidence, below every
+instruction tier — not in the system message, however convenient that would
+be. The repository's name and description are maintainer-set configuration and
+stay in the system message.
+
+One turn is one model response, and the accounting is exact:
+
+- a response carrying tool calls is a reading turn; executing its calls never
+  costs turns, only tool-call budget;
+- `max-turns` bounds reading turns;
+- when a reading turn is consumed and none is left, the loop sends **one**
+  finalisation request — transcript plus an explicit instruction to answer
+  now, tools withheld from the request so no further tool call is even
+  expressible. Its content is the final-answer candidate, and the review is
+  partial, bound named;
+- the same finalisation request ends the loop when the tool-call or evidence
+  ceiling fires first;
+- a response carrying no tool calls while reading turns remain is a natural
+  stop: its content is the final-answer candidate, and the review will be
+  complete if the candidate validates;
+- a structurally invalid candidate on the natural-stop path gets **one**
+  re-ask — same transcript, corrective instruction, tools withheld, logged.
+  The re-ask is not a reading turn and cannot itself call tools; failing it is
+  red. No re-ask follows a bound-driven finalisation — that request already
+  was the second chance.
+
+The transcript is compacted before `context-window` is reached — when the
+token estimate crosses 80% of the window — deterministically, in code: the
+system message and the original task message with its diff evidence are kept;
+every later exchange is replaced by one state message holding the inventory a
+reviewer would need to continue — turns used, tools called, files read,
+search hits with their line numbers, tool errors, and the findings so far
+verbatim. Raw tool bodies and the model's own prose along the way are
+discarded wholesale; findings survive because at that point they are
+code-validated structured data, not trusted prose. Compaction may run before
+any request, including a finalisation or re-ask. It is code, not a model
+call: a summary a model wrote is never allowed to become context the loop
+trusts, which is why the model's prose is discarded rather than summarised by
+it.
+
+The estimator feeding both the 80% trigger and the initial prompt budget is
+fixed so two implementations agree: per UTF-8 byte ÷ 4, except that
+codepoints above U+2E80 count at byte ÷ 1.5 instead of ÷ 4 — crude on purpose,
+biased against underestimating CJK-heavy text, and identical everywhere it
+runs.
+
+## The trust hierarchy
+
+```text
+system contract
+  > repository instruction document
+  > rule documents
+  > pull request title, body and diff
+  > tool results
+```
+
+Lower tiers are data; only the upper tiers steer. The instruction and rule
+documents are configuration — they add judgement, never capability: no text at
+any tier can grant a shell, network access, a write, an additional tool, a
+raised ceiling, or a relaxed output contract, because those surfaces are fixed
+in code and no code path reads them from the prompt. [Doctrine](../doctrine.md)
+states the principle; this design is where it becomes a floor plan.
 
 ## The output contract
 
@@ -160,16 +434,143 @@ refuses.
 }
 ```
 
-The severity vocabulary — `concern` and `nit` — is fixed in code and validated
-like a sheet: an answer outside it is refused and logged, never coerced.
-`strictness` filters what survives into the comment. `message` and `summary`
-pass through the sanitiser before they reach anything a human reads.
+No other field exists in v1: no verdict, no score, no approval state. Parsing
+follows the shared answer conventions — one wrapping fence stripped, the
+outermost brace-balanced object, JSON5 — with one correction stated here so it
+survives the copy this action owns: the brace scanner tracks both single- and
+double-quoted strings, or a message like `'it{ breaks'` corrupts the balance
+and a well-formed answer dies in extraction. The shape
+is strict: the object holds exactly `findings` and `summary`; each finding
+holds exactly `severity`, `file`, `line` and `message`.
+
+Severity is the fixed two-value vocabulary — `concern` and `nit` — and the
+refusal unit is the single finding, matching how anchors are judged: a finding
+whose severity sits outside the vocabulary is dropped and logged with the
+finding that produced it, never coerced, while the run continues on the
+strength of its valid findings. This is deliberately not `triage`'s
+whole-answer sheet semantics — there the labels _are_ the product, here a
+review's product is a list, and one malformed entry must not poison twenty
+good ones.
+
+### Finding validation
+
+Structural validity is necessary but not sufficient. Each finding is then
+checked against the reviewed snapshot:
+
+- `file` is a repository-relative path belonging to the non-ignored
+  changed-file inventory — renamed files anchor to their new path; a deleted
+  file, an ignored file, or a file the pull request does not touch is an
+  invalid anchor;
+- the file must be readable as text in the verified workspace copy — a
+  binary file (a NUL byte in the first 8 KiB), a symlink, or a directory is
+  an invalid anchor. A committed-secret worry about a binary change belongs
+  in the summary, where the model can raise it unanchored;
+- `line` is a 1-based line in the new file, at least 1 and at most the file's
+  line count in the verified workspace copy — contextual lines are legitimate
+  anchors, not only diff hunks.
+
+An invalid finding is rejected individually and logged with the finding that
+produced it — the run is not failed for one bad anchor among good ones, and
+nothing is coerced into looking valid. Strictness then filters what survives:
+at `low`, nits are discarded; at `medium`, nits are kept and rendered
+collapsed; at `high`, everything is kept, nothing collapsed. Filtering and
+rendering are deterministic code — the model never controls its own inclusion
+bar.
+
+Survivors are deduplicated — identity is `(file, line, severity, message)`
+with the message trimmed, so only exact logical duplicates collapse, never two
+genuine findings that happen to share a line — then ordered: concerns before
+nits, then file path byte-wise ascending (UTF-8 byte order — the only
+collation this document means wherever it says "sorted"), then line numerically
+ascending, then message byte-wise ascending. Whatever order the model produced
+is discarded. The findings cap takes the first 50 of that order and logs the
+overflow. `message` and `summary` pass through the sanitiser before they reach
+anything a human reads, with its visible truncation marks.
+
+The rendered anchor is defanged with the same care as the message: an
+inventory path carries attacker influence just as model text does — filenames
+are chosen on the attacking branch — so backticks, angle-bracket sequences and
+HTML-comment delimiters are stripped from the _displayed_ path before it is
+placed inside the comment's backticks. Matching is done on the exact name;
+rendering, on the defanged copy.
+
+If the final answer is structurally invalid — unparsable, wrong shape, unknown
+keys — the loop follows the re-ask rule of [the loop](#the-loop-and-the-prompt):
+one corrective request, tools withheld, logged; failing it, red. A provider
+that keeps failing the contract is not something to hide behind a green check.
+
+## Review states
+
+Every run ends in exactly one of three states:
+
+- **COMPLETE** — the model terminated normally and produced a valid,
+  fully-validated answer. Publish: the marker comment is upserted with the
+  findings — or, when there are none, with a literal "No findings.", so a
+  clean re-review clears whatever an earlier push left behind.
+- **PARTIAL** — a bound ended the review honestly: `max-turns`, the tool-call
+  ceiling, the evidence ceiling, or a bounded-completion answer after such a
+  bound. Publish, with the partial status prominent at the top of the comment
+  and the bound that fired named.
+- **FAILED** — provider failure, invalid configuration, a pull request past
+  the changed-file ceiling, a prompt past the initial budget, a broken
+  conversation protocol, or a persistently malformed final answer — any
+  unrecoverable error. Write nothing. The previous complete review, if one
+  exists, stays exactly as it is — a failed re-review must never destroy the
+  last known-good record.
+
+Skips and abandonments are none of these: nothing was reviewed, so nothing is
+written and the run goes green with its log line.
 
 ## The comment
 
-One marker comment, upserted — created on first review, updated on every run
-after. Findings grouped by severity, each anchored to its file and line. The
-comment records the head commit it reviewed.
+One marker comment, upserted — created on the first published review, updated
+on every run after; never duplicated. The marker carries the reviewed head SHA
+in its `head=` field, which is what makes core's concurrent-run guard work:
+two racing runs cannot clobber each other, and the loser walks away.
+
+Identity rules for that upsert, stated because a naive reading of "find my
+comment" deletes other people's words: a candidate is a comment carrying this
+action's marker **and** authored by a known bot identity — `github-actions[bot]`
+or its App-token kin. A maintainer who quotes the review copies the marker
+into their own comment; that quote is never updated and never deleted — it is
+theirs, and claiming it would be destroying user content while the genuine
+review still stands elsewhere. When candidates exist, the newest wins, the
+body is written there, and any surplus _bot-authored_ marker comments are
+removed; when none exists but foreign marker-bearing comments do, a fresh
+marker is created and the situation is logged, never repaired by force.
+
+```markdown
+**Review** — Complete
+Reviewed head `414dd39a…`
+
+<summary line>
+
+### Concerns (1)
+
+- `core/src/chat.mjs:42` — message…
+
+### Nits (2)
+
+- `core/src/http.mjs:7` — message…
+```
+
+At `medium` strictness the nits section renders inside a collapsible
+`<details>` block — each nit still individually anchored, one click away, not
+hidden. At `low` there is no nits section; at `high` there is no collapsing.
+
+The body carries the status, the reviewed head SHA, the summary and the
+findings — and nothing volatile: no timestamp (the comment interface shows
+when it was last updated), no run number, nothing that churns the comment
+without changing the review. Model-supplied text passes the sanitiser before
+rendering, so markers, HTML and mentions cannot be forged into the body.
+
+Two boundary cases fix stale-record drift: a run that finds every changed file
+ignored updates the marker comment, if one exists, to a deterministic
+"Nothing to review." body — stale findings from an earlier push must not
+outlive their own relevance — and creates nothing when no marker exists. A run
+whose publication is abandoned leaves the previous comment untouched, head SHA
+and all, which is exactly the record a maintainer wants while they look at
+what moved.
 
 `incremental` — re-reviewing only commits pushed since the last review — is
 **designed and deliberately absent**. The comment is replaced, not appended;
@@ -181,22 +582,40 @@ that simplicity is a full review each run. The key is additive when the
 carry-forward lands, and the marker's recorded head commit is what it will
 need.
 
+## Dry run
+
+`dry-run: true` is absolute zero mutation: no comment created, updated or
+deleted; nothing else exists to mutate — the action has no other write surface
+to suppress. The rendered comment body is logged instead, so a dry run shows
+precisely what would have appeared. Dry run changes nothing about the reading
+side: the same snapshot checks, the same ceilings, the same validation.
+
 ## Edge cases
 
-- every changed file ignored → nothing to read: no comment, a green run, and
-  a log line saying so;
-- `maxDiffLines` exceeded → a red refusal naming the counted total and the
-  excluded remainder;
-- `max-turns` reached → a partial review, labelled partial;
-- the pull request closed or merged mid-run → the review is abandoned before
-  writing, with a log line — commenting on a closed thread is noise.
+- a pull request with zero changed files, or every changed file ignored →
+  the model is never invoked; an existing marker comment is updated to a
+  deterministic "Nothing to review." body so stale findings do not outlive
+  their own relevance, and with no marker present it is a green run and a log
+  line;
+- `maxDiffLines` exceeded, or the assembled prompt past its budget → a red
+  refusal naming the counted total, or the estimate;
+- more changed files than GitHub's 3000-file listing ceiling → red refusal,
+  the same shape as any other ceiling;
+- `max-turns` or a hard ceiling reached → a partial review, labelled partial,
+  the bound named;
+- the pull request closed, merged, or pushed forward mid-run → abandoned
+  before writing, a green run, a log line;
+- provider unreachable after retries, config that does not validate → red,
+  not green-on-nothing.
 
 ## Failure posture
 
-The same law as the other two actions: the provider unreachable after
-retries, a config that does not validate — red, not green-on-nothing. A
-finding refused for being off-vocabulary is logged with the answer that
-produced it.
+The same law as the other two actions: the provider unreachable after retries,
+a config that does not validate — red, not green-on-nothing. Startup
+validation precedes the first model call. A finding refused for being
+off-vocabulary or off-snapshot is logged with the finding that produced it. A
+failed run never deletes and never overwrites: the last complete review
+survives every failure that comes after it.
 
 ## What `review` never does
 
@@ -211,16 +630,21 @@ write surface is one comment.
 
 ## What `review` will need from `core/`
 
-| Module          | Kind     | What `review` needs of it                                                                                                                                                                          |
-| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `http.mjs`      | protocol | timeouts, retries, the failure shapes a provider really returns                                                                                                                                    |
-| `chat.mjs`      | protocol | the chat-completions request, now carrying tool calls and their results back — the tools protocol is a protocol, which is why this grows in `core/` while the loop that uses it stays in `review/` |
-| `forge.mjs`     | protocol | read the pull request and its files                                                                                                                                                                |
-| `untrusted.mjs` | ceiling  | the evidence wrapper for the diff and every tool result                                                                                                                                            |
-| `sanitise.mjs`  | ceiling  | what finding text survives into the comment                                                                                                                                                        |
-| `comment.mjs`   | ceiling  | the marker upsert — find by author, then by marker                                                                                                                                                 |
-| `workspace.mjs` | ceiling  | path resolution confined to `GITHUB_WORKSPACE`, `.git` refused — `review` is its only consumer today                                                                                               |
+These are normative deltas, named precisely enough to build against — the
+table is not a farewell to future work but the contract for it. All of it is
+protocol or ceiling; none of it is loop.
 
-The agent loop itself — what to read next, when to stop, how to compact — is
-none of `core/`: it speaks no protocol and enforces no ceiling, which is the
-test, and it stays in `review/`.
+| Module          | Kind     | The delta `review` needs                                                                                                                                                                                                                                                                                                |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat.mjs`      | protocol | the request gains optional `tools`; a response may then be tool calls — `{ content, toolCalls, finishReason }`, where a tool-call response has `content: null` and must not throw the way the content-only reader does today. With no tools requested, behaviour is byte-for-byte what `triage` and `harmonise` see now |
+| `forge.mjs`     | protocol | one new read, `getPullRequest(number)` → state, draft flag, head SHA, base SHA, title, body — and `listPullRequestFiles` retaining the `patch` and per-file blob `sha` GitHub already sends instead of discarding them                                                                                                  |
+| `glob.mjs`      | protocol | the one glob dialect of the configuration page, promoted when `review` becomes its third consumer — `triage` and `harmonise` each hold a private copy today                                                                                                                                                             |
+| `comment.mjs`   | ceiling  | the marker upsert gains an identity guard: only comments authored by known bot identities are candidates for update or deletion, so a quoted marker in a maintainer's comment is never claimed and never destroyed                                                                                                      |
+| `workspace.mjs` | ceiling  | path resolution confined to `GITHUB_WORKSPACE`, `.git` refused, regular files only — the resolver every workspace touch goes through, tools and non-tool reads alike — with `review` as its first consumer                                                                                                              |
+| `http.mjs`      | protocol | nothing new — timeouts, retries, cross-origin refusal and capped error excerpts already serve                                                                                                                                                                                                                           |
+| `untrusted.mjs` | ceiling  | nothing new — the evidence wrapper frames the diff and every tool result                                                                                                                                                                                                                                                |
+| `sanitise.mjs`  | ceiling  | nothing new — what finding text survives into the comment                                                                                                                                                                                                                                                               |
+
+There is no `core/agent.mjs` and there will not be one: the agent loop — what
+to read next, when to stop, how to compact — speaks no protocol and enforces
+no ceiling, which is the test, and it stays in `review/`.
