@@ -49,7 +49,7 @@ function files() {
  *
  * @param {Record<string, string>} files
  * @param {{ path: string, type: string }[]} [tree]
- * @returns {import("#core/forge.mjs").Forge}
+ * @returns {import("#core/forge.mjs").Forge & { writes: { op: string, args: unknown[] }[], baseSha: string }}
  */
 function forge(
   files,
@@ -58,25 +58,54 @@ function forge(
     { path: "manual/vi/dev.md", type: "blob" },
   ],
 ) {
-  return /** @type {import("#core/forge.mjs").Forge} */ (
-    /** @type {any} */ ({
-      /** @param {string} path */
-      async getContents(path) {
-        const content = files[path];
-        return content === undefined ? null : { content };
-      },
-      async getRepository() {
-        return { defaultBranch: "main", name: "action-agents", description: "AI GitHub Actions" };
-      },
-      async getRef() {
-        return { sha: "a".repeat(40) };
-      },
-      /** @param {string} _sha */
-      async listTree(_sha) {
-        return tree;
-      },
-    })
-  );
+  const baseSha = "a".repeat(40);
+  /** @type {{ op: string, args: unknown[] }[]} */
+  const writes = [];
+  let blobSeq = 0;
+  return /** @type {any} */ ({
+    writes,
+    baseSha,
+    /** @param {string} path */
+    async getContents(path) {
+      const content = files[path];
+      return content === undefined ? null : { content };
+    },
+    async getRepository() {
+      return { defaultBranch: "main", name: "action-agents", description: "AI GitHub Actions" };
+    },
+    async getRef() {
+      return { sha: baseSha };
+    },
+    /** @param {string} _sha */
+    async listTree(_sha) {
+      return tree;
+    },
+    /** @param {string} content */
+    async createBlob(content) {
+      writes.push({ op: "createBlob", args: [content] });
+      blobSeq++;
+      return { sha: `blob${String(blobSeq).padStart(38, "0")}` };
+    },
+    /** @param {string} base @param {{ path: string, blobSha: string }[]} changes */
+    async createTree(base, changes) {
+      writes.push({ op: "createTree", args: [base, changes] });
+      return { sha: `tree-${base.slice(0, 4)}` };
+    },
+    /** @param {string} message @param {string} treeSha @param {string} parent */
+    async createCommit(message, treeSha, parent) {
+      writes.push({ op: "createCommit", args: [message, treeSha, parent] });
+      return { sha: "c".repeat(40) };
+    },
+    /** @param {string} branch @param {string} commitSha @param {string | null} expectedCurrentSha */
+    async upsertBranch(branch, commitSha, expectedCurrentSha) {
+      writes.push({ op: "upsertBranch", args: [branch, commitSha, expectedCurrentSha] });
+    },
+    /** @param {{ base: string, head: string, title: string, body: string }} input */
+    async upsertPullRequest(input) {
+      writes.push({ op: "upsertPullRequest", args: [input] });
+      return { number: 42, created: true };
+    },
+  });
 }
 
 /**
@@ -113,7 +142,18 @@ function echoingChat() {
     /** @param {{ messages: { role: string, content: string }[] }} request */
     async complete(request) {
       const user = request.messages[request.messages.length - 1]?.content ?? "";
-      const source = /\[source-document\]\n([\s\S]*)$/.exec(user)?.[1] ?? "";
+      // Byte-exact slice between this block's opening label and the next
+      // block's "\n\n[label]" separator: every byte of the gap belongs to
+      // the framing, never to the document.
+      const start = user.indexOf("[source-document]\n");
+      if (start < 0) {
+        return {
+          content: JSON.stringify({ drift: true, summary: "nothing found", content: "??" }),
+        };
+      }
+      const from = start + "[source-document]\n".length;
+      const nextBlock = user.indexOf("\n\n[", from);
+      const source = nextBlock === -1 ? user.slice(from) : user.slice(from, nextBlock);
       return {
         content: JSON.stringify({ drift: true, summary: "kept in step", content: source }),
       };
@@ -206,11 +246,109 @@ describe("readInputs", () => {
 });
 
 describe("run", () => {
-  it("refuses a real run outright — opening pull requests is not this build's job yet", async () => {
+  it("publishes one branch, one commit and one pull request on a real run", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(files());
+    const ioDouble = /** @type {any} */ ({
+      forge: forgeDouble,
+      chat: echoingChat(),
+      evidence,
+    });
     const inputs = { ...readInputs(runner), dryRun: false };
-    await expect(run(inputs, context(), /** @type {any} */ ({}))).rejects.toThrow(
-      /cannot open pull requests yet/,
+
+    await expect(run(inputs, context(), ioDouble)).resolves.toBeUndefined();
+
+    /** @typedef {{ op: string, args: unknown[] }} Write */
+    const ops = forgeDouble.writes.map((w) => w.op);
+    expect(ops).toEqual([
+      "createBlob",
+      "createTree",
+      "createCommit",
+      "upsertBranch",
+      "upsertPullRequest",
+    ]);
+    const branch = /** @type {Write} */ (forgeDouble.writes.find((w) => w.op === "upsertBranch"));
+    expect(branch.args[0]).toBe("harmonise/en");
+    // The optimistic lock is the tip every read anchored to.
+    expect(branch.args[2]).toBe(forgeDouble.baseSha);
+    const pr = /** @type {{ base: string, head: string, title: string, body: string }} */ (
+      /** @type {Write} */ (forgeDouble.writes.find((w) => w.op === "upsertPullRequest")).args[0]
     );
+    expect(pr.base).toBe("main");
+    expect(pr.head).toBe("harmonise/en");
+    expect(pr.title).toMatch(/harmonise: sync 1 documents with en/);
+    expect(pr.body).toMatch(/## What changed/);
+    expect(logged(log)).toMatch(/opened pull request #42/);
+  });
+
+  it("updates an existing pull request in place instead of opening a twin", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(files());
+    forgeDouble.upsertPullRequest = /** @type {any} */ (
+      async () => ({
+        number: 7,
+        created: false,
+      })
+    );
+    const ioDouble = /** @type {any} */ ({
+      forge: forgeDouble,
+      chat: echoingChat(),
+      evidence,
+    });
+
+    await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble);
+
+    expect(logged(log)).toMatch(/updated pull request #7 in place/);
+  });
+
+  it("publishes successful proposals first, then exits red on failed pairs", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+    }`;
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": config,
+        "manual/dev.md": "# Dev\n\nFine.\n",
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/lost.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({
+      forge: forgeDouble,
+      chat: echoingChat(),
+      evidence,
+    });
+
+    // The pull request carries the successful changes; the run still goes red.
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).rejects.toThrow(/1 pair\(s\) failed/);
+    expect(forgeDouble.writes.map((/** @type {{ op: string }} */ w) => w.op)).toContain(
+      "upsertPullRequest",
+    );
+  });
+
+  it("writes nothing on a real run whose pairs are all already in step", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const published = "# Dev\n\nProse.\n";
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": published,
+      "manual/vi/dev.md": published,
+    });
+    const ioDouble = /** @type {any} */ ({
+      forge: forgeDouble,
+      chat: echoingChat(),
+      evidence,
+    });
+
+    await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble);
+
+    expect(forgeDouble.writes).toEqual([]);
   });
 
   it("reports translated proposals, missing translations and orphans on a dry run", async () => {
@@ -511,8 +649,11 @@ describe("run", () => {
       ),
     );
 
-    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
-    expect(logged(log)).toMatch(/failed manual\/lost\.md: gone from the branch/);
+    // A failed pair is a failed run even when others carried — but the
+    // healthy pair's line is still reported before the red.
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+      /1 pair\(s\) failed[\s\S]*manual\/lost\.md: gone from the branch/,
+    );
     expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
   });
 
@@ -553,7 +694,7 @@ describe("main", () => {
   it("masks the key before it writes anything else", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    await main(runner);
+    await main(runner, () => Promise.reject(new Error("stopped early")));
 
     expect(log.mock.calls[0]?.[0]).toBe("::add-mask::sk-secret");
   });

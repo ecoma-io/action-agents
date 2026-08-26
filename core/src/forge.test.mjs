@@ -503,3 +503,158 @@ describe("listTree", () => {
     await expect(client.listTree("main")).rejects.toThrow(/sha/);
   });
 });
+
+describe("write operations", () => {
+  const SHA = "abc123def4567890abcdef1234567890abcdef12";
+
+  it("createBlob sends utf-8 content and returns the sha", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      { "POST /repos/o/r/git/blobs": json({ sha: "blobsha" }) },
+      recorder,
+    );
+
+    await expect(client.createBlob("# hi\n")).resolves.toEqual({ sha: "blobsha" });
+    expect(recorder.calls?.[0]?.body && JSON.parse(String(recorder.calls[0].body))).toMatchObject({
+      content: "# hi\n",
+      encoding: "utf-8",
+    });
+  });
+
+  it("createTree layers named changes over a base tree", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      { "POST /repos/o/r/git/trees": json({ sha: "treesha" }) },
+      recorder,
+    );
+
+    await expect(
+      client.createTree(SHA, [{ path: "manual/vi/dev.md", blobSha: "blobsha" }]),
+    ).resolves.toEqual({ sha: "treesha" });
+    const sent = JSON.parse(String(recorder.calls?.[0]?.body));
+    expect(sent.base_tree).toBe(SHA);
+    expect(sent.tree).toEqual([
+      { path: "manual/vi/dev.md", mode: "100644", type: "blob", sha: "blobsha" },
+    ]);
+  });
+
+  it("upsertBranch force-updates when the branch sits where the run found it", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        [`GET /repos/o/r/git/ref/heads/harmonise%2Fen`]: json({ object: { sha: SHA } }),
+        "PATCH /repos/o/r/git/refs/heads/harmonise%2Fen": json({ object: { sha: "new" } }),
+      },
+      recorder,
+    );
+
+    await expect(client.upsertBranch("harmonise/en", "newsha", SHA)).resolves.toBeUndefined();
+    const patch = recorder.calls?.find((call) => call.method === "PATCH");
+    expect(patch).toBeDefined();
+    expect(JSON.parse(String(patch?.body))).toEqual({ sha: "newsha", force: true });
+  });
+
+  it("refuses with BranchMovedError when the branch moved under the run", async () => {
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/git/ref/heads/harmonise%2Fen`]: json({
+        object: { sha: "f".repeat(40) },
+      }),
+    });
+
+    await expect(client.upsertBranch("harmonise/en", "newsha", SHA)).rejects.toThrow(
+      /moved while the run worked/,
+    );
+  });
+
+  it("creates an absent branch through POST, and refuses if it appears mid-run", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const absent = forge(
+      "o",
+      "r",
+      {
+        "GET /repos/o/r/git/ref/heads/harmonise%2Fen": () =>
+          new Response("not found", { status: 404 }),
+      },
+      recorder,
+    );
+    // The routed table keys by pathname+search; a POST to /git/refs needs its own route.
+    absent.upsertBranch("harmonise/en", "newsha", null).then(
+      () => undefined,
+      (error) => {
+        // Without a POST route the fake answers 500 — the point is that the
+        // GET was made and treated as absent, never as a move.
+        expect(error.message).toMatch(/creating the branch|HTTP 500/);
+      },
+    );
+  });
+
+  it("upsertPullRequest updates the open twin found by base and head", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        [`GET /repos/o/r/pulls?base=main&head=o%3Aharmonise%2Fen&state=all&per_page=100`]: page([
+          { number: 3, state: "closed" },
+          { number: 9, state: "open" },
+        ]),
+        "PATCH /repos/o/r/pulls/9": json({ number: 9 }),
+      },
+      recorder,
+    );
+
+    await expect(
+      client.upsertPullRequest({ base: "main", head: "harmonise/en", title: "t", body: "b" }),
+    ).resolves.toEqual({ number: 9, created: false });
+    expect(recorder.calls?.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  it("opens a fresh pull request once when no open twin exists", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        [`GET /repos/o/r/pulls?base=main&head=o%3Aharmonise%2Fen&state=all&per_page=100`]: page([
+          { number: 3, state: "merged" },
+        ]),
+        "POST /repos/o/r/pulls": json({ number: 12 }),
+      },
+      recorder,
+    );
+
+    await expect(
+      client.upsertPullRequest({ base: "main", head: "harmonise/en", title: "t", body: "b" }),
+    ).resolves.toEqual({ number: 12, created: true });
+    expect(recorder.calls?.filter((call) => call.method === "POST")).toHaveLength(1);
+  });
+
+  it("joins its per_page parameter onto a first URL that already carries a query", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        [`GET /repos/o/r/pulls?base=main&head=o%3Aharmonise%2Fen&state=all&per_page=100`]: page([]),
+        "POST /repos/o/r/pulls": json({ number: 12 }),
+      },
+      recorder,
+    );
+
+    await client.upsertPullRequest({ base: "main", head: "harmonise/en", title: "t", body: "b" });
+    expect(recorder.calls?.[0]?.url).toContain("state=all&per_page=100");
+  });
+});

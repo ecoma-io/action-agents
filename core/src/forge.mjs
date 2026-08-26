@@ -99,9 +99,35 @@ export class TruncatedTreeError extends Error {
 }
 
 /**
+ * The branch a run was building on moved between its first read and its ref
+ * update — another writer mutated it mid-run. Refused loudly: overwriting a
+ * concurrent change silently is exactly the failure optimistic locking
+ * exists to prevent. The next run starts from a fresh HEAD anyway.
+ */
+export class BranchMovedError extends Error {
+  /** @param {string} branch @param {string} expected @param {string} found */
+  constructor(branch, expected, found) {
+    super(
+      `branch '${branch}' moved while the run worked — it read ${expected.slice(0, 12)} and ` +
+        `found ${found.slice(0, 12)} at update time. Nothing was merged or lost; re-run to ` +
+        `build on the current HEAD`,
+    );
+    this.name = "BranchMovedError";
+  }
+}
+
+/**
  * @typedef {object} TreeEntry
  * @property {string} path
  * @property {string} type `blob` (a file), `tree` (a directory), or `commit` (a submodule)
+ */
+
+/**
+ * One file entry handed to {@linkcode createTree}: a path this run already
+ * turned into a blob.
+ * @typedef {object} TreeChange
+ * @property {string} path
+ * @property {string} blobSha
  */
 
 /** A GitHub call failed, naming the operation that failed. */
@@ -130,7 +156,7 @@ const PER_PAGE = 100;
  *   getRepository: () => Promise<{ defaultBranch: string, name: string, description: string }>,
  *   getRef: (branch: string) => Promise<{ sha: string }>,
  *   listTree: (sha: string) => Promise<TreeEntry[]>,
- *   getContents: (path: string) => Promise<{ content: string } | null>,
+ *   getContents: (path: string, options?: { ref?: string }) => Promise<{ content: string } | null>,
  *   listRepositoryLabels: () => Promise<string[]>,
  *   listPullRequestFiles: (number: number) => Promise<PullRequestFile[]>,
  *   addLabels: (number: number, names: string[]) => Promise<void>,
@@ -139,6 +165,11 @@ const PER_PAGE = 100;
  *   createComment: (number: number, body: string) => Promise<{ id: number }>,
  *   updateComment: (id: number, body: string) => Promise<void>,
  *   deleteComment: (id: number) => Promise<void>,
+ *   createBlob: (content: string) => Promise<{ sha: string }>,
+ *   createTree: (baseTreeSha: string, changes: TreeChange[]) => Promise<{ sha: string }>,
+ *   createCommit: (message: string, treeSha: string, parentCommitSha: string) => Promise<{ sha: string }>,
+ *   upsertBranch: (branch: string, commitSha: string, expectedCurrentSha: string | null) => Promise<void>,
+ *   upsertPullRequest: (input: { base: string, head: string, title: string, body: string }) => Promise<{ number: number, created: boolean }>,
  * }}
  */
 export function createForge(config) {
@@ -272,16 +303,21 @@ export function createForge(config) {
 
     /**
      * Reads one file from the repository's **default branch** — no ref, so no
-     * pull request can edit the policy that governs it. Absent is `null`, not
-     * an error: a missing config file is policy-empty.
+     * pull request can edit the policy that governs it. A `ref` pins the read
+     * to one exact commit instead: harmonise anchors every document read to
+     * the tip its inventory was built from, so one run describes one instant.
+     * Absent is `null`, not an error.
      *
      * @param {string} path
+     * @param {{ ref?: string }} [options]
      */
-    async getContents(path) {
-      const operation = `reading '${path}' from the default branch`;
+    async getContents(path, options = {}) {
+      const where = options.ref === undefined ? "the default branch" : `'${options.ref}'`;
+      const operation = `reading '${path}' from ${where}`;
+      const suffix = options.ref === undefined ? "" : `?ref=${encodeURIComponent(options.ref)}`;
       let response;
       try {
-        response = await http.request(`${root}/contents/${path}`);
+        response = await http.request(`${root}/contents/${path}${suffix}`);
       } catch (cause) {
         if (cause instanceof HttpError && cause.status === 404) return null;
         throw new ForgeError(operation, cause instanceof Error ? cause : new Error(String(cause)));
@@ -473,6 +509,183 @@ export function createForge(config) {
         http.request(`${root}/issues/comments/${String(id)}`, { method: "DELETE" }),
       );
     },
+
+    /** One file's content, stored — the first step of every commit this action builds. */
+    async createBlob(content) {
+      const operation = "creating a blob";
+      const json = await call(operation, () =>
+        http.request(`${root}/git/blobs`, {
+          method: "POST",
+          body: { content, encoding: "utf-8" },
+        }),
+      );
+      const sha = asRecord(json)?.["sha"];
+      if (typeof sha !== "string" || sha === "") {
+        throw new ForgeError(operation, new Error("the response carries no blob sha"));
+      }
+      return { sha };
+    },
+
+    /**
+     * One tree layered over a base: only the changed paths are named, and
+     * everything else is inherited from the base tree verbatim. This is what
+     * keeps a harmonise branch free of stale files — the tree is the base's,
+     * plus exactly this run's files.
+     *
+     * @param {string} baseTreeSha the commit (or tree) SHA the changes sit on
+     * @param {TreeChange[]} changes path → blob pairs, all of one run's proposals
+     */
+    async createTree(baseTreeSha, changes) {
+      const operation = "creating a tree";
+      const json = await call(operation, () =>
+        http.request(`${root}/git/trees`, {
+          method: "POST",
+          body: {
+            base_tree: baseTreeSha,
+            tree: changes.map((change) => ({
+              path: change.path,
+              mode: "100644",
+              type: "blob",
+              sha: change.blobSha,
+            })),
+          },
+        }),
+      );
+      const sha = asRecord(json)?.["sha"];
+      if (typeof sha !== "string" || sha === "") {
+        throw new ForgeError(operation, new Error("the response carries no tree sha"));
+      }
+      return { sha };
+    },
+
+    /**
+     * One commit on top of one parent, holding one whole tree.
+     *
+     * @param {string} message
+     * @param {string} treeSha
+     * @param {string} parentCommitSha
+     */
+    async createCommit(message, treeSha, parentCommitSha) {
+      const operation = "creating a commit";
+      const json = await call(operation, () =>
+        http.request(`${root}/git/commits`, {
+          method: "POST",
+          body: { message, tree: treeSha, parents: [parentCommitSha] },
+        }),
+      );
+      const sha = asRecord(json)?.["sha"];
+      if (typeof sha !== "string" || sha === "") {
+        throw new ForgeError(operation, new Error("the response carries no commit sha"));
+      }
+      return { sha };
+    },
+
+    /**
+     * Points the run's own branch at the freshly built commit — creating it
+     * when absent, force-updating it when present. The optimistic lock is the
+     * caller's `expectedCurrentSha`: the tip the run read when it started. A
+     * branch found elsewhere moved under the run, which is refused rather
+     * than overwritten.
+     *
+     * @param {string} branch the action's own branch; every documented caller names exactly `harmonise/<language>`
+     * @param {string} commitSha
+     * @param {string | null} expectedCurrentSha null when creating fresh (the ref read as absent moments ago)
+     */
+    async upsertBranch(branch, commitSha, expectedCurrentSha) {
+      // One read decides create vs update; a ref that appeared or moved under
+      // the run is another writer's move and is refused, never overwritten.
+      const current = await this.getRef(branch).catch((cause) => {
+        if (cause instanceof Error && /HTTP 404/.test(cause.message)) return null;
+        throw cause;
+      });
+
+      if (current !== null && expectedCurrentSha !== null && current.sha !== expectedCurrentSha) {
+        throw new BranchMovedError(branch, expectedCurrentSha, current.sha);
+      }
+      if (current === null && expectedCurrentSha !== null) {
+        throw new BranchMovedError(branch, expectedCurrentSha, "(absent)");
+      }
+
+      if (current === null) {
+        // Creating a ref is not idempotent; one attempt, like PR creation.
+        await call(`creating the branch '${branch}'`, () =>
+          http.request(`${root}/git/refs`, {
+            method: "POST",
+            maxAttempts: 1,
+            body: { ref: `refs/heads/${branch}`, sha: commitSha },
+          }),
+        );
+        return;
+      }
+
+      await call(`updating the branch '${branch}'`, () =>
+        http.request(`${root}/git/refs/heads/${encodeURIComponent(branch)}`, {
+          method: "PATCH",
+          body: { sha: commitSha, force: true },
+        }),
+      );
+    },
+
+    /**
+     * The pull request for one base/head pair, created once and updated in
+     * place forever after — never searched by title, never duplicated. A
+     * closed or merged twin does not block a fresh one: history stays
+     * history, and the open channel is what gets maintained.
+     *
+     * @param {object} input
+     * @param {string} input.base
+     * @param {string} input.head the branch name in THIS repository
+     * @param {string} input.title
+     * @param {string} input.body
+     * @returns {Promise<{ number: number, created: boolean }>}
+     */
+    async upsertPullRequest({ base, head, title, body }) {
+      const searchOperation = "searching for the run's pull request";
+      const pages = await paginate(
+        searchOperation,
+        `${root}/pulls?base=${encodeURIComponent(base)}&head=` +
+          `${encodeURIComponent(`${config.owner}:${head}`)}&state=all`,
+      );
+      /** @type {{ number: number } | undefined} */
+      let existing;
+      for (const page of pages) {
+        if (!Array.isArray(page)) continue;
+        for (const raw of page) {
+          const entry = asRecord(raw);
+          const number = entry?.["number"];
+          const state = entry?.["state"];
+          if (typeof number === "number" && state === "open") existing = { number };
+        }
+      }
+
+      if (existing === undefined) {
+        // Creating is not idempotent — a retried 503 would open two pull
+        // requests — so it makes a single attempt, like comment creation.
+        const created = await call("opening the run's pull request", () =>
+          http.request(`${root}/pulls`, {
+            method: "POST",
+            maxAttempts: 1,
+            body: { title, head, base, body },
+          }),
+        );
+        const number = asRecord(created)?.["number"];
+        if (typeof number !== "number") {
+          throw new ForgeError(
+            "opening the run's pull request",
+            new Error("the response carries no pull request number"),
+          );
+        }
+        return { number, created: true };
+      }
+
+      await call(`updating pull request #${String(existing.number)}`, () =>
+        http.request(`${root}/pulls/${String(existing.number)}`, {
+          method: "PATCH",
+          body: { title, body, state: "open" },
+        }),
+      );
+      return { number: existing.number, created: false };
+    },
   };
 
   /**
@@ -504,7 +717,8 @@ export function createForge(config) {
   async function paginate(operation, first) {
     /** @type {unknown[]} */
     const pages = [];
-    let url = `${first}?per_page=${String(PER_PAGE)}`;
+    const joiner = first.includes("?") ? "&" : "?";
+    let url = `${first}${joiner}per_page=${String(PER_PAGE)}`;
     for (;;) {
       let response;
       try {
