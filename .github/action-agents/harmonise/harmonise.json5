@@ -1,0 +1,32 @@
+{
+  // The language every other version is judged against. This repository's
+  // documentation is written in English first.
+  sourceLanguage: "en",
+
+  // Dogfood phase one: the README only, mirrored GitHub-style as a suffixed
+  // twin (README.vi.md). The suffix shape is the more specific claim, so
+  // README.vi.md classifies as vi even though both patterns can name it.
+  // Widening to docs/** happens after this phase has been reviewed.
+  languages: {
+    en: "{document}.md",
+    vi: "{document}.vi.md",
+  },
+
+  // Deliberately untranslated for now — everything at the root except the
+  // README. Remove entries as each document joins the program.
+  ignore: ["AGENTS.md", "CLAUDE.md", "CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "SECURITY.md"],
+
+  // Product and protocol names that stay in English in every translation.
+  glossary: [
+    "GitHub Actions",
+    "harmonise",
+    "triage",
+    "archkeep",
+    "OpenAI-compatible",
+    "pull request",
+  ],
+
+  instructions: {
+    instruction: ".github/action-agents/harmonise/instruction.md",
+  },
+}
