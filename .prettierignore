@@ -26,3 +26,9 @@ CHANGELOG.md
 # a coincidence of two repositories sharing a .prettierrc, not a guarantee.
 .claude/skills/
 .agents/skills/
+
+# Translations authored by the harmonise action. The action ships with no
+# dependencies, so it cannot run Prettier on the runner before proposing a
+# document; what it writes is judged on GitHub's diff like any contributor's
+# prose, not re-wrapped here. Revisit if the config grows a formatter hook.
+README.vi.md
