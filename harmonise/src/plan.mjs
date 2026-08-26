@@ -116,7 +116,7 @@ export function preparePair({ slug, lang, sourcePath, target, sourceText, invent
  * @param {Evidence} input.evidence
  * @param {{ name: string, description: string }} input.repository
  * @param {{ instruction?: string, languages: Record<string, string> }} input.documents
- * @returns {Promise<{ outcome: "noop" } | { outcome: "proposal", text: string, summary: string }>}
+ * @returns {Promise<{ outcome: "noop", summary: string } | { outcome: "proposal", text: string, summary: string }>}
  */
 export async function translatePair(input) {
   const { messages } = buildTranslationPrompt({
@@ -141,7 +141,7 @@ export async function translatePair(input) {
   // because the published text legitimately contains none of this run's
   // tokens.
   if (input.existingText !== undefined && answer.content === input.existingText) {
-    return { outcome: "noop" };
+    return { outcome: "noop", summary: answer.summary };
   }
 
   // Restoration is validation: counts must match and no unknown token may
@@ -161,7 +161,7 @@ export async function translatePair(input) {
   // Byte-identity semantics, per the specification: identical to what it
   // replaces is no drift whatever the flag claimed.
   if (input.existingText !== undefined && restored === input.existingText) {
-    return { outcome: "noop" };
+    return { outcome: "noop", summary: answer.summary };
   }
 
   const violations = compareStructuralProfiles(

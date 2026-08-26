@@ -20,6 +20,9 @@ import { parseLanguagePattern, validateLanguagePattern } from "./patterns.mjs";
  * test doubles only the reading half.
  *
  * @typedef {{ getContents: (path: string) => Promise<{ content: string } | null> }} ContentsReader
+ *
+ * Readers anchored to one exact commit pass the ref through their own
+ * closure; the typedef stays one-argument by design.
  */
 
 /**

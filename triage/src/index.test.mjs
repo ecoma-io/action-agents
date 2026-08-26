@@ -121,6 +121,24 @@ function fakeForge(options = {}) {
     async getRepository() {
       return { defaultBranch: "main", name: "action-agents", description: "" };
     },
+    /** @param {string} _content */
+    async createBlob(_content) {
+      return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _base @param {unknown[]} _changes */
+    async createTree(_base, _changes) {
+      return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _message @param {string} _tree @param {string} _parent */
+    async createCommit(_message, _tree, _parent) {
+      return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _branch @param {string} _sha @param {string | null} _expected */
+    async upsertBranch(_branch, _sha, _expected) {},
+    /** @param {{ base: string, head: string, title: string, body: string }} _input */
+    async upsertPullRequest(_input) {
+      return { number: 1, created: false };
+    },
     /** @param {string} _branch */
     async getRef(_branch) {
       return { sha: "0".repeat(40) };

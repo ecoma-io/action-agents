@@ -1,16 +1,17 @@
 /**
  * `harmonise` — keep multilingual documentation semantically in step.
  *
- * This build carries the deterministic half of the pipeline and nothing past
- * it: the config map, the complete default-branch inventory, pairing,
- * orphan detection, glossary and skip-directive protection, internal link and
- * image resolution, and the per-pair report a dry run exists to show. What it
- * refuses to do yet is propose text — the model half and the Git half land in
- * their own changes, so a real run today fails loudly rather than half-work.
+ * The full pipeline, in the specification's order: config map; complete
+ * default-branch inventory; pairing with orphan detection; per-pair
+ * preparation (glossary + skip protection, link/image localization);
+ * translation through the model with contract validation; then — for real
+ * runs only — one branch, one commit through the Git Data API, one pull
+ * request updated in place.
  *
  * The shape is deliberate. `readInputs` is pure over an environment; `run`
- * takes its inputs plus one replaceable I/O record, so a test states the whole
- * world as a literal; and `main` is the only place that touches process state.
+ * takes its inputs plus one replaceable I/O record, so a test states the
+ * whole world as a literal; and `main` is the only place that touches
+ * process state.
  */
 
 import { createChat } from "#core/chat.mjs";
@@ -32,6 +33,7 @@ import { loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
 import { buildInventory } from "./inventory.mjs";
 import { matchGlob } from "./glob.mjs";
 import { MAX_SOURCE_BYTES, preparationRefusal, preparePair, translatePair } from "./plan.mjs";
+import { buildPullRequestBody } from "./pull-request.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -90,22 +92,27 @@ function realIo(inputs, context) {
 }
 
 /**
+ * One translated pair's full record — the proposal if there is one, plus the
+ * preparation statistics every report line shows.
+ *
+ * @typedef {object} PairOutcome
+ * @property {string} lang
+ * @property {string} sourcePath
+ * @property {string} destinationPath
+ * @property {"existing" | "missing"} state
+ * @property {"proposed" | "unchanged"} outcome
+ * @property {{ glossaryHits: number, skippedSpans: number, linksRewritten: number }} stats
+ * @property {string | undefined} content the proposal text, undefined for unchanged
+ * @property {string} summary
+ */
+
+/**
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
  * @param {Io} [io]
  * @returns {Promise<void>}
  */
 export async function run(inputs, context, io = realIo(inputs, context)) {
-  if (!inputs.dryRun) {
-    // Honest refusal, not a degraded proposal: without the Git stage there is
-    // nowhere for a proposal to land, and a real run that wrote nothing while
-    // claiming to propose would be green-on-nothing in the worst way.
-    throw new Error(
-      "harmonise cannot open pull requests yet — translation and validation are in place; " +
-        "the branch/commit/PR stage lands with the Git integration. Run with dry-run until then.",
-    );
-  }
-
   const { raw } = await loadConfigFile({ forge: io.forge, configPath: inputs.configPath });
   let config = validateConfig(raw);
 
@@ -118,11 +125,33 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   }
   config = { ...config, sourceLanguage: requested };
 
-  // Instruction prose is read once, capped, and shared by every prompt.
-  const documents = await loadInstructions({ forge: io.forge, config });
-
   const repository = await io.forge.getRepository();
   const ref = await io.forge.getRef(repository.defaultBranch);
+
+  // The action's own branch is snapshotted now, before any work: at update
+  // time its tip must be where this run left it, or another writer moved it
+  // mid-run and is refused rather than overwritten.
+  /** @type {import("#core/forge.mjs").Forge} */
+  const f = io.forge;
+  const ownBranch = branchName(config.sourceLanguage);
+  const branchBefore = await f.getRef(ownBranch).catch((cause) => {
+    if (cause instanceof Error && /HTTP 404/.test(cause.message)) return null;
+    throw cause;
+  });
+
+  // Every read below is pinned to this exact commit: inventory, sources,
+  // config and instructions describe one instant of the repository, and the
+  // commit built from them parents on that same instant.
+  /** @type {(path: string) => Promise<{ content: string } | null>} */
+  const readAtBase = (path) => io.forge.getContents(path, { ref: ref.sha });
+
+  // Instruction prose is read once, capped, pinned to the audited tip, and
+  // shared by every prompt.
+  const documents = await loadInstructions({
+    forge: { getContents: (path) => f.getContents(path, { ref: ref.sha }) },
+    config,
+  });
+
   // Completeness is a contract: a listing GitHub had to truncate throws
   // rather than becoming an inventory that looks finished.
   const entries = await io.forge.listTree(ref.sha);
@@ -151,15 +180,15 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     );
   }
 
-  /** @type {string[]} */
-  const preparedLines = [];
+  /** @type {PairOutcome[]} */
+  const outcomes = [];
   /** @type {string[]} */
   const failedLines = [];
   /** @type {string[]} */
   const skippedLines = [];
 
   for (const pair of selected) {
-    const file = await io.forge.getContents(pair.sourcePath);
+    const file = await readAtBase(pair.sourcePath);
     if (file === null) {
       failedLines.push(`${pair.sourcePath}: gone from the branch since the tree was listed`);
       continue;
@@ -188,7 +217,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
 
         const existing =
           target.state === "existing"
-            ? await io.forge.getContents(target.path).then((found) => found?.content ?? undefined)
+            ? await readAtBase(target.path).then((found) => found?.content ?? undefined)
             : undefined;
         if (existing !== undefined) {
           // Both documents must fit the evidence frame together; a published
@@ -207,9 +236,11 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
         }
 
         let lastFailure = "";
+        /** @type {{ noop: boolean, text?: string, summary?: string } | undefined} */
+        let translated;
         for (let attempt = 1; attempt <= ATTEMPTS_PER_PAIR; attempt++) {
           try {
-            const outcome = await translatePair({
+            const result = await translatePair({
               prepared,
               sourceLanguage: config.sourceLanguage,
               existingText: existing,
@@ -219,21 +250,34 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
               repository: { name: repository.name, description: repository.description },
               documents,
             });
-            if (outcome.outcome === "noop") {
-              preparedLines.push(
-                pairLine(prepared, "unchanged") + " — byte-identical to what is published",
-              );
-            } else {
-              preparedLines.push(pairLine(prepared, "proposed") + ` — ${oneLine(outcome.summary)}`);
-            }
+            translated =
+              result.outcome === "noop"
+                ? { noop: true, summary: result.summary }
+                : { noop: false, text: result.text, summary: result.summary };
             lastFailure = "";
             break;
           } catch (cause) {
             lastFailure = cause instanceof Error ? cause.message : String(cause);
           }
         }
-        if (lastFailure !== "")
+        if (translated === undefined || lastFailure !== "") {
           failedLines.push(`${target.lang} ${pair.sourcePath}: ${lastFailure}`);
+        } else {
+          outcomes.push({
+            lang: target.lang,
+            sourcePath: pair.sourcePath,
+            destinationPath: prepared.destinationPath,
+            state: prepared.state,
+            outcome: translated.noop ? "unchanged" : "proposed",
+            stats: {
+              glossaryHits: prepared.protection.glossaryHits,
+              skippedSpans: prepared.protection.skippedSpans,
+              linksRewritten: prepared.linksRewritten,
+            },
+            content: translated.text,
+            summary: /** @type {string} */ (translated.summary),
+          });
+        }
       } catch (cause) {
         failedLines.push(
           `${target.lang} ${pair.sourcePath}: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -244,10 +288,11 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
 
   // Every pair failing or skipping is red: work existed and none of it was
   // attempted successfully. Some failing or skipping is reported and carried.
-  if (preparedLines.length === 0 && skippedLines.length === 0 && failedLines.length > 0) {
+  const proposed = outcomes.filter((entry) => entry.outcome === "proposed");
+  if (outcomes.length === 0 && skippedLines.length === 0 && failedLines.length > 0) {
     throw new Error(`every pair failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`);
   }
-  if (preparedLines.length === 0 && failedLines.length === 0 && skippedLines.length > 0) {
+  if (outcomes.length === 0 && failedLines.length === 0 && skippedLines.length > 0) {
     throw new Error(`every pair skipped:\n${skippedLines.map((line) => `- ${line}`).join("\n")}`);
   }
 
@@ -256,7 +301,16 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     `documents: ${String(inventory.pairs.length)} source(s), ` +
       `${String(selected.length)} selected, languages ${Object.keys(config.languages).join(", ")}`,
   );
-  for (const line of preparedLines) info(`translated ${line}`);
+  for (const entry of outcomes) {
+    info(
+      `translated ${entry.lang} ${entry.sourcePath} → ${entry.destinationPath}` +
+        ` [${entry.state}] ${entry.outcome}` +
+        ` glossary=${String(entry.stats.glossaryHits)}` +
+        ` skip=${String(entry.stats.skippedSpans)}` +
+        ` links=${String(entry.stats.linksRewritten)}` +
+        (entry.summary !== undefined ? ` — ${oneLine(entry.summary)}` : ""),
+    );
+  }
   for (const line of failedLines) info(`failed ${line}`);
   for (const line of skippedLines) info(`skipped ${line}`);
   if (inventory.orphanTranslations.length === 0) {
@@ -267,23 +321,84 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       info(`orphan ${orphan.path} [${orphan.lang}]`);
     }
   }
+
+  // A failed pair is a failed run, always. What the specification adds is
+  // ordering: successful proposals publish FIRST, then the run exits red.
+  const failureReport =
+    failedLines.length > 0
+      ? `${String(failedLines.length)} pair(s) failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`
+      : "";
+
+  if (inputs.dryRun) {
+    info("dry run — nothing was written");
+    if (failureReport !== "") throw new Error(failureReport);
+    return;
+  }
+
+  if (proposed.length === 0) {
+    // All pairs in step: a green run and a log line — the honest common case
+    // on a schedule. No branch, no commit, no pull request.
+    info("nothing to propose — no branch, no commit, no pull request");
+    if (failureReport !== "") throw new Error(failureReport);
+    return;
+  }
+
+  const branch = branchName(config.sourceLanguage);
+  const title = `harmonise: sync ${String(proposed.length)} documents with ${config.sourceLanguage}`;
+
+  // Blobs first, then exactly one tree layered over the audited base, one
+  // commit on top, one branch pointing at it, one request carrying it.
+  const changes = [];
+  for (const proposal of proposed) {
+    const blob = await io.forge.createBlob(/** @type {string} */ (proposal.content));
+    changes.push({ path: proposal.destinationPath, blobSha: blob.sha });
+  }
+  const tree = await io.forge.createTree(ref.sha, changes);
+  const commit = await io.forge.createCommit(
+    `${title}\n\nAuthored by harmonise from ${ref.sha}.`,
+    tree.sha,
+    ref.sha,
+  );
+  // The optimistic lock is the action's own branch tip as this run found it:
+  // unchanged means nobody else touched our branch while we worked.
+  await io.forge.upsertBranch(
+    branch,
+    commit.sha,
+    /** @type {string | null} */ (branchBefore?.sha ?? null),
+  );
+
+  const body = buildPullRequestBody({
+    sourceLanguage: config.sourceLanguage,
+    proposals: proposed.map((proposal) => ({
+      lang: proposal.lang,
+      destinationPath: proposal.destinationPath,
+      created: proposal.state === "missing",
+      summary: proposal.summary,
+    })),
+    orphans: inventory.orphanTranslations,
+    skipped: skippedLines,
+    failures: failedLines,
+  });
+  const pullRequest = await io.forge.upsertPullRequest({
+    base: repository.defaultBranch,
+    head: branch,
+    title,
+    body,
+  });
+
+  info(
+    pullRequest.created
+      ? `opened pull request #${String(pullRequest.number)} (${branch} → ${repository.defaultBranch})`
+      : `updated pull request #${String(pullRequest.number)} in place (${branch} → ${repository.defaultBranch})`,
+  );
+
+  // Published first, red second — exactly the specification's ordering.
+  if (failureReport !== "") throw new Error(failureReport);
 }
 
-/**
- * One report line per translated pair: destination, state, protection counts,
- * and the outcome — with the model's one-line summary only when it proposed.
- *
- * @param {ReturnType<typeof preparePair>} prepared
- * @param {"proposed" | "unchanged"} outcome
- * @returns {string}
- */
-function pairLine(prepared, outcome) {
-  return (
-    `${prepared.lang} ${prepared.sourcePath} → ${prepared.destinationPath}` +
-    ` [${prepared.state}] ${outcome} glossary=${String(prepared.protection.glossaryHits)}` +
-    ` skip=${String(prepared.protection.skippedSpans)}` +
-    ` links=${String(prepared.linksRewritten)}`
-  );
+/** @param {string} sourceLanguage @returns {string} */
+function branchName(sourceLanguage) {
+  return `harmonise/${sourceLanguage}`;
 }
 
 /**
