@@ -276,7 +276,7 @@ describe("run", () => {
     );
     expect(pr.base).toBe("main");
     expect(pr.head).toBe("harmonise/en");
-    expect(pr.title).toMatch(/harmonise: sync 1 documents with en/);
+    expect(pr.title).toBe("chore(harmonise): sync 1 document with en");
     expect(pr.body).toMatch(/## What changed/);
     expect(logged(log)).toMatch(/opened pull request #42/);
   });

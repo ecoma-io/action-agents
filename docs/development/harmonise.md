@@ -12,6 +12,8 @@ For every translated document in a repository: does it still convey what the sou
 
 A real run needs `contents: write` and `pull-requests: write`, and the workflow's `permissions:` block is the bound on both.
 
+**Token choice and CI:** a pull request opened by `GITHUB_TOKEN` gets no workflow runs — GitHub suppresses events its own token caused, so the action's PR would sit there un-checked forever. Consumers who want the harmonise pull request to run CI mint an identity outside the workflow token (a GitHub App token, as this repository's own dogfood workflow does) and pass it as `github-token`. That identity is stronger than the `permissions:` block — the block binds only `GITHUB_TOKEN` — which is acceptable precisely because what a harmonise run may write is pinned in code: files inside the configured language patterns, one branch of its own naming, nothing else.
+
 ## Inputs
 
 | Input             | Meaning                                                                                                                                  |
@@ -421,8 +423,11 @@ Real runs write one commit to one branch and maintain one pull request:
 ```text
 branch   harmonise/<source-language>            — force-updated each run to the
                                                   default branch's current HEAD
-commit   "harmonise: sync <n> documents with <source-language>"
-         one commit, every changed file:
+commit   "chore(harmonise): sync <n> document(s) with <source-language>"
+         conventional-commits shape, because the pull request title is this
+         repository's commit subject and commitlint judges it like any
+         other — "harmonise" is a scope here, never a type. One commit,
+         every changed file:
          - updated existing translations
          - new missing translations
          built through the Git Data API — no checkout anywhere
