@@ -271,6 +271,26 @@ describe("tool calls", () => {
     }
   });
 
+  it("treats an explicit null tool_calls as absence — several gateways send it", async () => {
+    const withTools = withFetch(
+      () =>
+        new Response(
+          '{"choices":[{"finish_reason":"stop","message":{"content":"done","tool_calls":null}}]}',
+        ),
+    );
+    await expect(
+      withTools.chat.complete({ model: "m", messages: MESSAGES, tools: TOOLS }),
+    ).resolves.toEqual({ content: "done", toolCalls: [], finishReason: "stop" });
+
+    const withoutTools = withFetch(
+      () => new Response('{"choices":[{"message":{"content":"plain","tool_calls":null}}]}'),
+    );
+    await expect(withoutTools.chat.complete({ model: "m", messages: MESSAGES })).resolves.toEqual({
+      content: "plain",
+      toolCalls: [],
+    });
+  });
+
   it("refuses an answer with neither content nor tool calls when tools were offered", async () => {
     const neither = withFetch(() => new Response('{"choices":[{"message":{"content":null}}]}'));
     const emptyCalls = withFetch(
