@@ -261,9 +261,11 @@ function readAnswer(parsed) {
   /** @type {ChatToolCall[]} */
   const toolCalls = [];
   const rawCalls = message["tool_calls"];
-  if (rawCalls === undefined) {
-    // No tool_calls key at all: content must speak for itself, and `undefined`
-    // (missing, or a non-string the protocol never sends) means it cannot.
+  if (rawCalls === undefined || rawCalls === null) {
+    // No tool_calls key at all — or an explicit null, which several
+    // gateways emit for the optional field when the model used none. The
+    // content speaks for itself either way; `undefined` (missing, or a
+    // non-string the protocol never sends) means it has nothing to say.
     return { content: content ?? null, toolCalls, finishReason, defect: "" };
   }
   if (!Array.isArray(rawCalls)) {
