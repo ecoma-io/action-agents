@@ -12,9 +12,11 @@
     vi: "{document}.vi.md",
   },
 
-  // Deliberately untranslated for now — everything at the root except the
-  // README. Remove entries as each document joins the program.
-  ignore: ["AGENTS.md", "CLAUDE.md", "CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "SECURITY.md"],
+  // Deliberately untranslated for now: the first dry run showed a bare
+  // `{document}.md` pattern claims every markdown file in the repository —
+  // skills, templates, the whole docs tree — so the ignore list narrows the
+  // program to exactly one document until each joins deliberately.
+  ignore: ["**", "!README.md"],
 
   // Product and protocol names that stay in English in every translation.
   glossary: [
