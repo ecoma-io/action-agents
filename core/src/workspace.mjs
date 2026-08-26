@@ -134,10 +134,11 @@ export function createWorkspace(options) {
           }
           throw new MissingPathError(relativePath);
         }
-        throw new WorkspaceRefusal(
-          relativePath,
-          cause instanceof Error ? cause.message : String(cause),
-        );
+        // ELOOP, EACCES and friends carry resolved absolute paths in their
+        // messages, and these errors travel toward model-visible surfaces.
+        // The refusal names the path that was asked for and nothing about
+        // where the filesystem said it landed.
+        throw new WorkspaceRefusal(relativePath, "it cannot be resolved safely on this filesystem");
       }
       assertInside(root, relativePath, realParent, true);
       assertNoDotGit(relativePath, p.relative(root, realParent));
@@ -149,9 +150,10 @@ export function createWorkspace(options) {
         stats = lstatSync(target);
       } catch (cause) {
         if (isMissing(cause)) throw new MissingPathError(relativePath);
+        // Same discipline as the parent resolution: OS error text stays here.
         throw new WorkspaceRefusal(
           relativePath,
-          cause instanceof Error ? cause.message : String(cause),
+          "it cannot be inspected safely on this filesystem",
         );
       }
       // The final component is never followed. A symlink is refused by type,

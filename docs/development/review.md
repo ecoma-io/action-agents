@@ -174,6 +174,9 @@ removed when `review` ships rather than deprecated later.
 - `strictness` is one of the three values, `language` a well-formed BCP-47
   tag, `maxDiffLines` at least 1;
 - every rule's instruction document must exist on the default branch;
+- instruction and rule documents carry the same 8 KiB cap as every action's
+  documents on [the configuration page](configuration.md) — overflow is
+  refused, never truncated;
 - a rule that matches no changed file in a given pull request is dormant, not
   an error — rules are declared for the repository, not for one diff.
 
