@@ -107,6 +107,93 @@ export function maskCodeSpans(line) {
 }
 
 /**
+ * Masks the machinery half of one line so prose-only scanners (the glossary)
+ * never match inside it: inline link and image destinations, reference
+ * definition destinations, angle autolinks, and bare scheme URLs. Like every
+ * mask here it preserves byte length — each masked interior becomes NUL
+ * characters of the same size, so column positions survive untouched. All
+ * ranges are UTF-16 code-unit offsets and the blank-out walks the line as
+ * code units, so astral characters shift nothing.
+ *
+ * Link TEXT stays visible: `[see the repository](repo.md)` keeps "see the
+ * repository" matchable while `repo.md` is machinery. An inline construct's
+ * whole parenthesized interior is machinery — destination and quoted title
+ * alike — because its extent is what the depth scan can prove; reference
+ * definitions mask only their destination token and keep titles visible.
+ * A construct that never closes on its line proves nothing and is left
+ * unmasked end to end.
+ *
+ * @param {string} line a line that may already carry code-span masking
+ * @returns {string}
+ */
+export function maskDestinations(line) {
+  /** @type {[number, number][]} */ // [start, end) ranges to blank out
+  const ranges = [];
+
+  // Reference definitions: the first token after `[label]:` is machinery,
+  // located by its own match index — never searched for, or a label that
+  // repeats the destination's text would steal the mask.
+  const definition = /^ {0,3}\[[^\]]*\]:\s*(<[^>]*>|\S+)/.exec(line);
+  if (definition !== null && definition[1] !== undefined) {
+    const at = definition.index + definition[0].length - definition[1].length;
+    ranges.push([at, at + definition[1].length]);
+  }
+
+  // Angle autolinks — `<https://…>` — are one whole piece of machinery.
+  for (const match of line.matchAll(/<[a-zA-Z][a-zA-Z0-9+.-]*:[^<>]*>/g)) {
+    ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  }
+
+  // Bare scheme URLs riding in prose (`https://…` with no bracket around).
+  for (const match of line.matchAll(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/g)) {
+    ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  }
+
+  // Inline link/image destinations: every `]( … )`, paren-depth aware, the
+  // same scan the link rewriter uses. A construct that never closes on its
+  // line is authoring slop whose extent cannot be proven — it is left
+  // entirely unmasked, exactly as the rewriter leaves it unrewritten, so
+  // prose after it keeps full glossary protection rather than being eaten.
+  /** @type {number} */
+  let claimedUntil = -1;
+  for (const match of line.matchAll(/\]\(/g)) {
+    const openerAt = match.index ?? 0;
+    if (openerAt < claimedUntil) continue;
+    let cursor = openerAt + 2;
+    let depth = 1;
+    let end = -1;
+    while (cursor < line.length) {
+      const char = line[cursor] ?? "";
+      if (char === "\\") {
+        cursor += 2;
+        continue;
+      }
+      if (char === "(") depth++;
+      if (char === ")") {
+        depth--;
+        if (depth === 0) {
+          end = cursor;
+          break;
+        }
+      }
+      cursor++;
+    }
+    if (end < 0) continue;
+    claimedUntil = end;
+    // The interior between `(` and `)` is machinery either way — angle
+    // brackets included.
+    ranges.push([openerAt + 2, end]);
+  }
+
+  if (ranges.length === 0) return line;
+  const out = line.split("");
+  for (const [from, to] of ranges) {
+    for (let index = from; index < to && index < out.length; index++) out[index] = "\u0000";
+  }
+  return out.join("");
+}
+
+/**
  * The structural profile a translation is compared against: fence count,
  * heading levels in document order, and the count of visibly broken inline
  * constructs (a `[text](` whose parentheses never close on the same line,

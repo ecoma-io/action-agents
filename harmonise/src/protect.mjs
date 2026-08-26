@@ -25,7 +25,7 @@
 
 import { randomBytes } from "node:crypto";
 
-import { fenceMask, maskCodeSpans, splitLines } from "./markdown.mjs";
+import { fenceMask, maskCodeSpans, maskDestinations, splitLines } from "./markdown.mjs";
 
 /** The shape of every placeholder this module mints. Case-insensitive on purpose: a token the model re-cased must be named as an unknown, never pass for prose. */
 const TOKEN_PATTERN = /\[\[harmonise:([0-9a-f]{16}):([gs])([1-9][0-9]*)\]\]/gi;
@@ -280,11 +280,19 @@ function replaceRange(text, [from, to], token) {
  * Glossary protection over text that already carries skip tokens. Terms are
  * matched longest-first so a longer configured term wins a shared prefix,
  * left-to-right, case-sensitive, never inside fenced blocks or inline code
- * spans, and never inside an existing placeholder.
+ * spans, never inside link/image destinations, reference-definition
+ * destinations or URLs — those are machinery, not prose — and never inside an
+ * existing placeholder.
  *
- * Masking preserves byte length everywhere (fence interiors and token bodies
- * become NUL runs of the same size), so every match position in the masked
- * text points at the identical slice of the real text.
+ * A match must also stand alone as a word: a term flanked by a letter, digit
+ * or underscore is a different word ("commit" inside "committed"), and
+ * matching it would be stemming by another name. Punctuation adjacency is
+ * fine — "repository," matches.
+ *
+ * Masking preserves byte length everywhere (fence interiors, destination
+ * interiors, code-span interiors and token bodies become NUL runs of the same
+ * size), so every match position in the masked text points at the identical
+ * slice of the real text.
  *
  * @param {string} text
  * @param {string[]} glossary
@@ -296,7 +304,7 @@ function protectGlossary(text, glossary, id) {
   const fences = fenceMask(lines);
   const masked = lines
     .map((line, index) =>
-      fences[index] === true ? "\u0000".repeat(line.length) : maskCodeSpans(line),
+      fences[index] === true ? "\u0000".repeat(line.length) : maskDestinations(maskCodeSpans(line)),
     )
     .join("\n")
     .replace(TOKEN_PATTERN, (token) => "\u0000".repeat(token.length));
@@ -304,7 +312,13 @@ function protectGlossary(text, glossary, id) {
   const alternatives = [...glossary]
     .sort((a, b) => b.length - a.length)
     .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const finder = new RegExp(alternatives.join("|"), "g");
+  // A word-boundary match without the baggage of `\b`, which misjudges terms
+  // that begin or end in punctuation: the lookarounds forbid exactly a
+  // flanking letter, digit or underscore, nothing else.
+  const finder = new RegExp(
+    `(?<![\\p{L}\\p{N}_])(?:${alternatives.join("|")})(?![\\p{L}\\p{N}_])`,
+    "gu",
+  );
 
   /** @type {[number, string][]} */
   const positions = [];

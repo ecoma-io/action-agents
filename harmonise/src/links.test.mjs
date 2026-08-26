@@ -90,6 +90,18 @@ describe("internal document links", () => {
     expect(result.text).toBe("[up](../../x.md)");
     expect(result.count).toBe(0);
   });
+
+  it("rewrites a resolvable parent-relative link that stays inside the repository", () => {
+    // ../other.md from manual/dev.md lands on the root document other.md,
+    // whose Vietnamese home is vi/other.md; rebuilt from the translation's
+    // directory at manual/vi/, that reads ../../vi/other.md.
+    const ctx = context({ documents: { "other.md": "vi/other.md" } });
+
+    expect(rewriteLinks("[up](../other.md)", ctx)).toEqual({
+      text: "[up](../../vi/other.md)",
+      count: 1,
+    });
+  });
 });
 
 describe("internal image links", () => {
@@ -168,6 +180,19 @@ describe("encoding and syntax preservation", () => {
     });
 
     expect(rewriteLinks("[![icon](i.png)](b.md)", ctx).text).toBe("[![icon](../i.vi.png)](b.md)");
+  });
+
+  it("handles nested parentheses inside a destination", () => {
+    const ctx = context({
+      documents: { "manual/file(1).md": "manual/vi/file(1).md" },
+    });
+
+    // The depth-aware scan reads the destination as `file(1).md`, not
+    // `file(1` followed by stray bytes.
+    expect(rewriteLinks("[w](file(1).md)", ctx)).toEqual({
+      text: "[w](file(1).md)",
+      count: 1,
+    });
   });
 
   it("rewrites reference-style destinations too", () => {
