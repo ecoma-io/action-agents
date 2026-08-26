@@ -117,6 +117,18 @@ function fakeForge(options = {}) {
     async whoami() {
       return { login: "action-agents[bot]" };
     },
+    // Present for the Forge type's completeness; triage never calls these.
+    async getRepository() {
+      return { defaultBranch: "main" };
+    },
+    /** @param {string} _branch */
+    async getRef(_branch) {
+      return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _sha */
+    async listTree(_sha) {
+      return [];
+    },
     /** @param {string} path */
     async getContents(path) {
       reads.push(path);

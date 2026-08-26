@@ -111,6 +111,41 @@ export const DOCS_DIR = "docs";
 export const EXEMPT_MARKER = "# consumer path";
 
 /**
+ * Blanks out fenced code blocks while preserving line numbers: every line
+ * inside a fence — delimiters included — becomes empty, so a `.md` file's
+ * examples are prose-shaped text the reference parsers never see. A spec page
+ * that shows `[text](target)` as SYNTAX to explain is not linking anywhere,
+ * and a gate that cannot tell documentation about links from links makes
+ * every honest example a failure. Real references never live inside fences.
+ *
+ * @param {string} text contents of a markdown file
+ * @returns {string} same number of lines, fence interiors emptied
+ */
+export function stripFencedCode(text) {
+  const lines = text.split("\n");
+  /** @type {string | undefined} */
+  let open;
+  const kept = lines.map((line) => {
+    const delimiter = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (open === undefined && delimiter !== undefined) {
+      open = delimiter[0] === "~" ? "~" : "`";
+      return "";
+    }
+    if (
+      open !== undefined &&
+      delimiter !== undefined &&
+      delimiter[0] === open &&
+      line.trim() === delimiter
+    ) {
+      open = undefined;
+      return "";
+    }
+    return open === undefined ? line : "";
+  });
+  return kept.join("\n");
+}
+
+/**
  * Extracts the local targets of every `[text](target)` markdown link in text.
  * External targets and fragment-only anchors are dropped here: external ones
  * are out of this tree's reach, and a bare `#anchor` is the same-file heading
@@ -460,15 +495,19 @@ function readFacts() {
     if (IGNORED_PREFIXES.some((prefix) => path.startsWith(prefix))) continue;
     const text = readFileSync(join(root, path), "utf8");
     const isMarkdown = path.endsWith(".md");
+    // A markdown file's fenced blocks are examples, not references: strip
+    // them once, before any parser, so link targets and docs citations shown
+    // as syntax are judged by no shape at all. Line numbers survive the strip.
+    const prose = isMarkdown ? stripFencedCode(text) : text;
     // YAML is judged by shape 3 alone. Running the citation scan over it too
     // would report one bad `docs/…/x.md` twice, under two names, for one line.
     const isYaml = YAML_EXTENSIONS.some((ext) => path.endsWith(ext));
     files.push({
       path,
-      links: isMarkdown ? parseMarkdownLinks(text) : [],
-      citations: isYaml ? [] : parseDocCitations(text),
+      links: isMarkdown ? parseMarkdownLinks(prose) : [],
+      citations: isYaml ? [] : parseDocCitations(prose),
       paths: isYaml ? parseYamlPathReferences(text) : [],
-      headings: isMarkdown ? headingAnchors(text) : new Set(),
+      headings: isMarkdown ? headingAnchors(prose) : new Set(),
     });
   }
   return { files, existingPaths };

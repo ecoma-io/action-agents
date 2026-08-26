@@ -231,6 +231,36 @@ describe("retries", () => {
 });
 
 describe("the redirect ceiling", () => {
+  it("refuses an absolute-url request off the configured origin before any call", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const http = createHttpClient({
+      baseUrl: "https://api.example",
+      authorization: "Bearer sk-secret",
+      fetchImpl: scripted([ok("{}")], recorder),
+      ...FAST,
+    });
+
+    // A server-chosen `Link: rel="next"` is exactly such a URL; following it
+    // would carry the credential to a host nobody configured.
+    await expect(http.request("https://evil.example/x")).rejects.toBeInstanceOf(
+      CrossOriginRedirectError,
+    );
+    expect(recorder.calls).toHaveLength(0);
+  });
+
+  it("accepts an absolute-url request on the configured origin", async () => {
+    const http = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: scripted([ok("{}")]),
+      ...FAST,
+    });
+
+    await expect(http.request("https://api.example/next?page=2")).resolves.toMatchObject({
+      text: "{}",
+    });
+  });
+
   it("refuses a redirect that leaves the configured origin, without following it", async () => {
     /** @type {{ calls?: RecordedCall[] }} */
     const recorder = {};
@@ -328,6 +358,30 @@ describe("the body cap", () => {
     });
 
     await expect(http.request("/x")).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+
+  it("takes a per-request cap over the client's, in both directions", async () => {
+    // A request naming a bigger cap reads what the client's would refuse.
+    const wider = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: scripted([() => new Response("x".repeat(2048))]),
+      maxBodyBytes: 1024,
+      ...FAST,
+    });
+    await expect(wider.request("/x", { maxBodyBytes: 4096 })).resolves.toMatchObject({
+      text: "x".repeat(2048),
+    });
+
+    // And one naming a smaller cap refuses what the client's would read.
+    const narrower = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: scripted([ok("x".repeat(64))]),
+      maxBodyBytes: 4096,
+      ...FAST,
+    });
+    await expect(narrower.request("/x", { maxBodyBytes: 8 })).rejects.toBeInstanceOf(
+      BodyTooLargeError,
+    );
   });
 });
 

@@ -40,8 +40,9 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
   // with slug "getting-started" are one document in three languages, and any
   // pattern shape works — per-language directories, suffixes, or a mix.
   //
-  // IMPORTANT: Language patterns MUST be disjoint. No single file may match
-  // more than one language pattern, or classification is undefined.
+  // When two patterns claim one file, the more specific — more literal
+  // characters around `{document}` — wins; two equally specific claims are
+  // refused at classification time. See "Document discovery" below.
   languages: {
     en: "docs/{document}.md",
     fr: "docs/fr/{document}.md",
@@ -100,19 +101,35 @@ inventory  =  discovered sources, existing translations, missing translations, o
 
 Sources and translations are discovered by enumerating the Git tree of the default branch using the configured patterns:
 
-1. List all files matching the source language pattern (minus `ignore`, minus `documents` filter)
-2. For each source, extract the `{document}` slug and apply each target language pattern
-3. Check if the target path exists in the tree
+1. List every blob on the default branch through the Git Trees API
+2. Match each blob against the language patterns (minus `ignore`)
+3. For each source, extract the `{document}` slug and apply each target language pattern
 4. Classify as: existing translation, missing translation, or orphan (target exists without source)
 
+A file claimed by more than one language pattern is settled by **specificity**: the pattern carrying more literal characters around its `{document}` wins. Nested layouts are legitimate and common — `en: docs/{document}.md` beside `vi: docs/vi/{document}.md` — and a file inside a language's own directory belongs to that language, the deeper pattern being the more specific claim. Two patterns of equal specificity claiming one file leave classification genuinely arbitrary, and that is refused with both names in the error.
+
+`{document}` may span path segments: under the pattern `docs/{document}.md`, a file `guides/setup.md` inside `docs/` carries the slug `guides/setup`. Slugs are matched case-sensitively.
+
+**Ignore interacts with orphans deliberately:** a translation whose slug has no source because the source is ignored is _deliberately untranslated_, not an orphan, and is never reported as one. Only a translation whose slug matches no source and no ignored source is an orphan.
+
+**The `documents` filter narrows work, not visibility:** it selects which pairs a run processes. Missing translations and orphans are still inventoried and reported outside the filter — a report that hid them would understate the repository's true translation state.
+
 The inventory is built **before** any translation begins. This is critical for link rewriting: if `api.md` lacks `api.vi.md` but the current run will create it, a document linking to `api.md` must know `api.vi.md` is a planned target.
+
+#### Inventory completeness
+
+The inventory is only sound if it is complete. A partial enumeration silently treated as complete corrupts everything downstream — orphan detection, missing-translation detection, link resolution all answer wrongly while looking authoritative. Therefore:
+
+- The tree listing follows `Link: rel="next"` pagination when the endpoint offers it;
+- The Git Trees API answers in one response and signals overflow with its own `truncated` flag — **a truncated response is refused, not processed**. The run fails red naming the ceiling, and no pair is translated from an inventory known to be incomplete;
+- There is no v1 fallback that processes part of a large repository. A repository past the API's ceiling needs its documentation split before `harmonise` can serve it, and the failure says exactly that.
 
 ### Transformation pipeline order
 
 For each source document, transformations occur in this order:
 
 1. **Parse and detect:** Extract skip directives from source
-2. **Detect glossary terms:** Find exact matches (case-sensitive) outside skipped regions and code blocks
+2. **Detect glossary terms:** Find exact matches (case-sensitive) outside skipped regions, fenced code blocks, and inline code spans
 3. **Apply placeholders:** Replace glossary terms and skip regions with unique placeholders
 4. **Rewrite links:** Apply internal link rewriting (using document inventory)
 5. **Send to LLM:** Translate with placeholders preserved
@@ -155,6 +172,12 @@ translated document
 
 Placeholders use a random-per-run identifier (similar to `core/untrusted.mjs`) to prevent untrusted content from forging them. A document containing the literal placeholder syntax cannot bypass validation because the random identifier changes each run.
 
+A placeholder has the shape `[[harmonise:<run-id>:<kind><n>]]` — one shared random hex `run-id` per action run, a kind (`g` for glossary terms, `s` for protected spans), and an index. One glossary term maps to one placeholder repeated at each of its occurrences; each protected span gets its own.
+
+- If a source document already contains text in the placeholder's own namespace, the id is regenerated before use; a source that collides with several consecutive ids is refused rather than risk ambiguity;
+- Validation counts every placeholder occurrence: a translation must carry exactly the source's count of each — no loss, no duplication, no edited syntax, no invented placeholders;
+- Restoration is byte-for-byte from what was protected, so the original term or span reappears exactly as it stood.
+
 ### Validation rules
 
 - **Placeholder model:** One unique placeholder per glossary term (not per occurrence)
@@ -185,6 +208,20 @@ If the model:
 
 Protected content within Markdown files that must not be translated.
 
+### Syntax
+
+A directive is a **whole line** whose only content is an HTML comment of one of
+the three forms below. Optional whitespace is tolerated inside the comment —
+`<!--harmonise:skip-->` and `<!-- harmonise:skip -->` are the same directive —
+and nothing else about the line may vary. Directives are recognized only
+outside fenced code blocks: inside a fence they are displayed text, not policy.
+
+```markdown
+<!-- harmonise:skip -->
+<!-- harmonise:skip-start -->
+<!-- harmonise:skip-end -->
+```
+
 ### Skip next line
 
 ```markdown
@@ -193,7 +230,14 @@ Protected content within Markdown files that must not be translated.
 This line is preserved byte-for-byte.
 ```
 
-The line immediately following the directive is preserved. Multiple consecutive directives skip multiple lines.
+The next non-blank line after the directive is preserved. Blank lines between
+the directive and its target carry no meaning and are left where they are.
+Multiple consecutive directives preserve multiple lines.
+
+A directive never targets a fenced code block. A `skip` whose next non-blank
+line is fenced is malformed authoring and refuses the run — wrap the block in
+a `skip-start` / `skip-end` region instead; a region carries fences through
+verbatim happily.
 
 ### Skip region
 
@@ -204,16 +248,26 @@ Content here is preserved byte-for-byte.
 <!-- harmonise:skip-end -->
 ```
 
-All content between the start and end markers is preserved.
+Everything from the start marker through the end marker — markers included —
+is one protected span, preserved byte-for-byte.
+
+### Protected spans
+
+Each protected span (a skip-next-line's directive plus its preserved line; a
+region's start marker through its end marker) is replaced by a single
+placeholder before translation and restored byte-for-byte afterwards, by the
+same mechanism glossary terms use. The restored document therefore still
+carries its original directives, which keeps a translated document a valid
+input to a later run.
 
 ### Validation rules
 
 - **Source directives only:** Only directives present in the original source document are honored. The model cannot introduce new skip directives through its output.
-- `skip-end` requires a matching `skip-start` in the source → malformed directive, run fails;
-- Nested skip regions are not supported in v1;
-- Unclosed skip regions → malformed directive, run fails;
-- Protected content is replaced with a placeholder before LLM translation;
-- Placeholders are validated and restored after translation, byte-for-byte.
+- `skip-end` requires an open `skip-start` in the source → malformed directive, run fails;
+- A `skip-start` while a region is already open → malformed (nested regions are not supported), run fails;
+- Unclosed `skip-start` at end of document → malformed directive, run fails;
+- A whole-line HTML comment addressing this action that is not exactly one of the three forms (`<!-- harmonise:skipx -->` and friends) → malformed, run fails — an unrecognized order to the action is refused, never silently ignored;
+- Comment-like text inside fenced code blocks or mid-line is content, not a directive, and is never validated as one.
 
 ### Scope (v1)
 
@@ -237,20 +291,19 @@ Internal relative links to other documents are automatically rewritten to point 
 
 ### Example
 
-Source:
+The map pairs `en: docs/{document}.md` with `vi: docs/{document}.vi.md`.
+The source document with slug `dev` links to two neighbors:
 
 ```markdown
-[Development](https://example.com/dev.md)
+See also [the API](api.md) and [the guide](guides/setup.md#install).
 ```
 
-Source language: `en`, target language: `vi`
-
-If `docs/dev.vi.md` exists **or will be created in this run**:
-
-Translation:
+If a localized `api` exists **or will be created in this run**, the
+translation re-points that link at its `.vi` twin; the guide has no localized
+version, so its link keeps every byte:
 
 ```markdown
-[Development](https://example.com/dev.vi.md)
+See also [the API](api.vi.md) and [the guide](guides/setup.md#install).
 ```
 
 ### Rules
@@ -264,36 +317,35 @@ Translation:
   5. Check document inventory: does the target exist (or is it planned for this run)?
   6. If yes: Re-relativize the target path against the translation document's directory and rewrite the link
   7. If no: Preserve the original link unchanged
+- **Rewritten syntaxes:** inline links and images — bracketed text followed by a parenthesized destination — and reference definitions (`[id]: target`). Never rewritten inside fenced code blocks, inline code spans, or skip-protected spans. HTML attributes (`<a href>`, `<img src>`) are content for v1 and pass through untouched.
 - **Preserve components:** Query strings, fragments, and URL encoding are preserved
-- **Never rewritten:** `http://`, `https://`, `mailto:`, `data:`, `#anchor` (same-page), any absolute URL
-- **Never rewritten:**
-  - `http://`
-  - `https://`
-  - `mailto:`
-  - `data:`
-  - `#anchor` (same-page anchor)
-  - Any absolute URL
-- **Preserved components:**
-  - Query strings: `dev.md?version=2` → `dev.vi.md?version=2`
-  - Fragments: `dev.md#install` → `dev.vi.md#install`
-  - URL encoding
+- **Never rewritten:** `http://`, `https://`, `mailto:`, `data:`, `#anchor` (same-page), protocol-relative URLs (`//host/path`), any other absolute URL or scheme
 
 ## Localized internal image links
 
-Internal relative image references follow the same principles as document links.
+Internal relative image references follow the same principles as document links: the reference is rewritten to a localized image when one exists, and preserved when it does not. The action never generates, translates, or uploads an image — it only re-points a reference at a file the repository already holds.
 
 ### Example
 
+Source document `docs/dev.md`, target language `vi`:
+
 ```markdown
-![Architecture](https://example.com/images/arch.png)
+![Architecture](images/dev.png)
 ```
 
-If a localized image exists according to the configured localization pattern, rewrite the reference. If not, preserve the original.
+If `docs/images/dev.vi.png` exists in the tree, the translation references it:
+
+```markdown
+![Architecture](images/dev.vi.png)
+```
 
 ### Rules
 
-- **V1 does not support image rewriting.** Image references are preserved as-is.
-- Future versions may add configurable image localization patterns.
+- **Deterministic naming:** the localized candidate for language `<lang>` is the referenced path with `. <lang>` inserted before its final extension — `dev.png` → `dev.vi.png`, `logo.brand.svg` → `logo.brand.vi.svg`, an extensionless path gains the tag at its end (`diagram` → `diagram.vi`). Query strings and fragments keep their places: `img.png?v=2#fig` → `img.vi.png?v=2#fig`;
+- **Existence-checked:** the rewrite happens only when the localized path exists in the default-branch tree. A missing localized image leaves the original reference untouched — never a broken link, never a generated file;
+- **Same resolution machinery as documents:** relative to the referencing document, resolved against the inventory, re-relativized for the translation's directory, URL encoding preserved;
+- **Never rewritten:** external images (`http://`, `https://`, protocol-relative), `data:` URIs, anchors;
+- The LLM sees only the already-rewritten reference; image decisions are never its to make.
 
 ## Markdown structural preservation
 
@@ -493,7 +545,7 @@ Any feature that would transform `harmonise` into a generic translation framewor
 
 This specification represents a substantial foundation for `harmonise`, but the adversarial review identified several areas for future refinement. These do not block implementation but should be noted:
 
-**Document discovery:** Tree enumeration may truncate on very large repositories (>100k files). V1 processes whatever is returned; future versions may handle pagination explicitly.
+**Document discovery:** The Git Trees API answers a recursive listing in one response and sets its `truncated` flag past its own ceiling (very large repositories). A truncated listing is refused, not processed — see [inventory completeness](#inventory-completeness). There is no v1 mode that works on a partial tree.
 
 **Edge cases:** Several edge cases are documented as requiring clarification or future specification:
 
@@ -503,9 +555,15 @@ This specification represents a substantial foundation for `harmonise`, but the 
 - Commit/PR attribution and title format
 - Dry-run report format and destination
 
-**Link rewriting complexity:** Relative link recomputation across directories is specified but may have edge cases with complex paths. Future versions may add more comprehensive link resolution.
+**Link rewriting complexity:** Relative link recomputation across directories is specified; complex paths (deep nesting, encoded segments) resolve through the same deterministic algorithm, but exotic destinations — angle-bracket destinations, backslash separators — pass through untouched in v1.
 
 These limitations are acceptable for v1. The specification provides sufficient clarity for core implementation while leaving room for refinement based on real-world usage.
+
+## Amendments
+
+The specification is living text, and changes to it are recorded here rather than silently rewritten into the acceptance list above:
+
+- **PR2:** Localized internal image references are specified and supported (the earlier "image rewriting removed" v1 limitation is superseded). Inventory completeness is a refusal contract: a truncated tree listing fails the run instead of being processed. Skip-directive syntax, protected-span boundaries, and pattern-overlap refusal are made exact.
 
 ## Acceptance criteria
 
@@ -518,7 +576,7 @@ PR1 (this specification) is substantially complete when:
 - [x] Glossary semantics are clear (per-term model, validation rules);
 - [x] Skip semantics are clear (source directives only, validation rules);
 - [x] Link rewrite semantics are clear (7-step algorithm specified);
-- [x] Image rewriting removed (v1 limitation acknowledged);
+- [x] Image rewriting removed (v1 limitation acknowledged; superseded by the PR2 amendment above);
 - [x] Missing/orphan semantics are clear;
 - [x] Markdown preservation is clear (counting/syntax checks);
 - [x] Out-of-scope section is explicit;

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   ForgeError,
   PastFileCeilingError,
+  TruncatedTreeError,
   MAX_PULL_REQUEST_FILES,
   createForge,
   nextLink,
@@ -59,10 +60,10 @@ function json(value) {
     new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
 }
 
-/** @param {unknown[]} page @param {string} [link] @returns {() => Response} */
-function page(page, link) {
+/** @param {unknown} body @param {string} [link] @returns {() => Response} */
+function page(body, link) {
   return () =>
-    new Response(JSON.stringify(page), {
+    new Response(JSON.stringify(body), {
       headers: link === undefined ? {} : { link },
     });
 }
@@ -362,5 +363,139 @@ describe("comments", () => {
 
     await expect(client.createComment(7, "body")).rejects.toBeInstanceOf(ForgeError);
     expect(recorder.calls).toHaveLength(1);
+  });
+});
+
+describe("getRepository", () => {
+  it("returns the default branch the repository names", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r": json({ default_branch: "main" }),
+    });
+
+    await expect(client.getRepository()).resolves.toEqual({ defaultBranch: "main" });
+  });
+
+  it("refuses a response that names no default branch", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r": json({}),
+    });
+
+    await expect(client.getRepository()).rejects.toThrow(/default branch/);
+  });
+});
+
+describe("getRef", () => {
+  it("returns the commit sha a branch points at, encoding slash-named branches", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        "GET /repos/o/r/git/ref/heads/feature%2Fone": json({
+          object: { sha: "abc123def4567890abcdef1234567890abcdef12", type: "commit" },
+        }),
+      },
+      recorder,
+    );
+
+    await expect(client.getRef("feature/one")).resolves.toEqual({
+      sha: "abc123def4567890abcdef1234567890abcdef12",
+    });
+    expect(recorder.calls?.[0]?.url).toMatch(/ref\/heads\/feature%2Fone$/);
+  });
+
+  it("refuses a response that carries no sha", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/git/ref/heads/main": json({ object: {} }),
+    });
+
+    await expect(client.getRef("main")).rejects.toThrow(ForgeError);
+  });
+});
+
+describe("listTree", () => {
+  const SHA = "abc123def4567890abcdef1234567890abcdef12";
+
+  it("lists every blob and tree entry, recursively, from one response", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        [`GET /repos/o/r/git/trees/${SHA}?recursive=1`]: json({
+          sha: SHA,
+          truncated: false,
+          tree: [
+            { path: "docs", type: "tree" },
+            { path: "docs/dev.md", type: "blob", size: 10 },
+            { path: "README.md", type: "blob", size: 4 },
+          ],
+        }),
+      },
+      recorder,
+    );
+
+    await expect(client.listTree(SHA)).resolves.toEqual([
+      { path: "docs", type: "tree" },
+      { path: "docs/dev.md", type: "blob" },
+      { path: "README.md", type: "blob" },
+    ]);
+    expect(recorder.calls).toHaveLength(1);
+  });
+
+  it("follows Link pagination when the host offers pages for a tree", async () => {
+    const first = `<https://api.github.com/repos/o/r/git/trees/${SHA}?recursive=1&page=2>; rel="next"`;
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/git/trees/${SHA}?recursive=1`]: page(
+        { truncated: false, tree: [{ path: "a.md", type: "blob" }] },
+        first,
+      ),
+      [`GET /repos/o/r/git/trees/${SHA}?recursive=1&page=2`]: page({
+        truncated: false,
+        tree: [{ path: "b.md", type: "blob" }],
+      }),
+    });
+
+    await expect(client.listTree(SHA)).resolves.toEqual([
+      { path: "a.md", type: "blob" },
+      { path: "b.md", type: "blob" },
+    ]);
+  });
+
+  it("refuses a listing flagged truncated instead of processing a partial tree", async () => {
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/git/trees/${SHA}?recursive=1`]: json({
+        truncated: true,
+        tree: [{ path: "a.md", type: "blob" }],
+      }),
+    });
+
+    const error = await client.listTree(SHA).catch((cause) => cause);
+    expect(error.name).toBe("TruncatedTreeError");
+    expect(error.message).toMatch(/truncated/);
+  });
+
+  it("flags truncation on any page, including a later one", async () => {
+    const first = `<https://api.github.com/repos/o/r/git/trees/${SHA}?recursive=1&page=2>; rel="next"`;
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/git/trees/${SHA}?recursive=1`]: page(
+        { truncated: false, tree: [{ path: "a.md", type: "blob" }] },
+        first,
+      ),
+      [`GET /repos/o/r/git/trees/${SHA}?recursive=1&page=2`]: page({
+        truncated: true,
+        tree: [{ path: "b.md", type: "blob" }],
+      }),
+    });
+
+    await expect(client.listTree(SHA)).rejects.toBeInstanceOf(TruncatedTreeError);
+  });
+
+  it("refuses a sha that is not a sha — trees are listed by id, never by name", async () => {
+    const client = forge("o", "r", {});
+
+    await expect(client.listTree("main")).rejects.toThrow(/sha/);
   });
 });

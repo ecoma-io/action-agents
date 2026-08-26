@@ -44,6 +44,7 @@
  * @property {unknown} [body] a string is sent as-is; anything else is JSON-encoded
  * @property {Headers} [headers] per-request headers, merged over the client's
  * @property {number | undefined} [maxAttempts] per-request attempt limit, overriding the client's — set to 1 for a call that is not idempotent, where a retry of an uncertain failure would do the work twice
+ * @property {number | undefined} [maxBodyBytes] per-request response-body cap, overriding the client's — for endpoints whose honest answer is bigger than the default cap (a recursive tree listing), without raising it for every call
  */
 
 /**
@@ -157,12 +158,24 @@ export function createHttpClient(config) {
       // A path joins onto the base's whole URL, path included: the
       // OpenAI-compatible convention is `{api-url}/chat/completions` where the
       // base already carries `/v1`, and `new URL("/x", base)` would drop it.
-      // An absolute URL (a pagination `next` link) is used as-is.
-      let url = /^https?:\/\//.test(path) ? new URL(path) : new URL(basePath + path, baseUrl);
+      // An absolute URL (a pagination `next` link) is used as-is — after the
+      // same-origin check a redirect already answers to, because a `Link`
+      // header is server-chosen text too, and following one off-origin would
+      // carry the credential to a host the caller never configured.
+      /** @type {URL} */
+      let url;
+      if (/^https?:\/\//.test(path)) {
+        const absolute = new URL(path);
+        if (absolute.origin !== origin) throw new CrossOriginRedirectError(origin, absolute.origin);
+        url = absolute;
+      } else {
+        url = new URL(basePath + path, baseUrl);
+      }
       const limit = init.maxAttempts ?? maxAttempts;
+      const bodyLimit = init.maxBodyBytes ?? maxBodyBytes;
 
       for (let hop = 0; ; hop++) {
-        const response = await attempt(url, method, body, headers, limit);
+        const response = await attempt(url, method, body, headers, limit, bodyLimit);
 
         if (!REDIRECT_STATUS.has(response.status)) {
           return response;
@@ -195,16 +208,18 @@ export function createHttpClient(config) {
 
   /**
    * One URL, retried while the failure is transient. `limit` is the request's
-   * own attempt ceiling when it names one, the client's otherwise.
+   * own attempt ceiling when it names one, the client's otherwise. `bodyLimit`
+   * is resolved the same way for the response-body cap.
    *
    * @param {URL} url
    * @param {string} method
    * @param {string | undefined} body
    * @param {Headers} headers
    * @param {number} limit
+   * @param {number} bodyLimit
    * @returns {Promise<HttpResponse>}
    */
-  async function attempt(url, method, body, headers, limit) {
+  async function attempt(url, method, body, headers, limit, bodyLimit) {
     for (let number = 1; ; number++) {
       const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
       try {
@@ -219,7 +234,7 @@ export function createHttpClient(config) {
           await sleep(delayFor(response, number));
           continue;
         }
-        const result = await materialise(response, url);
+        const result = await materialise(response, url, bodyLimit);
         // Redirect statuses are the caller of `attempt`'s to judge — the
         // redirect ceiling in `request` decides whether they are followed.
         if ((result.status < 200 || result.status >= 300) && !REDIRECT_STATUS.has(result.status)) {
@@ -250,9 +265,10 @@ export function createHttpClient(config) {
    *
    * @param {Response} response
    * @param {URL} url
+   * @param {number} maxBodyBytes
    * @returns {Promise<HttpResponse>}
    */
-  async function materialise(response, url) {
+  async function materialise(response, url, maxBodyBytes) {
     const declared = Number(response.headers.get("content-length") ?? "0");
     if (declared > maxBodyBytes) {
       throw new BodyTooLargeError(where(url), maxBodyBytes);

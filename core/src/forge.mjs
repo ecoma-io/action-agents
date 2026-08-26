@@ -72,6 +72,38 @@ export class PastFileCeilingError extends Error {
   }
 }
 
+/**
+ * The most one recursive tree response may carry. GitHub's own ceiling on the
+ * endpoint sits below this — its answers are cut and flagged `truncated`
+ * before they grow this large — so hitting this cap means the answer was not
+ * readable, which is refused like any other unreadable answer.
+ */
+export const MAX_TREE_RESPONSE_BYTES = 16 * 2 ** 20;
+
+/**
+ * A recursive tree listing came back flagged `truncated`: the entries beyond
+ * GitHub's ceiling are absent, and an inventory built from it would look
+ * complete while knowing less than the repository holds. Refused — never
+ * processed as if it were the whole tree.
+ */
+export class TruncatedTreeError extends Error {
+  /** @param {string} ref @param {number} collected */
+  constructor(ref, collected) {
+    super(
+      `the tree of '${ref}' lists ${String(collected)} entries and is truncated at ` +
+        `GitHub's ceiling — an inventory from it would be incomplete, so the run is ` +
+        `refused rather than guessed`,
+    );
+    this.name = "TruncatedTreeError";
+  }
+}
+
+/**
+ * @typedef {object} TreeEntry
+ * @property {string} path
+ * @property {string} type `blob` (a file), `tree` (a directory), or `commit` (a submodule)
+ */
+
 /** A GitHub call failed, naming the operation that failed. */
 export class ForgeError extends Error {
   /** @param {string} operation @param {Error} cause */
@@ -95,6 +127,9 @@ const PER_PAGE = 100;
  * @param {ForgeConfig} config
  * @returns {{
  *   whoami: () => Promise<{ login: string }>,
+ *   getRepository: () => Promise<{ defaultBranch: string }>,
+ *   getRef: (branch: string) => Promise<{ sha: string }>,
+ *   listTree: (sha: string) => Promise<TreeEntry[]>,
  *   getContents: (path: string) => Promise<{ content: string } | null>,
  *   listRepositoryLabels: () => Promise<string[]>,
  *   listPullRequestFiles: (number: number) => Promise<PullRequestFile[]>,
@@ -138,6 +173,97 @@ export function createForge(config) {
         );
       }
       return { login };
+    },
+
+    /** The repository's own facts — the default branch name is what a run reads first. */
+    async getRepository() {
+      const operation = "reading the repository";
+      const json = await call(operation, () => http.request(root));
+      const defaultBranch = asRecord(json)?.["default_branch"];
+      if (typeof defaultBranch !== "string" || defaultBranch === "") {
+        throw new ForgeError(operation, new Error("the response names no default branch"));
+      }
+      return { defaultBranch };
+    },
+
+    /**
+     * A branch's current commit SHA — the tip a tree listing or a new commit
+     * builds on.
+     *
+     * @param {string} branch
+     */
+    async getRef(branch) {
+      const operation = `reading the ref of branch '${branch}'`;
+      const json = await call(operation, () =>
+        http.request(`${root}/git/ref/heads/${encodeURIComponent(branch)}`),
+      );
+      const object = asRecord(asRecord(json)?.["object"]);
+      const sha = object?.["sha"];
+      if (typeof sha !== "string" || sha === "") {
+        throw new ForgeError(operation, new Error("the response carries no commit sha"));
+      }
+      return { sha };
+    },
+
+    /**
+     * Every entry of one tree, recursively — the whole default-branch file
+     * list in one call. The endpoint answers in a single response and flags
+     * overflow itself: a `truncated` answer is refused rather than processed,
+     * because an inventory that looks complete while entries are missing is
+     * the one failure mode worse than an error. `Link` pagination is followed
+     * when the host offers it, for forges whose answers do come in pages.
+     *
+     * @param {string} sha commit or tree SHA to list
+     */
+    async listTree(sha) {
+      const operation = `listing the tree of ${sha}`;
+      if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
+        throw new ForgeError(operation, new Error("a tree is listed by its sha"));
+      }
+      /** @type {unknown[]} */
+      const pages = [];
+      let url = `${root}/git/trees/${encodeURIComponent(sha)}?recursive=1`;
+      for (;;) {
+        let response;
+        try {
+          response = await http.request(url, { maxBodyBytes: MAX_TREE_RESPONSE_BYTES });
+        } catch (cause) {
+          throw new ForgeError(
+            operation,
+            cause instanceof Error ? cause : new Error(String(cause)),
+          );
+        }
+        pages.push(parse(operation, response.text));
+        const next = nextLink(response.headers["link"] ?? "");
+        if (next === null) break;
+        url = next;
+      }
+
+      /** @type {TreeEntry[]} */
+      const entries = [];
+      for (const page of pages) {
+        const record = asRecord(page);
+        if (record === null) {
+          throw new ForgeError(operation, new Error("the response is not a tree object"));
+        }
+        const rawEntries = record["tree"];
+        if (!Array.isArray(rawEntries)) {
+          throw new ForgeError(operation, new Error("the response carries no tree array"));
+        }
+        if (record["truncated"] === true) {
+          throw new TruncatedTreeError(sha, entries.length + rawEntries.length);
+        }
+        for (const raw of rawEntries) {
+          const entry = asRecord(raw);
+          const path = entry?.["path"];
+          const type = entry?.["type"];
+          if (typeof path !== "string" || typeof type !== "string") {
+            throw new ForgeError(operation, new Error("a tree entry has no path or type"));
+          }
+          entries.push({ path, type });
+        }
+      }
+      return entries;
     },
 
     /**

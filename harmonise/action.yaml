@@ -27,9 +27,9 @@ inputs:
     description: BCP 47 tag of the language that is the source of truth. Every other version is judged against it.
     required: true
   documents:
-    description: Comma-separated globs naming the documents to keep in step.
+    description: Comma-separated globs narrowing which source documents this run keeps in step. Empty means all of them — the config's language map defines the space, this only filters it.
     required: false
-    default: docs/**/*.md
+    default: ""
   dry-run:
     description: Report drift, propose nothing. Defaults to true, because the output of a real run is a pull request against your documentation rather than a comment. Edits are never pushed to a branch directly.
     required: false
