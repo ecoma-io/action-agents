@@ -1,0 +1,358 @@
+// Tests for the run orchestrator: the state law. Drafts skip, closed
+// threads skip, moved heads abandon before writing, failures preserve the
+// last complete review by never reaching a write, dry-run touches nothing,
+// and publication goes through exactly one marker upsert guarded by the
+// pre-publication re-read.
+
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as p from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { reviewPullRequest } from "./run.mjs";
+
+const HEAD = "a".repeat(40);
+const BASE = "b".repeat(40);
+
+/** A real checked-out-looking root: anchors count lines against this copy. */
+/** @type {string} */
+let wsRoot;
+
+beforeAll(() => {
+  wsRoot = mkdtempSync(p.join(tmpdir(), "run-test-ws-"));
+  mkdirSync(p.join(wsRoot, "src"));
+  writeFileSync(p.join(wsRoot, "src", "a.mjs"), "line1\nline2\nline3\n");
+  CONTEXT.workspace = wsRoot;
+});
+
+/**
+ * @param {Partial<import("#core/forge.mjs").PullRequestSnapshot>} [over]
+ * @returns {import("#core/forge.mjs").PullRequestSnapshot}
+ */
+function snapshot(over = {}) {
+  return {
+    number: 7,
+    state: "open",
+    draft: false,
+    merged: false,
+    title: "the change",
+    body: "",
+    head: { ref: "feature", sha: HEAD },
+    base: { ref: "main", sha: BASE },
+    ...over,
+  };
+}
+
+/**
+ * A forge stub covering the reads a full happy-path run makes.
+ *
+ * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot }} [options]
+ * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }> } }}
+ */
+function forgeStub(options = {}) {
+  const calls = {
+    /** @type {string[]} */
+    getPullRequests: [],
+    /** @type {Array<{ id?: number, body?: string }> } */
+    upserts: [],
+  };
+  return {
+    calls,
+    async getPullRequest() {
+      const snap = options.snapshotOverride ?? snapshot();
+      void options;
+      calls.getPullRequests.push(snap.head.sha);
+      return snap;
+    },
+    async getRepository() {
+      return { defaultBranch: "main", name: "widgets", description: options.repoDescription ?? "" };
+    },
+    /** @param {string} path */
+    /** @param {string} path @returns {Promise<{ content: string } | null>} */
+    async getContents(path) {
+      if (path.endsWith("review.json5")) {
+        return options.config === undefined
+          ? null
+          : { content: /** @type {string} */ (options.config) };
+      }
+      if (path.endsWith("review.json")) return null;
+      if (path.includes("instruction")) {
+        return typeof options.instruction === "string" ? { content: options.instruction } : null;
+      }
+      return null;
+    },
+    async listPullRequestFiles() {
+      return (
+        options.files ?? [
+          /** @type {any} */ ({
+            filename: "src/a.mjs",
+            status: "modified",
+            additions: 2,
+            deletions: 1,
+            patch: "@@ -1 +1,2 @@\n+x",
+          }),
+        ]
+      );
+    },
+    async listComments() {
+      return [];
+    },
+    /** @param {number} _number @param {string} body */
+    async createComment(_number, body) {
+      calls.upserts.push({ body });
+      return { id: 101 };
+    },
+    /** @param {number} id @param {string} body */
+    async updateComment(id, body) {
+      calls.upserts.push({ id, body });
+    },
+    async deleteComment() {},
+  };
+}
+
+/**
+ * @param {string} [finalAnswer]
+ * @returns {import("#core/chat.mjs").Chat}
+ */
+function chatStub(finalAnswer) {
+  return {
+    async complete() {
+      return {
+        content:
+          finalAnswer ??
+          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
+        toolCalls: [],
+        finishReason: "stop",
+      };
+    },
+  };
+}
+
+/**
+ * @param {import("./run.mjs").ReviewForge} forge
+ * @param {import("#core/chat.mjs").Chat} [chat]
+ * @returns {import("./run.mjs").Io}
+ */
+function io(forge, chat = chatStub()) {
+  return {
+    forge,
+    chat,
+    now: () => 1_000,
+    info: () => undefined,
+  };
+}
+
+const INPUTS = {
+  model: "review",
+  maxTurns: 5,
+  contextWindow: 128_000,
+  dryRun: false,
+  configPath: "",
+};
+const CONTEXT = { owner: "acme", repo: "widgets", workspace: "" }; // set in beforeAll
+
+describe("start-of-run state", () => {
+  it("skips drafts without touching anything else", async () => {
+    const forge = forgeStub({ snapshotOverride: snapshot({ draft: true }) });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(forge.calls.getPullRequests).toHaveLength(1);
+  });
+
+  it("skips closed and merged pull requests", async () => {
+    for (const over of [{ state: "closed" }, { state: "closed", merged: true }]) {
+      const forge = forgeStub({ snapshotOverride: snapshot(over) });
+      const result = await reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        io: io(forge),
+      });
+      expect(result.outcome).toBe("skip");
+    }
+  });
+});
+
+describe("the universe and the budget", () => {
+  it("clears an existing marker when every file is ignored, else stays silent", async () => {
+    const withMarker = forgeStub({ files: [] });
+    withMarker.listComments = async () => [
+      {
+        id: 55,
+        body: `<!-- action-agents:review:0badcafe -->old findings`,
+        user: { login: "github-actions[bot]" },
+        created_at: "",
+        updated_at: "",
+      },
+    ];
+    const cleared = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(withMarker),
+    });
+    expect(cleared.outcome).toBe("nothing-to-review");
+    expect(withMarker.calls.upserts[0]?.id).toBe(55);
+    expect(withMarker.calls.upserts[0]?.body).toContain("Nothing to review");
+
+    const bare = forgeStub({ files: [] });
+    const skipped = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(bare),
+    });
+    expect(skipped.outcome).toBe("skip");
+    expect(bare.calls.upserts).toHaveLength(0);
+  });
+
+  it("refuses diffs past the budget, red, naming both numbers — before any model call", async () => {
+    const forge = forgeStub({
+      files: [
+        { filename: "a.mjs", status: "modified", additions: 6000, deletions: 0 },
+        { filename: "b.mjs", status: "modified", additions: 1, deletions: 0 },
+      ],
+      config: `{ maxDiffLines: 100 }`,
+    });
+    await expect(
+      reviewPullRequest({ inputs: INPUTS, context: CONTEXT, pullRequestNumber: 7, io: io(forge) }),
+    ).rejects.toThrow(/past the break/);
+  });
+});
+
+describe("publication", () => {
+  it("publishes a complete review through one guarded upsert recording the head", async () => {
+    const forge = forgeStub();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+
+    expect(result.outcome).toBe("published");
+    expect(result.commentId).toBe(101);
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain(`<!-- action-agents:review:`);
+    expect(body).toContain(`head=${HEAD}`);
+    expect(body).toContain("**Review** — Complete");
+    expect(body).toContain("- `src/a.mjs:2` — off-by-one");
+    // Two reads pin the snapshot; the second guards publication.
+    expect(forge.calls.getPullRequests).toHaveLength(2);
+  });
+
+  it("abandons instead of publishing when the head moved mid-review", async () => {
+    let reads = 0;
+    const forge = forgeStub();
+    forge.getPullRequest = async () => {
+      reads++;
+      return snapshot(reads >= 2 ? { head: { ref: "feature", sha: "c".repeat(40) } } : {});
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("abandoned");
+    expect(forge.calls.upserts).toHaveLength(0);
+  });
+
+  it("abandons when the pull request closed while it was being reviewed", async () => {
+    let reads = 0;
+    const forge = forgeStub();
+    forge.getPullRequest = async () => {
+      reads++;
+      return snapshot(reads >= 2 ? { state: "closed" } : {});
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("abandoned");
+  });
+});
+
+describe("dry run", () => {
+  it("writes nothing anywhere — but logs the exact body", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub();
+    const result = await reviewPullRequest({
+      inputs: { ...INPUTS, dryRun: true },
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat: chatStub(), now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("dry-run");
+    expect(forge.calls.upserts).toHaveLength(0);
+    expect(logged.some((line) => line.includes("**Review** — Complete"))).toBe(true);
+  });
+});
+
+describe("failure posture", () => {
+  it("fails red on a twice-invalid final answer and writes nothing", async () => {
+    const forge = forgeStub();
+    const bad = chatStub("this is prose, not JSON");
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        io: io(forge, bad),
+      }),
+    ).rejects.toThrow(/failed the output contract twice/);
+    expect(forge.calls.upserts).toHaveLength(0);
+  });
+
+  it("fails red when the prompt cannot fit half the window", async () => {
+    const forge = forgeStub({
+      files: Array.from({ length: 30 }, (_, i) => ({
+        filename: `f${String(i)}.mjs`,
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "x".repeat(4000),
+      })),
+    });
+    await expect(
+      reviewPullRequest({
+        inputs: { ...INPUTS, contextWindow: 2000 },
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        io: io(forge),
+      }),
+    ).rejects.toThrow(/past half the .*window/);
+    expect(forge.calls.upserts).toHaveLength(0);
+  });
+
+  it("re-asks once after a natural stop, then accepts the corrected answer", async () => {
+    let asks = 0;
+    const forge = forgeStub();
+    const chatty = {
+      complete: async () => {
+        asks++;
+        return {
+          content: asks === 1 ? "prose first" : '{"findings":[],"summary":"clean now"}',
+          toolCalls: [],
+          finishReason: "stop",
+        };
+      },
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat: /** @type {any} */ (chatty), now: () => 0, info: () => undefined },
+    });
+    expect(asks).toBe(2);
+    expect(result.outcome).toBe("published");
+  });
+});
