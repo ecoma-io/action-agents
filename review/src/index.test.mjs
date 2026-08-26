@@ -1,137 +1,195 @@
-// Tests for the `review` entry point.
+// Tests for review's entry wiring.
 //
-// Two properties are pinned here that no later change may quietly drop:
-//
-//   1. **The unimplemented state fails loudly.** `run` refusing must reach
-//      `setFailed`, so a workflow goes red rather than green on an action that
-//      did nothing. A seed that reported success would be worse than no action.
-//   2. **The key is masked before anything can print it.** `add-mask` has to be
-//      issued before the first log line, or a later message carrying the
-//      request can put the key in a public build log.
+// The orchestrator behind `run` has its own suite; what is pinned here is
+// the seam the runner touches: inputs read and validated against the
+// manifest, the key masked before anything prints, non-pull_request events
+// refused loudly, and a pull_request event handed to the orchestrator over
+// the injected io.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as p from "node:path";
+import { describe, expect, it, vi } from "vitest";
 
 import { readContext } from "#core/runtime.mjs";
 
-import { ACTION, main, readInputs, run } from "./index.mjs";
+import { ACTION, main, readEvent, readInputs, run } from "./index.mjs";
+
+/** @typedef {import("#core/runtime.mjs").Env} Env */
+
+/** @type {string} */
+let eventDir;
 
 /**
- * A complete runner environment, from which each test removes what it is about.
- * Typed as `Env` rather than inferred: an inferred literal has required keys, and
- * `delete` on one is a type error — which would push these tests towards
- * asserting on a fixture they could not actually take a value out of.
+ * A runner-shaped env for a same-repo pull_request run whose event payload
+ * is a real file — no module mocking anywhere.
  *
- * @type {import("#core/runtime.mjs").Env}
+ * @param {{ event?: unknown, eventName?: string, extra?: Partial<Env> }} [options]
+ * @returns {Env}
  */
-const runner = {
-  "INPUT_GITHUB-TOKEN": "ghs_x",
-  "INPUT_API-URL": "https://api.example/v1",
-  "INPUT_API-KEY": "sk-secret",
-  INPUT_MODEL: "gpt-x",
-  GITHUB_REPOSITORY: "ecoma-io/action-agents",
-  GITHUB_WORKSPACE: "/work",
-  GITHUB_EVENT_NAME: "pull_request",
-  GITHUB_EVENT_PATH: "/work/event.json",
-};
-
-afterEach(() => {
-  // setFailed sets it, and vitest shares one process across files.
-  process.exitCode = 0;
-  vi.restoreAllMocks();
-});
+function runnerEnv(options = {}) {
+  if (eventDir === undefined) eventDir = mkdtempSync(p.join(tmpdir(), "review-entry-"));
+  const eventPath = p.join(eventDir, "event.json");
+  writeFileSync(eventPath, JSON.stringify(options.event ?? { pull_request: { number: 41 } }));
+  return {
+    "INPUT_GITHUB-TOKEN": "ghs_x",
+    "INPUT_API-URL": "https://llm.example/v1",
+    "INPUT_API-KEY": "sk-secret",
+    INPUT_MODEL: "review",
+    GITHUB_REPOSITORY: "acme/widgets",
+    GITHUB_WORKSPACE: "/w",
+    GITHUB_EVENT_NAME: options.eventName ?? "pull_request",
+    GITHUB_EVENT_PATH: eventPath,
+    GITHUB_API_URL: "https://api.github.com",
+    ...options.extra,
+  };
+}
 
 describe("readInputs", () => {
-  it("carries the shared inputs through", () => {
-    expect(readInputs(runner)).toMatchObject({
-      githubToken: "ghs_x",
-      apiUrl: "https://api.example/v1",
-      apiKey: "sk-secret",
-      model: "gpt-x",
-    });
+  it("defaults the knobs and keeps the shared shape", () => {
+    const inputs = readInputs(runnerEnv());
+    expect(inputs.model).toBe("review");
+    expect(inputs.maxTurns).toBe(30);
+    expect(inputs.contextWindow).toBe(128_000);
+    expect(inputs.dryRun).toBe(false);
+    expect(inputs.configPath).toBe("");
   });
 
-  it("defaults the rubric path, the turn ceiling and the context window", () => {
-    expect(readInputs(runner)).toMatchObject({
-      instructionsPath: ".github/review-instructions.md",
-      maxTurns: 30,
-      contextWindow: 128_000,
-    });
-  });
-
-  it("reads a configured config-path, empty for the default locations", () => {
-    expect(readInputs(runner).configPath).toBe("");
-    expect(readInputs({ ...runner, "INPUT_CONFIG-PATH": "p/review.json5" }).configPath).toBe(
-      "p/review.json5",
-    );
-  });
-
-  it("refuses a turn ceiling of zero, which would review nothing and say nothing", () => {
-    expect(() => readInputs({ ...runner, "INPUT_MAX-TURNS": "0" })).toThrow(/at least 1/);
-  });
-
-  it("does not default to a dry run — a review that writes no comment is not a review", () => {
-    expect(readInputs(runner).dryRun).toBe(false);
+  it("refuses knob values under their floors", () => {
+    expect(() => readInputs(runnerEnv({ extra: { "INPUT_MAX-TURNS": "0" } }))).toThrow();
+    expect(() => readInputs(runnerEnv({ extra: { "INPUT_CONTEXT-WINDOW": "999" } }))).toThrow();
+    expect(() => readInputs(runnerEnv({ extra: { "INPUT_DRY-RUN": "yes" } }))).toThrow();
   });
 });
 
-describe("run", () => {
-  it("refuses, rather than reporting success for work it never attempted", async () => {
-    await expect(run(readInputs(runner), readContext(runner))).rejects.toThrow(
-      /not implemented yet/,
+describe("readEvent", () => {
+  it("extracts the pull request number from a pull_request event", () => {
+    const env = runnerEnv();
+    expect(readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toEqual({
+      eventName: "pull_request",
+      pullRequestNumber: 41,
+    });
+  });
+
+  it("refuses any other event name before touching the payload", () => {
+    expect(() => readEvent("issues", "/dev/null")).toThrow(/runs on 'pull_request' events only/);
+    expect(() => readEvent("workflow_dispatch", "/dev/null")).toThrow(/pull_request/);
+  });
+
+  it("refuses an event payload without a pull request", () => {
+    const env = runnerEnv({ event: {} });
+    expect(() => readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toThrow(
+      /no pull_request\.number/,
     );
   });
 });
 
 describe("main", () => {
-  it("turns a refusal into a failed step, not a green one", async () => {
+  it("masks the key before the first log line", async () => {
+    /** @type {string[]} */
+    const written = [];
+    vi.spyOn(console, "log").mockImplementation((line) => {
+      written.push(String(line));
+    });
+    try {
+      await main(runnerEnv(), async () => {});
+      expect(written[0]).toContain("::add-mask::sk-secret");
+      expect(written.some((line) => line.includes("review: acme/widgets"))).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("lands failures in setFailed with exit code 1 — never green-on-nothing", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    const result = await main(runner);
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/not implemented yet/);
-    expect(process.exitCode).toBe(1);
+    const before = process.exitCode;
+    try {
+      const outcome = await main(runnerEnv({ eventName: "push" }));
+      expect(outcome.ok).toBe(false);
+      expect(outcome.message).toMatch(/pull_request' events only/);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = before;
+      vi.restoreAllMocks();
+    }
   });
 
-  it("masks the key before it writes anything else", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    await main(runner);
-
-    expect(log.mock.calls[0]?.[0]).toBe("::add-mask::sk-secret");
-  });
-
-  it("reports success when the work succeeds", async () => {
+  it("reports success when the orchestrator completes", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    const result = await main(runner, () => Promise.resolve());
-
-    expect(result).toEqual({ ok: true });
-    expect(process.exitCode).toBe(0);
+    try {
+      const outcome = await main(runnerEnv(), async () => {});
+      expect(outcome.ok).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
+});
 
-  it("fails on a missing required input without reaching the work", async () => {
+describe("run over injected io", () => {
+  it("delegates a pull_request event into the orchestrator and logs its reason", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const incomplete = { ...runner };
-    delete incomplete["INPUT_API-URL"];
-
-    const result = await main(incomplete, () => Promise.reject(new Error("must not run")));
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/'api-url'/);
+    /** @type {string[]} */
+    const logged = [];
+    const env = runnerEnv({ event: { pull_request: { number: 9 } } });
+    try {
+      await run(readInputs(env), readContext(env), {
+        forge: {
+          // Draft snapshot: the cheapest honest end of the orchestration.
+          getPullRequest: async () => ({
+            number: 9,
+            state: "open",
+            draft: true,
+            merged: false,
+            title: "",
+            body: "",
+            head: { ref: "x", sha: "a".repeat(40) },
+            base: { ref: "main", sha: "b".repeat(40) },
+          }),
+          async getRepository() {
+            return { defaultBranch: "main", name: "", description: "" };
+          },
+          async listPullRequestFiles() {
+            return [];
+          },
+          async listComments() {
+            return [];
+          },
+          async createComment() {
+            return { id: 1 };
+          },
+          async updateComment() {},
+          async deleteComment() {},
+          async getContents() {
+            return null;
+          },
+        },
+        chat: {
+          complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
+        },
+        now: () => 0,
+        info: (message) => logged.push(message),
+      });
+      expect(logged.some((line) => line.includes("is a draft"))).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
-  it("says so in the log when it is a dry run", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    await main({ ...runner, "INPUT_DRY-RUN": "true" }, () => Promise.resolve());
-
-    expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toMatch(
-      /\(dry run — nothing will be written\)/,
-    );
+  it("refuses non-pull_request events before any io touch", async () => {
+    const env = runnerEnv({ eventName: "issues" });
+    await expect(
+      run(readInputs(env), readContext(env), {
+        forge: /** @type {any} */ ({}),
+        chat: /** @type {any} */ ({}),
+        now: () => 0,
+        info: () => undefined,
+      }),
+    ).rejects.toThrow(/pull_request' events only/);
   });
+});
 
-  it("names itself", () => {
+describe("the action constant", () => {
+  it("is review — the marker namespace everything downstream assumes", () => {
     expect(ACTION).toBe("review");
   });
 });

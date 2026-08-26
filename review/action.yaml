@@ -23,12 +23,6 @@ inputs:
     description: Overrides `.github/action-agents/review/review.json5` / `.json`, read from the default branch. When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
     required: false
     default: ""
-  instructions-path:
-    description: Markdown file holding the repository's review rubric. Missing is fine — the built-in rubric applies alone.
-    required: false
-    # The path is read in the CONSUMER's repository, not this one, and its
-    # absence is a supported configuration rather than a defect.
-    default: .github/review-instructions.md # consumer path
   max-turns:
     description: Ceiling on agent turns. Reaching it ends the review and says so; it never posts a partial review as if it were complete.
     required: false
