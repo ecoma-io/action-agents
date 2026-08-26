@@ -52,6 +52,7 @@
     "check-anchors": "node tools/check-anchors.mjs",
     "check-uses-refs": "node tools/check-uses-refs.mjs",
     "check-action-inputs": "node tools/check-action-inputs.mjs",
+    "check-release-invariants": "node tools/check-release-invariants.mjs",
     "check-skills": "node scripts/check-skills.mjs",
     "sync-skills": "node scripts/sync-skills.mjs"
   },
