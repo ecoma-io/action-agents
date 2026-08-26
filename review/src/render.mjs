@@ -110,10 +110,12 @@ function defang(path) {
     path
       .replace(/`/g, "'")
       .replace(/<!--/g, "<-")
-      .replace(/-->/g, "->")
+      // Browsers close comments on --!> as well as -->; both closers go, so
+      // no displayed path can end a comment anywhere.
+      .replace(/--!?>/g, "->")
       .replace(/</g, "&lt;")
       // eslint-disable-next-line no-control-regex
-      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+      .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "")
   );
 }
 
