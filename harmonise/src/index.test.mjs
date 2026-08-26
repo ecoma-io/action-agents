@@ -126,7 +126,11 @@ function chat(answers) {
       cursor++;
       calls++;
       if (answer instanceof Error) throw answer;
-      return { content: /** @type {string} */ (answer) };
+      return {
+        content: /** @type {string} */ (answer),
+        toolCalls: [],
+        finishReason: undefined,
+      };
     },
   };
 }

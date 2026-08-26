@@ -121,6 +121,19 @@ function fakeForge(options = {}) {
     async getRepository() {
       return { defaultBranch: "main", name: "action-agents", description: "" };
     },
+    /** @param {number} _number */
+    async getPullRequest(_number) {
+      return {
+        number: 1,
+        state: "open",
+        draft: false,
+        merged: false,
+        title: "",
+        body: "",
+        head: { ref: "x", sha: "0".repeat(40) },
+        base: { ref: "main", sha: "0".repeat(40) },
+      };
+    },
     /** @param {string} _content */
     async createBlob(_content) {
       return { sha: "0".repeat(40) };
@@ -219,17 +232,19 @@ function fakeForge(options = {}) {
  */
 function io(options = {}) {
   const forge = fakeForge(options);
-  /** @type {{ model: string, messages: { role: string, content: string }[] } | null} */
+  /** @type {{ model: string, messages: import("#core/chat.mjs").ChatMessage[], tools?: import("#core/chat.mjs").ChatTool[] } | null} */
   let request = null;
   return {
     forge,
     request: () => request,
     chat: {
-      /** @param {{ model: string, messages: { role: string, content: string }[] }} ask */
+      /**
+       * @param {{ model: string, messages: import("#core/chat.mjs").ChatMessage[], tools?: import("#core/chat.mjs").ChatTool[] }} ask
+       */
       async complete(ask) {
         if (options.chatFailure) throw options.chatFailure;
         request = ask;
-        return { content: options.answer ?? LABELS_ANSWER };
+        return { content: options.answer ?? LABELS_ANSWER, toolCalls: [], finishReason: undefined };
       },
     },
     evidence: createEvidence(() => "aaaabbbb"),

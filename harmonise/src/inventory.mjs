@@ -13,7 +13,7 @@
  * undefined is refused, not guessed.
  */
 
-import { matchGlob } from "./glob.mjs";
+import { matchGlob } from "#core/glob.mjs";
 import { localizedImagePath } from "./patterns.mjs";
 
 /** A tree entry, as the forge hands it over. @typedef {{ path: string, type: string }} TreeEntry */

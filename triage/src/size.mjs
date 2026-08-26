@@ -14,7 +14,7 @@
  * refused, not reconciled, like any other label declared twice.
  */
 
-import { matchGlob } from "./glob.mjs";
+import { matchGlob } from "#core/glob.mjs";
 
 /** @typedef {import("#core/forge.mjs").PullRequestFile} PullRequestFile */
 

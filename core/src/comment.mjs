@@ -1,13 +1,17 @@
 /**
  * The marker upsert — the one route by which model text reaches a thread.
  *
- * One comment per action per thread. It is found by author first, then by
- * exact marker: the author pass covers the ordinary case (the same token
- * identity wrote it), and the marker pass covers a rename — the bot account
- * was renamed, or the workflow switched tokens — where the author no longer
- * matches but the marker still names the action.
+ * One comment per action per thread, found by exact marker **and** by known
+ * bot identity. The identity half is not decoration: a maintainer who quotes
+ * the action's comment copies its marker into their own words, and a marker
+ * alone cannot tell a quote from the original. Only comments authored by the
+ * logins in `ownLogins` are candidates for updating or deleting; a
+ * marker-bearing comment by anyone else is named in a log line and left
+ * exactly as its author wrote it. When no candidate exists but foreign
+ * markers do, a fresh comment is created rather than a foreign one claimed —
+ * two comments on the thread beat one human's words rewritten by a bot.
  *
- * The marker is an HTML comment, invisible in rendered Markdown:
+ * The marker itself is an HTML comment, invisible in rendered Markdown:
  *
  * ```text
  * <!-- action-agents:<action>:<id> -->
@@ -20,11 +24,12 @@
  * model text cannot contain it, so a marker found in a comment was written
  * by the action, not injected into its own output.
  *
- * If a race or a rename leaves several matches, the newest wins and the
- * losers are deleted with a log line — the upsert keeps exactly one. Where
- * the caller records a head commit, a comment holding a head written after
- * this run started is never overwritten: a concurrent run got there first,
- * and the older result is abandoned with a log line instead.
+ * If a race leaves several of the action's own comments, the newest wins and
+ * the losers are deleted with a log line — the upsert keeps exactly one of
+ * *its own*, and touches nothing else. Where the caller records a head
+ * commit, a comment holding a head written after this run started is never
+ * overwritten: a concurrent run got there first, and the older result is
+ * abandoned with a log line instead.
  */
 
 import { randomBytes } from "node:crypto";
@@ -40,7 +45,6 @@ import { randomBytes } from "node:crypto";
  * surprise.
  *
  * @typedef {object} CommentStore
- * @property {() => Promise<{ login: string }>} whoami
  * @property {(number: number) => Promise<CommentEntry[]>} listComments
  * @property {(number: number, body: string) => Promise<{ id: number }>} createComment
  * @property {(id: number, body: string) => Promise<void>} updateComment
@@ -57,6 +61,9 @@ import { randomBytes } from "node:crypto";
 /** The whole marker, as it sits in a comment. */
 const MARKER =
   /<!--\s*action-agents:([a-z0-9-]+):([0-9a-f-]{6,64})(?::head=([0-9a-f]{7,40}))?\s*-->/g;
+
+/** The logins this repo's actions write under when nothing exotic is configured. */
+const DEFAULT_OWN_LOGINS = ["github-actions[bot]"];
 
 /**
  * @param {string} action
@@ -95,6 +102,7 @@ function defaultNewId() {
  * @property {string} action the acting action's name, the marker's namespace
  * @property {number} issueNumber the thread — an issue number or a pull request's
  * @property {(marker: string) => string} buildBody the action's comment, around the marker it is handed
+ * @property {string[]} [ownLogins] the logins this action's own comments carry — defaults to the workflow-token bot; a caller writing under anything else must say so here
  * @property {string} [head] the commit the comment records, when the action records one
  * @property {number} [startedAt] epoch milliseconds, for the newer-head rule
  * @property {() => string} [newId]
@@ -109,24 +117,33 @@ function defaultNewId() {
  */
 export async function upsertComment(options) {
   const log = options.log ?? (() => undefined);
-  const { login } = await options.store.whoami();
+  const ownLogins = options.ownLogins ?? DEFAULT_OWN_LOGINS;
   const comments = await options.store.listComments(options.issueNumber);
 
   /** @type {CommentEntry[]} */
   const marked = [];
+  let foreign = 0;
   for (const comment of comments) {
     const marker = parseMarker(comment.body);
-    if (marker?.action === options.action) marked.push(comment);
+    if (marker?.action !== options.action) continue;
+    const login = comment.user?.login;
+    if (login === undefined || !ownLogins.includes(login)) {
+      // A quoted marker in someone else's words. Claiming it would be
+      // rewriting a human's comment; deleting it would be worse. Named and
+      // left alone.
+      foreign++;
+      continue;
+    }
+    marked.push(comment);
+  }
+  if (foreign > 0) {
+    log(
+      `${String(foreign)} comment(s) on #${String(options.issueNumber)} carry this ` +
+        `action's marker but were written by other accounts — left untouched`,
+    );
   }
 
-  // Author first, marker second. A human quoting the action's comment copies
-  // its marker along; claiming that quote is not ours to do while our own
-  // comment stands. The marker-only fallback covers a rename — the login no
-  // longer matches, the marker still names the action.
-  const byAuthor = marked.filter((comment) => comment.user?.login === login);
-  const found = byAuthor.length > 0 ? byAuthor : marked;
-
-  if (found.length === 0) {
+  if (marked.length === 0) {
     const mint = options.newId ?? defaultNewId;
     const marker = markerLine(options.action, mint(), options.head);
     const created = await options.store.createComment(
@@ -136,13 +153,14 @@ export async function upsertComment(options) {
     return { outcome: "created", id: created.id };
   }
 
-  // Newest wins: ids ascend with creation, and the upsert keeps exactly one.
-  found.sort((a, b) => a.id - b.id);
-  const winner = found[found.length - 1] ?? null;
+  // Newest wins: ids ascend with creation, and the upsert keeps exactly one
+  // of its own.
+  marked.sort((a, b) => a.id - b.id);
+  const winner = marked[marked.length - 1] ?? null;
   if (winner === null) {
     throw new Error("the marker upsert found no comment after finding some");
   }
-  for (const loser of found.slice(0, -1)) {
+  for (const loser of marked.slice(0, -1)) {
     log(
       `deleting a duplicate ${options.action} comment (${String(loser.id)}) — the upsert keeps exactly one`,
     );

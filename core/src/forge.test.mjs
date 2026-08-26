@@ -658,3 +658,108 @@ describe("write operations", () => {
     expect(recorder.calls?.[0]?.url).toContain("state=all&per_page=100");
   });
 });
+
+describe("getPullRequest", () => {
+  const PULL = {
+    number: 7,
+    state: "open",
+    draft: false,
+    merged: false,
+    title: "the change",
+    body: "what and why",
+    head: { ref: "feature", sha: "aaaabbbbccccdddd000011112222333344445555" },
+    base: { ref: "main", sha: "ffff0000ffff0000111122223333444455556666" },
+  };
+
+  it("reads one pull request whole — state, flags, prose, both commits", async () => {
+    const client = forge("o", "r", { "GET /repos/o/r/pulls/7": json(PULL) });
+
+    await expect(client.getPullRequest(7)).resolves.toEqual({
+      number: 7,
+      state: "open",
+      draft: false,
+      merged: false,
+      title: "the change",
+      body: "what and why",
+      head: { ref: "feature", sha: "aaaabbbbccccdddd000011112222333344445555" },
+      base: { ref: "main", sha: "ffff0000ffff0000111122223333444455556666" },
+    });
+  });
+
+  it("normalises an absent description to an empty string", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/pulls/7": json({ ...PULL, body: null }),
+    });
+
+    const snapshot = await client.getPullRequest(7);
+    expect(snapshot.body).toBe("");
+    expect(snapshot.title).toBe("the change");
+  });
+
+  it("refuses a response whose commits carry no usable shas", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/pulls/7": json({
+        ...PULL,
+        head: { ref: "feature", sha: "not-a-sha" },
+      }),
+    });
+
+    const error = await client.getPullRequest(7).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/shaped like a pull request/);
+  });
+
+  it("names the operation when the read fails", async () => {
+    const client = forge("o", "r", {});
+
+    const error = await client.getPullRequest(404).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/reading pull request #404/);
+  });
+});
+
+describe("listPullRequestFiles extras", () => {
+  it("keeps patch, blob sha and a rename's old path when GitHub sends them", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/pulls/5/files?per_page=100": page([
+        {
+          filename: "renamed.rs",
+          status: "renamed",
+          additions: 2,
+          deletions: 1,
+          previous_filename: "old-name.rs",
+          sha: "bbbb1111",
+          patch: "@@ -1,2 +1,3 @@",
+        },
+        { filename: "logo.png", status: "modified", additions: 0, deletions: 0, sha: "cccc2222" },
+        { filename: "plain.mjs", status: "added", additions: 10, deletions: 0 },
+      ]),
+    });
+
+    const files = await client.listPullRequestFiles(5);
+
+    expect(files[0]).toEqual({
+      filename: "renamed.rs",
+      status: "renamed",
+      additions: 2,
+      deletions: 1,
+      previousFilename: "old-name.rs",
+      sha: "bbbb1111",
+      patch: "@@ -1,2 +1,3 @@",
+    });
+    // A binary's entry carries no patch — absent, not empty.
+    expect(files[1]).toEqual({
+      filename: "logo.png",
+      status: "modified",
+      additions: 0,
+      deletions: 0,
+      sha: "cccc2222",
+    });
+    expect(files[2]).toEqual({
+      filename: "plain.mjs",
+      status: "added",
+      additions: 10,
+      deletions: 0,
+    });
+  });
+});
