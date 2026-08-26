@@ -51,6 +51,26 @@ import { createHttpClient, HttpError } from "./http.mjs";
  * @property {string} status added, removed, modified, renamed, …
  * @property {number} additions zero for binary, submodule and pure-rename entries
  * @property {number} deletions zero for the same entries
+ * @property {string} [previousFilename] a rename's old path, when the entry is a rename
+ * @property {string} [patch] the file's unified diff, when GitHub supplies one — absent for binaries, submodule bumps and diffs past GitHub's own size ceiling
+ * @property {string} [sha] the blob SHA of the file at the pull request's head commit
+ */
+
+/**
+ * What one `GET /pulls/{number}` read fixes about a pull request: its state,
+ * its two commits, and the prose a human wrote about it. A snapshot policy —
+ * what pins a run to these values, and when they are re-read — lives above
+ * this module, in the action that reads twice around its own work.
+ *
+ * @typedef {object} PullRequestSnapshot
+ * @property {number} number
+ * @property {string} state "open", "closed", or whatever the forge answers
+ * @property {boolean} draft
+ * @property {boolean} merged
+ * @property {string} title an absent title is normalised to ""
+ * @property {string} body an absent description is normalised to ""
+ * @property {{ ref: string, sha: string }} head
+ * @property {{ ref: string, sha: string }} base
  */
 
 /** The listing's own ceiling; a pull request at or past it is unmeasurable. */
@@ -158,6 +178,7 @@ const PER_PAGE = 100;
  *   listTree: (sha: string) => Promise<TreeEntry[]>,
  *   getContents: (path: string, options?: { ref?: string }) => Promise<{ content: string } | null>,
  *   listRepositoryLabels: () => Promise<string[]>,
+ *   getPullRequest: (number: number) => Promise<PullRequestSnapshot>,
  *   listPullRequestFiles: (number: number) => Promise<PullRequestFile[]>,
  *   addLabels: (number: number, names: string[]) => Promise<void>,
  *   removeLabel: (number: number, name: string) => Promise<void>,
@@ -347,9 +368,66 @@ export function createForge(config) {
     },
 
     /**
+     * The pull request itself, read in one call: state, draft and merged
+     * flags, title, body, and both commits. This is the read a snapshot is
+     * built from and the read repeated immediately before publication — the
+     * pair of reads that makes reviewing commit A while the thread sits at
+     * commit B unreachable in practice.
+     *
+     * @param {number} number
+     */
+    async getPullRequest(number) {
+      const operation = `reading pull request #${String(number)}`;
+      const json = await call(operation, () => http.request(`${root}/pulls/${String(number)}`));
+      const record = asRecord(json);
+      const head = asRecord(record?.["head"]);
+      const base = asRecord(record?.["base"]);
+      const state = record?.["state"];
+      const draft = record?.["draft"];
+      const merged = record?.["merged"];
+      const title = record?.["title"];
+      const headRef = head?.["ref"];
+      const headSha = head?.["sha"];
+      const baseRef = base?.["ref"];
+      const baseSha = base?.["sha"];
+      if (
+        typeof state !== "string" ||
+        typeof draft !== "boolean" ||
+        typeof merged !== "boolean" ||
+        typeof title !== "string" ||
+        typeof headRef !== "string" ||
+        typeof headSha !== "string" ||
+        !/^[0-9a-f]{7,40}$/i.test(headSha) ||
+        typeof baseRef !== "string" ||
+        typeof baseSha !== "string" ||
+        !/^[0-9a-f]{7,40}$/i.test(baseSha)
+      ) {
+        throw new ForgeError(
+          operation,
+          new Error("the response is not shaped like a pull request"),
+        );
+      }
+      // An absent description is a normal pull request, not a broken answer.
+      const body = typeof record?.["body"] === "string" ? record["body"] : "";
+      return {
+        number,
+        state,
+        draft,
+        merged,
+        title,
+        body,
+        head: { ref: headRef, sha: headSha },
+        base: { ref: baseRef, sha: baseSha },
+      };
+    },
+
+    /**
      * The pull request's files with per-file counts. Renamed, binary and
      * submodule entries arrive with zero counts by GitHub's own accounting of
-     * them, and a pull request at the listing's ceiling is refused.
+     * them, and a pull request at the listing's ceiling is refused. When an
+     * entry carries GitHub's optional extras — a rename's old path, the file's
+     * diff, its blob SHA at the head — they are kept: a reviewer needs the
+     * diff to show the model and the SHA to know what it is looking at.
      *
      * @param {number} number
      */
@@ -374,7 +452,18 @@ export function createForge(config) {
           ) {
             throw new ForgeError(operation, new Error("a file entry has no counts"));
           }
-          files.push({ filename, status, additions, deletions });
+          const previousFilename = entry?.["previous_filename"];
+          const patch = entry?.["patch"];
+          const sha = entry?.["sha"];
+          files.push({
+            filename,
+            status,
+            additions,
+            deletions,
+            ...(typeof previousFilename === "string" ? { previousFilename } : {}),
+            ...(typeof patch === "string" ? { patch } : {}),
+            ...(typeof sha === "string" ? { sha } : {}),
+          });
         }
       }
       if (files.length >= MAX_PULL_REQUEST_FILES) {

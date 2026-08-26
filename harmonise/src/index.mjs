@@ -31,7 +31,7 @@ import {
 
 import { loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
 import { buildInventory } from "./inventory.mjs";
-import { matchGlob } from "./glob.mjs";
+import { matchGlob } from "#core/glob.mjs";
 import { MAX_SOURCE_BYTES, preparationRefusal, preparePair, translatePair } from "./plan.mjs";
 import { buildPullRequestBody } from "./pull-request.mjs";
 

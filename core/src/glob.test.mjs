@@ -4,7 +4,8 @@
 // case: `*` stays inside a segment, a double star crosses them, `!`
 // negates, and the last match wins. The absence of gitignore's implicit
 // any-depth is pinned too — it is the one difference a consumer would
-// silently trip on.
+// silently trip on. This is the promoted matcher: `triage` and `harmonise`
+// import it exactly as `review` will.
 
 import { describe, expect, it } from "vitest";
 
