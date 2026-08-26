@@ -241,6 +241,37 @@ describe("compaction", () => {
     expect(final[2]?.content).toContain("files read:");
     expect(final[2]?.content).toContain("src/big.mjs");
   });
+
+  it("returns the post-compaction transcript so reaskFinalAnswer does not exceed the window", async () => {
+    // Regression for REVIEW-001: conclude() used to capture transcript by
+    // value before ask() compacted it, sending the pre-compaction array to
+    // reaskFinalAnswer and blowing past the context window.
+    writeFileSync(p.join(root, "src", "big.mjs"), "y".repeat(4000) + "\n");
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ argumentsJson: '{"path":"src/big.mjs"}' })] },
+      { content: '{"findings":[],"summary":"partial"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 1,
+      contextWindow: 1000,
+    });
+
+    // The transcript returned should be the compacted one (system + task + state),
+    // not the pre-compaction one (which would contain the large evidence block).
+    const hasEvidence = outcome.transcript.some(
+      (m) => typeof m.content === "string" && m.content.includes("[evidence:"),
+    );
+    expect(hasEvidence).toBe(false);
+    // The state inventory message should be present.
+    const hasState = outcome.transcript.some(
+      (m) => typeof m.content === "string" && m.content.includes("[state inventory]"),
+    );
+    expect(hasState).toBe(true);
+  });
 });
 
 describe("fatal wire defects", () => {

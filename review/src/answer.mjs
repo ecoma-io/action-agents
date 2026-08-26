@@ -24,6 +24,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { json5Parse } from "#core/json5-parse.mjs";
 
 import { utf8Compare } from "./order.mjs";
+import { MAX_READ_BYTES } from "./tools.mjs";
 
 /** @typedef {import("./inventory.mjs").ChangedFile} ChangedFile */
 /** @typedef {import("#core/workspace.mjs").Workspace} Workspace */
@@ -31,8 +32,9 @@ import { utf8Compare } from "./order.mjs";
 export const SEVERITIES = /** @type {const} */ (["concern", "nit"]);
 export const MAX_FINDINGS = 50;
 
-/** Reading more than this to count lines is not worth an anchor. */
-const MAX_ANCHOR_READ_BYTES = 2 * 2 ** 20;
+/** Anchors must not exceed the model's own read cap — a finding for a line
+ *  the model could never have inspected is a false verification claim. */
+const MAX_ANCHOR_READ_BYTES = MAX_READ_BYTES;
 
 /** A NUL byte within this window marks binary content — the tools' own rule. */
 const BINARY_SNIFF_BYTES = 8192;
