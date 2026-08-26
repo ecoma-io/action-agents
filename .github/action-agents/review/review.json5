@@ -1,0 +1,38 @@
+{
+  // This repository's own policy for its own reviewer.
+  //
+  // strictness stays at the default on purpose: concerns plus collapsed
+  // nits is the bar a maintainer actually reads. language follows the
+  // repository's English-first convention for public artifacts.
+  //
+  // The ignore set is a universe filter, not a suggestion: ignored paths
+  // cost nothing against maxDiffLines, are invisible to rule matching, and
+  // cannot be reached by the tools either.
+  ignore: [
+    "pnpm-lock.yaml",
+    "coverage/**",
+    "dist/**",
+    ".claude/**",
+    ".agents/**",
+    ".codex/**",
+    ".opencode/**",
+  ],
+
+  // Generous but bounded: the largest diffs this repository sees are
+  // vendored-skill syncs, and those are exactly the ones worth refusing to
+  // half-review.
+  maxDiffLines: 3000,
+
+  // Path-scoped rubrics. Every document here must exist on the default
+  // branch — a declared rule with no file is a startup error, not dormancy.
+  rules: [
+    {
+      include: ["core/src/**/*.mjs", "*/src/**/*.mjs"],
+      instruction: ".github/action-agents/review/rules/runtime-mjs.md",
+    },
+    {
+      include: ["docs/**/*.md"],
+      instruction: ".github/action-agents/review/rules/docs.md",
+    },
+  ],
+}
