@@ -162,6 +162,9 @@ function readContent(parsed) {
  * @returns {string}
  */
 function excerpt(text) {
-  const cut = text.slice(0, EXCERPT_BYTES);
-  return cut.length < text.length ? `${cut}…` : cut;
+  // Flattened to one line while it is here: an error message travels into
+  // logs, and a multi-line excerpt is a log-forgery primitive, not context.
+  const flat = text.replace(/\s+/g, " ").trim();
+  const cut = flat.slice(0, EXCERPT_BYTES);
+  return cut.length < flat.length ? `${cut}…` : cut;
 }

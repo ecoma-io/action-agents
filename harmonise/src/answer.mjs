@@ -46,6 +46,18 @@ export function parseTranslationAnswer(content, { existingTranslation }) {
   if (document === "") {
     throw new Error("the model's answer holds empty content");
   }
+  // Whitespace between the fences is not a document either.
+  if (document.trim() === "") {
+    throw new Error("the model's answer holds no content beyond whitespace");
+  }
+
+  // A missing translation is always drift: there is nothing it could be
+  // byte-identical to.
+  if (!drift && existingTranslation === undefined) {
+    throw new Error(
+      "the model's answer says drift=false for a translation that does not exist yet",
+    );
+  }
 
   // A `drift: false` whose content differs from the existing translation is
   // self-contradictory: the model declined to call it changed while changing

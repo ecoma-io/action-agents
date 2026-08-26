@@ -134,6 +134,16 @@ export async function translatePair(input) {
     existingTranslation: input.existingText,
   });
 
+  // The cheapest identity check runs first, on what the model actually said:
+  // an answer carrying the published translation verbatim needs no
+  // restoration — the published text holds no placeholders to validate.
+  // Without this early exit, an honest no-op could never pass restoration,
+  // because the published text legitimately contains none of this run's
+  // tokens.
+  if (input.existingText !== undefined && answer.content === input.existingText) {
+    return { outcome: "noop" };
+  }
+
   // Restoration is validation: counts must match and no unknown token may
   // wear this run's namespace, or this throws and the pair fails.
   const restored = restoreDocument(answer.content, input.prepared.protection);

@@ -31,7 +31,7 @@ import {
 import { loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
 import { buildInventory } from "./inventory.mjs";
 import { matchGlob } from "./glob.mjs";
-import { preparationRefusal, preparePair, translatePair } from "./plan.mjs";
+import { MAX_SOURCE_BYTES, preparationRefusal, preparePair, translatePair } from "./plan.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -190,6 +190,21 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           target.state === "existing"
             ? await io.forge.getContents(target.path).then((found) => found?.content ?? undefined)
             : undefined;
+        if (existing !== undefined) {
+          // Both documents must fit the evidence frame together; a published
+          // translation past the cap cannot be judged whole, so its pair
+          // skips with that reason rather than comparing against a truncated
+          // view.
+          const existingBytes = new TextEncoder().encode(existing).byteLength;
+          if (existingBytes > MAX_SOURCE_BYTES) {
+            skippedLines.push(
+              `${target.lang} ${pair.sourcePath}: the existing translation is ` +
+                `${String(existingBytes)} bytes, past the ${String(MAX_SOURCE_BYTES)}-byte cap — ` +
+                `shrink or split it first`,
+            );
+            continue;
+          }
+        }
 
         let lastFailure = "";
         for (let attempt = 1; attempt <= ATTEMPTS_PER_PAIR; attempt++) {
@@ -280,7 +295,14 @@ function pairLine(prepared, outcome) {
  * @returns {string}
  */
 function oneLine(summary) {
-  return summary.trim().replace(/\s+/g, " ").slice(0, 200);
+  let flat = "";
+  for (const char of summary) {
+    const code = char.codePointAt(0) ?? 0;
+    // Control characters never reach a log line: they are log-forgery
+    // material, and whitespace collapses to the space it reads as.
+    flat += code <= 0x1f || code === 0x7f ? " " : char;
+  }
+  return flat.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 /**

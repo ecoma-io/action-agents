@@ -271,6 +271,70 @@ describe("run", () => {
     expect(logged(log)).not.toMatch(/proposed/);
   });
 
+  it("reports an honest no-op even when glossary tokens are in play", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+      glossary: ["repository"],
+    }`;
+    const published = "# Dev\n\nLe dépôt repository grandit.\n";
+    const ioDouble = io(
+      forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": config,
+          "manual/dev.md": "# Dev\n\nThe repository grows.\n",
+          "manual/vi/dev.md": published,
+        },
+        [
+          { path: "manual/dev.md", type: "blob" },
+          { path: "manual/vi/dev.md", type: "blob" },
+        ],
+      ),
+      // The honest answer: drift=false carrying the published bytes verbatim.
+      // It holds no run tokens — and must not need any.
+      [JSON.stringify({ drift: false, summary: "none", content: published })],
+    );
+
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    expect(logged(log)).toMatch(/unchanged/);
+  });
+
+  it("refuses a translation that deletes a code block adjacent to another", async () => {
+    const source = "# Dev\n\n```js\nfirst()\n```\n```py\nsecond()\n```\n";
+    const ioDouble = io(
+      forge({
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+        "manual/dev.md": source,
+      }),
+      // Two adjacent blocks in, one out: the count walk must see both.
+      [proposes("# Dev\n\n```js\nfirst()\n```\n"), proposes("# Dev\n\n```js\nfirst()\n```\n")],
+    );
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/fenced code block count changed: 2 → 1/);
+  });
+
+  it("skips a pair whose existing translation is past the cap", async () => {
+    const ioDouble = io(
+      forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": "# Dev\n\nFine.\n",
+          "manual/vi/dev.md": "x".repeat(33 * 1024),
+        },
+        [
+          { path: "manual/dev.md", type: "blob" },
+          { path: "manual/vi/dev.md", type: "blob" },
+        ],
+      ),
+    );
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/every pair skipped/);
+    expect(error.message).toMatch(/existing translation is 33792 bytes, past the 32768-byte cap/);
+  });
+
   it("retries once on a malformed answer, then records the pair as failed", async () => {
     const chatDouble = chat(["this is not json at all", "still not json"]);
     const ioDouble = /** @type {any} */ ({
@@ -283,6 +347,13 @@ describe("run", () => {
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/does not parse as JSON|holds no JSON object/);
     expect(chatDouble.calls()).toBe(2);
+  });
+
+  it("refuses an answer whose content is whitespace only", async () => {
+    const ioDouble = io(forge(files()), [proposes("\n\n"), proposes("   \n ")]);
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/no content beyond whitespace/);
   });
 
   it("fails a pair whose answer lost a protected token, however fluent the prose", async () => {

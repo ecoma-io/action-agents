@@ -114,6 +114,7 @@ export function maskCodeSpans(line) {
  *
  * @typedef {object} StructuralProfile
  * @property {number} fenceCount
+ * @property {string[]} fenceDelimiters each block's opening delimiter character, in document order
  * @property {number[]} headingLevels
  * @property {number} brokenInlineCount
  */
@@ -126,10 +127,30 @@ export function structuralProfile(text) {
   const lines = splitLines(text);
   const fences = fenceMask(lines);
 
-  // One count per fence pair: the false→true transition where it opens.
+  // Counted by walking the same state the mask was built from, not by mask
+  // transitions: a closing delimiter followed directly by an opener is TWO
+  // blocks back-to-back, and only a real state walk sees both.
   let fenceCount = 0;
-  for (let index = 0; index < fences.length; index++) {
-    if (fences[index] === true && (index === 0 || fences[index - 1] !== true)) fenceCount++;
+  /** @type {string[]} */
+  const fenceDelimiters = [];
+  /** @type {string | undefined} */
+  let open;
+  for (const line of lines) {
+    const delimiter = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (open === undefined && delimiter !== undefined) {
+      open = delimiter[0] ?? "`";
+      fenceCount++;
+      fenceDelimiters.push(open);
+      continue;
+    }
+    if (
+      open !== undefined &&
+      delimiter !== undefined &&
+      delimiter[0] === open &&
+      line.trim() === delimiter
+    ) {
+      open = undefined;
+    }
   }
 
   /** @type {number[]} */
@@ -148,7 +169,7 @@ export function structuralProfile(text) {
     if (/[^\\]\]\([^)]*$/.test(line)) brokenInlineCount++;
   }
 
-  return { fenceCount, headingLevels, brokenInlineCount };
+  return { fenceCount, fenceDelimiters, headingLevels, brokenInlineCount };
 }
 
 /**
@@ -169,6 +190,10 @@ export function compareStructuralProfiles(source, candidate) {
     violations.push(
       `fenced code block count changed: ${String(source.fenceCount)} → ${String(candidate.fenceCount)}`,
     );
+  } else if (candidate.fenceDelimiters.join("") !== source.fenceDelimiters.join("")) {
+    // Same number of blocks but the tilde/backtick sequence differs — blocks
+    // were reordered or re-charactered, which is restructure, not translation.
+    violations.push("fenced code blocks appear in a different order or kind");
   }
 
   const shorter = Math.min(source.headingLevels.length, candidate.headingLevels.length);

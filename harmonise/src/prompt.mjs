@@ -42,7 +42,7 @@ export function buildTranslationPrompt(input) {
   const system = [
     layerTask(input),
     input.documents.instruction,
-    input.documents.languages[input.language],
+    input.documents.languages[input.language] ?? "",
   ]
     .filter((layer) => layer !== undefined && layer !== "")
     .join("\n\n");
