@@ -1,0 +1,70 @@
+name: Review
+
+# Dogfood: this repository's own `review` action, reviewing its own pull
+# requests as an agent that decides what to read.
+#
+# THIS RUN IS IN DRY-RUN MODE. It reads the real diff, walks the real tree,
+# calls the real model through the real gateway, validates the answer
+# against the reviewed snapshot — and writes nothing anywhere. The rendered
+# comment appears in the run log instead of on the thread. The dry-run phase
+# exists so the first live writes land only after the logs have shown
+# several real reviews behaving; flipping `dry-run` to `false` is its own
+# change, made deliberately.
+#
+# The write surface when that flip happens is exactly one marker comment on
+# the pull request — no labels (`triage`'s job), no verdicts, no mentions —
+# and the block below is the boundary that makes that true: `contents` stays
+# read-only because the working tree under `pull_request` is untrusted
+# input, and a fork's pull request carries neither secrets nor a write token,
+# which is the arrangement SECURITY.md documents for this trigger.
+#
+# The action is referenced as `./review` from the checkout of the ref that
+# triggered the run, which under `pull_request` is the merge preview: a pull
+# request is reviewed by exactly the code it carries. The trade that shape
+# makes, stated rather than hidden, matches `triage.yml`'s: a same-repo
+# branch runs its own review code with the LLM gateway key in reach. Here
+# that means a maintainer's own push.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # `edited` is deliberately absent — a re-worded description does not change
+  # the code under review, and re-reviewing it would only churn the comment.
+  # There is no workflow_dispatch: without a pull request there is nothing
+  # for this action to look at.
+
+# A comment is the whole write surface, and only when dry-run is off.
+permissions:
+  contents: read
+  pull-requests: write
+
+# One review per pull request: a rapid push sequence replaces the queued run
+# rather than stacking reviews of stale heads.
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Thirty reading turns over a real provider fit comfortably in this;
+    # a run that cannot finish in fifteen minutes has hit a bound and will
+    # say so rather than hang.
+    timeout-minutes: 15
+    steps:
+      # Unlike `triage`, whose reads all go through the API, `review`'s
+      # subject IS the working tree — this checkout is the snapshot the tools
+      # read, confined to GITHUB_WORKSPACE by the action itself.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: ./review
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
+          api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
+          model: review
+          # Dry-run while the dogfood earns trust: review fully, write never.
+          dry-run: "true"
