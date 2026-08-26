@@ -56,4 +56,12 @@ describe("entries in order, last match wins", () => {
     expect(matchGlob(["lib/**"], "src/a.mjs")).toBe(false);
     expect(matchGlob([], "src/a.mjs")).toBe(false);
   });
+
+  it("keeps a trailing double star under its prefix — never a sibling", () => {
+    expect(matchGlob(["docs/changelog/**"], "docs/changelogx.md")).toBe(false);
+    expect(matchGlob(["docs/changelog/**"], "docs/changelog")).toBe(false);
+    expect(matchGlob(["docs/changelog/**"], "docs/changelog/a")).toBe(true);
+    expect(matchGlob(["docs/**"], "docs/x.md")).toBe(true);
+    expect(matchGlob(["docs/**"], "manualx.md")).toBe(false);
+  });
 });

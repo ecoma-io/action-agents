@@ -1,26 +1,19 @@
 // Tests for the `harmonise` entry point.
 //
-// Two properties are pinned here that no later change may quietly drop:
+// Three properties are pinned here that no later change may quietly drop:
 //
-//   1. **The unimplemented state fails loudly.** `run` refusing must reach
-//      `setFailed`, so a workflow goes red rather than green on an action that
-//      did nothing. A seed that reported success would be worse than no action.
-//   2. **The key is masked before anything can print it.** `add-mask` has to be
-//      issued before the first log line, or a later message carrying the
-//      request can put the key in a public build log.
+//   1. **Refusals stay refusals.** A real-run request this build cannot honor,
+//      an empty document set, a filter that narrows to nothing, every pair
+//      failing — each goes red rather than green-on-nothing.
+//   2. **The key is masked before anything can print it.**
+//   3. **The deterministic report is honest about what it saw** — prepared
+//      pairs, failed pairs and orphans each get their line.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { readContext } from "#core/runtime.mjs";
 
 import { ACTION, main, readInputs, run } from "./index.mjs";
 
 /**
- * A complete runner environment, from which each test removes what it is about.
- * Typed as `Env` rather than inferred: an inferred literal has required keys, and
- * `delete` on one is a type error — which would push these tests towards
- * asserting on a fixture they could not actually take a value out of.
- *
  * @type {import("#core/runtime.mjs").Env}
  */
 const runner = {
@@ -30,13 +23,54 @@ const runner = {
   INPUT_MODEL: "gpt-x",
   GITHUB_REPOSITORY: "ecoma-io/action-agents",
   GITHUB_WORKSPACE: "/work",
-  GITHUB_EVENT_NAME: "push",
+  GITHUB_EVENT_NAME: "workflow_dispatch",
   GITHUB_EVENT_PATH: "/work/event.json",
   "INPUT_SOURCE-LANGUAGE": "en",
 };
 
+const CONFIG = `{
+  sourceLanguage: "en",
+  languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+  glossary: ["repository"],
+}`;
+
+/**
+ * A forge double carrying only the reads this build makes; the write surface
+ * lands with the Git integration and stays unexercised here.
+ *
+ * @param {Record<string, string>} files
+ * @param {{ path: string, type: string }[]} [tree]
+ * @returns {import("#core/forge.mjs").Forge}
+ */
+function forge(
+  files,
+  tree = [
+    { path: "manual/dev.md", type: "blob" },
+    { path: "manual/vi/dev.md", type: "blob" },
+  ],
+) {
+  return /** @type {import("#core/forge.mjs").Forge} */ (
+    /** @type {any} */ ({
+      /** @param {string} path */
+      async getContents(path) {
+        const content = files[path];
+        return content === undefined ? null : { content };
+      },
+      async getRepository() {
+        return { defaultBranch: "main" };
+      },
+      async getRef() {
+        return { sha: "a".repeat(40) };
+      },
+      /** @param {string} _sha */
+      async listTree(_sha) {
+        return tree;
+      },
+    })
+  );
+}
+
 afterEach(() => {
-  // setFailed sets it, and vitest shares one process across files.
   process.exitCode = 0;
   vi.restoreAllMocks();
 });
@@ -64,12 +98,11 @@ describe("readInputs", () => {
     );
   });
 
-  it("defaults the document globs, and reads a comma-separated override", () => {
-    expect(readInputs(runner).documents).toEqual(["docs/**/*.md"]);
-    expect(readInputs({ ...runner, INPUT_DOCUMENTS: "a/**.md, b/**.md" }).documents).toEqual([
-      "a/**.md",
-      "b/**.md",
-    ]);
+  it("defaults the documents filter to empty — the map defines the space", () => {
+    expect(readInputs(runner).documents).toEqual([]);
+    expect(
+      readInputs({ ...runner, INPUT_DOCUMENTS: "manual/a.md, manual/b.md" }).documents,
+    ).toEqual(["manual/a.md", "manual/b.md"]);
   });
 
   it("defaults to a dry run, because this action edits files rather than comments", () => {
@@ -78,21 +111,224 @@ describe("readInputs", () => {
 });
 
 describe("run", () => {
-  it("refuses, rather than reporting success for work it never attempted", async () => {
-    await expect(run(readInputs(runner), readContext(runner))).rejects.toThrow(
-      /not implemented yet/,
+  it("refuses a real run outright — proposing text is not this build's job yet", async () => {
+    const inputs = { ...readInputs(runner), dryRun: false };
+    await expect(run(inputs, context(), /** @type {any} */ ({}))).rejects.toThrow(
+      /cannot propose translations yet/,
     );
   });
+
+  it("reports prepared pairs, missing translations and orphans on a dry run", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const io = {
+      forge: forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": "# Dev\n\nThe repository holds guides.\n\n![diagram](images/dev.png)\n",
+        },
+        [
+          { path: "manual/dev.md", type: "blob" },
+          { path: "manual/vi/dev.md", type: "blob" },
+          { path: "manual/images/dev.vi.png", type: "blob" },
+          { path: "manual/vi/legacy.md", type: "blob" },
+        ],
+      ),
+    };
+
+    await expect(run(readInputs(runner), context(), io)).resolves.toBeUndefined();
+
+    const out = logged(log);
+    expect(out).toMatch(/prepared vi manual\/dev\.md → manual\/vi\/dev\.md \[existing\]/);
+    expect(out).toMatch(/glossary=1/); // "repository", once
+    expect(out).toMatch(/links=1/); // the localized image exists
+    expect(out).toMatch(/orphans: 1 \(reported, never touched\)/);
+    expect(out).toMatch(/orphan manual\/vi\/legacy\.md \[vi\]/);
+  });
+
+  it("resolves a planned target's links before the translation exists", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const io = {
+      forge: forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          // api.vi.md does not exist yet, but this run plans to create it:
+          // the internal link must already point at its future home while the
+          // external one stays exactly as authored.
+          "manual/dev.md": "See [the api](api.md) and [the site](https://example.com/).\n",
+          "manual/api.md": "# API\n\nEndpoints.\n",
+        },
+        [
+          { path: "manual/dev.md", type: "blob" },
+          { path: "manual/vi/dev.md", type: "blob" },
+          { path: "manual/api.md", type: "blob" },
+        ],
+      ),
+    };
+
+    await expect(run(readInputs(runner), context(), io)).resolves.toBeUndefined();
+
+    expect(logged(log)).toMatch(/links=1/);
+  });
+
+  it("refuses when no source document matches the map", async () => {
+    const io = {
+      forge: forge({ ".github/action-agents/harmonise/harmonise.json5": CONFIG }, [
+        { path: "README.md", type: "blob" },
+      ]),
+    };
+
+    await expect(run(readInputs(runner), context(), io)).rejects.toThrow(
+      /no document matches the source language 'en'/,
+    );
+  });
+
+  it("refuses a documents filter that narrows everything away", async () => {
+    const io = { forge: forge(files()) };
+    const inputs = { ...readInputs(runner), documents: ["nope/**/*.md"] };
+
+    await expect(run(inputs, context(), io)).rejects.toThrow(/narrows 1 source documents to none/);
+  });
+
+  it("goes red when every pair fails preparation, naming the defect", async () => {
+    const io = {
+      forge: forge({
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+        // An unclosed region is malformed: preparation must refuse it.
+        "manual/dev.md": "<!-- harmonise:skip-start -->\nnever closed\n",
+      }),
+    };
+
+    const error = await run(readInputs(runner), context(), io).catch((cause) => cause);
+    expect(error.message).toMatch(/every pair failed preparation/);
+    expect(error.message).toMatch(/never closed/);
+  });
+
+  it("carries on when one pair fails and another prepares", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
+    }`;
+    // Two sources on the branch, but only one still readable: the second
+    // pair's preparation fails and must not take the healthy pair down.
+    const io = {
+      forge: forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": config,
+          "manual/dev.md": "# Dev\n\nFine prose.\n",
+        },
+        [
+          { path: "manual/dev.md", type: "blob" },
+          { path: "manual/lost.md", type: "blob" },
+        ],
+      ),
+    };
+
+    await expect(run(readInputs(runner), context(), io)).resolves.toBeUndefined();
+    expect(logged(log)).toMatch(/failed manual\/lost\.md: gone from the branch/);
+    expect(logged(log)).toMatch(/prepared vi manual\/dev\.md/);
+  });
+
+  it("skips an oversized source with its reason while healthy pairs prepare", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+    }`;
+    const io = {
+      forge: forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": config,
+          "manual/dev.md": "# Dev\n\nFine.\n",
+          // 33 KiB: past the deterministic cap.
+          "manual/big.md": "x".repeat(33 * 1024),
+        },
+        [
+          { path: "manual/dev.md", type: "blob" },
+          { path: "manual/big.md", type: "blob" },
+        ],
+      ),
+    };
+
+    await expect(run(readInputs(runner), context(), io)).resolves.toBeUndefined();
+    const out = logged(log);
+    expect(out).toMatch(/skipped vi manual\/big\.md: 33792 bytes, past the 32768-byte cap/);
+    expect(out).toMatch(/prepared vi manual\/dev\.md/);
+  });
+
+  it("goes red when every pair skips — work existed and none was attempted", async () => {
+    const io = {
+      forge: forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": "",
+        },
+        [{ path: "manual/dev.md", type: "blob" }],
+      ),
+    };
+
+    await expect(run(readInputs(runner), context(), io)).rejects.toThrow(
+      /every pair skipped[\s\S]*the source document is empty/,
+    );
+  });
+
+  it("refuses a source-language input the config does not declare", async () => {
+    const io = { forge: forge(files()) };
+    const env = { ...runner, "INPUT_SOURCE-LANGUAGE": "de" };
+    await expect(run(readInputs(env), context(), io)).rejects.toThrow(
+      /'de' is not a language the config declares/,
+    );
+  });
+
+  it("surfaces a truncated tree as the refusal it is", async () => {
+    class TruncatedTreeError extends Error {}
+    const io = {
+      forge: {
+        ...forge(files()),
+        /** @param {string} _sha */
+        async listTree(_sha) {
+          throw new TruncatedTreeError("truncated");
+        },
+      },
+    };
+
+    await expect(run(readInputs(runner), context(), io)).rejects.toThrow(TruncatedTreeError);
+  });
 });
+
+/** Files a happy-path inventory needs. @returns {Record<string, string>} */
+function files() {
+  return {
+    ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+    "manual/dev.md": "# Dev\n\nProse.\n",
+  };
+}
+
+/** @returns {ReturnType<typeof import("#core/runtime.mjs").readContext>} */
+function context() {
+  return {
+    owner: "ecoma-io",
+    repo: "action-agents",
+    eventName: "workflow_dispatch",
+    eventPath: "/work/event.json",
+    workspace: "/work",
+    apiUrl: "https://api.github.com",
+  };
+}
+
+/** @param {import("vitest").MockInstance} log @returns {string} */
+function logged(log) {
+  return log.mock.calls.map((call) => call.map(String).join(" ")).join("\n");
+}
 
 describe("main", () => {
   it("turns a refusal into a failed step, not a green one", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const result = await main(runner);
+    const result = await main(runner, () => Promise.reject(new Error("the work refused")));
 
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/not implemented yet/);
+    expect(result.message).toMatch(/the work refused/);
     expect(process.exitCode).toBe(1);
   });
 
@@ -122,16 +358,6 @@ describe("main", () => {
 
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/'api-url'/);
-  });
-
-  it("says so in the log when it is a dry run", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    await main({ ...runner, "INPUT_DRY-RUN": "true" }, () => Promise.resolve());
-
-    expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toMatch(
-      /\(dry run — nothing will be written\)/,
-    );
   });
 
   it("names itself", () => {

@@ -24,6 +24,7 @@ import {
   parseDocCitations,
   parseMarkdownLinks,
   parseYamlPathReferences,
+  stripFencedCode,
   withDirectories,
 } from "./check-docs-links.mjs";
 
@@ -468,4 +469,24 @@ test("evaluate waives a marked consumer path and says how many it waived", () =>
   });
   assert.equal(failures.length, 0);
   assert.match(lines.at(-1) ?? "", /1 path\(s\) exempt by marker/);
+});
+
+test("stripFencedCode blanks fence interiors and delimiters, keeping line numbers", () => {
+  const text = `before
+
+\`\`\`markdown
+[example](target.md) docs/…/page.md
+\`\`\`
+
+after [real](usage/configuration.md)`;
+  const stripped = stripFencedCode(text);
+  assert.equal(stripped.split("\n").length, text.split("\n").length);
+  assert.deepEqual(parseMarkdownLinks(stripped), [{ target: "usage/configuration.md", line: 7 }]);
+  assert.deepEqual(parseDocCitations(stripped), []);
+});
+
+test("stripFencedCode tracks tilde fences and leaves prose outside untouched", () => {
+  const text = "~~~\n[hidden](gone.md)\n~~~\n[seen](missing.md)";
+  const stripped = stripFencedCode(text);
+  assert.deepEqual(parseMarkdownLinks(stripped), [{ target: "missing.md", line: 4 }]);
 });

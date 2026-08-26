@@ -4,11 +4,13 @@
  * a double star matches across segments, `!` at an entry's head negates it,
  * entries apply in order and the last match wins, and braces do not expand.
  *
- * It lives in `triage/` rather than `core/` on the doctrine's own test: a
- * matcher speaks no protocol from outside this repository and enforces no
- * ceiling, so it belongs to the action that needed it — duplicated into the
- * second action when one needs it, promoted once a third caller appears.
- * `triage`'s `size.exclude` is its first consumer.
+ * This is a deliberate duplicate of `triage/src/glob.mjs`, not an oversight:
+ * no action may import another, and the matcher stays out of `core/` because
+ * it speaks no protocol from outside this repository and enforces no ceiling.
+ * The doctrine is written on the original: duplicated into the second action
+ * when one needs it — this file — promoted once a third caller appears. A
+ * change to the dialect must land in both copies in the same pull request,
+ * and a divergence between them is a bug in whichever copy was edited alone.
  *
  * A pattern matches the whole path — there is no implicit any-depth the way
  * gitignore has one. `pnpm-lock.yaml` names one file at the root; the same

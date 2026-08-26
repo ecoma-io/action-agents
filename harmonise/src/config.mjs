@@ -1,0 +1,280 @@
+/**
+ * `harmonise`'s config file — the document map, the ignore list, the glossary,
+ * and where the instruction prose lives. Everything here is `harmonise`'s own
+ * domain: `core/` never learns a key's name, and no other action imports this
+ * reader. The mechanism (where the file lives, the default branch, precedence)
+ * is `docs/development/configuration.md`'s.
+ *
+ * Unlike `triage`, an absent file is never policy-empty here: with no map
+ * there is no source language and nothing to keep in step, so a missing file
+ * is a red refusal rather than a quiet run. All validation happens at startup,
+ * before anything is fetched beyond the config itself.
+ */
+
+import { json5Parse } from "#core/json5-parse.mjs";
+
+import { parseLanguagePattern, validateLanguagePattern } from "./patterns.mjs";
+
+/**
+ * The operations the config loaders need — a slice of the forge client, so a
+ * test doubles only the reading half.
+ *
+ * @typedef {{ getContents: (path: string) => Promise<{ content: string } | null> }} ContentsReader
+ */
+
+/**
+ * @typedef {object} HarmoniseInstructions
+ * @property {string} [instruction] path to the all-pairs instruction document
+ * @property {Record<string, string>} languages language tag → path, one per language that has its own prose
+ */
+
+/**
+ * @typedef {object} HarmoniseConfig
+ * @property {string} sourceLanguage the key of `languages` every other version is judged against
+ * @property {Record<string, LanguagePattern>} languages language tag → parsed pattern
+ * @property {string[]} ignore glob patterns excluding generated or untranslated documents from the source set
+ * @property {string[]} glossary terms protected verbatim in every translation, exact-match
+ * @property {HarmoniseInstructions} instructions
+ */
+
+/**
+ * @typedef {import("./patterns.mjs").LanguagePattern} LanguagePattern
+ */
+
+/** A config file larger than this is a red refusal, not a truncated policy. */
+export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
+
+const DEFAULT_LOCATIONS = [
+  ".github/action-agents/harmonise/harmonise.json5",
+  ".github/action-agents/harmonise/harmonise.json",
+];
+
+/**
+ * Reads the config file from the default branch and parses it. There is no
+ * absent-file case: `harmonise` without a map refuses at startup.
+ *
+ * @param {object} input
+ * @param {ContentsReader} input.forge
+ * @param {string} input.configPath the `config-path` input, "" for the default locations
+ * @returns {Promise<{ raw: Record<string, unknown>, path: string }>}
+ */
+export async function loadConfigFile({ forge, configPath }) {
+  if (configPath !== "") {
+    const file = await forge.getContents(configPath);
+    if (file === null) {
+      throw new Error(
+        `config-path names '${configPath}', which does not exist on the default branch`,
+      );
+    }
+    return { raw: parseFile(configPath, file.content), path: configPath };
+  }
+
+  /** @type {{ path: string, content: string }[]} */
+  const found = [];
+  for (const path of DEFAULT_LOCATIONS) {
+    const file = await forge.getContents(path);
+    if (file !== null) found.push({ path, content: file.content });
+  }
+  if (found.length === 2) {
+    throw new Error(
+      `the policy is declared twice — both ${DEFAULT_LOCATIONS[0]} and ${DEFAULT_LOCATIONS[1]} ` +
+        `exist; remove one`,
+    );
+  }
+  if (found.length === 0) {
+    throw new Error(
+      `no config file exists — expected one of ${DEFAULT_LOCATIONS.join(" or ")} on the ` +
+        `default branch. harmonise keeps no documents in step without a map of them`,
+    );
+  }
+  const first = found[0];
+  if (first === undefined) throw new Error("a config file was found and then lost");
+  return { raw: parseFile(first.path, first.content), path: first.path };
+}
+
+/**
+ * @param {string} path
+ * @param {string} content
+ * @returns {Record<string, unknown>}
+ */
+function parseFile(path, content) {
+  const bytes = new TextEncoder().encode(content).byteLength;
+  if (bytes > MAX_CONFIG_BYTES) {
+    throw new Error(
+      `'${path}' is ${String(bytes)} bytes, past the ${String(MAX_CONFIG_BYTES)}-byte cap — ` +
+        `a policy that overflows is refused rather than truncated`,
+    );
+  }
+  let parsed;
+  try {
+    parsed = json5Parse(content);
+  } catch (cause) {
+    const error = new Error(
+      `'${path}' does not parse: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    error.cause = cause;
+    throw error;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`'${path}' must hold an object`);
+  }
+  return /** @type {Record<string, unknown>} */ (parsed);
+}
+
+/**
+ * Validates the parsed file into a `HarmoniseConfig`. Every refusal here is a
+ * startup refusal: a config half-accepted would be half-run.
+ *
+ * @param {Record<string, unknown>} raw
+ * @returns {HarmoniseConfig}
+ */
+export function validateConfig(raw) {
+  for (const key of Object.keys(raw)) {
+    if (!["sourceLanguage", "languages", "ignore", "glossary", "instructions"].includes(key)) {
+      throw new Error(
+        `unknown config key '${key}' — the file holds sourceLanguage, languages, ignore, ` +
+          `glossary and instructions`,
+      );
+    }
+  }
+
+  const languagesRaw = expectObject(raw["languages"], "languages");
+  /** @type {Record<string, LanguagePattern>} */
+  const languages = {};
+  for (const [lang, pattern] of Object.entries(languagesRaw)) {
+    if (!/^[a-zA-Z]{2,8}(-[a-zA-Z0-9]+)*$/.test(lang)) {
+      throw new Error(`languages.'${lang}' is not a language tag`);
+    }
+    if (typeof pattern !== "string") {
+      throw new Error(`languages.'${lang}' must be a pattern string`);
+    }
+    validateLanguagePattern(pattern, `languages.'${lang}'`);
+    languages[lang] = parseLanguagePattern(pattern);
+  }
+
+  const sourceLanguage = raw["sourceLanguage"];
+  if (typeof sourceLanguage !== "string" || sourceLanguage === "") {
+    throw new Error("sourceLanguage must name the language every other version is judged against");
+  }
+  if (!Object.hasOwn(languages, sourceLanguage)) {
+    throw new Error(
+      `sourceLanguage '${sourceLanguage}' is not a key of languages — the source needs a ` +
+        `pattern like every other language`,
+    );
+  }
+  // A map of the source alone leaves nothing to translate into: green there
+  // would be green-on-nothing.
+  if (Object.keys(languages).length < 2) {
+    throw new Error(
+      `languages declares only the source '${sourceLanguage}' — at least one target language ` +
+        `is needed, or the action has nothing to do`,
+    );
+  }
+
+  /** @type {string[]} */
+  const ignore = [];
+  if (raw["ignore"] !== undefined) {
+    if (!Array.isArray(raw["ignore"])) throw new Error("ignore must be an array of globs");
+    for (const entry of raw["ignore"]) {
+      if (typeof entry !== "string") throw new Error("ignore must hold strings only");
+      ignore.push(entry);
+    }
+  }
+
+  /** @type {string[]} */
+  const glossary = [];
+  if (raw["glossary"] !== undefined) {
+    if (!Array.isArray(raw["glossary"])) throw new Error("glossary must be an array of strings");
+    for (const term of raw["glossary"]) {
+      if (typeof term !== "string" || term === "") {
+        throw new Error("glossary entries must be non-empty strings");
+      }
+      // Terms are matched against text whose invisible machinery (code-span
+      // masks, placeholder bodies) is NUL-filled: a control character or a
+      // newline in a term would match the machinery instead of the prose and
+      // corrupt documents on restore. Refused, not worked around.
+      const carriesControl = [...term].some((char) => {
+        const code = char.codePointAt(0) ?? 0;
+        return code <= 0x1f || code === 0x7f;
+      });
+      if (carriesControl) {
+        throw new Error(
+          `the glossary names a term containing control characters or line breaks — ` +
+            `terms match visible prose only`,
+        );
+      }
+    }
+    const seen = new Set();
+    for (const term of /** @type {unknown[]} */ (raw["glossary"])) {
+      const value = /** @type {string} */ (term);
+      if (seen.has(value)) {
+        throw new Error(`the glossary names '${value}' twice — refused, not deduplicated`);
+      }
+      seen.add(value);
+      glossary.push(value);
+    }
+  }
+
+  const instructions = parseInstructions(raw["instructions"], languages);
+
+  return { sourceLanguage, languages, ignore, glossary, instructions };
+}
+
+/**
+ * The `instructions` block, validated against the languages the map declares:
+ * prose for every pair, plus per-language overrides. A language the map does
+ * not declare is refused — prose aimed at a language that cannot come up is a
+ * bug waiting to be wondered about.
+ *
+ * @param {unknown} value
+ * @param {Record<string, LanguagePattern>} languages
+ * @returns {HarmoniseInstructions}
+ */
+function parseInstructions(value, languages) {
+  /** @type {HarmoniseInstructions} */
+  const instructions = { languages: {} };
+  if (value === undefined) return instructions;
+  const block = expectObject(value, "instructions");
+
+  for (const key of Object.keys(block)) {
+    if (key !== "instruction" && key !== "language-instructions") {
+      throw new Error(
+        `unknown instructions key '${key}' — the block holds instruction and language-instructions`,
+      );
+    }
+  }
+
+  const general = block["instruction"];
+  if (general !== undefined) {
+    if (typeof general !== "string" || general === "") {
+      throw new Error("instructions.instruction must be a path");
+    }
+    instructions.instruction = general;
+  }
+
+  const perLanguage = block["language-instructions"];
+  if (perLanguage !== undefined) {
+    const map = expectObject(perLanguage, "instructions.language-instructions");
+    for (const [lang, path] of Object.entries(map)) {
+      if (!Object.hasOwn(languages, lang)) {
+        throw new Error(
+          `instructions.language-instructions names '${lang}', which languages does not declare`,
+        );
+      }
+      if (typeof path !== "string" || path === "") {
+        throw new Error(`instructions.language-instructions.'${lang}' must be a path`);
+      }
+      instructions.languages[lang] = path;
+    }
+  }
+
+  return instructions;
+}
+
+/** @param {unknown} value @param {string} name @returns {Record<string, unknown>} */
+function expectObject(value, name) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${name} must be an object`);
+  }
+  return /** @type {Record<string, unknown>} */ (value);
+}
