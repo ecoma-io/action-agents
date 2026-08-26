@@ -10,9 +10,9 @@ import { describe, expect, it } from "vitest";
 
 import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
 
-/** @param {{ title?: string }} [pullRequest] @returns {any} */
-function configWith(pullRequest = {}) {
-  return { sourceLanguage: "en", ...pullRequest };
+/** @param {{ pullRequest?: { title: string } }} [overrides] @returns {any} */
+function configWith(overrides = {}) {
+  return { sourceLanguage: "en", ...overrides };
 }
 
 /** @returns {Parameters<typeof buildPullRequestBody>[0]} */

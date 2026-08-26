@@ -324,18 +324,15 @@ describe("run", () => {
 
     await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble);
 
+    /** @typedef {{ op: string, args: unknown[] }} Write */
     const pr = /** @type {{ title: string }} */ (
-      /** @type {{ args: [unknown] }} */ (
-        forgeDouble.writes.find((/** @type {{ op: string }} */ w) => w.op === "upsertPullRequest")
-      ).args[0]
+      /** @type {Write} */ (forgeDouble.writes.find((w) => w.op === "upsertPullRequest")).args[0]
     );
-    const commit = /** @type {{ args: [string] }} */ (
-      forgeDouble.writes.find((/** @type {{ op: string }} */ w) => w.op === "createCommit")
-    );
+    const commit = /** @type {Write} */ (forgeDouble.writes.find((w) => w.op === "createCommit"));
     const expected = "docs(i18n): sync 1 documents from en";
     expect(pr.title).toBe(expected);
     // One convention, two surfaces: the commit subject carries the same line.
-    expect(commit.args[0].startsWith(expected + "\n")).toBe(true);
+    expect(/** @type {string} */ (commit.args[0]).startsWith(expected + "\n")).toBe(true);
   });
 
   it("publishes successful proposals first, then exits red on failed pairs", async () => {

@@ -203,7 +203,7 @@ describe("validateConfig", () => {
   });
 
   it("leaves pullRequest undefined when the block is absent", () => {
-    expect(validateConfig(config()).pullRequest).toBeUndefined();
+    expect(validateConfig(config({})).pullRequest).toBeUndefined();
   });
 
   it("refuses an unknown or empty placeholder in the title template", () => {
