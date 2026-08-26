@@ -42,7 +42,8 @@ export const MAX_LIST_ENTRIES = 500;
 export const MAX_SEARCH_MATCHES = 200;
 export const MAX_SCAN_BYTES = 8 * 2 ** 20;
 export const BINARY_SNIFF_BYTES = 8192;
-/** The most one read_file pulls off disk before the evidence cap takes over. */
+/** The most one read_file pulls off disk before the evidence cap takes over.
+ *  Bounded reads keep a giant blob from costing the run its whole window. */
 export const MAX_READ_BYTES = 2 ** 20;
 
 /**

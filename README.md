@@ -140,3 +140,8 @@ Agents contributors. Apache-2.0 for its explicit patent grant.
     <a href="https://github.com/ecoma-io">Github</a>
   </sub>
 </p>
+
+## Dogfooding
+
+This repository reviews its own pull requests with `review` itself —
+first in dry-run mode, then live once the logs earn trust.
