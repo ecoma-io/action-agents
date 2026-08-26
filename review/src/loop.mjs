@@ -114,15 +114,17 @@ export async function runLoop({ chat, model, tools, messages, maxTurns, contextW
         `compacted the transcript to ${String(estimateTokens(transcript))} estimated tokens`,
       );
     }
-    return chat.complete({
+    const response = await chat.complete({
       model,
       messages: [...transcript, ...pending],
       ...(offeredTools === undefined ? {} : { tools: offeredTools }),
     });
+    return { response, transcript };
   }
 
   for (;;) {
-    const response = await ask(TOOL_SPECS);
+    const { response, transcript: currentTranscript } = await ask(TOOL_SPECS);
+    transcript = currentTranscript;
 
     if (response.toolCalls.length === 0) {
       // Natural stop while reading turns remain: the candidate speaks now.
@@ -202,15 +204,15 @@ export async function runLoop({ chat, model, tools, messages, maxTurns, contextW
  * tools withheld so no further call is even expressible.
  *
  * @param {object} input
- * @param {(offeredTools: import("#core/chat.mjs").ChatTool[] | undefined, pending?: ChatMessage[]) => Promise<{ content: string }>} input.ask
+ * @param {(offeredTools: import("#core/chat.mjs").ChatTool[] | undefined, pending?: ChatMessage[]) => Promise<{ response: { content: string }, transcript: ChatMessage[] }>} input.ask
  * @param {Ledger} input.ledger
  * @param {string[]} input.log
  * @param {Bound} input.bound
  * @param {ChatMessage[]} input.transcript
  * @returns {Promise<LoopOutcome>}
  */
-async function conclude({ ask, ledger, log, bound, transcript }) {
-  const response = await ask(undefined, [
+async function conclude({ ask, ledger, log, bound, transcript: _transcript }) {
+  const { response, transcript: finalTranscript } = await ask(undefined, [
     {
       role: "user",
       content:
@@ -224,7 +226,7 @@ async function conclude({ ask, ledger, log, bound, transcript }) {
     bound,
     readingTurns: ledger.readingTurns,
     toolCalls: ledger.toolCalls,
-    transcript,
+    transcript: finalTranscript,
     log,
   };
 }

@@ -155,3 +155,24 @@ describe("validateAnswer", () => {
     expect(result.rejections.some((reason) => reason.includes("past the"))).toBe(true);
   });
 });
+
+describe("anchor read cap alignment", () => {
+  it("rejects findings for lines past the model's own read_file cap", () => {
+    // Regression for REVIEW-002: countLines used a 2 MiB cap while read_file
+    // used 1 MiB, allowing the model to anchor findings on lines it never read.
+    // 700K lines × 2 bytes = 1.4 MiB. countLines now reads only 1 MiB (524K
+    // lines), so line 600K — which would have passed the old 2 MiB cap — is
+    // now rejected.
+    const big = "x\n".repeat(700_000);
+    writeFileSync(p.join(root, "src", "big.mjs"), big);
+    const result = validateAnswer({
+      rawFindings: [{ severity: "nit", file: "src/big.mjs", line: 600_000, message: "m" }],
+      summary: "big",
+      reviewed: [{ filename: "src/big.mjs", status: "modified", additions: 700_000, deletions: 0 }],
+      workspace,
+    });
+    // Line 600K is past the 1 MiB read cap — the model never read it.
+    expect(result.findings).toHaveLength(0);
+    expect(result.rejections.some((r) => r.includes("does not exist"))).toBe(true);
+  });
+});

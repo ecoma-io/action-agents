@@ -57,7 +57,10 @@ export function buildPrompt(input) {
   /** @type {ChatMessage[]} */
   const messages = [{ role: "system", content: system }];
 
-  const evidence = [input.evidence.wrap("thread-body", input.thread.body)];
+  const evidence = [
+    input.evidence.wrap("title", input.thread.title),
+    input.evidence.wrap("thread-body", input.thread.body),
+  ];
   if (input.thread.type === "pr" && input.files.length > 0) {
     evidence.push(input.evidence.wrap("diff-stats", diffStats(input.files)));
   }
@@ -80,7 +83,6 @@ function layerTask(input) {
     input.sheet === null
       ? 'Answer with JSON only, no prose: {"classification": "<one line naming what this is>", "rationale": "<one line saying why"}.'
       : 'Answer with JSON only, no prose: {"labels": ["<name>", …], "rationale": "<one line>"}. Choose labels only from the sheet below; choose none if none fit.',
-    `Title: ${input.thread.title}`,
   ];
   return lines.join("\n");
 }

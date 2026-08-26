@@ -327,8 +327,12 @@ async function assertLabelsExist(forge, config) {
 function commentBody(answer, marker) {
   const classification = sanitiseCommentText(oneLine(answer.classification), {
     maxChars: 300,
+    forbidden: [marker],
   });
-  const rationale = sanitiseCommentText(oneLine(answer.rationale), { maxChars: 300 });
+  const rationale = sanitiseCommentText(oneLine(answer.rationale), {
+    maxChars: 300,
+    forbidden: [marker],
+  });
   for (const note of [...classification.notes, ...rationale.notes]) {
     warning(`sanitiser: ${note}`);
   }

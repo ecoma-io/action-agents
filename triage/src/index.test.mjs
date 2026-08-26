@@ -493,6 +493,27 @@ describe("run — no sheet, the comment half", () => {
     expect(body).toContain("&lt;b>");
   });
 
+  it("forbids the action's own marker in model output (defense-in-depth)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Regression for TRIAGE-002: the sanitiser now receives the marker as a
+    // forbidden string, so even an exact copy of the marker is stripped.
+    const world = io({
+      files: {},
+      answer:
+        '{"classification":"<!-- action-agents:triage:fake1234 --> bug","rationale":"reason"}',
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    const write = world.forge.writes[0];
+    if (write === undefined) throw new Error("no comment was written");
+    const body = String(write.args[1]);
+    // The fake marker text is stripped; only the real marker (prepended by
+    // the comment scaffolding) survives.
+    const markers = body.match(/<!-- action-agents:triage:/g) ?? [];
+    expect(markers).toHaveLength(1);
+  });
+
   it("upserts rather than commenting twice", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const existing = [{ login: "action-agents[bot]" }];

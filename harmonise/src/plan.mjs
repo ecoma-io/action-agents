@@ -16,7 +16,13 @@ import { protectDocument } from "./protect.mjs";
 import { restoreDocument } from "./protect.mjs";
 import { parseTranslationAnswer } from "./answer.mjs";
 import { buildTranslationPrompt } from "./prompt.mjs";
-import { compareStructuralProfiles, structuralProfile } from "./markdown.mjs";
+import {
+  compareStructuralProfiles,
+  structuralProfile,
+  fenceMask,
+  maskCodeSpans,
+  splitLines,
+} from "./markdown.mjs";
 
 /** @typedef {import("./inventory.mjs").Inventory} Inventory */
 /** @typedef {import("#core/chat.mjs").Chat} Chat */
@@ -148,9 +154,13 @@ export async function translatePair(input) {
   // wear this run's namespace, or this throws and the pair fails.
   const restored = restoreDocument(answer.content, input.prepared.protection);
 
+  // Strip dangerous HTML from model output before it reaches the commit.
+  // Code blocks and code spans are preserved unchanged; only prose is sanitised.
+  const sanitised = sanitizeTranslationHtml(restored);
+
   // A proposal past the same cap the preparation enforces would be a
   // document we could never frame as evidence on a later pass.
-  const bytes = new TextEncoder().encode(restored).byteLength;
+  const bytes = new TextEncoder().encode(sanitised).byteLength;
   if (bytes > MAX_SOURCE_BYTES) {
     throw new Error(
       `the translated document is ${String(bytes)} bytes, past the ` +
@@ -160,17 +170,82 @@ export async function translatePair(input) {
 
   // Byte-identity semantics, per the specification: identical to what it
   // replaces is no drift whatever the flag claimed.
-  if (input.existingText !== undefined && restored === input.existingText) {
+  if (input.existingText !== undefined && sanitised === input.existingText) {
     return { outcome: "noop", summary: answer.summary };
   }
 
   const violations = compareStructuralProfiles(
     structuralProfile(input.prepared.sourceText),
-    structuralProfile(restored),
+    structuralProfile(sanitised),
   );
   if (violations.length > 0) {
     throw new Error(`structural validation failed: ${violations.join("; ")}`);
   }
 
-  return { outcome: "proposal", text: restored, summary: answer.summary };
+  return { outcome: "proposal", text: sanitised, summary: answer.summary };
+}
+
+/**
+ * Strips dangerous HTML from model translation output while preserving code
+ * blocks and code spans unchanged. The model is instructed to produce Markdown
+ * only; any HTML in prose is either accidental or adversarial.
+ *
+ * Preserved: fenced code blocks, inline code, safe block-level HTML
+ * (tables, details, summary). Stripped: script, iframe, object, embed,
+ * form, input, textarea, select, button, link, meta, base, svg, math,
+ * foreignObject, and any on* event-handler attributes. Also strips
+ * javascript: URI schemes in href/src attributes and `<!-- harmonise:`
+ * directive comments that a model could inject as persistent artifacts.
+ *
+ * @param {string} text the restored translation
+ * @returns {string} sanitised text safe to commit
+ */
+export function sanitizeTranslationHtml(text) {
+  const lines = splitLines(text);
+  const fenced = fenceMask(lines);
+
+  /** @type {string[]} */
+  const result = new Array(lines.length);
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i] === true) {
+      result[i] = lines[i] ?? "";
+      continue;
+    }
+    // Mask code spans to protect their interiors from the HTML regex, then
+    // unmask: the NUL replacement is a scanning aid, not a preservation format.
+    const masked = maskCodeSpans(lines[i] ?? "");
+    let line = masked;
+    line = line.replace(
+      /<\s*\/?\s*(?:script|iframe|object|embed|form|input|textarea|select|button|link|meta|base|svg|math|foreignObject)\b[^>]*>/gi,
+      "",
+    );
+    line = line.replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+    line = line.replace(
+      /(?:href|src)\s*=\s*(?:"[^"]*javascript:[^"]*"|'[^']*javascript:[^']*'|[^\s>]*javascript:[^\s>]*)/gi,
+      "",
+    );
+    line = line.replace(/<!--\s*harmonise:/g, "<!-- ");
+    // Restore code span interiors from the original line using byte offsets.
+    result[i] = unmaskCodeSpans(line, lines[i] ?? "", masked);
+  }
+  return result.join("\n");
+}
+
+/**
+ * Restores code span interiors from the original line. `masked` has NUL
+ * characters where the interiors were; `original` has the real content.
+ * Because `maskCodeSpans` preserves byte length, a NUL in `masked` at
+ * position i corresponds to the same position in `original`.
+ *
+ * @param {string} sanitized the line after HTML stripping on the masked version
+ * @param {string} original the untouched source line
+ * @param {string} masked the NUL-masked version used for scanning
+ * @returns {string}
+ */
+function unmaskCodeSpans(sanitized, original, masked) {
+  let out = "";
+  for (let i = 0; i < sanitized.length; i++) {
+    out += (masked[i] === "\u0000" ? original[i] : sanitized[i]) ?? "";
+  }
+  return out;
 }
