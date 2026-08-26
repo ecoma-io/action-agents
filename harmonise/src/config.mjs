@@ -38,6 +38,7 @@ import { parseLanguagePattern, validateLanguagePattern } from "./patterns.mjs";
  * @property {string[]} ignore glob patterns excluding generated or untranslated documents from the source set
  * @property {string[]} glossary terms protected verbatim in every translation, exact-match
  * @property {HarmoniseInstructions} instructions
+ * @property {{ title: string }} [pullRequest] the commit-subject/pull-request-title template, when the repository renames the convention
  */
 
 /**
@@ -54,6 +55,12 @@ const DEFAULT_LOCATIONS = [
   ".github/action-agents/harmonise/harmonise.json5",
   ".github/action-agents/harmonise/harmonise.json",
 ];
+
+/** The placeholders a pull-request title template may carry, and no others. */
+export const TITLE_PLACEHOLDERS = ["n", "sourceLanguage"];
+
+/** A rendered title longer than this is refused — a subject line is read, not scrolled. */
+export const MAX_TITLE_CHARS = 200;
 
 const DEFAULT_INSTRUCTION_PATHS = {
   instruction: ".github/action-agents/harmonise/instruction.md",
@@ -140,10 +147,19 @@ function parseFile(path, content) {
  */
 export function validateConfig(raw) {
   for (const key of Object.keys(raw)) {
-    if (!["sourceLanguage", "languages", "ignore", "glossary", "instructions"].includes(key)) {
+    if (
+      ![
+        "sourceLanguage",
+        "languages",
+        "ignore",
+        "glossary",
+        "instructions",
+        "pullRequest",
+      ].includes(key)
+    ) {
       throw new Error(
         `unknown config key '${key}' — the file holds sourceLanguage, languages, ignore, ` +
-          `glossary and instructions`,
+          `glossary, instructions and pullRequest`,
       );
     }
   }
@@ -227,7 +243,72 @@ export function validateConfig(raw) {
 
   const instructions = parseInstructions(raw["instructions"], languages);
 
-  return { sourceLanguage, languages, ignore, glossary, instructions };
+  const pullRequest = parsePullRequest(raw["pullRequest"]);
+
+  return { sourceLanguage, languages, ignore, glossary, instructions, ...pullRequest };
+}
+
+/**
+ * The optional `pullRequest` block: today only `title`, the template for both
+ * the commit subject and the pull-request title. Absent means the built-in
+ * convention stands — nothing about an existing consumer's run changes.
+ *
+ * The template is deterministic string work: `{n}` and `{sourceLanguage}` are
+ * its only placeholders, substituted at publish time from facts this run
+ * already derived. Every brace that is not one of those two placeholders is a
+ * refusal — a typo like `{count}` must be a red config, never literal text in
+ * a title nobody meant.
+ *
+ * @param {unknown} value
+ * @returns {{ pullRequest?: { title: string } }}
+ */
+function parsePullRequest(value) {
+  if (value === undefined) return {};
+  const block = expectObject(value, "pullRequest");
+
+  for (const key of Object.keys(block)) {
+    if (key !== "title") {
+      throw new Error(`unknown pullRequest key '${key}' — the block holds title`);
+    }
+  }
+
+  const title = block["title"];
+  if (typeof title !== "string") {
+    throw new Error("pullRequest.title must be a template string");
+  }
+  if (title.trim() === "") {
+    throw new Error("pullRequest.title is empty — a subject line cannot be blank");
+  }
+  // Braces are reserved: exactly the two known placeholders may appear.
+  const braces = [...title.matchAll(/\{([^{}]*)\}/g)];
+  for (const match of braces) {
+    const name = /** @type {RegExpMatchArray} */ (match)[1] ?? "";
+    if (!TITLE_PLACEHOLDERS.includes(name)) {
+      throw new Error(
+        name === ""
+          ? "pullRequest.title carries an empty placeholder '{}' — the only placeholders " +
+              `are ${TITLE_PLACEHOLDERS.map((n) => `{${n}}`).join(" and ")}`
+          : `pullRequest.title carries unknown placeholder '{${name}}' — the only ` +
+              `placeholders are ${TITLE_PLACEHOLDERS.map((n) => `{${n}}`).join(" and ")}`,
+      );
+    }
+  }
+  // A lone brace pairs with nothing and would surface as literal debris or
+  // silently vanish depending on where substitution looks; refused outright.
+  if (/[{}]/.test(title.replace(/\{(?:n|sourceLanguage)\}/g, ""))) {
+    throw new Error(
+      "pullRequest.title carries an unpaired brace — braces are reserved for " +
+        `${TITLE_PLACEHOLDERS.map((n) => `{${n}}`).join(" and ")}`,
+    );
+  }
+  if (title.length > MAX_TITLE_CHARS) {
+    throw new Error(
+      `pullRequest.title is ${String(title.length)} characters, past the ` +
+        `${String(MAX_TITLE_CHARS)}-character cap`,
+    );
+  }
+
+  return { pullRequest: { title } };
 }
 
 /**

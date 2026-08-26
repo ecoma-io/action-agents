@@ -305,6 +305,39 @@ describe("run", () => {
     expect(logged(log)).toMatch(/updated pull request #7 in place/);
   });
 
+  it("renders a configured pullRequest.title template into commit subject and PR title", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+      pullRequest: { title: "docs(i18n): sync {n} documents from {sourceLanguage}" },
+    }`;
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": config,
+      "manual/dev.md": "# Dev\n\nProse.\n",
+    });
+    const ioDouble = /** @type {any} */ ({
+      forge: forgeDouble,
+      chat: echoingChat(),
+      evidence,
+    });
+
+    await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble);
+
+    const pr = /** @type {{ title: string }} */ (
+      /** @type {{ args: [unknown] }} */ (
+        forgeDouble.writes.find((/** @type {{ op: string }} */ w) => w.op === "upsertPullRequest")
+      ).args[0]
+    );
+    const commit = /** @type {{ args: [string] }} */ (
+      forgeDouble.writes.find((/** @type {{ op: string }} */ w) => w.op === "createCommit")
+    );
+    const expected = "docs(i18n): sync 1 documents from en";
+    expect(pr.title).toBe(expected);
+    // One convention, two surfaces: the commit subject carries the same line.
+    expect(commit.args[0].startsWith(expected + "\n")).toBe(true);
+  });
+
   it("publishes successful proposals first, then exits red on failed pairs", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const config = `{

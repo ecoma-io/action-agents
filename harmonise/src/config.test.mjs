@@ -191,4 +191,52 @@ describe("validateConfig", () => {
       /unknown instructions key 'style'/,
     );
   });
+
+  it("accepts a pullRequest title template and keeps it on the config", () => {
+    const validated = validateConfig(
+      config({ pullRequest: { title: "docs(i18n): sync {n} documents from {sourceLanguage}" } }),
+    );
+
+    expect(validated.pullRequest?.title).toBe(
+      "docs(i18n): sync {n} documents from {sourceLanguage}",
+    );
+  });
+
+  it("leaves pullRequest undefined when the block is absent", () => {
+    expect(validateConfig(config()).pullRequest).toBeUndefined();
+  });
+
+  it("refuses an unknown or empty placeholder in the title template", () => {
+    expect(() => validateConfig(config({ pullRequest: { title: "sync {count} docs" } }))).toThrow(
+      /unknown placeholder '\{count\}'/,
+    );
+    expect(() => validateConfig(config({ pullRequest: { title: "sync {} docs" } }))).toThrow(
+      /empty placeholder/,
+    );
+  });
+
+  it("refuses an unpaired brace in the title template", () => {
+    expect(() => validateConfig(config({ pullRequest: { title: "sync {n} docs }" } }))).toThrow(
+      /unpaired brace/,
+    );
+    expect(() => validateConfig(config({ pullRequest: { title: "sync {n docs" } }))).toThrow(
+      /unpaired brace/,
+    );
+  });
+
+  it("refuses an empty, whitespace-only or oversized title template", () => {
+    expect(() => validateConfig(config({ pullRequest: { title: "" } }))).toThrow(/cannot be blank/);
+    expect(() => validateConfig(config({ pullRequest: { title: "   " } }))).toThrow(
+      /cannot be blank/,
+    );
+    expect(() =>
+      validateConfig(config({ pullRequest: { title: "x".repeat(201) + " {n}" } })),
+    ).toThrow(/-character cap/);
+  });
+
+  it("refuses unknown keys inside the pullRequest block", () => {
+    expect(() => validateConfig(config({ pullRequest: { title: "t {n}", body: "b" } }))).toThrow(
+      /unknown pullRequest key 'body'/,
+    );
+  });
 });

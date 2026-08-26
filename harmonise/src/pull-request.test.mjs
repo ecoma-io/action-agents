@@ -8,7 +8,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildPullRequestBody } from "./pull-request.mjs";
+import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
+
+/** @param {{ title?: string }} [pullRequest] @returns {any} */
+function configWith(pullRequest = {}) {
+  return { sourceLanguage: "en", ...pullRequest };
+}
 
 /** @returns {Parameters<typeof buildPullRequestBody>[0]} */
 function baseReport() {
@@ -76,5 +81,39 @@ describe("buildPullRequestBody", () => {
     expect(body).not.toMatch(/`\.`|``x``/); // no raw backtick pair survives into spans
     expect(body).not.toMatch(/injected\nlog line/);
     expect(body).toMatch(/## Skipped pairs/); // the real structure stands alone
+  });
+});
+
+describe("renderPullRequestTitle", () => {
+  it("keeps the built-in convention, pluralized, when no template is configured", () => {
+    expect(renderPullRequestTitle(configWith(), 1)).toBe(
+      "chore(harmonise): sync 1 document with en",
+    );
+    expect(renderPullRequestTitle(configWith(), 3)).toBe(
+      "chore(harmonise): sync 3 documents with en",
+    );
+  });
+
+  it("substitutes a custom template's {n} and {sourceLanguage} deterministically", () => {
+    const cfg = configWith({
+      pullRequest: { title: "docs(i18n): đồng bộ {n} tài liệu từ {sourceLanguage}" },
+    });
+
+    expect(renderPullRequestTitle(cfg, 2)).toBe("docs(i18n): đồng bộ 2 tài liệu từ en");
+  });
+
+  it("substitutes repeated placeholders and leaves the wording to the template", () => {
+    const cfg = configWith({
+      pullRequest: { title: "{sourceLanguage}: one document? many! n={n} ({n})" },
+    });
+
+    expect(renderPullRequestTitle(cfg, 1)).toBe("en: one document? many! n=1 (1)");
+  });
+
+  it("refuses a rendered title past the cap", () => {
+    const longWord = "x".repeat(150);
+    const cfg = configWith({ pullRequest: { title: `${longWord} ${longWord} {n}` } });
+
+    expect(() => renderPullRequestTitle(cfg, 5)).toThrow(/-character cap/);
   });
 });
