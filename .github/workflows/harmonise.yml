@@ -15,8 +15,18 @@ name: Harmonise
 # `release.yml` makes for the release pull request, accepted because what a
 # harmonise run may write is already pinned in code: files inside the
 # configured language patterns, one branch of its own naming, nothing else.
+#
+# The verification phase is complete: the first real pull request (README →
+# README.vi.md) was inspected against the safety checklist — source
+# untouched, links and badges intact, glossary preserved, structure held —
+# and merged through the queue with every check green. The weekly schedule
+# is what keeps the mirror in step without anyone asking; dispatch remains
+# for out-of-band runs, real or dry.
 
 on:
+  schedule:
+    # Weekly, an hour after the semgrep analysis run — staggered, not stacked.
+    - cron: "17 3 * * 1"
   workflow_dispatch:
     inputs:
       dry-run:
