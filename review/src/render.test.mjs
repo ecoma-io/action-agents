@@ -87,7 +87,7 @@ describe("renderComment", () => {
       findings: [
         {
           severity: "nit",
-          file: "we`</details>`<!-- x -->name.mjs",
+          file: "we`</details>`<!-- x -->--!>name.mjs",
           line: 1,
           message: "anchor on an evil name",
         },
@@ -96,6 +96,7 @@ describe("renderComment", () => {
     });
     expect(body).not.toContain("</details>");
     expect(body).not.toContain("<!--");
+    expect(body).not.toContain("--!>"); // the browser's second comment closer
     expect(body).not.toMatch(/[^ ]`[^ ].*`.*name\.mjs/); // no raw backticks survive in the anchor
     expect(body).toContain("name.mjs");
   });
