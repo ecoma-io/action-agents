@@ -13,8 +13,10 @@
  * world as a literal; and `main` is the only place that touches process state.
  */
 
+import { createChat } from "#core/chat.mjs";
 import { createForge } from "#core/forge.mjs";
 import { readSharedInputs } from "#core/inputs.mjs";
+import { createEvidence } from "#core/untrusted.mjs";
 import {
   getBooleanInput,
   getInput,
@@ -26,16 +28,19 @@ import {
   setFailed,
 } from "#core/runtime.mjs";
 
-import { loadConfigFile, validateConfig } from "./config.mjs";
+import { loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
 import { buildInventory } from "./inventory.mjs";
 import { matchGlob } from "./glob.mjs";
-import { preparationRefusal, preparePair } from "./plan.mjs";
+import { MAX_SOURCE_BYTES, preparationRefusal, preparePair, translatePair } from "./plan.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
 /** @typedef {import("#core/forge.mjs").Forge} Forge */
 
 export const ACTION = "harmonise";
+
+/** Semantic retries per pair: a malformed answer gets exactly one more try. */
+const ATTEMPTS_PER_PAIR = 2;
 
 /**
  * @typedef {SharedInputs & { configPath: string, sourceLanguage: string, documents: string[], dryRun: boolean }} Inputs
@@ -62,6 +67,8 @@ export function readInputs(env = process.env) {
  *
  * @typedef {object} Io
  * @property {Forge} forge
+ * @property {ReturnType<typeof createChat>} chat
+ * @property {ReturnType<typeof createEvidence>} evidence
  */
 
 /**
@@ -77,6 +84,8 @@ function realIo(inputs, context) {
       token: inputs.githubToken,
       apiUrl: context.apiUrl,
     }),
+    chat: createChat({ apiUrl: inputs.apiUrl, apiKey: inputs.apiKey }),
+    evidence: createEvidence(),
   };
 }
 
@@ -88,12 +97,12 @@ function realIo(inputs, context) {
  */
 export async function run(inputs, context, io = realIo(inputs, context)) {
   if (!inputs.dryRun) {
-    // Honest refusal, not a degraded proposal: without the model stage there
-    // is no rewritten text, and a real run that wrote nothing while claiming
-    // to propose would be green-on-nothing in the worst way.
+    // Honest refusal, not a degraded proposal: without the Git stage there is
+    // nowhere for a proposal to land, and a real run that wrote nothing while
+    // claiming to propose would be green-on-nothing in the worst way.
     throw new Error(
-      "harmonise cannot propose translations yet — the deterministic stages are in place; " +
-        "translation lands with the model integration. Run with dry-run until then.",
+      "harmonise cannot open pull requests yet — translation and validation are in place; " +
+        "the branch/commit/PR stage lands with the Git integration. Run with dry-run until then.",
     );
   }
 
@@ -108,6 +117,9 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     );
   }
   config = { ...config, sourceLanguage: requested };
+
+  // Instruction prose is read once, capped, and shared by every prompt.
+  const documents = await loadInstructions({ forge: io.forge, config });
 
   const repository = await io.forge.getRepository();
   const ref = await io.forge.getRef(repository.defaultBranch);
@@ -161,6 +173,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       }
       continue;
     }
+
     for (const target of pair.targets) {
       try {
         const prepared = preparePair({
@@ -172,12 +185,55 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           inventory,
           config,
         });
-        preparedLines.push(
-          `${target.lang} ${pair.sourcePath} → ${prepared.destinationPath}` +
-            ` [${prepared.state}] glossary=${String(prepared.protection.glossaryHits)}` +
-            ` skip=${String(prepared.protection.skippedSpans)}` +
-            ` links=${String(prepared.linksRewritten)}`,
-        );
+
+        const existing =
+          target.state === "existing"
+            ? await io.forge.getContents(target.path).then((found) => found?.content ?? undefined)
+            : undefined;
+        if (existing !== undefined) {
+          // Both documents must fit the evidence frame together; a published
+          // translation past the cap cannot be judged whole, so its pair
+          // skips with that reason rather than comparing against a truncated
+          // view.
+          const existingBytes = new TextEncoder().encode(existing).byteLength;
+          if (existingBytes > MAX_SOURCE_BYTES) {
+            skippedLines.push(
+              `${target.lang} ${pair.sourcePath}: the existing translation is ` +
+                `${String(existingBytes)} bytes, past the ${String(MAX_SOURCE_BYTES)}-byte cap — ` +
+                `shrink or split it first`,
+            );
+            continue;
+          }
+        }
+
+        let lastFailure = "";
+        for (let attempt = 1; attempt <= ATTEMPTS_PER_PAIR; attempt++) {
+          try {
+            const outcome = await translatePair({
+              prepared,
+              sourceLanguage: config.sourceLanguage,
+              existingText: existing,
+              model: inputs.model,
+              chat: io.chat,
+              evidence: io.evidence,
+              repository: { name: repository.name, description: repository.description },
+              documents,
+            });
+            if (outcome.outcome === "noop") {
+              preparedLines.push(
+                pairLine(prepared, "unchanged") + " — byte-identical to what is published",
+              );
+            } else {
+              preparedLines.push(pairLine(prepared, "proposed") + ` — ${oneLine(outcome.summary)}`);
+            }
+            lastFailure = "";
+            break;
+          } catch (cause) {
+            lastFailure = cause instanceof Error ? cause.message : String(cause);
+          }
+        }
+        if (lastFailure !== "")
+          failedLines.push(`${target.lang} ${pair.sourcePath}: ${lastFailure}`);
       } catch (cause) {
         failedLines.push(
           `${target.lang} ${pair.sourcePath}: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -186,13 +242,10 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     }
   }
 
-  // Every pair failing is red: work existed and none of it was attempted
-  // successfully. So is every pair skipping — work existed and none of it was
-  // even attempted. Some failing or skipping is reported and carried.
+  // Every pair failing or skipping is red: work existed and none of it was
+  // attempted successfully. Some failing or skipping is reported and carried.
   if (preparedLines.length === 0 && skippedLines.length === 0 && failedLines.length > 0) {
-    throw new Error(
-      `every pair failed preparation:\n${failedLines.map((line) => `- ${line}`).join("\n")}`,
-    );
+    throw new Error(`every pair failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`);
   }
   if (preparedLines.length === 0 && failedLines.length === 0 && skippedLines.length > 0) {
     throw new Error(`every pair skipped:\n${skippedLines.map((line) => `- ${line}`).join("\n")}`);
@@ -203,7 +256,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     `documents: ${String(inventory.pairs.length)} source(s), ` +
       `${String(selected.length)} selected, languages ${Object.keys(config.languages).join(", ")}`,
   );
-  for (const line of preparedLines) info(`prepared ${line}`);
+  for (const line of preparedLines) info(`translated ${line}`);
   for (const line of failedLines) info(`failed ${line}`);
   for (const line of skippedLines) info(`skipped ${line}`);
   if (inventory.orphanTranslations.length === 0) {
@@ -214,6 +267,42 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       info(`orphan ${orphan.path} [${orphan.lang}]`);
     }
   }
+}
+
+/**
+ * One report line per translated pair: destination, state, protection counts,
+ * and the outcome — with the model's one-line summary only when it proposed.
+ *
+ * @param {ReturnType<typeof preparePair>} prepared
+ * @param {"proposed" | "unchanged"} outcome
+ * @returns {string}
+ */
+function pairLine(prepared, outcome) {
+  return (
+    `${prepared.lang} ${prepared.sourcePath} → ${prepared.destinationPath}` +
+    ` [${prepared.state}] ${outcome} glossary=${String(prepared.protection.glossaryHits)}` +
+    ` skip=${String(prepared.protection.skippedSpans)}` +
+    ` links=${String(prepared.linksRewritten)}`
+  );
+}
+
+/**
+ * The summary is model text and reaches logs: flattened to one line, so it
+ * cannot forge report structure. Full sanitisation is the pull request's
+ * business, not the log's.
+ *
+ * @param {string} summary
+ * @returns {string}
+ */
+function oneLine(summary) {
+  let flat = "";
+  for (const char of summary) {
+    const code = char.codePointAt(0) ?? 0;
+    // Control characters never reach a log line: they are log-forgery
+    // material, and whitespace collapses to the space it reads as.
+    flat += code <= 0x1f || code === 0x7f ? " " : char;
+  }
+  return flat.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 /**
