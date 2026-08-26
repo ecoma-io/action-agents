@@ -127,7 +127,7 @@ const PER_PAGE = 100;
  * @param {ForgeConfig} config
  * @returns {{
  *   whoami: () => Promise<{ login: string }>,
- *   getRepository: () => Promise<{ defaultBranch: string }>,
+ *   getRepository: () => Promise<{ defaultBranch: string, name: string, description: string }>,
  *   getRef: (branch: string) => Promise<{ sha: string }>,
  *   listTree: (sha: string) => Promise<TreeEntry[]>,
  *   getContents: (path: string) => Promise<{ content: string } | null>,
@@ -179,11 +179,15 @@ export function createForge(config) {
     async getRepository() {
       const operation = "reading the repository";
       const json = await call(operation, () => http.request(root));
-      const defaultBranch = asRecord(json)?.["default_branch"];
+      const record = asRecord(json);
+      const defaultBranch = record?.["default_branch"];
       if (typeof defaultBranch !== "string" || defaultBranch === "") {
         throw new ForgeError(operation, new Error("the response names no default branch"));
       }
-      return { defaultBranch };
+      // Name and description feed prompts; absent description is normal.
+      const name = typeof record?.["name"] === "string" ? record["name"] : "";
+      const description = typeof record?.["description"] === "string" ? record["description"] : "";
+      return { defaultBranch, name, description };
     },
 
     /**

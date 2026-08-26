@@ -369,10 +369,14 @@ describe("comments", () => {
 describe("getRepository", () => {
   it("returns the default branch the repository names", async () => {
     const client = forge("o", "r", {
-      "GET /repos/o/r": json({ default_branch: "main" }),
+      "GET /repos/o/r": json({ name: "r", description: null, default_branch: "main" }),
     });
 
-    await expect(client.getRepository()).resolves.toEqual({ defaultBranch: "main" });
+    await expect(client.getRepository()).resolves.toEqual({
+      defaultBranch: "main",
+      name: "r",
+      description: "",
+    });
   });
 
   it("refuses a response that names no default branch", async () => {

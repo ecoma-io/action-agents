@@ -119,7 +119,7 @@ function fakeForge(options = {}) {
     },
     // Present for the Forge type's completeness; triage never calls these.
     async getRepository() {
-      return { defaultBranch: "main" };
+      return { defaultBranch: "main", name: "action-agents", description: "" };
     },
     /** @param {string} _branch */
     async getRef(_branch) {

@@ -44,10 +44,17 @@ import { parseLanguagePattern, validateLanguagePattern } from "./patterns.mjs";
 /** A config file larger than this is a red refusal, not a truncated policy. */
 export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
 
+/** An instruction document larger than this is a red refusal — prose cut mid-sentence misleads. */
+export const MAX_INSTRUCTION_BYTES = 8 * 2 ** 10;
+
 const DEFAULT_LOCATIONS = [
   ".github/action-agents/harmonise/harmonise.json5",
   ".github/action-agents/harmonise/harmonise.json",
 ];
+
+const DEFAULT_INSTRUCTION_PATHS = {
+  instruction: ".github/action-agents/harmonise/instruction.md",
+};
 
 /**
  * Reads the config file from the default branch and parses it. There is no
@@ -269,6 +276,52 @@ function parseInstructions(value, languages) {
   }
 
   return instructions;
+}
+
+/**
+ * Reads the instruction documents a run's prompts will carry, from the
+ * default branch: the all-pairs document, plus each language's own. Every
+ * document is optional — the convention path is tried when no override is
+ * configured, and a missing document is fine. A document past its cap is
+ * refused rather than truncated.
+ *
+ * @param {object} input
+ * @param {ContentsReader} input.forge
+ * @param {HarmoniseConfig} input.config the validated config (paths already resolved)
+ * @returns {Promise<{ instruction?: string, languages: Record<string, string> }>}
+ */
+export async function loadInstructions({ forge, config }) {
+  /** @type {{ instruction?: string, languages: Record<string, string> }} */
+  const documents = { languages: {} };
+
+  const generalPath = config.instructions.instruction ?? DEFAULT_INSTRUCTION_PATHS["instruction"];
+  const general = await readInstruction(forge, generalPath);
+  if (general !== null) documents.instruction = general;
+
+  for (const [lang, path] of Object.entries(config.instructions.languages).sort()) {
+    const text = await readInstruction(forge, path);
+    if (text !== null) documents.languages[lang] = text;
+  }
+
+  return documents;
+}
+
+/**
+ * @param {ContentsReader} forge
+ * @param {string} path
+ * @returns {Promise<string | null>}
+ */
+async function readInstruction(forge, path) {
+  const file = await forge.getContents(path);
+  if (file === null) return null;
+  const bytes = new TextEncoder().encode(file.content).byteLength;
+  if (bytes > MAX_INSTRUCTION_BYTES) {
+    throw new Error(
+      `'${path}' is ${String(bytes)} bytes, past the ${String(MAX_INSTRUCTION_BYTES)}-byte ` +
+        `cap — an instruction document that overflows is refused rather than truncated`,
+    );
+  }
+  return file.content;
 }
 
 /** @param {unknown} value @param {string} name @returns {Record<string, unknown>} */

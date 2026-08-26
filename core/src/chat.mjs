@@ -26,6 +26,13 @@
  * `api-key` the request carries no `Authorization` header at all.
  */
 
+/**
+ * The client `createChat` returns, named so an action's JSDoc can say
+ * `import("#core/chat.mjs").Chat`.
+ *
+ * @typedef {ReturnType<typeof createChat>} Chat
+ */
+
 import { createHttpClient } from "./http.mjs";
 
 /**
