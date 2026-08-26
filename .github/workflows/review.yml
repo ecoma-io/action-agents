@@ -3,13 +3,14 @@ name: Review
 # Dogfood: this repository's own `review` action, reviewing its own pull
 # requests as an agent that decides what to read.
 #
-# THIS RUN IS IN DRY-RUN MODE. It reads the real diff, walks the real tree,
-# calls the real model through the real gateway, validates the answer
-# against the reviewed snapshot — and writes nothing anywhere. The rendered
-# comment appears in the run log instead of on the thread. The dry-run phase
-# exists so the first live writes land only after the logs have shown
-# several real reviews behaving; flipping `dry-run` to `false` is its own
-# change, made deliberately.
+# DRY-RUN IS OVER. Several real runs — an adversarial-body fixture among
+# them — reviewed real diffs against the real gateway with correct anchors,
+# ignored embedded instructions as data, cleared stale state honestly, and
+# wrote nothing while doing it. This run publishes for real: exactly one
+# marker comment per pull request, updated in place, guarded by the
+# pre-publication re-read of state and head. A hostile review of the whole
+# surface found no path from pull-request content to anything beyond that
+# one comment before this flip was made.
 #
 # The write surface when that flip happens is exactly one marker comment on
 # the pull request — no labels (`triage`'s job), no verdicts, no mentions —
@@ -66,5 +67,5 @@ jobs:
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
           model: review
-          # Dry-run while the dogfood earns trust: review fully, write never.
-          dry-run: "true"
+          # Live: the write surface below is one upserted marker comment.
+          dry-run: "false"

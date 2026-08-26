@@ -154,6 +154,13 @@ jobs:
       - name: Check action manifests against their code
         run: pnpm check-action-inputs
 
+      # Validates the release surface: root action stub contract, every child
+      # action manifest with resolvable entry point, no undocumented action
+      # directory, and version consistency across release-please files.
+      # Catches invariant drift before it reaches a release PR.
+      - name: Check release invariants
+        run: pnpm check-release-invariants
+
       # Resolves every `(path#frag)` link in docs against the headings in the
       # target file, using the same github-slugger GitHub renders with — a dead
       # anchor fails CI instead of a reader's click.

@@ -38,6 +38,7 @@ Three consequences, each of which has already turned down a plausible design:
 ## The layout
 
 ```text
+action.yml              root stub — fails with usage guidance, not a runnable action
 core/src/            shared runtime primitives — infrastructure only
 triage/action.yaml   triage/src/
 review/action.yaml   review/src/
@@ -47,6 +48,12 @@ harmonise/action.yaml harmonise/src/
 Each directory beside `core/` is a whole action: the `action.yaml` a consumer
 names in `uses:`, and the source that runs. A consumer writes
 `ecoma-io/action-agents/review@v0.1`, which is that directory and nothing else.
+
+The root `action.yml` is a composite stub that always fails with guidance
+pointing to the real actions — it exists so that `ecoma-io/action-agents@v0.1`
+resolves against a tag (following the
+[github/codeql-action](https://github.com/github/codeql-action) pattern). It is
+not a runnable action and must never become one.
 
 ## Setting up
 
@@ -146,21 +153,22 @@ them — not in anticipation that one might.
 
 ## The commands
 
-| Command                    | What it does                                                                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm lint`                | ESLint, zero warnings tolerated                                                                                                   |
-| `pnpm typecheck`           | `tsc --noEmit` over the JSDoc types — the only place a type error is caught                                                       |
-| `pnpm arch`                | `archkeep check` — the core/action boundary, judged mechanically                                                                  |
-| `pnpm test`                | Vitest, with coverage thresholds                                                                                                  |
-| `pnpm test:tools`          | `node --test` over `tools/**` and `scripts/**` — the gates that check the gates                                                   |
-| `pnpm check-docs-links`    | Every markdown link, prose `docs/…` citation, and path named in a `.yml`/`.yaml` resolves                                         |
-| `pnpm check-anchors`       | Every `(file#fragment)` link resolves against a heading that is really there — duplicate headings included                        |
-| `pnpm check-uses-refs`     | Every documented `uses: ecoma-io/action-agents/<action>@<ref>` resolves against a tag that exists, and an action that ships at it |
-| `pnpm check-action-inputs` | Every `action.yaml` and the code behind it declare and read the same inputs — in both directions                                  |
-| `pnpm check-skills`        | The vendored `arch-*` skills are byte-identical in both agent directories and match the pinned `@ecoma-io/archkeep`               |
-| `pnpm sync-skills`         | Rewrites those vendored skills from an Archkeep source tree. Not a gate — the only sanctioned way they change                     |
-| `pnpm format`              | Prettier, in place                                                                                                                |
-| `pnpm format:check`        | Prettier, read-only — what CI runs                                                                                                |
+| Command                         | What it does                                                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm lint`                     | ESLint, zero warnings tolerated                                                                                                   |
+| `pnpm typecheck`                | `tsc --noEmit` over the JSDoc types — the only place a type error is caught                                                       |
+| `pnpm arch`                     | `archkeep check` — the core/action boundary, judged mechanically                                                                  |
+| `pnpm test`                     | Vitest, with coverage thresholds                                                                                                  |
+| `pnpm test:tools`               | `node --test` over `tools/**` and `scripts/**` — the gates that check the gates                                                   |
+| `pnpm check-docs-links`         | Every markdown link, prose `docs/…` citation, and path named in a `.yml`/`.yaml` resolves                                         |
+| `pnpm check-anchors`            | Every `(file#fragment)` link resolves against a heading that is really there — duplicate headings included                        |
+| `pnpm check-uses-refs`          | Every documented `uses: ecoma-io/action-agents/<action>@<ref>` resolves against a tag that exists, and an action that ships at it |
+| `pnpm check-action-inputs`      | Every `action.yaml` and the code behind it declare and read the same inputs — in both directions                                  |
+| `pnpm check-release-invariants` | Root stub contract, child manifests, entry points, surprise action detection, version consistency                                 |
+| `pnpm check-skills`             | The vendored `arch-*` skills are byte-identical in both agent directories and match the pinned `@ecoma-io/archkeep`               |
+| `pnpm sync-skills`              | Rewrites those vendored skills from an Archkeep source tree. Not a gate — the only sanctioned way they change                     |
+| `pnpm format`                   | Prettier, in place                                                                                                                |
+| `pnpm format:check`             | Prettier, read-only — what CI runs                                                                                                |
 
 Everything above except `pnpm format` and `pnpm sync-skills` is a gate. Run them
 before you push; a shorter local run just moves the red to the pull request.
@@ -336,6 +344,12 @@ above makes that routine — so a `v0` would hand breaking changes to anyone
 tracking it. The floating tag is the minor line instead: `v0.1`, `v0.2`. From
 1.0.0 on it becomes `v1`, where semver's promise makes a floating major safe
 again.
+
+**The root action is part of the release surface.** Every release tag must
+contain a root `action.yml` so that `ecoma-io/action-agents@<tag>` resolves.
+The root action is a composite stub that fails with guidance — it is not a
+runnable action. Release validation checks its contract: `runs.using: composite`,
+no `main:` entry point, required metadata present.
 
 Two things about the release pull request that are not obvious:
 

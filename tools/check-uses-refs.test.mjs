@@ -82,15 +82,26 @@ test("an action documented before the tag it debuts in fails", () => {
   assert.match(result.failures[0], /no harmonise\/action\.yaml at v0\.1/);
 });
 
-test("a ref naming no action cannot resolve, because nothing ships at the root", () => {
+test("a root ref with no action manifest at that tag fails", () => {
+  const result = evaluate({
+    files: [doc("      - uses: ecoma-io/action-agents@v0.1\n")],
+    tags: new Set(["v0.1"]),
+    hasManifest: (_tag, action) => action !== "",
+  });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0], /no action\.yml at repository root/);
+});
+
+test("a root ref with a manifest at that tag resolves", () => {
   const result = evaluate({
     files: [doc("      - uses: ecoma-io/action-agents@v0.1\n")],
     tags: new Set(["v0.1"]),
     hasManifest: shipsEverywhere,
   });
 
-  assert.equal(result.failures.length, 1);
-  assert.match(result.failures[0], /no action at the repository root/);
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.checked, 1);
 });
 
 test("a commit SHA is valid without a tag lookup", () => {

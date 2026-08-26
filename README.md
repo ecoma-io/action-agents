@@ -83,6 +83,26 @@ jobs:
           model: ${{ vars.LLM_MODEL }}
 ```
 
+### Pinning strategy
+
+Every `uses:` reference takes a ref that controls what code runs. Three shapes,
+in order of safety:
+
+| Ref                  | Example                                 | What it resolves to                                                    |
+| -------------------- | --------------------------------------- | ---------------------------------------------------------------------- |
+| `v0.1` (floating)    | `ecoma-io/action-agents/review@v0.1`    | The latest patch release in the `v0.1` line. Gets fixes automatically. |
+| `v0.1.0` (exact)     | `ecoma-io/action-agents/review@v0.1.0`  | Exactly that release. Never moves.                                     |
+| `<sha>` (SHA-pinned) | `ecoma-io/action-agents/review@abc123…` | Exactly those bytes. Immutable.                                        |
+
+Floating tags (`v0.1`, `v0.2`) deliver patches without a workflow edit — that is
+usually what you want. Exact tags deliver reproducibility — that is what you
+want when it is. A commit SHA delivers an audit trail — the strongest pin, and
+what security policy engines enforce.
+
+**Do not use `@main`.** A push to `main` can change what the action does at any
+time, including in ways that are not yet released. Every published ref is
+immutable or floating within a declared compatibility line.
+
 Behaviour that belongs to the repository rather than to one workflow lives in
 `.github/action-agents/<action>/<action>.json5` — one file per action, colocated
 with its action-specific files. It is read from the default branch, so a pull request
@@ -105,6 +125,19 @@ points at, because prose belongs in a document.
 are tempted to reach for `pull_request_target` to cover forks, read
 [SECURITY.md](SECURITY.md) first: checking out a fork's head under that trigger
 is a vulnerability in **your** repository, and no action can fix it for you.
+
+### The root action
+
+The repository root contains an `action.yml`, but it is **not a runnable
+action**. It exists so that `uses: ecoma-io/action-agents@v0.1.0` resolves <!-- roadmap ref -->
+against a tag rather than failing with a missing-manifest error. When invoked,
+it immediately fails with an error naming the three real actions and telling you
+to pick one. This follows the pattern established by
+[github/codeql-action](https://github.com/github/codeql-action), where the root
+stub prevents accidental use of the repository as if it were a single action.
+
+**Always reference a specific action directory** (`triage`, `review`, or
+`harmonise`) in your `uses:` line.
 
 ## Documentation
 

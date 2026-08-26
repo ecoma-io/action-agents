@@ -110,10 +110,15 @@ export function evaluate({ files, tags, hasManifest }) {
         checked += 1;
 
         if (action === "") {
-          failures.push(
-            `${where}: ecoma-io/action-agents@${ref} — there is no action at the repository ` +
-              `root. Name the action's directory, e.g. ecoma-io/action-agents/review@${ref}.`,
-          );
+          // The root action exists as a stub that fails with guidance.
+          // Consumers may reference it, but the documentation should prefer
+          // naming a specific action directory.  Validate the root manifest
+          // exists at the tag rather than rejecting outright.
+          if (!hasManifest(ref, "")) {
+            failures.push(
+              `${where}: ecoma-io/action-agents@${ref} — no action.yml at repository root for ${ref}.`,
+            );
+          }
           continue;
         }
         if (SHA.test(ref)) continue;

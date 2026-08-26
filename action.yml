@@ -1,0 +1,17 @@
+name: Action Agents - AI-powered repository maintenance actions.
+description: >-
+  Three actions, one responsibility each — triage, review, harmonise — running
+  inside GitHub Actions against any OpenAI-compatible model, including one you host
+  yourself. No bundle to trust, no dependency to audit, no install before they start.
+
+runs:
+  using: composite
+  steps:
+    - name: Fail with usage guidance
+      shell: bash
+      run: |
+        echo "::error::This is not a runnable action. Select a specific action:" \
+          "ecoma-io/action-agents/triage@<ref>," \
+          "ecoma-io/action-agents/review@<ref>, or" \
+          "ecoma-io/action-agents/harmonise@<ref>."
+        exit 1
