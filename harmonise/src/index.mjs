@@ -344,7 +344,12 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   }
 
   const branch = branchName(config.sourceLanguage);
-  const title = `harmonise: sync ${String(proposed.length)} documents with ${config.sourceLanguage}`;
+  // Conventional-commits shape, because the pull request title is this
+  // repository's commit subject and commitlint judges it like any other:
+  // "harmonise" is a scope here, never a type.
+  const title =
+    `chore(harmonise): sync ${String(proposed.length)} ` +
+    `${proposed.length === 1 ? "document" : "documents"} with ${config.sourceLanguage}`;
 
   // Blobs first, then exactly one tree layered over the audited base, one
   // commit on top, one branch pointing at it, one request carrying it.

@@ -5,14 +5,16 @@ name: Harmonise
 # action reads everything through the API — the checkout exists only so the
 # runner can find the action at `./harmonise`.
 #
-# Phase one is dry runs: every dispatch reports what it found and proposes
-# nothing. The real-run phase (dry-run=false) publishes one branch, one
-# commit and one pull request; that switch is flipped deliberately after a
-# dry run has been inspected, per the dogfood safety checklist.
-#
-# `schedule` joins only after the first real pull request has been reviewed
-# and merged by a human — the trigger that keeps documentation in step
-# without anyone asking.
+# The pull request this action maintains must run CI like any contributor's:
+# events raised by `GITHUB_TOKEN` are suppressed by GitHub's recursion
+# prevention, so a harmonise PR opened on the workflow token would sit there
+# with no checks at all. The App token minted below gives the run the
+# organisation App's identity, and its events start workflows the way a
+# contributor's do. That identity is stronger than the permissions block
+# below — the block binds only `GITHUB_TOKEN` — which is the same trade
+# `release.yml` makes for the release pull request, accepted because what a
+# harmonise run may write is already pinned in code: files inside the
+# configured language patterns, one branch of its own naming, nothing else.
 
 on:
   workflow_dispatch:
@@ -23,8 +25,9 @@ on:
         default: "true"
         type: string
 
-# What a real run writes: blobs, a tree, a commit, its own branch ref, and
-# the one pull request. Nothing else — no issues, no comments, no merges.
+# What a real run writes when it falls back to the workflow token: blobs, a
+# tree, a commit, its own branch ref, and the one pull request. Nothing else
+# — no issues, no comments, no merges.
 permissions:
   contents: write
   pull-requests: write
@@ -40,15 +43,30 @@ jobs:
   harmonise:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Hoisted so the App-token step's `if:` has something it is allowed to
+    # read — secrets cannot be referenced directly in step conditionals. Same
+    # arrangement as `release.yml`, including the fallback: empty credentials
+    # skip only this step, and the token line degrades to `github.token`
+    # instead of failing red.
+    env:
+      HARMONISE_APP_ID: ${{ secrets.ECOMA_APP_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 1
 
+      - name: Mint a GitHub App token
+        id: app-token
+        if: env.HARMONISE_APP_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ECOMA_APP_ID }}
+          private-key: ${{ secrets.ECOMA_APP_KEY }}
+
       - uses: ./harmonise
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
           model: harmonise
