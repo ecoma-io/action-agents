@@ -69,6 +69,98 @@ describe("glossary protection", () => {
     expect(protection.text).toBe(source);
     expect(protection.glossaryHits).toBe(0);
   });
+
+  it("does not match inside a longer word — no stemming by substring", () => {
+    const { protection } = protect("He committed to the commitment and will recommit.\n", {
+      glossary: ["commit"],
+    });
+
+    expect(protection.text).toBe("He committed to the commitment and will recommit.\n");
+    expect(protection.glossaryHits).toBe(0);
+  });
+
+  it("does not match when an underscore joins it into one identifier", () => {
+    const { protection } = protect("set commit_hash before committing\n", {
+      glossary: ["commit"],
+    });
+
+    expect(protection.glossaryHits).toBe(0);
+  });
+
+  it("matches a term adjacent to punctuation", () => {
+    const { protection } = protect('The repository, (repository) "repository" works.\n', {
+      glossary: ["repository"],
+    });
+    const token = "[[harmonise:0123456789abcdef:g1]]";
+
+    expect(protection.text).toBe(`The ${token}, (${token}) "${token}" works.\n`);
+    expect(protection.glossaryHits).toBe(3);
+  });
+
+  it("matches link text but never a link or image destination", () => {
+    const source = "See [the repository](repo/repository.md) and ![the repository](img.png) now.\n";
+    const { protection } = protect(source, { glossary: ["repository"] });
+
+    // The two prose occurrences are protected; both destinations survive
+    // byte-for-byte so the link rewriter still sees real paths.
+    expect(protection.text).toBe(
+      "See [the [[harmonise:0123456789abcdef:g1]]](repo/repository.md) and " +
+        "![the [[harmonise:0123456789abcdef:g1]]](img.png) now.\n",
+    );
+    expect(protection.glossaryHits).toBe(2);
+  });
+
+  it("never matches inside a reference definition's destination", () => {
+    const source = '[docs]: repo/repository.md "the repository docs"\n';
+    const { protection } = protect(source, { glossary: ["repository"] });
+
+    expect(protection.text).toBe(
+      '[docs]: repo/repository.md "the [[harmonise:0123456789abcdef:g1]] docs"\n',
+    );
+    expect(protection.glossaryHits).toBe(1);
+  });
+
+  it("never matches inside bare URLs or angle autolinks", () => {
+    const source =
+      "Read https://example.com/commit-guidelines and <https://example.com/repository>.\n";
+    const { protection } = protect(source, { glossary: ["commit", "repository"] });
+
+    expect(protection.text).toBe(source);
+    expect(protection.glossaryHits).toBe(0);
+  });
+
+  it("keeps offsets exact when an astral character precedes machinery and prose", () => {
+    // A surrogate pair before a link shifts UTF-16 columns; the term after
+    // the link must still be protected at its true position, and the
+    // destination must survive untouched.
+    const source = "🎉 [docs](v1🎉guide.md); the repository grows\n";
+    const { protection } = protect(source, { glossary: ["repository"] });
+    const token = "[[harmonise:0123456789abcdef:g1]]";
+
+    expect(protection.text).toBe(`🎉 [docs](v1🎉guide.md); the ${token} grows\n`);
+    expect(restoreDocument(protection.text, protection)).toBe(source);
+  });
+
+  it("still protects prose after a construct whose title hides another ](", () => {
+    const source = '[a](b.md "see ](" ) repository\n';
+    const { protection } = protect(source, { glossary: ["repository"] });
+
+    // The unprovable construct is left entirely alone; the term after it is.
+    // not sacrificed to it.
+    expect(protection.glossaryHits).toBe(1);
+    expect(restoreDocument(protection.text, protection)).toBe(source);
+  });
+
+  it("matches a short term standalone and the long term at its own position", () => {
+    const { protection } = protect("file a request, then review a pull request\n", {
+      glossary: ["pull request", "request"],
+    });
+
+    expect(protection.text).toBe(
+      "file a [[harmonise:0123456789abcdef:g2]], then review a [[harmonise:0123456789abcdef:g1]]\n",
+    );
+    expect(protection.glossaryHits).toBe(2);
+  });
 });
 
 describe("skip directives", () => {
@@ -240,5 +332,32 @@ describe("restoration", () => {
 
     const retranslated = `${protection.text}`;
     expect(restoreDocument(retranslated, protection)).toBe(source);
+  });
+
+  it("round-trips a CRLF document with glossary and skip-next byte-for-byte", () => {
+    const source =
+      "Title\r\n\r\n<!-- harmonise:skip -->\r\n\r\nkeep me verbatim\r\nThe repository holds.\r\n";
+    const { protection } = protect(source, { glossary: ["repository"] });
+
+    expect(protection.skippedSpans).toBe(1);
+    expect(protection.glossaryHits).toBe(1);
+    expect(restoreDocument(protection.text, protection)).toBe(source);
+  });
+
+  it("round-trips mixed LF and CRLF newlines byte-for-byte", () => {
+    const source = "one\n<!-- harmonise:skip -->\r\n\r\nkeep\r\ntwo\nrepository\n";
+    const { protection } = protect(source, { glossary: ["repository"] });
+
+    expect(protection.glossaryHits).toBe(1);
+    expect(restoreDocument(protection.text, protection)).toBe(source);
+  });
+
+  it("round-trips a document with no trailing newline byte-for-byte", () => {
+    const source =
+      "head\r\n<!-- harmonise:skip-start -->\r\nbody\r\n<!-- harmonise:skip-end -->\ntail repository";
+    const { protection } = protect(source, { glossary: ["repository"] });
+
+    expect(protection.glossaryHits).toBe(1);
+    expect(restoreDocument(protection.text, protection)).toBe(source);
   });
 });

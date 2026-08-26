@@ -138,6 +138,16 @@ export function buildInventory({ entries, config, documents }) {
   }
   orphanTranslations.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
+  // The canonical lookup index: slug → lang → target. Link resolution asks it
+  // once per link instead of scanning `pairs`, and — the real reason it
+  // exists — there is exactly one answer to "where does slug X live in lang
+  // Y", built here and read everywhere.
+  /** @type {Map<string, Map<string, Pair["targets"][number]>>} */
+  const targetIndex = new Map();
+  for (const pair of pairs) {
+    targetIndex.set(pair.slug, new Map(pair.targets.map((target) => [target.lang, target])));
+  }
+
   return {
     sourcePaths: pairs.map((pair) => pair.sourcePath),
     pairs,
@@ -154,9 +164,7 @@ export function buildInventory({ entries, config, documents }) {
     resolveDocument(absPath, lang) {
       const slug = config.languages[config.sourceLanguage]?.slugFromPath(absPath);
       if (slug === null || slug === undefined) return null;
-      const pair = pairs.find((candidate) => candidate.slug === slug);
-      if (pair === undefined) return null;
-      const target = pair.targets.find((candidate) => candidate.lang === lang);
+      const target = targetIndex.get(slug)?.get(lang);
       if (target === undefined) return null;
       return target.state === "existing" || target.planned ? target.path : null;
     },

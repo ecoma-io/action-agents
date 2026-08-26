@@ -131,7 +131,7 @@ The inventory is only sound if it is complete. A partial enumeration silently tr
 For each source document, transformations occur in this order:
 
 1. **Parse and detect:** Extract skip directives from source
-2. **Detect glossary terms:** Find exact matches (case-sensitive) outside skipped regions, fenced code blocks, and inline code spans
+2. **Detect glossary terms:** Find exact matches (case-sensitive, whole-word) outside skipped regions, fenced code blocks, inline code spans, and link machinery
 3. **Apply placeholders:** Replace glossary terms and skip regions with unique placeholders
 4. **Rewrite links:** Apply internal link rewriting (using document inventory)
 5. **Send to LLM:** Translate with placeholders preserved
@@ -161,7 +161,7 @@ Glossary terms must be preserved exactly in all translations. This is enforced d
 
 ```text
 source document
-  ↓ detect glossary terms (exact match, case-sensitive)
+  ↓ detect glossary terms (exact match, case-sensitive, whole-word)
 replace each term with a per-term unique placeholder
   (random-per-run identifier to prevent forgery)
   ↓ LLM translates (preserves placeholders)
@@ -169,6 +169,10 @@ validate placeholder count and integrity per term
   ↓ restore each placeholder to exact original glossary term
 translated document
 ```
+
+**Whole-word matching.** A match must stand alone: a term flanked by a letter, digit or underscore is a different word and never matches — `commit` does not fire inside `committed`, `commitment`, `recommit` or `commit_hash`. Punctuation adjacency is fine (`repository,`, `(repository)`, `"repository"` all match). This is the boundary the "no stemming" rule draws: substring-in-word matching would be morphology by another name.
+
+**Machinery never matches.** Beyond skipped regions, fenced code blocks and inline code spans, glossary detection also excludes everything the link rewriter treats as machinery: an inline link or image's whole parenthesized interior — destination and quoted title alike, the extent the depth scan can prove — reference-definition destinations (`[id]: target`, whose titles stay matchable), angle autolinks (`<https://…>`), and bare scheme URLs in prose (`https://example.com/commit-guidelines`). Link text stays matchable — it is author prose — and so is every byte of a line that an inline construct leaves unproven by never closing. Excluding machinery keeps every destination byte-intact for the link rewriter that runs next; a placeholder inside a path would be a link the resolver can no longer prove.
 
 ### Placeholder security
 
@@ -187,7 +191,7 @@ A placeholder has the shape `[[harmonise:<run-id>:<kind><n>]]` — one shared ra
 - No placeholder may be modified, removed, or have its syntax changed
 - No new placeholders may be introduced
 - Each placeholder must be restored to the **exact original glossary term** — case-sensitive, character-for-character
-- Terms inside skipped regions or code blocks are not detected or replaced
+- Terms inside skipped regions, code blocks, link/image destinations, reference-definition destinations or URLs are not detected or replaced
 
 ### Failure modes
 
@@ -200,7 +204,7 @@ If the model:
 
 ### Scope (v1)
 
-- Exact string matching only;
+- Exact string matching only, with whole-word boundaries (no flanking letter, digit or underscore);
 - No stemming, morphology, or synonym detection;
 - No automatic glossary extraction;
 - Glossary terms are configured in the `glossary` array;
@@ -569,6 +573,7 @@ These limitations are acceptable for v1. The specification provides sufficient c
 The specification is living text, and changes to it are recorded here rather than silently rewritten into the acceptance list above:
 
 - **PR2:** Localized internal image references are specified and supported (the earlier "image rewriting removed" v1 limitation is superseded). Inventory completeness is a refusal contract: a truncated tree listing fails the run instead of being processed. Skip-directive syntax, protected-span boundaries, and pattern-overlap refusal are made exact.
+- **Correctness hardening:** Glossary detection is specified as whole-word — a term flanked by a letter, digit or underscore never matches — and its scope excludes link machinery: inline link and image destinations, reference-definition destinations, angle autolinks, and bare scheme URLs. Newline handling is pinned by test: protected content round-trips byte-for-byte under LF, CRLF, mixed newlines, and a missing final newline. Document resolution is answered from the inventory's own index rather than a per-link scan of `pairs`.
 
 ## Acceptance criteria
 

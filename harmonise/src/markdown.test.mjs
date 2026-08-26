@@ -7,6 +7,7 @@ import {
   compareStructuralProfiles,
   fenceMask,
   maskCodeSpans,
+  maskDestinations,
   splitLines,
   structuralProfile,
 } from "./markdown.mjs";
@@ -68,6 +69,73 @@ describe("maskCodeSpans", () => {
     const masked = maskCodeSpans("a `b c d");
 
     expect(masked).toBe("a `\u0000\u0000\u0000\u0000\u0000");
+  });
+});
+
+describe("maskDestinations", () => {
+  it("blanks an inline construct's interior while keeping link text visible", () => {
+    const line = 'see [the repo](repo/x.md "docs") and ![img](i.png) now';
+    const masked = maskDestinations(line);
+
+    expect(masked).toHaveLength(line.length);
+    expect(masked.startsWith("see [the repo](")).toBe(true);
+    // Destination and title are one machinery interior; the second link's
+    // destination masks the same way; the prose around stays.
+    expect(masked).toBe(
+      "see [the repo](" +
+        "\u0000".repeat('repo/x.md "docs"'.length) +
+        ") and ![img](" +
+        "\u0000".repeat(5) +
+        ") now",
+    );
+  });
+
+  it("preserves length even with astral characters around and inside machinery", () => {
+    for (const line of [
+      "[x](a🎉.md) repository lives",
+      "🎉 [docs](v1🎉guide.md); the repository grows 🎉",
+      "emoji 👨‍👩‍👧 family then [l](d.md) tail repository",
+    ]) {
+      expect(maskDestinations(line)).toHaveLength(line.length);
+    }
+  });
+
+  it("locates a reference definition's destination by its own match index", () => {
+    // The label repeats the destination's text: only the destination masks.
+    const line = '[repository]: repository.md "docs"';
+    const masked = maskDestinations(line);
+
+    expect(masked).toHaveLength(line.length);
+    expect(masked.slice(0, "[repository]: ".length)).toBe("[repository]: ");
+    expect(
+      masked.includes('repository.md "docs"'.replace("repository.md", "\u0000".repeat(12))),
+    ).toBe(true);
+  });
+
+  it("keeps prose after an unprovable construct unmasked", () => {
+    const line = '[a](b.md "see ](" ) repository';
+    const masked = maskDestinations(line);
+
+    // The first construct never closes, so it proves nothing and masks
+    // nothing; the stray `](` in the title opens only the two bytes before
+    // its own `)`. The trailing prose keeps full protection.
+    expect(masked).toBe('[a](b.md "see ](' + "\u0000\u0000" + ") repository");
+  });
+
+  it("does not open a window on an escaped bracket", () => {
+    const line = "escape \\]( not-a-link repository";
+    const masked = maskDestinations(line);
+
+    expect(masked).toBe(line);
+  });
+
+  it("masks angle autolinks and bare scheme URLs whole", () => {
+    const line = "visit <https://x.repository/a> or https://y.repository/commit today";
+    const masked = maskDestinations(line);
+    const blanked = masked.split("\u0000").length - 1;
+
+    expect(masked).toHaveLength(line.length);
+    expect(blanked).toBe("<https://x.repository/a>".length + "https://y.repository/commit".length);
   });
 });
 

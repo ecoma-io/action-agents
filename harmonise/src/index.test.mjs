@@ -277,6 +277,10 @@ describe("run", () => {
     expect(pr.base).toBe("main");
     expect(pr.head).toBe("harmonise/en");
     expect(pr.title).toBe("chore(harmonise): sync 1 document with en");
+    // The pull-request title and the commit subject are one convention: the
+    // commit message carries the title as its first line.
+    const commit = /** @type {Write} */ (forgeDouble.writes.find((w) => w.op === "createCommit"));
+    expect(commit.args[0]).toMatch(/^chore\(harmonise\): sync 1 document with en\n/);
     expect(pr.body).toMatch(/## What changed/);
     expect(logged(log)).toMatch(/opened pull request #42/);
   });
