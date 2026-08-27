@@ -98,6 +98,34 @@ describe("sanitizeTranslationHtml", () => {
     expect(result).not.toContain("JAVASCRIPT:");
   });
 
+  it("blanks tab-split javascript: schemes in href and src whole", () => {
+    // A browser strips tab, LF and CR bytes from a URL before scheme
+    // dispatch, so java<TAB>script: executes as javascript: wherever the
+    // committed markup is rendered without a second sanitiser.
+    const input = '<a href="java\tscript:alert(1)">click</a>\n<img src="java\tscript:alert(1)">';
+    const result = sanitizeTranslationHtml(input);
+    expect(result).not.toContain("java\tscript:");
+    expect(result).not.toContain("script:alert(1)");
+    expect(result).toContain("click");
+  });
+
+  it("blanks entity-split javascript: schemes whole", () => {
+    // Attribute values are entity-decoded before scheme dispatch, so the
+    // numeric reference is read as the tab byte it spells.
+    const input = '<a href="java&#x09;script:alert(1)">click</a>';
+    const result = sanitizeTranslationHtml(input);
+    expect(result).not.toContain("&#x09;");
+    expect(result).not.toContain("script:alert(1)");
+    expect(result).toContain("click");
+  });
+
+  it("leaves ordinary https URLs in href and src untouched", () => {
+    const input =
+      '<a href="https://example.com/docs">docs</a>\n<img src="https://example.com/img.png">';
+    const result = sanitizeTranslationHtml(input);
+    expect(result).toBe(input);
+  });
+
   it("leaves text without HTML unchanged", () => {
     const input = "# Title\n\nNo HTML here.\n\n- item 1\n- item 2";
     const result = sanitizeTranslationHtml(input);

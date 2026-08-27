@@ -194,8 +194,10 @@ export async function translatePair(input) {
  * (tables, details, summary). Blanked: script, iframe, object, embed,
  * form, input, textarea, select, button, link, meta, base, svg, math,
  * foreignObject, and any on* event-handler attributes. Also blanks
- * javascript: URI schemes in href/src attributes and `<!-- harmonise:`
- * directive comments that a model could inject as persistent artifacts.
+ * javascript: URI schemes in href/src attributes — however the scheme is
+ * spelled across the whitespace and HTML entities a browser normalises
+ * away — and `<!-- harmonise:` directive comments that a model could
+ * inject as persistent artifacts.
  *
  * "Blanked" is deliberate, and it is what makes the strip sound: every
  * construct is overwritten in place with spaces of the same length rather
@@ -232,17 +234,34 @@ export function sanitizeTranslationHtml(text) {
 
 /**
  * Elements and attribute shapes that execute or navigate on their own: the
- * element list, on* event handlers, and href/src values in the javascript:
- * scheme, plus the directive-comment prefix a model could forge to steer a
- * later run. Hoisted to module scope because the fixpoint loop in
+ * element list, on* event handlers, and href/src attribute values, plus the
+ * directive-comment prefix a model could forge to steer a later run.
+ * Hoisted to module scope because the fixpoint loop in
  * `stripDangerousHtml` is part of their contract.
  */
 const DANGEROUS_TAG =
   /<\s*\/?\s*(?:script|iframe|object|embed|form|input|textarea|select|button|link|meta|base|svg|math|foreignObject)\b[^>]*>/gi;
 const EVENT_HANDLER = /\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
-const SCRIPT_URI =
-  /(?:href|src)\s*=\s*(?:"[^"]*javascript:[^"]*"|'[^']*javascript:[^']*'|[^\s>]*javascript:[^\s>]*)/gi;
 const DIRECTIVE_COMMENT = /<!--\s*harmonise:/g;
+
+/** An href/src attribute value in any of the three quoting shapes. The
+ *  scheme is judged on the value's normalised form, not on this raw text. */
+const URI_ATTRIBUTE = /(?:href|src)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
+
+/** The scheme, matched on the normalised value. */
+const SCRIPT_SCHEME = /javascript:/i;
+
+/** Numeric character references — with or without the semicolon, both of
+ *  which browsers parse — and the named references for the characters a
+ *  URL's scheme can hide behind. */
+const URI_ENTITY = /&#x([0-9a-fA-F]+);?|&#([0-9]+);?|&(tab|newline|colon);/gi;
+
+/** Resolutions for the named references URI_ENTITY matches. */
+const NAMED_URI_ENTITIES = new Map([
+  ["tab", "\t"],
+  ["newline", "\n"],
+  ["colon", ":"],
+]);
 
 /**
  * Blanks one match in place: same length, all spaces.
@@ -266,6 +285,58 @@ function blankDirective(match) {
 }
 
 /**
+ * Normalises an href/src attribute value the way a browser does before
+ * scheme dispatch: attribute entities are decoded once and the tab, LF and
+ * CR bytes are stripped from the result. `javascript:` is dispatched
+ * however it is spelled across those two normalisations, so the sanitiser
+ * judges the scheme on this form rather than on the raw text.
+ *
+ * @param {string} value the raw attribute value
+ * @returns {string}
+ */
+function normaliseUri(value) {
+  return value.replace(URI_ENTITY, decodeUriEntity).replace(/[\t\n\r]/g, "");
+}
+
+/**
+ * Decodes one character reference for `normaliseUri`: numeric references
+ * with or without the semicolon, and the named ones URI_ENTITY matches.
+ * Anything outside the code-point range is left as written rather than
+ * guessed at.
+ *
+ * @param {string} match
+ * @param {string | undefined} hex the hex digits of a `&#x…;` reference
+ * @param {string | undefined} dec the decimal digits of a `&#…;` reference
+ * @param {string | undefined} name the name of a `&…;` reference
+ * @returns {string}
+ */
+function decodeUriEntity(match, hex, dec, name) {
+  if (name !== undefined) {
+    return NAMED_URI_ENTITIES.get(name.toLowerCase()) ?? match;
+  }
+  const digits = hex ?? dec;
+  const radix = hex !== undefined ? 16 : 10;
+  const code = digits !== undefined ? Number.parseInt(digits, radix) : Number.NaN;
+  if (!Number.isInteger(code) || code > 0x10ffff) {
+    return match;
+  }
+  return String.fromCodePoint(code);
+}
+
+/**
+ * Blanks an href/src attribute whole when its value dispatches as a
+ * javascript: URI once normalised; any other value passes through
+ * untouched, byte for byte.
+ *
+ * @param {string} match the whole `href=…` / `src=…` attribute text
+ * @param {string} value the raw attribute value (first capture group)
+ * @returns {string}
+ */
+function blankUriAttribute(match, value) {
+  return SCRIPT_SCHEME.test(normaliseUri(value)) ? blank(match) : match;
+}
+
+/**
  * Blanks every dangerous construct out of one masked prose line, repeating
  * until nothing changes. In-place overwriting already cannot reconstruct
  * what it removes; the loop is the second belt — the shape sanitisation
@@ -283,7 +354,7 @@ function stripDangerousHtml(masked) {
     current = current
       .replace(DANGEROUS_TAG, blank)
       .replace(EVENT_HANDLER, blank)
-      .replace(SCRIPT_URI, blank)
+      .replace(URI_ATTRIBUTE, blankUriAttribute)
       .replace(DIRECTIVE_COMMENT, blankDirective);
   } while (current !== previous);
   return current;
