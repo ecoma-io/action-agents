@@ -140,7 +140,7 @@ describe("getContents", () => {
     const client = forge(
       "o",
       "r",
-      { "GET /repos/o/r/contents/.github/action-agents/triage/triage.json5": json(PAYLOAD) },
+      { "GET /repos/o/r/contents/.github%2Faction-agents%2Ftriage%2Ftriage.json5": json(PAYLOAD) },
       recorder,
     );
 
@@ -181,6 +181,36 @@ describe("getContents", () => {
     const error = await client.getContents("x").catch((c) => c);
     expect(error).toBeInstanceOf(ForgeError);
     expect(error.message).toMatch(/reading 'x'/);
+  });
+
+  it("encodes #, ? and % in the path so a file name reads as itself", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        "GET /repos/o/r/contents/docs%2Fa%23b.md": json(PAYLOAD),
+        "GET /repos/o/r/contents/docs%2Fq%3Fx.md": json(PAYLOAD),
+        "GET /repos/o/r/contents/docs%2F50%2525.md": json(PAYLOAD),
+      },
+      recorder,
+    );
+
+    await expect(client.getContents("docs/a#b.md")).resolves.toEqual({
+      content: "labels: {}",
+    });
+    await expect(client.getContents("docs/q?x.md")).resolves.toEqual({
+      content: "labels: {}",
+    });
+    await expect(client.getContents("docs/50%25.md")).resolves.toEqual({
+      content: "labels: {}",
+    });
+    expect(recorder.calls?.map((call) => call.url)).toEqual([
+      "https://api.github.com/repos/o/r/contents/docs%2Fa%23b.md",
+      "https://api.github.com/repos/o/r/contents/docs%2Fq%3Fx.md",
+      "https://api.github.com/repos/o/r/contents/docs%2F50%2525.md",
+    ]);
   });
 });
 
