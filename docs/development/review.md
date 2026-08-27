@@ -533,8 +533,10 @@ two racing runs cannot clobber each other, and the loser walks away.
 
 Identity rules for that upsert, stated because a naive reading of "find my
 comment" deletes other people's words: a candidate is a comment carrying this
-action's marker **and** authored by a known bot identity — `github-actions[bot]`
-or its App-token kin. A maintainer who quotes the review copies the marker
+action's marker **and** authored by the identity the workflow's token writes
+as — resolved from the API (`GET /user`) at the moment of writing, which is
+`github-actions[bot]` under `GITHUB_TOKEN` and the app's bot login under an
+App token, never the triggering user. A maintainer who quotes the review copies the marker
 into their own comment; that quote is never updated and never deleted — it is
 theirs, and claiming it would be destroying user content while the genuine
 review still stands elsewhere. When candidates exist, the newest wins, the

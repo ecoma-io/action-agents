@@ -88,7 +88,9 @@ function prEvent(thread = {}) {
  * @param {Record<string, string>} [options.files] path → content, default branch
  * @param {string[] | null} [options.repoLabels] null skips the check's read
  * @param {import("#core/forge.mjs").PullRequestFile[]} [options.prFiles]
- * @param {{ login: string }[]} [options.comments] existing comments, marker-shaped
+ * @param {{ login: string, body?: string }[]} [options.comments] existing comments
+ * @param {string} [options.whoamiLogin] the login whoami reports — the identity comments claim by
+ * @param {Error} [options.whoamiError] thrown by whoami
  * @param {Error} [options.writeFailure] thrown by every write
  */
 function fakeForge(options = {}) {
@@ -101,8 +103,8 @@ function fakeForge(options = {}) {
   let commentId = 100;
   const comments = (options.comments ?? []).map((comment, index) => ({
     id: index + 1,
-    body: "",
-    user: comment,
+    body: comment.body ?? "",
+    user: { login: comment.login },
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   }));
@@ -114,9 +116,6 @@ function fakeForge(options = {}) {
   return {
     reads,
     writes,
-    async whoami() {
-      return { login: "action-agents[bot]" };
-    },
     // Present for the Forge type's completeness; triage never calls these.
     async getRepository() {
       return { defaultBranch: "main", name: "action-agents", description: "" };
@@ -216,6 +215,11 @@ function fakeForge(options = {}) {
       writes.push({ op: "deleteComment", args: [id] });
       const at = comments.findIndex((entry) => entry.id === id);
       if (at !== -1) comments.splice(at, 1);
+    },
+    /** The identity comments are written under; the comment-half upsert claims by it. */
+    async whoami() {
+      if (options.whoamiError) throw options.whoamiError;
+      return { login: options.whoamiLogin ?? "action-agents[bot]" };
     },
   };
 }
@@ -538,6 +542,64 @@ describe("run — no sheet, the comment half", () => {
     const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
     expect(lines).toMatch(/dry run/);
     expect(lines).toContain("bug report");
+  });
+
+  it("claims a prior marker comment authored by the login its token writes as", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {},
+      answer: COMMENT_ANSWER,
+      comments: [
+        {
+          login: "action-agents[bot]",
+          body: "<!-- action-agents:triage:0badcafe --> earlier classification",
+        },
+      ],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes.map((write) => write.op)).toEqual(["updateComment"]);
+  });
+
+  it("refuses a foreign bot's marker comment even when it carries this action's marker", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {},
+      answer: COMMENT_ANSWER,
+      comments: [
+        {
+          login: "docs-bot[bot]",
+          body: "<!-- action-agents:triage:0badcafe --> not ours",
+        },
+      ],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    // Created fresh; the foreign-authored comment stands untouched.
+    expect(world.forge.writes.map((write) => write.op)).toEqual(["createComment"]);
+  });
+
+  it("falls back to github-actions[bot] when the identity read fails", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {},
+      answer: COMMENT_ANSWER,
+      whoamiError: new Error("the token's identity read failed"),
+      comments: [
+        {
+          login: "github-actions[bot]",
+          body: "<!-- action-agents:triage:0badcafe --> earlier classification",
+        },
+      ],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    // The fallback login is the identity the prior comment carries, so the
+    // upsert still claims it instead of duplicating.
+    expect(world.forge.writes.map((write) => write.op)).toEqual(["updateComment"]);
   });
 });
 

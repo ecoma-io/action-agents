@@ -33,7 +33,6 @@ import { createHttpClient, HttpError } from "./http.mjs";
  * @property {number} [timeoutMs]
  * @property {number} [maxAttempts]
  * @property {number} [retryDelayMs]
- * @property {() => string} [getActor] Function to get the current actor (default: reads GITHUB_ACTOR env var)
  */
 
 /**
@@ -212,17 +211,19 @@ export function createForge(config) {
   const root = `/repos/${config.owner}/${config.repo}`;
 
   return {
-    /** The login the token writes as — the marker upsert finds its own comments by it. */
+    /**
+     * The login the token writes as — the marker upsert finds its own
+     * comments by it. `GET /user` answers with the token's authenticated
+     * principal: `github-actions[bot]` under the workflow's GITHUB_TOKEN,
+     * the app's bot login under an App installation token, the user under a
+     * PAT — the same identity that authors whatever the token writes.
+     */
     async whoami() {
-      // Use GITHUB_ACTOR environment variable instead of calling /user API
-      // This avoids permission issues with pull_request events from forks
-      const getActor = config.getActor ?? (() => process.env.GITHUB_ACTOR ?? "github-actions[bot]");
-      const login = getActor();
+      const operation = "reading the token's identity";
+      const record = asRecord(await call(operation, () => http.request("/user")));
+      const login = record?.["login"];
       if (typeof login !== "string" || login === "") {
-        throw new ForgeError(
-          "reading the token's identity",
-          new Error("GITHUB_ACTOR is not set or empty"),
-        );
+        throw new ForgeError(operation, new Error("the response names no login"));
       }
       return { login };
     },

@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { markerLine, parseMarker, upsertComment } from "./comment.mjs";
+import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "./comment.mjs";
 
 /** @typedef {import("./forge.mjs").CommentEntry} CommentEntry */
 
@@ -281,5 +281,45 @@ describe("the newer-head rule", () => {
     });
 
     expect(outcome.outcome).toBe("updated");
+  });
+});
+
+describe("resolveOwnLogins", () => {
+  it("resolves the identity the token writes as", async () => {
+    const ownLogins = await resolveOwnLogins(
+      { whoami: async () => ({ login: "docs-bot[bot]" }) },
+      () => undefined,
+    );
+    expect(ownLogins).toEqual(["docs-bot[bot]"]);
+  });
+
+  it("falls back to the workflow-token bot and says so when the read fails", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const ownLogins = await resolveOwnLogins(
+      {
+        whoami: async () => {
+          throw new Error("502 behind a proxy");
+        },
+      },
+      (message) => logged.push(message),
+    );
+    expect(ownLogins).toEqual(["github-actions[bot]"]);
+    expect(logged.some((line) => line.includes("assuming github-actions[bot]"))).toBe(true);
+  });
+
+  it("hands the resolution straight to the upsert: a prior comment by the resolved identity is claimed", async () => {
+    const forge = { whoami: async () => ({ login: "docs-bot[bot]" }) };
+    const ownLogins = await resolveOwnLogins(forge, () => undefined);
+    const prior = comment({
+      id: 9,
+      body: `${markerLine("triage", "e2e00009")} ours under an App token`,
+      user: { login: "docs-bot[bot]" },
+    });
+    const api = store([prior]);
+
+    const outcome = await upsertComment({ ...baseOptions(api), ownLogins });
+
+    expect(outcome).toEqual({ outcome: "updated", id: 9 });
   });
 });

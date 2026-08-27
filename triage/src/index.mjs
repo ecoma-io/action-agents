@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 import { readSharedInputs } from "#core/inputs.mjs";
 import { createChat } from "#core/chat.mjs";
 import { createForge } from "#core/forge.mjs";
-import { upsertComment } from "#core/comment.mjs";
+import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import {
@@ -176,11 +176,15 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       info(body("<!-- action-agents:triage:dry-run -->"));
       return;
     }
+    // The identity read sits behind every dry-run and label-sheet gate: paid
+    // only by a run about to write a comment.
+    const ownLogins = await resolveOwnLogins(io.forge, info);
     const outcome = await upsertComment({
       store: io.forge,
       action: ACTION,
       issueNumber: thread.number,
       buildBody: body,
+      ownLogins,
       startedAt: io.now(),
       log: info,
     });

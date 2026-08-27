@@ -12,7 +12,7 @@
  */
 
 import { createWorkspace } from "#core/workspace.mjs";
-import { markerLine, parseMarker, upsertComment } from "#core/comment.mjs";
+import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
@@ -36,14 +36,12 @@ import { renderComment, renderNothingToReview } from "./render.mjs";
  * @property {(id: number, body: string) => Promise<void>} updateComment
  * @property {(path: string) => Promise<{ content: string } | null>} getContents reads the default branch
  * @property {(id: number) => Promise<void>} deleteComment
+ * @property {() => Promise<{ login: string }>} whoami the token's writing identity
  */
 
 /** The chat seam is the whole client; its shape is the protocol's. */
 
 export const ACTION = "review";
-
-/** Logins this action's own comments carry under the workflow token. */
-const OWN_LOGINS = ["github-actions[bot]"];
 
 /**
  * @typedef {object} RunInputs the action's own knobs, already read and validated
@@ -218,13 +216,16 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     io.info(`review: dry run — the comment that would have been published:\n${body}`);
     return { outcome: "dry-run", reason: "dry run: nothing written" };
   }
+  // The identity read sits behind every skip and dry-run gate: paid only by
+  // a run about to write.
+  const ownLogins = await resolveOwnLogins(io.forge, (message) => io.info(`review: ${message}`));
 
   const upsert = await upsertComment({
     store: io.forge,
     action: ACTION,
     issueNumber: pullRequestNumber,
     buildBody: (marker) => `${marker}\n${body}`,
-    ownLogins: OWN_LOGINS,
+    ownLogins,
     head: headSha,
     startedAt,
   });
@@ -253,13 +254,16 @@ async function nothingToReview({ pullRequestNumber, headSha, io, dryRun, started
       reason: `#${String(pullRequestNumber)} moved while it was being reviewed — nothing written`,
     };
   }
+  // Same gate as the write below: the identity read is paid only when a
+  // marker comment may actually be claimed.
+  const ownLogins = await resolveOwnLogins(io.forge, (message) => io.info(`review: ${message}`));
   const comments = await io.forge.listComments(pullRequestNumber);
   for (const comment of [...comments].sort((a, b) => b.id - a.id)) {
     const marker = parseMarker(comment.body);
     if (
       marker?.action === ACTION &&
       comment.user?.login !== undefined &&
-      OWN_LOGINS.includes(comment.user.login)
+      ownLogins.includes(comment.user.login)
     ) {
       const body = `${markerLine(ACTION, marker.id ?? "", headSha)}\n${renderNothingToReview(headSha)}`;
       if (dryRun) {
@@ -271,7 +275,7 @@ async function nothingToReview({ pullRequestNumber, headSha, io, dryRun, started
         action: ACTION,
         issueNumber: pullRequestNumber,
         buildBody: () => body,
-        ownLogins: OWN_LOGINS,
+        ownLogins,
         head: headSha,
         startedAt,
       });
