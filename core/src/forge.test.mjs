@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BranchMovedError,
   ForgeError,
   PastFileCeilingError,
   TruncatedTreeError,
@@ -605,7 +606,36 @@ describe("write operations", () => {
     );
   });
 
-  it("creates an absent branch through POST, and refuses if it appears mid-run", async () => {
+  it("refuses with BranchMovedError when the branch appears under the run", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    let reads = 0;
+    const client = forge(
+      "o",
+      "r",
+      {
+        "GET /repos/o/r/git/ref/heads/harmonise%2Fen": () => {
+          reads += 1;
+          return reads === 1
+            ? new Response("not found", { status: 404 })
+            : json({ object: { sha: "f".repeat(40) } })();
+        },
+      },
+      recorder,
+    );
+
+    // The run's first read: absent. By update time the branch exists.
+    await client.getRef("harmonise/en").catch(() => undefined);
+    await expect(client.upsertBranch("harmonise/en", "newsha", null)).rejects.toThrow(
+      BranchMovedError,
+    );
+    // Refused, never overwritten: no PATCH moving the winner's tip, no create either.
+    expect(
+      recorder.calls?.filter((call) => call.method === "PATCH" || call.method === "POST"),
+    ).toHaveLength(0);
+  });
+
+  it("creates an absent branch through POST when the run first read it absent", async () => {
     /** @type {{ calls?: RecordedCall[] }} */
     const recorder = {};
     const absent = forge(

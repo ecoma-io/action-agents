@@ -688,11 +688,10 @@ export function createForge(config) {
         throw cause;
       });
 
-      if (current !== null && expectedCurrentSha !== null && current.sha !== expectedCurrentSha) {
-        throw new BranchMovedError(branch, expectedCurrentSha, current.sha);
-      }
-      if (current === null && expectedCurrentSha !== null) {
-        throw new BranchMovedError(branch, expectedCurrentSha, "(absent)");
+      const found = current === null ? "(absent)" : current.sha;
+      const expected = expectedCurrentSha ?? "(absent)";
+      if (found !== expected) {
+        throw new BranchMovedError(branch, expected, found);
       }
 
       if (current === null) {
