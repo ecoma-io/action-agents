@@ -338,7 +338,7 @@ export function createForge(config) {
       const suffix = options.ref === undefined ? "" : `?ref=${encodeURIComponent(options.ref)}`;
       let response;
       try {
-        response = await http.request(`${root}/contents/${path}${suffix}`);
+        response = await http.request(`${root}/contents/${encodeURIComponent(path)}${suffix}`);
       } catch (cause) {
         if (cause instanceof HttpError && cause.status === 404) return null;
         throw new ForgeError(operation, cause instanceof Error ? cause : new Error(String(cause)));
