@@ -107,7 +107,12 @@ export async function run(inputs, context, io = {}) {
     io: {
       forge:
         io.forge ??
-        createForge({ owner: context.owner, repo: context.repo, token: inputs.githubToken }),
+        createForge({
+          owner: context.owner,
+          repo: context.repo,
+          token: inputs.githubToken,
+          apiUrl: context.apiUrl,
+        }),
       chat: io.chat ?? createChat({ apiUrl: inputs.apiUrl, apiKey: inputs.apiKey }),
       now: io.now ?? (() => Date.now()),
       info: io.info ?? ((message) => info(message)),

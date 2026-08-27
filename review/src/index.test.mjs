@@ -188,6 +188,56 @@ describe("run over injected io", () => {
   });
 });
 
+describe("run over the real forge", () => {
+  it("sends the GitHub API calls to the runner's GITHUB_API_URL, not api.github.com", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {string[]} */
+    const requested = [];
+    const env = runnerEnv({ extra: { GITHUB_API_URL: "https://ghe.example.com/api/v3" } });
+    vi.stubGlobal(
+      "fetch",
+      /** @type {typeof globalThis.fetch} */ (
+        /** @param {string | URL | Request} url */
+        async (url) => {
+          requested.push(String(url));
+          // Draft snapshot: the cheapest honest end of the orchestration.
+          return new Response(
+            JSON.stringify({
+              number: 9,
+              state: "open",
+              draft: true,
+              merged: false,
+              title: "",
+              body: "",
+              head: { ref: "x", sha: "a".repeat(40) },
+              base: { ref: "main", sha: "b".repeat(40) },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+      ),
+    );
+    try {
+      await run(readInputs(env), readContext(env), {
+        chat: {
+          complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
+        },
+        now: () => 0,
+        info: () => undefined,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+    // One call is enough to know where the forge lives; the loop proves every
+    // call, not just the first, stayed on the runner's host.
+    expect(requested.length).toBeGreaterThan(0);
+    for (const url of requested) {
+      expect(url.startsWith("https://ghe.example.com/api/v3/")).toBe(true);
+    }
+  });
+});
+
 describe("the action constant", () => {
   it("is review — the marker namespace everything downstream assumes", () => {
     expect(ACTION).toBe("review");
