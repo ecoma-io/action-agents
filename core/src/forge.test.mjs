@@ -81,51 +81,30 @@ describe("nextLink", () => {
 });
 
 describe("whoami", () => {
-  it("returns the GITHUB_ACTOR environment variable value", async () => {
-    const actor = "action-agents[bot]";
-    const client = createForge({
-      owner: "o",
-      repo: "r",
-      token: "ghs_x",
-      fetchImpl: routed({}),
-      getActor: () => actor,
-      ...FAST,
-    });
-    await expect(client.whoami()).resolves.toEqual({ login: actor });
+  it("reads the login the token writes as from GET /user", async () => {
+    const client = forge("o", "r", { "GET /user": json({ login: "docs-bot[bot]" }) });
+    await expect(client.whoami()).resolves.toEqual({ login: "docs-bot[bot]" });
   });
 
-  it("uses default GITHUB_ACTOR when getActor is not provided", async () => {
+  it("resolves github-actions[bot] under GITHUB_TOKEN semantics — GITHUB_ACTOR is never consulted", async () => {
     const originalActor = process.env.GITHUB_ACTOR;
-    process.env.GITHUB_ACTOR = "github-actions[bot]";
+    process.env.GITHUB_ACTOR = "whoever-triggered-the-run";
     try {
-      const client = forge("o", "r", {});
+      const client = forge("o", "r", { "GET /user": json({ login: "github-actions[bot]" }) });
       await expect(client.whoami()).resolves.toEqual({ login: "github-actions[bot]" });
     } finally {
       process.env.GITHUB_ACTOR = originalActor;
     }
   });
 
-  it("refuses an empty actor", async () => {
-    const client = createForge({
-      owner: "o",
-      repo: "r",
-      token: "ghs_x",
-      fetchImpl: routed({}),
-      getActor: () => "",
-      ...FAST,
-    });
+  it("names the operation when /user fails", async () => {
+    const client = forge("o", "r", { "GET /user": () => new Response("boom", { status: 500 }) });
     await expect(client.whoami()).rejects.toThrow(ForgeError);
   });
 
-  it("falls back to default when GITHUB_ACTOR is not set", async () => {
-    const originalActor = process.env.GITHUB_ACTOR;
-    delete process.env.GITHUB_ACTOR;
-    try {
-      const client = forge("o", "r", {});
-      await expect(client.whoami()).resolves.toEqual({ login: "github-actions[bot]" });
-    } finally {
-      process.env.GITHUB_ACTOR = originalActor;
-    }
+  it("refuses a response that names no login", async () => {
+    const client = forge("o", "r", { "GET /user": json({ type: "Bot" }) });
+    await expect(client.whoami()).rejects.toThrow(ForgeError);
   });
 });
 

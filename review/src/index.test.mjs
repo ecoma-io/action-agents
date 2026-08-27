@@ -162,6 +162,11 @@ describe("run over injected io", () => {
           async getContents() {
             return null;
           },
+          // The draft path returns before any write, so it must never pay
+          // the identity read; this fires if that gating regresses.
+          async whoami() {
+            throw new Error("the draft path never reads the token's identity");
+          },
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),

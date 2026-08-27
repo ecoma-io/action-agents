@@ -46,7 +46,7 @@ function snapshot(over = {}) {
 /**
  * A forge stub covering the reads a full happy-path run makes.
  *
- * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot }} [options]
+ * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot, whoamiLogin?: string, whoamiError?: Error }} [options]
  * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }> } }}
  */
 function forgeStub(options = {}) {
@@ -96,6 +96,10 @@ function forgeStub(options = {}) {
     },
     async listComments() {
       return [];
+    },
+    async whoami() {
+      if (options.whoamiError) throw options.whoamiError;
+      return { login: options.whoamiLogin ?? "github-actions[bot]" };
     },
     /** @param {number} _number @param {string} body */
     async createComment(_number, body) {
@@ -354,5 +358,58 @@ describe("failure posture", () => {
     });
     expect(asks).toBe(2);
     expect(result.outcome).toBe("published");
+  });
+});
+
+describe("comment identity", () => {
+  it("claims its own prior comment under an App-token identity", async () => {
+    const forge = forgeStub({ whoamiLogin: "docs-bot[bot]" });
+    forge.listComments = async () => [
+      {
+        id: 55,
+        body: `<!-- action-agents:review:0badcafe:head=${HEAD} -->old findings`,
+        user: { login: "docs-bot[bot]" },
+        created_at: "",
+        updated_at: "",
+      },
+    ];
+
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+
+    expect(result.outcome).toBe("published");
+    expect(forge.calls.upserts[0]?.id).toBe(55);
+  });
+
+  it("falls back to github-actions[bot] when the identity read fails and leaves the foreign marker alone", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub({ whoamiError: new Error("the token's identity read failed") });
+    forge.listComments = async () => [
+      {
+        id: 55,
+        body: `<!-- action-agents:review:0badcafe:head=${HEAD} -->old findings`,
+        user: { login: "docs-bot[bot]" },
+        created_at: "",
+        updated_at: "",
+      },
+    ];
+
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat: chatStub(), now: () => 1_000, info: (m) => logged.push(m) },
+    });
+
+    expect(result.outcome).toBe("published");
+    // Created fresh — the docs-bot comment is foreign under the fallback
+    // identity, and the upsert never claims what it did not author.
+    expect(forge.calls.upserts[0]?.id).toBeUndefined();
+    expect(logged.some((line) => line.includes("assuming github-actions[bot]"))).toBe(true);
   });
 });

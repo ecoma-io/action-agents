@@ -62,8 +62,9 @@ import { randomBytes } from "node:crypto";
 const MARKER =
   /<!--\s*action-agents:([a-z0-9-]+):([0-9a-f-]{6,64})(?::head=([0-9a-f]{7,40}))?\s*-->/g;
 
-/** The logins this repo's actions write under when nothing exotic is configured. */
-const DEFAULT_OWN_LOGINS = ["github-actions[bot]"];
+/** The login this repo's actions write under when nothing exotic is configured. */
+const DEFAULT_OWN_LOGIN = "github-actions[bot]";
+const DEFAULT_OWN_LOGINS = [DEFAULT_OWN_LOGIN];
 
 /**
  * @param {string} action
@@ -102,7 +103,7 @@ function defaultNewId() {
  * @property {string} action the acting action's name, the marker's namespace
  * @property {number} issueNumber the thread — an issue number or a pull request's
  * @property {(marker: string) => string} buildBody the action's comment, around the marker it is handed
- * @property {string[]} [ownLogins] the logins this action's own comments carry — defaults to the workflow-token bot; a caller writing under anything else must say so here
+ * @property {string[]} [ownLogins] the logins this action's own comments carry — defaults to the workflow-token bot; the actions resolve theirs from the token with {@linkcode resolveOwnLogins}, and a caller with other plans says so here
  * @property {string} [head] the commit the comment records, when the action records one
  * @property {number} [startedAt] epoch milliseconds, for the newer-head rule
  * @property {() => string} [newId]
@@ -187,4 +188,31 @@ export async function upsertComment(options) {
     options.buildBody(markerLine(options.action, marker?.id ?? "", options.head)),
   );
   return { outcome: "updated", id: winner.id };
+}
+
+/**
+ * Resolves the logins a run's own comments carry, from the identity the
+ * workflow's token actually writes as — `github-actions[bot]` under a
+ * GITHUB_TOKEN, the app's bot login under an App token, the token's user
+ * under a PAT — read from the API rather than assumed, so the upsert keeps
+ * exactly one of its own whatever token the workflow chose. When the read
+ * fails the default bot login stands in: exact under GITHUB_TOKEN, and under
+ * anything else it costs one duplicate comment that the next healthy run's
+ * upsert claims and collapses.
+ *
+ * @param {{ whoami: () => Promise<{ login: string }> }} forge
+ * @param {(message: string) => void} log
+ * @returns {Promise<string[]>}
+ */
+export async function resolveOwnLogins(forge, log) {
+  try {
+    const { login } = await forge.whoami();
+    return [login];
+  } catch (cause) {
+    log(
+      `could not read the token's writing identity ` +
+        `(${cause instanceof Error ? cause.message : String(cause)}) — assuming ${DEFAULT_OWN_LOGIN}`,
+    );
+    return [...DEFAULT_OWN_LOGINS];
+  }
 }
