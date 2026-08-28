@@ -172,6 +172,37 @@ describe("retries", () => {
     expect(error.message).toMatch(/HTTP 503/);
   });
 
+  it("cancels the body of a retryable answer it abandons on the retry path", async () => {
+    let cancelled = false;
+    const http = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: scripted(
+        [
+          () => {
+            const response = status(503, "busy")();
+            // Shadow the stream so the test can observe the client's cancel.
+            Object.defineProperty(response, "body", {
+              value: {
+                cancel: () => {
+                  cancelled = true;
+                  return Promise.resolve();
+                },
+              },
+            });
+            return response;
+          },
+          ok('"done"'),
+        ],
+        {},
+      ),
+      ...FAST,
+    });
+
+    await expect(http.request("/x")).resolves.toMatchObject({ status: 200, text: '"done"' });
+    // The refused stream was released before the retry, not left dangling.
+    expect(cancelled).toBe(true);
+  });
+
   it("does not retry a permanent status", async () => {
     /** @type {{ calls?: RecordedCall[] }} */
     const recorder = {};
