@@ -5,7 +5,7 @@ allowed to become. Written down because the alternative is re-deriving them in
 each pull request, and arriving somewhere slightly different every time.
 
 All three actions shipped do their work — `triage`, `review` and `harmonise`
-are released and pinnable from `v0.1` through `v0.3` — so this page describes
+are released and pinnable — so this page describes
 running code rather than intent. What it keeps doing is naming the shape that
 code is built to, and the constraints it is not allowed to escape on the way.
 
