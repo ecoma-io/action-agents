@@ -160,8 +160,6 @@ export async function runLoop({
       maxTurns,
       evidenceBytes: ledger.evidenceBytes,
       evidenceLimit: maxEvidenceBytes,
-      // Findings exist on the ledger only once the final answer lands.
-      findingsRecorded: 0,
       // Lanes are fixed by code before the loop starts.
       lanesAssigned: true,
       strictness,
@@ -179,6 +177,14 @@ export async function runLoop({
     if (estimateTokens(transcript) > 0.8 * contextWindow && transcript.length > 2) {
       transcript = [
         ...transcript.slice(0, 2),
+        // The model's own analysis prose is the one thing no ledger
+        // re-derives, so it is kept verbatim. Its toolCalls payload is
+        // stripped: the results those calls produced are not carried
+        // across, and a tool call without its answers breaks the wire.
+        ...transcript
+          .slice(2)
+          .filter((m) => m.role === "assistant" && (m.content ?? "") !== "")
+          .map(({ role, content }) => ({ role, content: /** @type {string} */ (content) })),
         { role: "user", content: renderState(ledger, phase) },
       ];
       log.push(

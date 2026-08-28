@@ -431,18 +431,20 @@ One turn is one model response, and the accounting is exact:
 
 The transcript is compacted before `context-window` is reached — when the
 token estimate crosses 80% of the window — deterministically, in code: the
-system message and the original task message with its diff evidence are kept;
-every later exchange is replaced by one state message holding the inventory a
-reviewer would need to continue — turns used, tools called, files read, the
-deletions already inspected via their diff sections, search hits with their
-line numbers, tool errors, and the findings so far
-verbatim. Raw tool bodies and the model's own prose along the way are
-discarded wholesale; findings survive because at that point they are
-code-validated structured data, not trusted prose. Compaction may run before
-any request, including a finalisation or re-ask. It is code, not a model
-call: a summary a model wrote is never allowed to become context the loop
-trusts, which is why the model's prose is discarded rather than summarised by
-it.
+system message and the original task message with its diff evidence are
+kept; the model's own analysis messages are kept verbatim, with their tool
+calls stripped; and every other later exchange is replaced by one state
+message holding the inventory a reviewer would need to continue — turns
+used, tools called, files read, the deletions already inspected via their
+diff sections, search hits with their line numbers, and tool errors. The
+stripping is not a nicety: a kept tool call without its kept answer is a
+malformed request, so the calls go and their results enter context only as
+the state inventory. Findings so far are not carried as structured data —
+no findings ledger exists mid-run — so what survives of them is the model's
+own prose, kept verbatim rather than summarised. Raw tool bodies are
+discarded. Compaction may run before any request, including a finalisation
+or re-ask. It is code, not a model call: a summary a model wrote is never
+allowed to become context the loop trusts.
 
 The estimator feeding both the 80% trigger and the initial prompt budget is
 fixed so two implementations agree: per UTF-8 byte ÷ 4, except that

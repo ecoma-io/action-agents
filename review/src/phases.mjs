@@ -65,7 +65,6 @@ export class PhaseError extends Error {
  * @property {number} maxTurns the reading-turn ceiling
  * @property {number} evidenceBytes cumulative evidence bytes charged
  * @property {number} evidenceLimit the cumulative-evidence ceiling
- * @property {number} findingsRecorded findings the ledger holds (the reading loop records none until the final answer lands)
  * @property {boolean} lanesAssigned whether code has fixed the attention lanes
  * @property {import("./config.mjs").Strictness} strictness the review policy; the conclude gate tightens at "high"
  */
@@ -262,17 +261,15 @@ function oriented(context) {
 }
 
 /**
- * Investigate ends when the expected set is fully read, or when findings are
- * on the ledger waiting to be verified against the code they cite.
+ * Investigate ends when the expected set is fully read. The reading ledger
+ * holds no findings to short-circuit it — findings exist only once the
+ * final answer lands, and verification is reachable only through coverage.
  *
  * @param {PhaseContext} context
  * @returns {boolean}
  */
 function investigated(context) {
-  return (
-    context.coverage.total > 0 &&
-    (context.coverage.uncovered.length === 0 || context.findingsRecorded > 0)
-  );
+  return context.coverage.total > 0 && context.coverage.uncovered.length === 0;
 }
 
 /**
@@ -312,7 +309,6 @@ function assertContext(context) {
     "maxTurns",
     "evidenceBytes",
     "evidenceLimit",
-    "findingsRecorded",
   ])) {
     if (!isCount(context[field])) {
       throw new PhaseError(`the phase context field "${field}" is not a non-negative integer`);
