@@ -131,6 +131,39 @@ describe("renderComment", () => {
     expect(body).not.toContain("@maintainer"); // mention broken by ZWNJ
     expect(body).toContain("…[truncated]");
   });
+
+  it("renders the examination count when a non-empty coverage report is supplied", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "medium",
+      coverage: { covered: ["src/a.mjs"], uncovered: ["src/b.mjs"], total: 2 },
+    });
+    expect(body).toContain("Changed files examined: 1/2.");
+  });
+
+  it("omits the examination line when coverage is absent or its set is empty", () => {
+    const empty = renderComment({
+      status: "Partial",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "medium",
+      partialReason: "the bound fired",
+      coverage: { covered: [], uncovered: [], total: 0 },
+    });
+    const absent = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "medium",
+    });
+    expect(empty).not.toContain("Changed files examined");
+    expect(absent).not.toContain("Changed files examined");
+  });
 });
 
 describe("boundary bodies", () => {

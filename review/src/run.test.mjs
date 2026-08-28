@@ -133,6 +133,29 @@ function chatStub(finalAnswer) {
 }
 
 /**
+ * A chat stub that can run reading turns before the final answer — the
+ * shape a review that actually reads takes on the wire.
+ *
+ * @param {Array<{ content: string, toolCalls?: { id: string, name: string, arguments: string }[] }>} script
+ * @returns {import("#core/chat.mjs").Chat}
+ */
+function readingChat(script) {
+  let cursor = 0;
+  return {
+    async complete() {
+      const next = script[Math.min(cursor, script.length - 1)];
+      cursor++;
+      if (next === undefined || cursor > script.length) throw new Error("script exhausted");
+      return {
+        content: next.content,
+        toolCalls: next.toolCalls ?? [],
+        finishReason: next.toolCalls !== undefined ? "tool_calls" : "stop",
+      };
+    },
+  };
+}
+
+/**
  * @param {import("./run.mjs").ReviewForge} forge
  * @param {import("#core/chat.mjs").Chat} [chat]
  * @returns {import("./run.mjs").Io}
@@ -490,5 +513,110 @@ describe("comment identity", () => {
     // identity, and the upsert never claims what it did not author.
     expect(forge.calls.upserts[0]?.id).toBeUndefined();
     expect(logged.some((line) => line.includes("assuming github-actions[bot]"))).toBe(true);
+  });
+});
+
+describe("coverage accounting and strict partial reviews", () => {
+  const TWO_FILES = [
+    {
+      filename: "src/a.mjs",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -1 +1,2 @@\n+x",
+    },
+    {
+      filename: "src/b.mjs",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -1 +1,2 @@\n+y",
+    },
+  ];
+
+  it("at high strictness, a review that read nothing publishes as partial naming the gap", async () => {
+    const forge = forgeStub({ files: TWO_FILES, config: '{ strictness: "high" }' });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("2 of 2 changed files were never read: src/a.mjs, src/b.mjs.");
+    expect(body).toContain("Changed files examined: 0/2.");
+  });
+
+  it("at the standard arm, zero coverage still completes — the count line rides along", async () => {
+    const forge = forgeStub({ files: TWO_FILES });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("**Review** — Complete");
+    expect(body).not.toContain("partial");
+    expect(body).toContain("Changed files examined: 0/2.");
+  });
+
+  it("at high strictness, reading both expected files concludes complete at 2/2", async () => {
+    const forge = forgeStub({ files: TWO_FILES, config: '{ strictness: "high" }' });
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [
+          { id: "c1", name: "read_file", arguments: '{"path":"src/a.mjs"}' },
+          { id: "c2", name: "read_file", arguments: '{"path":"src/b.mjs"}' },
+        ],
+      },
+      { content: '{"findings":[],"summary":"read everything"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("**Review** — Complete");
+    expect(body).toContain("Changed files examined: 2/2.");
+  });
+
+  it("a summary that claims completeness cannot outvote the ledger", async () => {
+    const forge = forgeStub({ files: TWO_FILES, config: '{ strictness: "high" }' });
+    const chat = chatStub('{"findings":[],"summary":"every changed file was examined in full"}');
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("never read");
+  });
+
+  it("a derivation that cannot account for the whole universe refuses the run", async () => {
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "lib/gone.mjs",
+          status: "removed",
+          additions: 0,
+          deletions: 1,
+          patch: "@@ -1,1 +1,0 @@\n-x\n--- a/ghost.mjs",
+        },
+      ],
+    });
+    await expect(
+      reviewPullRequest({ inputs: INPUTS, context: CONTEXT, pullRequestNumber: 7, io: io(forge) }),
+    ).rejects.toThrow(/cannot account for the whole universe/);
   });
 });

@@ -16,6 +16,7 @@ import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/
 
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
+import { canConcludeReview, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
 import { createTools } from "./tools.mjs";
 import { buildPrompt } from "./prompt.mjs";
 import { runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
@@ -119,6 +120,20 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     return nothingToReview({ pullRequestNumber, headSha, io, dryRun: inputs.dryRun, startedAt });
   }
 
+  // ── Coverage: the expected set, derived in code from the diff ───────────
+  const expectedPaths = parseDiffPaths(unifiedDiff(inventory.reviewed));
+  const reviewedNames = new Set(inventory.reviewed.map((file) => file.filename));
+  if (
+    expectedPaths.length !== reviewedNames.size ||
+    !expectedPaths.every((path) => reviewedNames.has(path))
+  ) {
+    throw new Error(
+      `coverage accounting derived ${String(expectedPaths.length)} of ` +
+        `${String(reviewedNames.size)} expected path(s) from the diff — a derivation that ` +
+        `cannot account for the whole universe is refused, not under-counted`,
+    );
+  }
+
   // ── The conversation's raw materials ────────────────────────────────────
   const activeRules = selectActiveRules(config.rules, inventory.reviewed);
   /** @type {Map<string, string>} */
@@ -164,8 +179,12 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     messages,
     maxTurns: inputs.maxTurns,
     contextWindow: inputs.contextWindow,
+    expectedPaths,
   });
   for (const line of outcome.log) io.info(`review: ${line}`);
+  io.info(
+    `review: coverage ${outcome.coverage.covered.length}/${String(outcome.coverage.total)} expected file(s) read`,
+  );
 
   let parsed = parseAnswer(outcome.candidate);
   if (!parsed.ok && outcome.naturalStopped) {
@@ -194,13 +213,13 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   // leave the published set here — each drop logged, concerns untouchable.
   const findings = applyStrictness(validated.findings, config.strictness, (line) => io.info(line));
 
-  const status =
-    outcome.bound === undefined
-      ? { label: /** @type {const} */ ("Complete") }
-      : { label: /** @type {const} */ ("Partial"), reason: partialReason(outcome.bound) };
+  // The concluding state is code's verdict: a bound or a coverage gap names
+  // the partial reason; the model's summary text is never consulted.
+  const status = concludingStatus(outcome, config.strictness);
   const body = renderComment({
     status: status.label,
     headSha,
+    coverage: outcome.coverage,
     summary: validated.summary,
     findings,
     strictness: config.strictness,
@@ -336,4 +355,39 @@ function partialReason(bound) {
     case "evidence":
       return "the evidence budget was reached before the reviewer finished reading.";
   }
+}
+
+/**
+ * The concluding state, decided by code: a fired bound is Partial with the
+ * bound named; under the strict arm (`high`), unread expected files are
+ * Partial with the gap named; otherwise Complete. The coverage verdict is
+ * `canConcludeReview`'s — the model's summary text is never consulted.
+ *
+ * @param {import("./loop.mjs").LoopOutcome} outcome
+ * @param {import("./config.mjs").Strictness} strictness
+ * @returns {{ label: "Complete" | "Partial", reason?: string }}
+ */
+function concludingStatus(outcome, strictness) {
+  if (outcome.bound !== undefined) {
+    return { label: "Partial", reason: partialReason(outcome.bound) };
+  }
+  if (!canConcludeReview(outcome.coverage, strictness)) {
+    return { label: "Partial", reason: coverageReason(outcome.coverage) };
+  }
+  return { label: "Complete" };
+}
+
+/**
+ * The coverage gap becomes the sentence a partial review leads with, in
+ * the same voice as `partialReason`'s.
+ *
+ * @param {import("./coverage.mjs").CoverageReport} report
+ * @returns {string}
+ */
+function coverageReason(report) {
+  const files = report.total === 1 ? "file was" : "files were";
+  return (
+    `${String(report.uncovered.length)} of ${String(report.total)} changed ${files} never ` +
+    `read: ${report.uncovered.join(", ")}.`
+  );
 }

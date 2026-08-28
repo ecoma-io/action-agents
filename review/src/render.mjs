@@ -27,13 +27,22 @@ export const MESSAGE_CHARS = 1000;
  * @property {Finding[]} findings already validated, ordered, capped
  * @property {import("./config.mjs").Strictness} strictness decides collapsing, never inclusion — filtering happened earlier
  * @property {string} [partialReason] required when status is Partial
+ * @property {import("./coverage.mjs").CoverageReport} [coverage] the deterministic read-coverage report; rendered as a count line when the expected set is non-empty
  */
 
 /**
  * @param {RenderInput} input
  * @returns {string}
  */
-export function renderComment({ status, headSha, summary, findings, strictness, partialReason }) {
+export function renderComment({
+  status,
+  headSha,
+  summary,
+  findings,
+  strictness,
+  partialReason,
+  coverage,
+}) {
   /** @type {string[]} */
   const lines = [];
   if (status === "Partial") {
@@ -44,6 +53,14 @@ export function renderComment({ status, headSha, summary, findings, strictness, 
   }
   lines.push(`**Review** — ${status}`, `Reviewed head \`${headSha}\``, "");
   lines.push(sanitised(summary === "" ? "(no summary)" : summary, SUMMARY_CHARS));
+
+  if (coverage !== undefined && coverage.total > 0) {
+    // Numbers only — no paths, so nothing to defang or sanitise.
+    lines.push(
+      "",
+      `Changed files examined: ${String(coverage.covered.length)}/${String(coverage.total)}.`,
+    );
+  }
 
   if (findings.length === 0 && status === "Complete") {
     // A clean re-review must clear whatever an earlier push left behind.

@@ -374,7 +374,9 @@ concerns and reports only what it is confident matters; `medium` states the
 default — a normal, thorough review that anchors every finding; `high` is
 strict and evidence-driven — every finding verified against concrete code
 before reporting, no unconfirmed hypotheses, reading every changed file stated
-as the expectation (coverage enforcement is a later mechanism, not prose).
+as the expectation — and the expectation is enforced in code, not promised in
+prose: at `high`, a review that has not read every changed file cannot
+conclude complete (see [Coverage accounting](#coverage-accounting)).
 `strategy: "adversarial"` appends a second paragraph at any strictness:
 candidate findings are hypotheses pending verification, counterexamples are
 actively sought, and a separate verification stage follows. The paragraphs
@@ -401,7 +403,8 @@ One turn is one model response, and the accounting is exact:
   ceiling fires first;
 - a response carrying no tool calls while reading turns remain is a natural
   stop: its content is the final-answer candidate, and the review will be
-  complete if the candidate validates;
+  complete if the candidate validates and — at strictness `high` — the
+  coverage ledger shows every changed file read;
 - a structurally invalid candidate on the natural-stop path gets **one**
   re-ask — same transcript, corrective instruction, tools withheld, logged.
   The re-ask is not a reading turn and cannot itself call tools; failing it is
@@ -427,6 +430,42 @@ fixed so two implementations agree: per UTF-8 byte ÷ 4, except that
 codepoints above U+2E80 count at byte ÷ 1.5 instead of ÷ 4 — crude on purpose,
 biased against underestimating CJK-heavy text, and identical everywhere it
 runs.
+
+## Coverage accounting
+
+What the reviewer read is ledgered in code, and what it was supposed to read
+is derived in code; the two meet in a deterministic verdict that no model
+text can move. The expected set comes from the same files list that builds
+the inventory: each reviewed file is rendered as its canonical git-style diff
+section — rename and copy extended headers included, `/dev/null` on the empty
+side of an addition or deletion, quoted and C-escaped names resolved — and
+that text is parsed back to paths by one shared parser. The parse must
+reproduce the reviewed universe exactly: a derivation that names a path the
+inventory does not hold, or misses one the inventory does, is a broken
+derivation, and the run is refused, red, before any model call. A deleted
+file is part of the expectation — a change that removes a path expects that
+path to have been looked at as much as one that edits it.
+
+The read record is the ledger's `read_file` calls, each recorded path
+normalised to the diff's canonical spelling, so `./src/a.mjs` and `src/a.mjs`
+are one file. `coverageReport(expected, read)` partitions the expected set
+into covered and uncovered; nothing the model wrote — summary, findings,
+self-assessment — enters the computation.
+
+The verdict is strictness's to set, and strictness is the maintainer's:
+
+- at `high`, the expectation is the whole diff. Any unread changed file ends
+  the review **PARTIAL**, the banner naming the gap ("N of M changed files
+  were never read: …") in the same voice and through the same code path as a
+  bound's reason. A summary claiming completeness changes nothing — the
+  ledger outvotes the prose;
+- at `low` and `medium`, coverage never blocks completion. The accounting
+  still runs, and the count line rides in the comment, so a maintainer can
+  see how much of the diff the reviewer actually opened.
+
+A bound and a coverage gap compose the way everything else here does: the
+bound ends the review partial as before, and the examination count in the
+comment tells the rest of the truth.
 
 ## The trust hierarchy
 
@@ -532,10 +571,10 @@ Every run ends in exactly one of three states:
   fully-validated answer. Publish: the marker comment is upserted with the
   findings — or, when there are none, with a literal "No findings.", so a
   clean re-review clears whatever an earlier push left behind.
-- **PARTIAL** — a bound ended the review honestly: `max-turns`, the tool-call
-  ceiling, the evidence ceiling, or a bounded-completion answer after such a
-  bound. Publish, with the partial status prominent at the top of the comment
-  and the bound that fired named.
+- **PARTIAL** — the review says so honestly: a bound ended it (`max-turns`,
+  the tool-call ceiling, the evidence ceiling), or, at strictness `high`, the
+  coverage ledger shows changed files that were never read. Publish, with the
+  partial status prominent at the top of the comment and the cause named.
 - **FAILED** — provider failure, invalid configuration, a pull request past
   the changed-file ceiling, a prompt past the initial budget, a broken
   conversation protocol, or a persistently malformed final answer — any
@@ -572,6 +611,8 @@ Reviewed head `414dd39a…`
 
 <summary line>
 
+Changed files examined: 2/2.
+
 ### Concerns (1)
 
 - `core/src/chat.mjs:42` — message…
@@ -586,8 +627,10 @@ At `medium` strictness the nits section renders inside a collapsible
 hidden. At `low` there is no nits section — the nits were already dropped by
 policy before rendering; at `high` there is no collapsing.
 
-The body carries the status, the reviewed head SHA, the summary and the
-findings — and nothing volatile: no timestamp (the comment interface shows
+The body carries the status, the reviewed head SHA, the summary, the changed-
+files examination count (rendered whenever the expected set is non-empty,
+whatever the strictness) and the findings — and nothing volatile: no
+timestamp (the comment interface shows
 when it was last updated), no run number, nothing that churns the comment
 without changing the review. Model-supplied text passes the sanitiser before
 rendering, so markers, HTML and mentions cannot be forged into the body.
