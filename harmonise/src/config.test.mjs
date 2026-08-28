@@ -239,4 +239,76 @@ describe("validateConfig", () => {
       /unknown pullRequest key 'body'/,
     );
   });
+
+  it("accepts an assets block and compiles its layouts in order", () => {
+    const validated = validateConfig(
+      config({ assets: { layouts: ["assets/{lang}/{base}.{ext}", "{dir}/{base}.{lang}.{ext}"] } }),
+    );
+
+    expect(validated.assets?.layouts.map((layout) => layout.template)).toEqual([
+      "assets/{lang}/{base}.{ext}",
+      "{dir}/{base}.{lang}.{ext}",
+    ]);
+    expect(
+      validated.assets?.layouts[0]?.render({ dir: "imgs", base: "dev", ext: "png", lang: "vi" }),
+    ).toBe("assets/vi/dev.png");
+  });
+
+  it("leaves assets undefined when the block is absent", () => {
+    expect(validateConfig(config({})).assets).toBeUndefined();
+  });
+
+  it("refuses an assets block that is not an object or holds unknown keys", () => {
+    expect(() => validateConfig(config({ assets: ["{lang}/{base}"] }))).toThrow(
+      /assets must be an object/,
+    );
+    expect(() => validateConfig(config({ assets: { layouts: [], quality: "high" } }))).toThrow(
+      /unknown assets key 'quality'/,
+    );
+  });
+
+  it("refuses layouts that are not an array of non-empty strings", () => {
+    expect(() => validateConfig(config({ assets: { layouts: "{lang}/{base}" } }))).toThrow(
+      /must be an array/,
+    );
+    expect(() => validateConfig(config({ assets: { layouts: [""] } }))).toThrow(
+      /non-empty template strings/,
+    );
+    // Runtime refusal of a non-string entry — the validator never trusts the JSON.
+    expect(() => validateConfig(config({ assets: { layouts: [7] } }))).toThrow(
+      /non-empty template strings/,
+    );
+  });
+
+  it("refuses duplicated layouts and more than 8 of them", () => {
+    expect(() =>
+      validateConfig(config({ assets: { layouts: ["{lang}/{base}", "{lang}/{base}"] } })),
+    ).toThrow(/names '\{lang\}\/\{base\}' twice/);
+    const nine = Array.from({ length: 9 }, (_, index) => `{lang}/{base}.{ext}${String(index)}`);
+    expect(() => validateConfig(config({ assets: { layouts: nine } }))).toThrow(/holds 9 layouts/);
+  });
+
+  it("refuses layout templates that misuse placeholders or escape the document's directory", () => {
+    const assets = (/** @type {string[]} */ layouts) => config({ assets: { layouts } });
+    expect(() => validateConfig(assets(["assets/{locale}/{base}.{ext}"]))).toThrow(
+      /unknown placeholder '\{locale\}'/,
+    );
+    expect(() => validateConfig(assets(["assets/{base}.{ext}"]))).toThrow(
+      /must contain \{lang\} exactly once/,
+    );
+    expect(() => validateConfig(assets(["{lang}.{lang}/{base}"]))).toThrow(
+      /must contain \{lang\} exactly once, got 2/,
+    );
+    expect(() => validateConfig(assets(["{lang}/{ext}"]))).toThrow(
+      /must contain \{base\} exactly once/,
+    );
+    expect(() => validateConfig(assets(["/assets/{lang}/{base}.{ext}"]))).toThrow(
+      /starts with '\/'/,
+    );
+    expect(() => validateConfig(assets(["C:{lang}/{base}.{ext}"]))).toThrow(/names a drive/);
+    expect(() => validateConfig(assets(["assets/../{lang}/{base}.{ext}"]))).toThrow(/with '\.\.'/);
+    expect(() => validateConfig(assets(["assets//{lang}/{base}.{ext}"]))).toThrow(
+      /empty path segment/,
+    );
+  });
 });

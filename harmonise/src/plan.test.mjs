@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildInventory } from "./inventory.mjs";
-import { parseLanguagePattern } from "./patterns.mjs";
+import { parseAssetLayout, parseLanguagePattern } from "./patterns.mjs";
 import { preparePair, sanitizeTranslationHtml, translatePair } from "./plan.mjs";
 
 describe("sanitizeTranslationHtml", () => {
@@ -320,6 +320,129 @@ describe("translatePair", () => {
     // translation with no link drift passes regardless.
     const prepared = prepare();
     const result = await translate(prepared, proposes(prepared.protectedText));
+    expect(result.outcome).toBe("proposal");
+  });
+});
+
+describe("preparePair asset layouts", () => {
+  /**
+   * A real inventory over a tiny tree, with the configured asset layouts
+   * compiled in — the same wiring a run uses.
+   *
+   * @param {string[]} paths
+   * @param {string[]} [layouts]
+   * @returns {import("./inventory.mjs").Inventory}
+   */
+  function inventoryFor(paths, layouts) {
+    return buildInventory({
+      entries: paths.map((path) => ({ path, type: "blob" })),
+      config: {
+        sourceLanguage: "en",
+        languages: {
+          en: parseLanguagePattern("manual/{document}.md"),
+          vi: parseLanguagePattern("manual/vi/{document}.md"),
+        },
+        ignore: [],
+        glossary: [],
+        instructions: { languages: {} },
+        ...(layouts === undefined
+          ? {}
+          : { assets: { layouts: layouts.map((t) => parseAssetLayout(t, "t")) } }),
+      },
+      documents: [],
+    });
+  }
+
+  const config = /** @type {import("./config.mjs").HarmoniseConfig} */ ({
+    sourceLanguage: "en",
+    languages: { vi: parseLanguagePattern("manual/vi/{document}.md") },
+    ignore: [],
+    glossary: [],
+    instructions: { languages: {} },
+    assets: { layouts: [parseAssetLayout("assets/{lang}/{dir}/{base}.{ext}", "t")] },
+  });
+
+  it("rewrites an image reference through a configured layout", () => {
+    // Only the layout's candidate exists on the branch; the built-in
+    // convention's does not, so the rewrite must land on the layout's file.
+    const prepared = preparePair({
+      slug: "dev",
+      lang: "vi",
+      sourcePath: "manual/dev.md",
+      target: { path: "manual/vi/dev.md", state: "missing" },
+      sourceText: "![d](imgs/diagram.png)\n",
+      inventory: inventoryFor(
+        ["manual/dev.md", "manual/assets/vi/imgs/diagram.png"],
+        ["assets/{lang}/{dir}/{base}.{ext}"],
+      ),
+      config,
+    });
+
+    expect(prepared.protectedText).toBe("![d](../assets/vi/imgs/diagram.png)\n");
+    expect(prepared.linksRewritten).toBe(1);
+  });
+
+  it("keeps the reference when no candidate exists on the branch", () => {
+    const prepared = preparePair({
+      slug: "dev",
+      lang: "vi",
+      sourcePath: "manual/dev.md",
+      target: { path: "manual/vi/dev.md", state: "missing" },
+      sourceText: "![d](imgs/diagram.png)\n",
+      inventory: inventoryFor(["manual/dev.md"], ["assets/{lang}/{dir}/{base}.{ext}"]),
+      config,
+    });
+
+    expect(prepared.protectedText).toBe("![d](imgs/diagram.png)\n");
+    expect(prepared.linksRewritten).toBe(0);
+  });
+
+  it("accepts an honest translation echoing a layout-rewritten reference", async () => {
+    // Validation judges the rewritten reference from the translation's
+    // directory and both sides must land on one identity — the proof that
+    // the validation-side resolver anchors where the rewrite spelled.
+    const prepared = preparePair({
+      slug: "dev",
+      lang: "vi",
+      sourcePath: "manual/dev.md",
+      target: { path: "manual/vi/dev.md", state: "existing" },
+      sourceText: "![d](imgs/diagram.png)\n",
+      inventory: inventoryFor(
+        ["manual/dev.md", "manual/vi/dev.md", "manual/assets/vi/imgs/diagram.png"],
+        ["assets/{lang}/{dir}/{base}.{ext}"],
+      ),
+      config,
+    });
+    expect(prepared.protectedText).toContain("../assets/vi/imgs/diagram.png");
+
+    const result = await translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: "old\n",
+      model: "gpt-x",
+      chat: {
+        async complete() {
+          return {
+            content: JSON.stringify({
+              drift: true,
+              summary: "kept in step",
+              content: prepared.protectedText,
+            }),
+            toolCalls: [],
+            finishReason: "stop",
+          };
+        },
+      },
+      evidence: /** @type {import("#core/untrusted.mjs").Evidence} */ ({
+        /** @param {string} label @param {string} content */
+        wrap(label, content) {
+          return `[${label}]\n${content}`;
+        },
+      }),
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+
     expect(result.outcome).toBe("proposal");
   });
 });
