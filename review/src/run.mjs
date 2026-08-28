@@ -35,7 +35,7 @@ import {
 } from "./verify.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
-import { assertFreshArtifact, buildArtifact } from "./artifact.mjs";
+import { assertFreshArtifact, buildArtifact, withCommentId } from "./artifact.mjs";
 
 /**
  * The forge operations one review run makes, listed so a test doubles only
@@ -80,8 +80,8 @@ export const ACTION = "review";
  * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
- * @property {import("./artifact.mjs").RunArtifact} [artifact] the machine-readable run record — present only when the run published, and only after the comment's own identity is known
-
+ * @property {import("./artifact.mjs").RunArtifact} [artifact] the machine-readable run record — present only when the run published, when the comment's own identity is known, and when the fresh read at write time still names the reviewed head
+ */
 /**
  * @param {object} input
  * @param {RunInputs} input.inputs
@@ -362,20 +362,14 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   // a run about to write.
   const ownLogins = await resolveOwnLogins(io.forge, (message) => io.info(`review: ${message}`));
 
-  const upsert = await upsertComment({
-    store: io.forge,
-    action: ACTION,
-    issueNumber: pullRequestNumber,
-    buildBody: (marker) => `${marker}\n${body}`,
-    ownLogins,
-    head: headSha,
-    startedAt,
-  });
   // The artifact is the run's machine-readable record, built from the same
-  // final facts the comment renders — after the comment's identity is known,
-  // so the two records name each other. `published` carries the provenance
-  // the anchoring pass put on every finding (the provenance gate re-derives
-  // the anchors itself, and buildArtifact refuses a finding without one).
+  // final facts the comment renders — BEFORE the comment, so every refusal
+  // buildArtifact can raise refuses a run that has not yet written anything
+  // irreversible. The one fact it cannot hold yet is the comment's identity:
+  // the upsert below returns it and `withCommentId` attaches it, so the two
+  // records still name each other. `published` carries the provenance the
+  // anchoring pass put on every finding (the provenance gate re-derives the
+  // anchors itself, and buildArtifact refuses a finding without one).
   const publishedAnchored =
     /** @type {Array<import("./verify.mjs").VerifiedFinding & { provenance: import("./provenance.mjs").Provenance }>} */ (
       published
@@ -401,16 +395,58 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     gates: report.results,
     coverage: outcome.coverage,
     phases: outcome.phaseLog,
-    provenance: { commentId: upsert.id },
+    provenance: {},
   });
-  // The comment's newer-head rule extends to the artifact: a snapshot that
-  // does not describe the head the forge reports is refused, never written.
-  assertFreshArtifact(artifact, fresh.head.sha);
+
+  // The built record is validated against a read taken here — before the
+  // comment exists — so a refusal of the record refuses a run that has
+  // written nothing, never one that has already spoken.
+  const preComment = await io.forge.getPullRequest(pullRequestNumber);
+  try {
+    assertFreshArtifact(artifact, preComment.head.sha);
+  } catch (cause) {
+    return {
+      outcome: "abandoned",
+      reason:
+        `#${String(pullRequestNumber)} moved while it was being reviewed ` +
+        `(${cause instanceof Error ? cause.message : String(cause)}) — nothing written`,
+    };
+  }
+
+  const upsert = await upsertComment({
+    store: io.forge,
+    action: ACTION,
+    issueNumber: pullRequestNumber,
+    buildBody: (marker) => `${marker}\n${body}`,
+    ownLogins,
+    head: headSha,
+    startedAt,
+  });
+  const record = withCommentId(artifact, upsert.id);
+
+  // The comment's newer-head rule extends to the artifact, and the guard
+  // runs on a read taken here — at the write, after the comment exists —
+  // not on the object the pre-publication guard already proved. A push
+  // landing in that window must end in no artifact, never in an artifact
+  // describing a head the pull request has already left; the run reports
+  // the abandonment and the comment it leaves standing.
+  const freshAtWrite = await io.forge.getPullRequest(pullRequestNumber);
+  try {
+    assertFreshArtifact(record, freshAtWrite.head.sha);
+  } catch (cause) {
+    return {
+      outcome: "abandoned",
+      reason:
+        `#${String(pullRequestNumber)} moved while its review was being published ` +
+        `(comment ${String(upsert.id)} stands) — the artifact is not written: ` +
+        (cause instanceof Error ? cause.message : String(cause)),
+    };
+  }
   return {
     outcome: "published",
     reason,
     commentId: upsert.id,
-    artifact,
+    artifact: record,
   };
 }
 

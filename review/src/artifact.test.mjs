@@ -13,6 +13,7 @@ import {
   buildArtifact,
   reviewArtifactSchemaVersion,
   serialiseArtifact,
+  withCommentId,
 } from "./artifact.mjs";
 import { MESSAGE_CHARS, renderComment } from "./render.mjs";
 import { VERDICT_REASON_CHARS } from "./verify.mjs";
@@ -1076,6 +1077,30 @@ describe("assertFreshArtifact", () => {
     expect(() => assertFreshArtifact(artifact, "")).toThrow(ArtifactError);
     const foreign = /** @type {any} */ ({ ...artifact, headRef: "main" });
     expect(() => assertFreshArtifact(foreign, HEAD)).toThrow(ArtifactError);
+  });
+});
+
+describe("withCommentId", () => {
+  it("attaches the comment's identity and serialises to the canonical bytes", () => {
+    const builtLate = withCommentId(buildArtifact(facts({ provenance: {} })), 42);
+    expect(serialiseArtifact(builtLate)).toBe(serialiseArtifact(buildArtifact(facts())));
+  });
+
+  it("returns a frozen record whose provenance is frozen", () => {
+    const built = withCommentId(buildArtifact(facts({ provenance: {} })), 42);
+    expect(Object.isFrozen(built)).toBe(true);
+    expect(Object.isFrozen(built.provenance)).toBe(true);
+  });
+  it("refuses to attach a second comment", () => {
+    const built = withCommentId(buildArtifact(facts({ provenance: {} })), 42);
+    expect(() => withCommentId(built, 43)).toThrow(ArtifactError);
+  });
+
+  it("refuses an id that is not a positive integer", () => {
+    const fresh = buildArtifact(facts({ provenance: {} }));
+    for (const id of [0, -1, 1.5, Number.NaN, "7"]) {
+      expect(() => withCommentId(fresh, /** @type {any} */ (id))).toThrow(ArtifactError);
+    }
   });
 });
 
