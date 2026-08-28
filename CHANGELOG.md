@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.1](https://github.com/ecoma-io/action-agents/compare/v0.1.0...v0.1.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **core:** percent-encode the contents path in getContents ([#52](https://github.com/ecoma-io/action-agents/issues/52)) ([5ced493](https://github.com/ecoma-io/action-agents/commit/5ced49321522e17f0c199d6695f07eaa714a606e))
+* **core:** refuse upsertBranch when the branch appears under the run ([#50](https://github.com/ecoma-io/action-agents/issues/50)) ([ebf6a28](https://github.com/ecoma-io/action-agents/commit/ebf6a2805b97044bcc532612d063023e94b282bd))
+* **core:** resolve the marker upsert identity from the run's token ([#55](https://github.com/ecoma-io/action-agents/issues/55)) ([55eae1a](https://github.com/ecoma-io/action-agents/commit/55eae1a5a846b8df596a598113123408ddbd67aa)), closes [#46](https://github.com/ecoma-io/action-agents/issues/46)
+* **harmonise:** blank scheme-split javascript: URIs in href/src ([#51](https://github.com/ecoma-io/action-agents/issues/51)) ([1808104](https://github.com/ecoma-io/action-agents/commit/1808104d0ed30e0adcb251a5d996e7e7bbc83524)), closes [#49](https://github.com/ecoma-io/action-agents/issues/49)
+* **review:** pass GITHUB_API_URL to the forge client ([#54](https://github.com/ecoma-io/action-agents/issues/54)) ([8f4cc33](https://github.com/ecoma-io/action-agents/commit/8f4cc33b710e54022ea677ca6df5ce9e3a8aeb8b))
+
 ## 0.1.0 (2026-08-26)
 
 

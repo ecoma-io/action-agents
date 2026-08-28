@@ -1,6 +1,6 @@
 {
   "name": "@ecoma-io/action-agents",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "AI-powered GitHub Actions for repository maintenance, triage, review and harmonise, each one a self-contained action against any OpenAI-compatible model.",
   "keywords": [
