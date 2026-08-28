@@ -311,4 +311,17 @@ describe("validateConfig", () => {
       /empty path segment/,
     );
   });
+
+  it("accepts a positive-integer concurrency and defaults it when absent", () => {
+    expect(validateConfig(config({ concurrency: 3 })).concurrency).toBe(3);
+    expect(validateConfig(config({})).concurrency).toBe(2);
+  });
+
+  it("refuses a concurrency that is not a positive integer", () => {
+    for (const value of [0, -1, 2.5, "3"]) {
+      expect(() => validateConfig(config({ concurrency: value }))).toThrow(
+        /concurrency must be a positive integer/,
+      );
+    }
+  });
 });

@@ -1313,6 +1313,349 @@ describe("run with a translation memory", () => {
   });
 });
 
+describe("run with a bounded-concurrency pool", () => {
+  const POLICY = policyFingerprint({
+    glossary: [],
+    languageInstructions: {},
+    transformationVersion: TRANSFORMATION_VERSION,
+  });
+
+  const CONFIG_2 = `{
+    sourceLanguage: "en",
+    languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
+    concurrency: 2,
+  }`;
+
+  const SOURCE_DEV = "# Dev\n\nProse.\n";
+  const SOURCE_API = "# Api\n\nReference.\n";
+  const SOURCE_GUIDE = "# Guide\n\nWalkthrough.\n";
+
+  /**
+   * @param {number} ticks
+   * @returns {Promise<void>}
+   */
+  function delay(ticks) {
+    if (ticks <= 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      let remaining = ticks;
+      const tick = () => {
+        remaining--;
+        if (remaining <= 0) resolve();
+        else setImmediate(tick);
+      };
+      setImmediate(tick);
+    });
+  }
+
+  /**
+   * A chat double that tracks in-flight concurrency, finishes calls out of
+   * order, and can fail selected calls. `plan[i]` governs call `i` (calls are
+   * issued in walk order): `{ delay }` waits `delay` macrotask ticks before
+   * completing with an honest echo; `{ fail: "message" }` throws.
+   *
+   * @param {Array<{ delay?: number, fail?: string }>} plan
+   * @returns {{
+   *   peak: () => number,
+   *   calls: () => number,
+   *   completions: () => string[],
+   *   complete: import("#core/chat.mjs").Chat["complete"],
+   * }}
+   */
+  function pooledChat(plan) {
+    let issued = 0;
+    let inFlight = 0;
+    let peak = 0;
+    /** @type {string[]} */
+    const completions = [];
+    return {
+      peak: () => peak,
+      calls: () => issued,
+      completions: () => /** @type {string[]} */ ([...completions]),
+      async complete(request) {
+        const index = issued++;
+        const step = plan[Math.min(index, plan.length - 1)] ?? { delay: 0 };
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        try {
+          if (step.fail !== undefined) throw new Error(step.fail);
+          const user = request.messages[request.messages.length - 1]?.content ?? "";
+          const start = user.indexOf("[source-document]\n");
+          let source = "";
+          if (start >= 0) {
+            const from = start + "[source-document]\n".length;
+            const nextBlock = user.indexOf("\n\n[", from);
+            source = nextBlock === -1 ? user.slice(from) : user.slice(from, nextBlock);
+          }
+          await delay(step.delay ?? 0);
+          completions.push(`call${index}`);
+          return {
+            content: JSON.stringify({ drift: true, summary: "kept in step", content: source }),
+            toolCalls: [],
+            finishReason: undefined,
+          };
+        } finally {
+          inFlight -= 1;
+        }
+      },
+    };
+  }
+
+  it("translates under the declared bound and finishes in pair order, not completion order", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const plan = [{ delay: 5 }, { delay: 0 }, { delay: 0 }, { delay: 0 }];
+    const chatDouble = pooledChat(plan);
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
+        "manual/dev.md": SOURCE_DEV,
+        "manual/api.md": SOURCE_API,
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/api.md", type: "blob" },
+      ],
+    );
+    /** @type {number[]} */
+    const atBlob = [];
+    const origBlob = forgeDouble.createBlob.bind(forgeDouble);
+    forgeDouble.createBlob = /** @type {any} */ (
+      async (/** @type {string} */ content) => {
+        atBlob.push(chatDouble.completions().length);
+        return origBlob(content);
+      }
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    // The cap held: two lanes ran and peaked at exactly 2 in flight.
+    expect(chatDouble.peak()).toBe(2);
+    expect(chatDouble.calls()).toBe(4);
+    // Completion order was genuinely scrambled — the slow pair finished last.
+    expect(chatDouble.completions()).toEqual(["call1", "call2", "call3", "call0"]);
+
+    // The report and the publication order are pair-identity, not completion
+    // order: pairs walk slug-sorted sources × alphabetized targets —
+    // fr→api, vi→api, fr→dev, vi→dev.
+    const out = logged(log);
+    const translated = [...out.matchAll(/translated (vi|fr) manual\/(dev|api)\.md/g)].map(
+      (m) => `${m[1]} ${m[2]}`,
+    );
+    expect(translated).toEqual(["fr api", "vi api", "fr dev", "vi dev"]);
+
+    // Publication happened once, after every pooled pair settled.
+    expect(forgeDouble.writes.map((w) => w.op)).toEqual([
+      "createBlob",
+      "createBlob",
+      "createBlob",
+      "createBlob",
+      "createBlob",
+      "createBlob",
+      "createTree",
+      "createCommit",
+      "upsertBranch",
+      "upsertPullRequest",
+    ]);
+    // Every blob was created only after all four model completions.
+    for (const n of atBlob) expect(n).toBe(4);
+  });
+
+  it("skipped pairs consume no slot and no model call", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Recorded state: vi/dev is unchanged, api pairs go to the model.
+    const viRecord = {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      sourcePath: "manual/dev.md",
+      destinationPath: "manual/vi/dev.md",
+      language: "vi",
+      sourceFingerprint: contentFingerprint(SOURCE_DEV),
+      translationFingerprint: contentFingerprint("# Dev\n\nTraduit.\n"),
+      policyFingerprint: POLICY,
+      transformationVersion: TRANSFORMATION_VERSION,
+    };
+    const plan = [{ delay: 0 }, { delay: 0 }, { delay: 0 }];
+    const chatDouble = pooledChat(plan);
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
+        "manual/dev.md": SOURCE_DEV,
+        "manual/vi/dev.md": "# Dev\n\nTraduit.\n",
+        "manual/api.md": SOURCE_API,
+        [STATE_PATH]: renderState([viRecord]),
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/vi/dev.md", type: "blob" },
+        { path: "manual/api.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    // The unchanged pair never reached the model; the other three did.
+    expect(chatDouble.calls()).toBe(3);
+    expect(chatDouble.peak()).toBe(2);
+
+    const out = logged(log);
+    // The skip line is positioned before the fr/dev model line, in walk order.
+    const skipIdx = out.indexOf("unchanged-skipped vi manual/dev.md → manual/vi/dev.md");
+    const frDevIdx = out.indexOf("translated fr manual/dev.md → manual/fr/dev.md");
+    expect(skipIdx).toBeGreaterThan(-1);
+    // The skip fills its walk slot — dev is the last slug, vi the last
+    // target, so the skip line lands after every translated line.
+    expect(skipIdx).toBeGreaterThan(frDevIdx);
+    // The unchanged destination is not proposed — it never lands in the tree.
+    const tree = /** @type {{ args: unknown[] }} */ (
+      forgeDouble.writes.find((w) => w.op === "createTree")
+    );
+    const paths = /** @type {{ path: string }[]} */ (tree.args[1]).map((c) => c.path);
+    expect(paths).not.toContain("manual/vi/dev.md");
+  });
+
+  it("keeps a failing pair contained and follows the failure policy", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Call 1 is api→vi's first attempt; its retry is call 2 (the retry
+    // issues immediately after the failure). Both fail; every other call
+    // succeeds with controlled timing, so the failure happens while a
+    // sibling is in flight.
+    const plan = [
+      { delay: 0 },
+      { fail: "provider overloaded" },
+      { fail: "provider overloaded" },
+      { delay: 0 },
+      { delay: 0 },
+    ];
+    const chatDouble = pooledChat(plan);
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
+        "manual/dev.md": SOURCE_DEV,
+        "manual/api.md": SOURCE_API,
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/api.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/1 pair\(s\) failed/);
+    expect(error.message).toMatch(/vi manual\/api\.md: provider overloaded/);
+
+    // The pool never aborted on the failure: the pair's retry ran (five
+    // calls total) and the sibling lanes finished their work.
+    expect(chatDouble.calls()).toBe(5);
+    expect(chatDouble.peak()).toBe(2);
+
+    // Publication happened first — the three healthy pairs published.
+    expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
+    const out = logged(log);
+    expect(out).toMatch(/translated fr manual\/api\.md/);
+    expect(out).toMatch(/translated fr manual\/dev\.md/);
+    expect(out).toMatch(/translated vi manual\/dev\.md/);
+    expect(out).toMatch(/failed vi manual\/api\.md/);
+  });
+
+  it("refuses an invalid concurrency at startup", async () => {
+    const bad = [0, -1, 2.5, "3"];
+    for (const value of bad) {
+      const config = `{
+        sourceLanguage: "en",
+        languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+        concurrency: ${JSON.stringify(value)},
+      }`;
+      const chatDouble = chat([new Error("the model must not be called")]);
+      const forgeDouble = forge({
+        ".github/action-agents/harmonise/harmonise.json5": config,
+        "manual/dev.md": SOURCE_DEV,
+      });
+      const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+      await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+        /concurrency must be a positive integer/,
+      );
+      expect(chatDouble.calls()).toBe(0);
+    }
+  });
+
+  it("caps the declared bound at the module maximum", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
+      concurrency: 50,
+    }`;
+    // Three sources × two targets = six pairs — more than the cap of four.
+    const plan = [
+      { delay: 0 },
+      { delay: 0 },
+      { delay: 0 },
+      { delay: 0 },
+      { delay: 0 },
+      { delay: 0 },
+    ];
+    const chatDouble = pooledChat(plan);
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": config,
+        "manual/dev.md": SOURCE_DEV,
+        "manual/api.md": SOURCE_API,
+        "manual/guide.md": SOURCE_GUIDE,
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/api.md", type: "blob" },
+        { path: "manual/guide.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    // Six calls ran but never more than four at once — the cap held.
+    expect(chatDouble.calls()).toBe(6);
+    expect(chatDouble.peak()).toBe(4);
+  });
+
+  it("degrades a corrupt state file and memory to the model path under the pool", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const plan = [{ delay: 0 }, { delay: 0 }, { delay: 0 }, { delay: 0 }];
+    const chatDouble = pooledChat(plan);
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
+        "manual/dev.md": SOURCE_DEV,
+        "manual/api.md": SOURCE_API,
+        [STATE_PATH]: "{ this is not json",
+        [TM_PATH]: "{ not json",
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/api.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    // Every pair degraded to the model path; the pool ran at the bound.
+    expect(chatDouble.calls()).toBe(4);
+    expect(chatDouble.peak()).toBe(2);
+  });
+});
+
 describe("main", () => {
   it("turns a refusal into a failed step, not a green one", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);

@@ -45,6 +45,7 @@ import {
  * @property {HarmoniseInstructions} instructions
  * @property {{ title: string }} [pullRequest] the commit-subject/pull-request-title template, when the repository renames the convention
  * @property {{ layouts: AssetLayout[] }} [assets] templates naming where a language's image variants live, relative to the document's directory
+ * @property {number} concurrency how many translatable pairs may be in flight with the model at once; defaults to 2, capped at `MAX_PAIR_CONCURRENCY`
  */
 
 /**
@@ -59,6 +60,17 @@ export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
 
 /** An instruction document larger than this is a red refusal — prose cut mid-sentence misleads. */
 export const MAX_INSTRUCTION_BYTES = 8 * 2 ** 10;
+
+/** How many translatable pairs a run translates at once when the config is silent. */
+const DEFAULT_PAIR_CONCURRENCY = 2;
+
+/**
+ * The most pairs one run ever translates concurrently, whatever the config
+ * declares. A cap, not a validation range: a declared value above it is
+ * honored up to the ceiling rather than refused, so the bound a run works
+ * under is `min(config.concurrency, this)`.
+ */
+export const MAX_PAIR_CONCURRENCY = 4;
 
 const DEFAULT_LOCATIONS = [
   ".github/action-agents/harmonise/harmonise.json5",
@@ -163,13 +175,14 @@ export function validateConfig(raw) {
         "ignore",
         "glossary",
         "instructions",
+        "concurrency",
         "pullRequest",
         "assets",
       ].includes(key)
     ) {
       throw new Error(
         `unknown config key '${key}' — the file holds sourceLanguage, languages, ignore, ` +
-          `glossary, instructions, pullRequest and assets`,
+          `glossary, instructions, concurrency, pullRequest and assets`,
       );
     }
   }
@@ -253,11 +266,22 @@ export function validateConfig(raw) {
 
   const instructions = parseInstructions(raw["instructions"], languages);
 
+  const { concurrency } = parseConcurrency(raw["concurrency"]);
+
   const pullRequest = parsePullRequest(raw["pullRequest"]);
 
   const assets = parseAssets(raw["assets"]);
 
-  return { sourceLanguage, languages, ignore, glossary, instructions, ...pullRequest, ...assets };
+  return {
+    sourceLanguage,
+    languages,
+    ignore,
+    glossary,
+    instructions,
+    concurrency,
+    ...pullRequest,
+    ...assets,
+  };
 }
 
 /**
@@ -321,6 +345,28 @@ function parsePullRequest(value) {
   }
 
   return { pullRequest: { title } };
+}
+
+/**
+ * The optional `concurrency` key: how many translatable pairs one run may
+ * have in flight with the model at once. A declared resource policy, never a
+ * knob anything model-shaped can turn: absent it is the conservative
+ * starting point the pool's doctrine names, and anything that is not a
+ * positive integer is refused — a config half-accepted would be half-run.
+ *
+ * @param {unknown} value
+ * @returns {{ concurrency: number }}
+ */
+function parseConcurrency(value) {
+  if (value === undefined) return { concurrency: DEFAULT_PAIR_CONCURRENCY };
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    const shown = typeof value === "string" ? `"${value}"` : String(value);
+    throw new Error(
+      `concurrency must be a positive integer (got ${shown}) — how many translatable pairs ` +
+        `the model works on at once; absent it defaults to ${String(DEFAULT_PAIR_CONCURRENCY)}`,
+    );
+  }
+  return { concurrency: value };
 }
 
 /**

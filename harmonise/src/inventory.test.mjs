@@ -28,6 +28,7 @@ function input(options = {}) {
       ignore: options.ignore ?? [],
       glossary: [],
       instructions: { languages: {} },
+      concurrency: 2,
       ...(options.layouts === undefined
         ? {}
         : { assets: { layouts: options.layouts.map((t) => parseAssetLayout(t, "t")) } }),
@@ -117,6 +118,7 @@ describe("specificity", () => {
           ignore: [],
           glossary: [],
           instructions: { languages: {} },
+          concurrency: 2,
         },
         documents: [],
       }),
