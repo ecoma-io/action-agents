@@ -221,6 +221,12 @@ export function createHttpClient(config) {
    */
   async function attempt(url, method, body, headers, limit, bodyLimit) {
     for (let number = 1; ; number++) {
+      // One fresh signal per attempt: a timed-out attempt never poisons the
+      // next one. `timeoutMs <= 0` disables the ceiling entirely — a
+      // capability for in-repo callers, and deliberately unreachable from a
+      // workflow: every action reads `request-timeout-ms` through
+      // getNumberInput with a 1000 ms floor, so 0 and negatives are refused
+      // before this line ever sees them.
       const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
       try {
         const response = await fetchImpl(url, {

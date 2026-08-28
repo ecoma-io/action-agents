@@ -33,6 +33,7 @@ import {
   getBooleanInput,
   getInput,
   getListInput,
+  getNumberInput,
   info,
   isProgramEntry,
   maskSecret,
@@ -55,7 +56,7 @@ import { currentSizeLabels, measureSize } from "./size.mjs";
 export const ACTION = "triage";
 
 /**
- * @typedef {SharedInputs & { labels: string[], dryRun: boolean, configPath: string }} Inputs
+ * @typedef {SharedInputs & { labels: string[], dryRun: boolean, configPath: string, requestTimeoutMs: number }} Inputs
  */
 
 /**
@@ -68,6 +69,7 @@ export function readInputs(env = process.env) {
     labels: getListInput("labels", {}, env),
     dryRun: getBooleanInput("dry-run", { default: true }, env),
     configPath: getInput("config-path", {}, env),
+    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
   };
 }
 
@@ -98,7 +100,11 @@ function realIo(inputs, context) {
       token: inputs.githubToken,
       apiUrl: context.apiUrl,
     }),
-    chat: createChat({ apiUrl: inputs.apiUrl, apiKey: inputs.apiKey }),
+    chat: createChat({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      timeoutMs: inputs.requestTimeoutMs,
+    }),
     evidence: createEvidence(),
     now: () => Date.now(),
     readEvent: async () => {

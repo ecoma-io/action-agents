@@ -23,6 +23,7 @@ import {
   getBooleanInput,
   getInput,
   getListInput,
+  getNumberInput,
   info,
   isProgramEntry,
   maskSecret,
@@ -77,7 +78,7 @@ export const TM_PATH = ".github/action-agents/harmonise/tm.json";
 const ATTEMPTS_PER_PAIR = 2;
 
 /**
- * @typedef {SharedInputs & { configPath: string, sourceLanguage: string, documents: string[], dryRun: boolean }} Inputs
+ * @typedef {SharedInputs & { configPath: string, sourceLanguage: string, documents: string[], dryRun: boolean, requestTimeoutMs: number }} Inputs
  */
 
 /**
@@ -93,6 +94,7 @@ export function readInputs(env = process.env) {
     // default here would silently hide documents the config declared.
     documents: getListInput("documents", { default: [] }, env),
     dryRun: getBooleanInput("dry-run", { default: true }, env),
+    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
   };
 }
 
@@ -118,7 +120,11 @@ function realIo(inputs, context) {
       token: inputs.githubToken,
       apiUrl: context.apiUrl,
     }),
-    chat: createChat({ apiUrl: inputs.apiUrl, apiKey: inputs.apiKey }),
+    chat: createChat({
+      apiUrl: inputs.apiUrl,
+      apiKey: inputs.apiKey,
+      timeoutMs: inputs.requestTimeoutMs,
+    }),
     evidence: createEvidence(),
   };
 }
