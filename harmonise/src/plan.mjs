@@ -15,6 +15,13 @@ import { rewriteLinks } from "./links.mjs";
 import { collectLinks, validateLinkGraph } from "./link-graph.mjs";
 import { protectDocument } from "./protect.mjs";
 import { restoreDocument } from "./protect.mjs";
+import { planBlocks, summarizePlan } from "./blocks.mjs";
+import {
+  DEFAULT_FRONTMATTER_POLICY,
+  extractFrontmatter,
+  planFrontmatterProtection,
+  validateFrontmatter,
+} from "./frontmatter.mjs";
 import { parseTranslationAnswer } from "./answer.mjs";
 import { buildTranslationPrompt } from "./prompt.mjs";
 import {
@@ -56,6 +63,20 @@ export function preparationRefusal(sourceText) {
 }
 
 /**
+ * The frontmatter protection one pair carries from preparation to validation:
+ * the plan's restore map, the policy the gate judges with, and the raw
+ * frontmatter exactly as authored. Planned once per source document by
+ * {@link planFrontmatterGuard}; `undefined` for a frontmatter-less document,
+ * which passes through untouched.
+ *
+ * @typedef {object} FrontmatterGuard
+ * @property {string} raw the raw frontmatter as authored, the validation gate's original side
+ * @property {import("./frontmatter.mjs").FrontmatterPolicy} policy the policy the gate judges with
+ * @property {Map<string, string>} restoreMap token → the exact protected bytes
+ * @property {string} maskedRaw the raw frontmatter with protected values behind tokens
+ */
+
+/**
  * @typedef {object} PreparedPair
  * @property {string} slug
  * @property {string} lang
@@ -65,10 +86,77 @@ export function preparationRefusal(sourceText) {
  * @property {string} sourceText the untouched original, for identity checks and structure comparison
  * @property {string} protectedText the source as the model will receive it
  * @property {ReturnType<typeof protectDocument>} protection
+ * @property {FrontmatterGuard | undefined} frontmatter the pair's frontmatter protection, undefined without frontmatter
  * @property {number} linksRewritten destinations that moved during preparation
  * @property {(absPath: string) => string | null} resolveDocument a linked document's localized target, or null when absent and unplanned
  * @property {(absPath: string) => string | null} resolveImage an image's localized variant, or null when the file does not exist
  */
+
+/**
+ * Plans one source document's frontmatter protection. The shipped policy is
+ * the whole policy today: keys it names translatable stay in the clear, every
+ * other key — known or unknown — goes behind a placeholder. A frontmatter-less
+ * document passes through untouched, and a frontmatter the recognizer or the
+ * planner refuses comes back refused: masking is the only way past, so a
+ * refused plan is a pair that never reaches the model.
+ *
+ * @param {string} sourceText
+ * @returns {{ kind: "absent" } | { kind: "refused", code: string, message: string } | { kind: "planned", guard: FrontmatterGuard }}
+ */
+export function planFrontmatterGuard(sourceText) {
+  const extracted = extractFrontmatter(sourceText);
+  if (extracted.kind === "absent") return { kind: "absent" };
+  if (extracted.kind === "refused") {
+    return { kind: "refused", code: extracted.code, message: extracted.message };
+  }
+  const plan = planFrontmatterProtection(extracted.raw, DEFAULT_FRONTMATTER_POLICY);
+  if (plan.kind === "refused") {
+    return { kind: "refused", code: plan.code, message: plan.message };
+  }
+  return {
+    kind: "planned",
+    guard: {
+      raw: extracted.raw,
+      policy: DEFAULT_FRONTMATTER_POLICY,
+      restoreMap: plan.restoreMap,
+      maskedRaw: plan.masked,
+    },
+  };
+}
+
+/**
+ * Splices the masked frontmatter back over the document it was planned from:
+ * everything before the opening fence, the masked raw, everything from the
+ * closing fence on. The fence scan mirrors `extractFrontmatter`'s, and a
+ * guard is only ever handed the exact text it was planned from — a missing
+ * fence here is a wiring defect, refused, never a mangled document.
+ *
+ * @param {string} sourceText
+ * @param {FrontmatterGuard} guard
+ * @returns {string}
+ */
+function maskFrontmatter(sourceText, guard) {
+  const lines = splitLines(sourceText);
+  if (lines[0]?.trim() !== "---") {
+    throw new Error("the frontmatter planned for masking has no opening fence");
+  }
+  const contentStart = (lines[0]?.length ?? 0) + 1;
+  let closerStart = -1;
+  let offset = contentStart;
+  for (let index = 1; index < lines.length; index++) {
+    const line = lines[index];
+    if (line === undefined) break;
+    if (line.trim() === "---") {
+      closerStart = offset;
+      break;
+    }
+    offset += line.length + 1;
+  }
+  if (closerStart === -1) {
+    throw new Error("the frontmatter planned for masking has no closing fence");
+  }
+  return sourceText.slice(0, contentStart) + guard.maskedRaw + sourceText.slice(closerStart);
+}
 
 /**
  * Prepares one pair. Throws only on defects that make the pair unpreparable
@@ -80,12 +168,26 @@ export function preparationRefusal(sourceText) {
  * @param {string} input.sourcePath
  * @param {{ path: string, state: "existing" | "missing" }} input.target
  * @param {string} input.sourceText
+ * @param {FrontmatterGuard} [input.frontmatter] the source's planned frontmatter protection, undefined without frontmatter
  * @param {Inventory} input.inventory
  * @param {import("./config.mjs").HarmoniseConfig} input.config
  * @returns {PreparedPair}
  */
-export function preparePair({ slug, lang, sourcePath, target, sourceText, inventory, config }) {
-  const protection = protectDocument(sourceText, { glossary: config.glossary });
+export function preparePair({
+  slug,
+  lang,
+  sourcePath,
+  target,
+  sourceText,
+  inventory,
+  config,
+  frontmatter,
+}) {
+  // Frontmatter protection runs first: protected values are tokens before
+  // the glossary, the skip directives or the link rewriter can see them, so
+  // no machinery ever rewrites what the policy holds fixed.
+  const working = frontmatter === undefined ? sourceText : maskFrontmatter(sourceText, frontmatter);
+  const protection = protectDocument(working, { glossary: config.glossary });
 
   // The rewrite resolves references from the source document's directory;
   // validation (the resolvers exposed below) judges the rewritten references
@@ -114,6 +216,7 @@ export function preparePair({ slug, lang, sourcePath, target, sourceText, invent
     sourceText,
     protectedText: rewritten.text,
     protection,
+    frontmatter,
     linksRewritten: rewritten.count,
     resolveDocument: context.resolveDocument,
     resolveImage: (absPath) => inventory.resolveImage(absPath, lang, target.path),
@@ -135,6 +238,7 @@ export function preparePair({ slug, lang, sourcePath, target, sourceText, invent
  * @param {Evidence} input.evidence
  * @param {{ name: string, description: string }} input.repository
  * @param {{ instruction?: string, languages: Record<string, string> }} input.documents
+ * @param {string} [input.priorTranslation] a previously accepted translation of this exact source, offered to the model as reference — never an instruction
  * @returns {Promise<{ outcome: "noop", summary: string } | { outcome: "proposal", text: string, summary: string }>}
  */
 export async function translatePair(input) {
@@ -144,6 +248,7 @@ export async function translatePair(input) {
     language: input.prepared.lang,
     protectedSource: input.prepared.protectedText,
     existingTranslation: input.existingText,
+    priorTranslation: input.priorTranslation,
     documents: input.documents,
     evidence: input.evidence,
   });
@@ -171,9 +276,14 @@ export async function translatePair(input) {
   // Code blocks and code spans are preserved unchanged; only prose is sanitised.
   const sanitised = sanitizeTranslationHtml(restored);
 
+  // The protected frontmatter values go back only after sanitising: until
+  // this point the placeholders shielded them from every rewrite and from
+  // the HTML stripper, exactly as the glossary tokens shield their terms.
+  const unmasked = restoreFrontmatter(sanitised, input.prepared.frontmatter);
+
   // A proposal past the same cap the preparation enforces would be a
   // document we could never frame as evidence on a later pass.
-  const bytes = new TextEncoder().encode(sanitised).byteLength;
+  const bytes = new TextEncoder().encode(unmasked).byteLength;
   if (bytes > MAX_SOURCE_BYTES) {
     throw new Error(
       `the translated document is ${String(bytes)} bytes, past the ` +
@@ -183,13 +293,21 @@ export async function translatePair(input) {
 
   // Byte-identity semantics, per the specification: identical to what it
   // replaces is no drift whatever the flag claimed.
-  if (input.existingText !== undefined && sanitised === input.existingText) {
+  if (input.existingText !== undefined && unmasked === input.existingText) {
     return { outcome: "noop", summary: answer.summary };
+  }
+
+  // The frontmatter gate: protected values byte-identical, the key sequence
+  // exact, translatable scalars still single-line, no placeholder alive. Any
+  // violation refuses the pair — reported, never coerced back into a pass.
+  if (input.prepared.frontmatter !== undefined) {
+    const refusal = validateRestoredFrontmatter(unmasked, input.prepared.frontmatter);
+    if (refusal !== null) throw new Error(`frontmatter validation failed: ${refusal}`);
   }
 
   const violations = compareStructuralProfiles(
     structuralProfile(input.prepared.sourceText),
-    structuralProfile(sanitised),
+    structuralProfile(unmasked),
   );
   if (violations.length > 0) {
     throw new Error(`structural validation failed: ${violations.join("; ")}`);
@@ -206,7 +324,7 @@ export async function translatePair(input) {
     sourceLinks: collectLinks(
       restoreDocument(input.prepared.protectedText, input.prepared.protection),
     ),
-    candidateLinks: collectLinks(sanitised),
+    candidateLinks: collectLinks(unmasked),
     context: {
       translatedDocPath: input.prepared.destinationPath,
       resolveDocument: input.prepared.resolveDocument,
@@ -217,7 +335,131 @@ export async function translatePair(input) {
     throw new Error(`link validation failed: ${linkVerdict.violations.join("; ")}`);
   }
 
-  return { outcome: "proposal", text: sanitised, summary: answer.summary };
+  return { outcome: "proposal", text: unmasked, summary: answer.summary };
+}
+
+/** The shape of every frontmatter placeholder this pipeline can mint. Case-insensitive on purpose: a token the model re-cased is a forgery, never prose. */
+const FRONTMATTER_TOKEN = /\[\[harmonise:[0-9a-f]{16}:f[1-9][0-9]*\]\]/gi;
+
+/**
+ * Restores the protected frontmatter values into a translated document:
+ * every token this run minted back to its exact bytes. A token the model
+ * dropped or mangled is not refused here — the restoration simply cannot put
+ * the value back, and the validation gate refuses the pair for the changed
+ * bytes. A token this run never minted is refused on the spot, mirroring
+ * `restoreDocument`'s namespace rule: the `f` kind sits outside that
+ * function's token pattern, so this is the only place the refusal lives.
+ *
+ * @param {string} candidate the translated text, machinery tokens already restored
+ * @param {FrontmatterGuard | undefined} frontmatter the pair's frontmatter protection
+ * @returns {string}
+ */
+function restoreFrontmatter(candidate, frontmatter) {
+  if (frontmatter === undefined) return candidate;
+  for (const match of candidate.matchAll(FRONTMATTER_TOKEN)) {
+    if (!frontmatter.restoreMap.has(match[0])) {
+      throw new Error(`the output contains '${match[0]}', which this run never minted`);
+    }
+  }
+  let restored = candidate;
+  for (const [token, original] of frontmatter.restoreMap) {
+    restored = restored.split(token).join(original);
+  }
+  return restored;
+}
+
+/**
+ * The deterministic gate over a restored translation's frontmatter: the
+ * translated block must still parse, and {@link validateFrontmatter}'s
+ * verdicts — byte-identical protected values, the exact key sequence,
+ * single-line translatable scalars, no surviving placeholder — are refusal
+ * conditions, never coerced back into a pass.
+ *
+ * @param {string} restored the candidate with every placeholder consumed
+ * @param {FrontmatterGuard} guard
+ * @returns {string | null} the refusal message, or null when the frontmatter is in step
+ */
+function validateRestoredFrontmatter(restored, guard) {
+  const translated = extractFrontmatter(restored);
+  if (translated.kind === "absent") {
+    return "the translated document lost its frontmatter block";
+  }
+  if (translated.kind === "refused") {
+    return `the translated frontmatter does not parse: ${translated.message}`;
+  }
+  const verdict = validateFrontmatter(guard.raw, translated.raw, guard.policy);
+  return verdict.ok ? null : verdict.violations.map((entry) => entry.detail).join("; ");
+}
+
+/**
+ * The change shape one pair is reported with. A block plan needs BOTH sides'
+ * blocks: the recorded source's blocks from the pair's sync-state record and
+ * a segmentation of the current source. Either side missing makes whole-file
+ * the only honest scope — the current behavior — with the reason named;
+ * neither side is ever guessed.
+ *
+ * @typedef {object} PairBlockShape
+ * @property {"whole-file" | "planned"} planning how the pair's change was scoped
+ * @property {string} [reason] why whole-file was the only honest scope
+ * @property {number} [changed] planned: current blocks aligned with a previous block of different content
+ * @property {number} [unchanged] planned: current blocks byte-identical to a previous block
+ * @property {number} [added] planned: current blocks with no previous counterpart
+ * @property {number} [removed] planned: previous blocks with no current counterpart
+ */
+
+/**
+ * The recorded source's blocks, when the pair's state record carries them.
+ * The state schema (v1) records whole-document fingerprints only, so no
+ * record a repository holds today has blocks; the read is shaped defensively
+ * so a schema that grows them is picked up by this seam without a rewrite.
+ * Anything that is not a list of content-carrying blocks is null — a plan
+ * built on malformed records would be a guess.
+ *
+ * @param {import("./state.mjs").SyncStateRecord | null} recorded
+ * @returns {import("./blocks.mjs").SourceBlock[] | null}
+ */
+function recordedSourceBlocks(recorded) {
+  const blocks = /** @type {{ sourceBlocks?: unknown } | null} */ (recorded)?.sourceBlocks;
+  if (!Array.isArray(blocks)) return null;
+  for (const block of blocks) {
+    if (typeof (/** @type {any} */ (block)?.content) !== "string") return null;
+  }
+  return /** @type {import("./blocks.mjs").SourceBlock[]} */ (blocks);
+}
+
+/**
+ * The change shape one pair is scoped to, from the pair's recorded state and
+ * the current source's blocks. `currentBlocks` is null while no segmentation
+ * stage exists — the plan degrades to whole-file with the reason, exactly
+ * the current behavior, and {@link planBlocks} runs only when both sides
+ * provably exist.
+ *
+ * @param {import("./state.mjs").SyncStateRecord | null} recorded
+ * @param {import("./blocks.mjs").SourceBlock[] | null} currentBlocks
+ * @returns {PairBlockShape}
+ */
+export function pairBlockShape(recorded, currentBlocks) {
+  const previousBlocks = recordedSourceBlocks(recorded);
+  if (previousBlocks === null) {
+    return {
+      planning: "whole-file",
+      reason: "the recorded state carries no block fingerprints to plan against",
+    };
+  }
+  if (currentBlocks === null) {
+    return {
+      planning: "whole-file",
+      reason: "no segmentation stage exists for the current source",
+    };
+  }
+  const counts = summarizePlan(planBlocks(previousBlocks, currentBlocks));
+  return {
+    planning: "planned",
+    changed: counts.changed,
+    unchanged: counts.unchanged,
+    added: counts.added,
+    removed: counts.removed,
+  };
 }
 
 /**

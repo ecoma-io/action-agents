@@ -13,9 +13,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ACTION, main, readInputs, run } from "./index.mjs";
+import { ACTION, main, readInputs, run, TM_PATH } from "./index.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
 import { renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
+import { buildTmKey, createTmStore, serialize as serializeTm, TM_SCHEMA_VERSION } from "./tm.mjs";
 
 /**
  * @type {import("#core/runtime.mjs").Env}
@@ -267,6 +268,7 @@ describe("run", () => {
     /** @typedef {{ op: string, args: unknown[] }} Write */
     const ops = forgeDouble.writes.map((w) => w.op);
     expect(ops).toEqual([
+      "createBlob",
       "createBlob",
       "createBlob",
       "createTree",
@@ -938,7 +940,7 @@ describe("run with recorded state", () => {
       forgeDouble.writes.find((w) => w.op === "createTree")
     );
     const changes = /** @type {{ path: string }[]} */ (tree.args[1]);
-    expect(changes.map((change) => change.path)).toEqual(["manual/fr/dev.md", STATE_PATH]);
+    expect(changes.map((change) => change.path)).toEqual(["manual/fr/dev.md", STATE_PATH, TM_PATH]);
     // The merged state file carries the preserved vi record and the new fr
     // record, each pinning exactly the bytes this commit publishes.
     const { records } = stateBlobOf(forgeDouble);
@@ -989,6 +991,325 @@ describe("run with recorded state", () => {
 
     expect(secondChat.calls()).toBe(0);
     expect(secondForge.writes).toEqual([]);
+  });
+});
+
+describe("run with frontmatter", () => {
+  const FM_SOURCE = "---\ntitle: Dev guide\nslug: dev\n---\n\n# Dev\n\nProse.\n";
+  const FM_TRANSLATED = "---\ntitle: Guide de dev\nslug: dev\n---\n\n# Dev\n\nProse.\n";
+
+  /**
+   * A chat double that echoes the prepared source through a transform — an
+   * honest translation of the translatable parts, tokens and structure kept
+   * — and captures every request for assertion.
+   *
+   * @param {(source: string) => string} translate
+   * @returns {{ calls: () => number, userContent: () => string, complete: import("#core/chat.mjs").Chat["complete"] }}
+   */
+  function translatingChat(translate) {
+    /** @type {string[]} */
+    const users = [];
+    let calls = 0;
+    return {
+      calls: () => calls,
+      userContent: () => users[users.length - 1] ?? "",
+      async complete(request) {
+        calls++;
+        const user = request.messages[request.messages.length - 1]?.content ?? "";
+        users.push(user);
+        const start = user.indexOf("[source-document]\n");
+        if (start < 0) {
+          return {
+            content: JSON.stringify({ drift: true, summary: "nothing found", content: "??" }),
+            toolCalls: [],
+            finishReason: undefined,
+          };
+        }
+        const from = start + "[source-document]\n".length;
+        const nextBlock = user.indexOf("\n\n[", from);
+        const source = nextBlock === -1 ? user.slice(from) : user.slice(from, nextBlock);
+        return {
+          content: JSON.stringify({
+            drift: true,
+            summary: "kept in step",
+            content: translate(source),
+          }),
+          toolCalls: [],
+          finishReason: undefined,
+        };
+      },
+    };
+  }
+
+  it("masks protected frontmatter in the prompt and restores it byte-for-byte on publication", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = translatingChat((masked) =>
+      masked.replace("title: Dev guide", "title: Guide de dev"),
+    );
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": FM_SOURCE,
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    // The prompt carried the protected slug as a placeholder, never its value.
+    const user = chatDouble.userContent();
+    expect(user).toMatch(/slug: \[\[harmonise:[0-9a-f]{16}:f1\]\]/);
+    expect(user).not.toMatch(/slug: dev/);
+    // The published bytes restored the slug exactly and kept the translation.
+    const published = /** @type {any} */ (
+      forgeDouble.writes.find(
+        (w) =>
+          w.op === "createBlob" &&
+          typeof w.args[0] === "string" &&
+          w.args[0].startsWith("---\ntitle: Guide de dev"),
+      )
+    );
+    expect(published.args[0]).toBe(FM_TRANSLATED);
+    expect(logged(log)).toMatch(/blocks=whole-file/);
+  });
+
+  it("refuses a translation that alters a protected frontmatter value", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const tampered = "---\ntitle: Guide de dev\nslug: autre\n---\n\n# Dev\n\nProse.\n";
+    const chatDouble = chat([proposes(tampered), proposes(tampered)]);
+    const ioDouble = /** @type {any} */ ({
+      forge: forge({
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+        "manual/dev.md": FM_SOURCE,
+      }),
+      chat: chatDouble,
+      evidence,
+    });
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/frontmatter validation failed/);
+    expect(error.message).toMatch(/slug/);
+    expect(chatDouble.calls()).toBe(2);
+  });
+
+  it("refuses to translate a document whose frontmatter does not parse", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = chat([new Error("the model must not be called")]);
+    const ioDouble = /** @type {any} */ ({
+      forge: forge({
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+        "manual/dev.md": "---\ntitle: a\ntitle: b\n---\n\n# Dev\n\nProse.\n",
+      }),
+      chat: chatDouble,
+      evidence,
+    });
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/every pair skipped/);
+    expect(error.message).toMatch(/frontmatter protection refused/);
+    expect(error.message).toMatch(/declared twice/);
+    expect(chatDouble.calls()).toBe(0);
+  });
+
+  it("refuses an answer that forges a frontmatter token in prose", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = translatingChat(
+      (masked) =>
+        `${masked.replace("title: Dev guide", "title: Guide de dev")}\n\nVoir [[harmonise:deadbeefdeadbeef:f9]].\n`,
+    );
+    const ioDouble = /** @type {any} */ ({
+      forge: forge({
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+        "manual/dev.md": FM_SOURCE,
+      }),
+      chat: chatDouble,
+      evidence,
+    });
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/which this run never minted/);
+    expect(chatDouble.calls()).toBe(2);
+  });
+});
+
+describe("run with a translation memory", () => {
+  const POLICY = policyFingerprint({
+    glossary: [],
+    languageInstructions: {},
+    transformationVersion: TRANSFORMATION_VERSION,
+  });
+
+  const SOURCE = "# Dev\n\nProse.\n";
+
+  /**
+   * @param {string} key a key as `buildTmKey` produces
+   * @param {string} value
+   * @returns {string} a serialized TM carrying exactly one entry
+   */
+  function memoryWith(key, value) {
+    const store = createTmStore();
+    store.record(key, value);
+    return serializeTm(store);
+  }
+
+  /**
+   * A chat double that echoes the prepared source through a transform and
+   * captures every request.
+   *
+   * @param {(source: string) => string} translate
+   * @returns {{ calls: () => number, userContent: () => string, complete: import("#core/chat.mjs").Chat["complete"] }}
+   */
+  function translatingChat(translate) {
+    /** @type {string[]} */
+    const users = [];
+    let calls = 0;
+    return {
+      calls: () => calls,
+      userContent: () => users[users.length - 1] ?? "",
+      async complete(request) {
+        calls++;
+        const user = request.messages[request.messages.length - 1]?.content ?? "";
+        users.push(user);
+        const start = user.indexOf("[source-document]\n");
+        if (start < 0) {
+          return {
+            content: JSON.stringify({ drift: true, summary: "nothing found", content: "??" }),
+            toolCalls: [],
+            finishReason: undefined,
+          };
+        }
+        const from = start + "[source-document]\n".length;
+        const nextBlock = user.indexOf("\n\n[", from);
+        const source = nextBlock === -1 ? user.slice(from) : user.slice(from, nextBlock);
+        return {
+          content: JSON.stringify({
+            drift: true,
+            summary: "kept in step",
+            content: translate(source),
+          }),
+          toolCalls: [],
+          finishReason: undefined,
+        };
+      },
+    };
+  }
+
+  it("offers no prior translation when the memory is absent", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = translatingChat((source) => source.replace("Prose.", "Traduit."));
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: true }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.userContent()).not.toMatch(/prior-accepted-translation/);
+  });
+
+  it("renders a memory hit as context and still validates what comes back", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const source = "# Dev\n\n```js\nkeep()\n```\n";
+    const prior = "# Dev\n\nTraduit.\n\n```js\nkeep()\n```\n";
+    const key = buildTmKey({
+      sourceHash: contentFingerprint(source),
+      targetLang: "vi",
+      policyContext: POLICY,
+    });
+    // The model returns the prior text but drops the fence — a structural
+    // violation that proves validation still runs on a TM-shaped answer.
+    const chatDouble = chat([proposes("# Dev\n\nTraduit.\n"), proposes("# Dev\n\nTraduit.\n")]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": source,
+      [TM_PATH]: memoryWith(key, prior),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/structural validation failed/);
+    expect(error.message).toMatch(/fenced code block count changed/);
+    expect(chatDouble.calls()).toBe(2);
+  });
+
+  it("renders the prior-accepted-translation block in the prompt when the memory hits", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const prior = "# Dev\n\nTraduit.\n";
+    const key = buildTmKey({
+      sourceHash: contentFingerprint(SOURCE),
+      targetLang: "vi",
+      policyContext: POLICY,
+    });
+    const chatDouble = translatingChat((source) => source.replace("Prose.", "Traduit à nouveau."));
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      [TM_PATH]: memoryWith(key, prior),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: true }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    const user = chatDouble.userContent();
+    expect(user).toMatch(/\[prior-accepted-translation\]/);
+    expect(user).toContain(prior);
+  });
+
+  it("degrades a corrupt memory file to an empty store and completes", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = translatingChat((source) => source.replace("Prose.", "Traduit."));
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      [TM_PATH]: "{ not json",
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: true }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.userContent()).not.toMatch(/prior-accepted-translation/);
+  });
+
+  it("records each proposed pair in the memory blob the same commit publishes", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const translated = "# Dev\n\nTraduit.\n";
+    const chatDouble = chat([proposes(translated)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+    // The memory blob is the one carrying an "entries" array — distinct from
+    // the state blob, which carries "records".
+    const tmWrite = /** @type {any} */ (
+      forgeDouble.writes.find(
+        (w) =>
+          w.op === "createBlob" && typeof w.args[0] === "string" && w.args[0].includes('"entries"'),
+      )
+    );
+    const doc = JSON.parse(tmWrite.args[0]);
+    expect(doc.tmSchemaVersion).toBe(TM_SCHEMA_VERSION);
+    expect(doc.entries).toHaveLength(1);
+    expect(doc.entries[0].key).toEqual({
+      sourceHash: contentFingerprint(SOURCE),
+      targetLang: "vi",
+      policyContext: POLICY,
+    });
+    expect(doc.entries[0].value).toBe(translated);
   });
 });
 
