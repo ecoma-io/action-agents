@@ -295,6 +295,10 @@ describe("extractFrontmatter", () => {
     expectRefusal(extractFrontmatter(`---\n${raw(["title: *intro"])}---\n`), "alias");
   });
 
+  it("refuses a whole-line alias", () => {
+    expectRefusal(extractFrontmatter(`---\n${raw(["title: x", "*intro"])}---\n`), "alias");
+  });
+
   it("refuses merge keys", () => {
     expectRefusal(extractFrontmatter(`---\n${raw(["title: x", "<<: *base"])}---\n`), "merge-key");
   });
@@ -327,6 +331,24 @@ describe("extractFrontmatter", () => {
 
   it("refuses a colon with no following space", () => {
     expectRefusal(extractFrontmatter(`---\n${raw(["title:Café"])}---\n`), "unrecognized-line");
+  });
+
+  it("refuses a second ': ' in an unquoted value", () => {
+    const result = extractFrontmatter(`---\n${raw(["title: a: b"])}---\n`);
+    expectRefusal(result, "unrecognized-line");
+    expect(result.kind === "refused" && result.message).toContain(
+      "a second ': ' makes the value ambiguous",
+    );
+  });
+
+  it("records a bare key at end of input as an empty scalar", () => {
+    // `title:` with no following content line resolves at end of input: an
+    // empty scalar whose value span sits just past the line terminator,
+    // whether that terminator is LF or CRLF.
+    const extracted = extract("---\ntitle:\n---\nBody\n");
+    expect(extracted.keys).toEqual([{ name: "title", kind: "scalar", valueStart: 6, valueEnd: 6 }]);
+    const crlf = extract("---\r\ntitle:\r\n---\r\nBody\r\n");
+    expect(crlf.keys).toEqual([{ name: "title", kind: "scalar", valueStart: 7, valueEnd: 7 }]);
   });
 
   it("refuses a quoted key", () => {
@@ -470,6 +492,13 @@ describe("planFrontmatterProtection", () => {
     expect(planned.masked).toBe(`slug:\ndraft: ${TOKEN1}\n`);
     expect(planned.restoreMap).toEqual(new Map([[TOKEN1, "  "]]));
     expect(restore(planned.masked, planned.restoreMap)).toBe(raw(["slug:", "draft:   "]));
+  });
+
+  it("carries no token for a bare key at end of input", () => {
+    const planned = plan(raw(["slug:"]));
+    expect(planned.masked).toBe("slug:\n");
+    expect(planned.restoreMap.size).toBe(0);
+    expect(restore(planned.masked, planned.restoreMap)).toBe(raw(["slug:"]));
   });
 
   it("refuses raw text that still wears its fences", () => {
