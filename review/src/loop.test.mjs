@@ -12,6 +12,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createEvidence } from "#core/untrusted.mjs";
 import { createWorkspace } from "#core/workspace.mjs";
 
+import { canConcludeReview } from "./coverage.mjs";
 import { estimateTokens, runLoop } from "./loop.mjs";
 import { createTools } from "./tools.mjs";
 
@@ -386,6 +387,87 @@ describe("coverage accounting", () => {
     expect(outcome.bound).toBe("max-turns");
     expect(outcome.coverage.covered).toEqual(["src/a.mjs"]);
     expect(outcome.coverage.total).toBe(2);
+  });
+  it("a refused read never covers its path — coverage counts captured bytes", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ argumentsJson: '{"path":"src/missing.mjs"}' })] },
+      { content: '{"findings":[],"summary":"s"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/missing.mjs"],
+    });
+    expect(outcome.coverage.covered).toEqual([]);
+    expect(outcome.coverage.uncovered).toEqual(["src/missing.mjs"]);
+  });
+
+  it("a read of a path past the display cap still covers at its full spelling", async () => {
+    const rel = `src/${"d".repeat(120)}/${"e".repeat(120)}/${"f".repeat(120)}/x.mjs`;
+    mkdirSync(p.join(root, "src", "d".repeat(120), "e".repeat(120), "f".repeat(120)), {
+      recursive: true,
+    });
+    writeFileSync(p.join(root, rel), "content\n");
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ argumentsJson: JSON.stringify({ path: rel }) })] },
+      { content: '{"findings":[],"summary":"s"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: [rel],
+    });
+    expect(outcome.coverage.covered).toEqual([rel]);
+  });
+
+  it("the state inventory truncates a long read path for display only", async () => {
+    const rel = `src/${"d".repeat(120)}/${"e".repeat(120)}/${"f".repeat(120)}/x.mjs`;
+    mkdirSync(p.join(root, "src", "d".repeat(120), "e".repeat(120), "f".repeat(120)), {
+      recursive: true,
+    });
+    writeFileSync(p.join(root, rel), "y".repeat(4000) + "\n");
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ argumentsJson: JSON.stringify({ path: rel }) })] },
+      { content: '{"findings":[],"summary":"after compact"}' },
+    ]);
+    await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 4,
+      contextWindow: 1000,
+      expectedPaths: [rel],
+    });
+    const state = chat.requests.at(-1)?.messages[2]?.content ?? "";
+    expect(state).toContain(JSON.stringify(rel).slice(0, 300)); // the bounded spelling is shown
+    expect(state).not.toContain(rel); // the full path never rides in the message
+  });
+
+  it("zero captured bytes leave the expected set uncovered — the coverage gate refuses at high", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ argumentsJson: '{"path":"src/missing.mjs"}' })] },
+      { content: '{"findings":[],"summary":"s"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/missing.mjs"],
+      strictness: "high",
+    });
+    expect(canConcludeReview(outcome.coverage, "high")).toBe(false);
   });
 });
 

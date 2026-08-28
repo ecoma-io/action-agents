@@ -475,11 +475,17 @@ ignored deletion is outside the universe and never recorded. The expectation
 set itself does not move: a deletion stays expected, and what changes is only
 that the expectation can now be met.
 
-The read record is the ledger's `read_file` calls plus that code-recorded
-deletion set, every path normalised to the diff's canonical spelling, so
-`./src/a.mjs` and `src/a.mjs` are one file. `coverageReport(expected, read)`
-partitions the expected set into covered and uncovered; nothing the model
-wrote — summary, findings, self-assessment — enters the computation.
+The read record is the set of `read_file` calls whose bytes the run
+captured — a refused attempt (a missing, ignored or unresolvable path, a
+directory, binary content) is a tool error, never a read — plus that
+code-recorded deletion set, every path normalised to the diff's canonical
+spelling, so `./src/a.mjs` and `src/a.mjs` are one file. Coverage and the
+verification pass draw on the same captures by construction: both move only
+on a captured read, so a run that captured zero bytes of a changed file
+cannot claim it examined — at `high` the coverage gate refuses.
+`coverageReport(expected, read)` partitions the expected set into covered
+and uncovered; nothing the model wrote — summary, findings, self-assessment
+— enters the computation.
 
 The verdict is strictness's to set, and strictness is the maintainer's:
 
@@ -748,6 +754,9 @@ Every run ends in exactly one of three states:
   marker comment is upserted with the findings — or, when there are none,
   with a literal "No findings.", so a clean re-review clears whatever an
   earlier push left behind.
+  Findings the run withheld as unanchored are not "none": when nothing
+  published but findings were quarantined, the comment says so and counts
+  the withheld — a withheld review never renders as a clean one.
 - **PARTIAL** — the review says so honestly: a declared run gate refused the
   complete posture. The conditions are the ones this page already states — a
   bound ended it (`max-turns`, the tool-call ceiling, the evidence ceiling),

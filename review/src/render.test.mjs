@@ -94,6 +94,32 @@ describe("renderComment", () => {
     });
     expect(body).toContain("No findings.");
   });
+  it("a quarantine-only complete names the withheld count instead of a clean bill", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "high",
+      quarantinedCount: 2,
+    });
+    expect(body).toContain(
+      "No published findings — 2 findings withheld: no recorded read reaches their anchor lines.",
+    );
+    expect(body).not.toContain("No findings.");
+  });
+
+  it("the withheld line is singular for one withheld finding", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "high",
+      quarantinedCount: 1,
+    });
+    expect(body).toContain("1 finding withheld: no recorded read reaches its anchor line.");
+  });
 
   it("defangs inventory-derived paths before they enter backticks", () => {
     const body = renderComment({
