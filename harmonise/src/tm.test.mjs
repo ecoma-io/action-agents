@@ -1,9 +1,10 @@
 // Tests for the translation memory store. The rules under test are narrow:
 // keys are collision-free encodings of their three parts, the store answers
 // only exact (or, opt-in, whitespace-normalized) key matches and never
-// judges content, eviction follows a replayable LRU order with the cap as a
-// pure memory bound, and `parse` refuses foreign or malformed documents
-// whole while reporting every entry it had to refuse.
+// judges content, the store keeps every recorded entry — it never evicts,
+// because a forgotten entry is a merge base a state record can never reach
+// again — and `parse` refuses foreign or malformed documents whole while
+// reporting every entry it had to refuse.
 
 import { describe, expect, it } from "vitest";
 
@@ -13,7 +14,6 @@ import {
   parse,
   readTm,
   serialize,
-  TM_MAX_ENTRIES,
   TM_PATH,
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
@@ -86,12 +86,6 @@ describe("store", () => {
 });
 
 describe("fail-closed API misuse", () => {
-  it("refuses a maxEntries that is not a positive integer", () => {
-    for (const maxEntries of [0, -1, 1.5, Number.NaN]) {
-      expect(() => createTmStore({ maxEntries })).toThrow(TypeError);
-    }
-  });
-
   it("refuses non-string keys and values on record", () => {
     const store = createTmStore();
     expect(() => store.record(/** @type {any} */ (7), "x")).toThrow(TypeError);
@@ -109,30 +103,21 @@ describe("fail-closed API misuse", () => {
   });
 });
 
-describe("LRU eviction", () => {
-  it("evicts the least-recently inserted-or-accessed entry at the cap", () => {
-    const store = createTmStore({ maxEntries: 2 });
-    store.record(key("a", "fr", "ctx"), "1");
-    store.record(key("b", "fr", "ctx"), "2");
-    store.record(key("c", "fr", "ctx"), "3");
-    expect(store.size()).toBe(2);
-    expect(store.lookup(key("a", "fr", "ctx"))).toBeUndefined();
-    expect(store.lookup(key("b", "fr", "ctx"))).toBe("2");
-    expect(store.lookup(key("c", "fr", "ctx"))).toBe("3");
+describe("unbounded store", () => {
+  it("keeps every entry — the store never evicts, even far past the old 1000-entry cap", () => {
+    const store = createTmStore();
+    for (let index = 0; index < 1001; index++) {
+      store.record(key(`h${index}`, "fr", "ctx"), `v${index}`);
+    }
+    expect(store.size()).toBe(1001);
+    // The oldest entry may be a recorded pair's only merge base: eviction
+    // would be data loss, so nothing is dropped, oldest included.
+    expect(store.lookup(key("h0", "fr", "ctx"))).toBe("v0");
+    expect(store.lookup(key("h1000", "fr", "ctx"))).toBe("v1000");
   });
 
-  it("a lookup hit refreshes recency and survives the next eviction", () => {
-    const store = createTmStore({ maxEntries: 2 });
-    store.record(key("a", "fr", "ctx"), "1");
-    store.record(key("b", "fr", "ctx"), "2");
-    expect(store.lookup(key("a", "fr", "ctx"))).toBe("1");
-    store.record(key("c", "fr", "ctx"), "3");
-    expect(store.lookup(key("a", "fr", "ctx"))).toBe("1");
-    expect(store.lookup(key("b", "fr", "ctx"))).toBeUndefined();
-  });
-
-  it("re-recording an existing key at the cap evicts nothing", () => {
-    const store = createTmStore({ maxEntries: 2 });
+  it("re-recording an existing key updates the value without growing the store", () => {
+    const store = createTmStore();
     store.record(key("a", "fr", "ctx"), "1");
     store.record(key("b", "fr", "ctx"), "2");
     store.record(key("a", "fr", "ctx"), "1b");
@@ -141,14 +126,13 @@ describe("LRU eviction", () => {
     expect(store.lookup(key("a", "fr", "ctx"))).toBe("1b");
   });
 
-  it("the default cap is TM_MAX_ENTRIES", () => {
+  it("a lookup never drops a sibling entry", () => {
     const store = createTmStore();
-    for (let index = 0; index < TM_MAX_ENTRIES + 1; index++) {
-      store.record(key(`h${index}`, "fr", "ctx"), `v${index}`);
-    }
-    expect(store.size()).toBe(TM_MAX_ENTRIES);
-    expect(store.lookup(key("h0", "fr", "ctx"))).toBeUndefined();
-    expect(store.lookup(key(`h${TM_MAX_ENTRIES}`, "fr", "ctx"))).toBe(`v${TM_MAX_ENTRIES}`);
+    store.record(key("a", "fr", "ctx"), "1");
+    store.record(key("b", "fr", "ctx"), "2");
+    expect(store.lookup(key("a", "fr", "ctx"))).toBe("1");
+    expect(store.lookup(key("b", "fr", "ctx"))).toBe("2");
+    expect(store.size()).toBe(2);
   });
 });
 
@@ -184,38 +168,6 @@ describe("normalized-whitespace tier", () => {
     expect(store.size()).toBe(2);
   });
 
-  it("a tier-2 hit refreshes the primary entry's recency", () => {
-    const store = createTmStore({ maxEntries: 2, normalizeWhitespace: true });
-    store.record(k1, "v1");
-    store.record(key("other", "fr", "ctx"), "vo");
-    expect(store.lookup(k4)).toBe("v1"); // tier-2 hit touches k1
-    store.record(key("third", "fr", "ctx"), "v3");
-    expect(store.lookup(k1)).toBe("v1");
-    expect(store.lookup(key("other", "fr", "ctx"))).toBeUndefined();
-  });
-
-  it("evicting an entry takes its tier-2 alias with it when the alias names it", () => {
-    const store = createTmStore({ maxEntries: 2, normalizeWhitespace: true });
-    store.record(k1, "v1");
-    store.record(key("other", "fr", "ctx"), "vo");
-    store.record(key("third", "fr", "ctx"), "v3"); // evicts k1 and its alias
-    expect(store.lookup(k1)).toBeUndefined();
-    expect(store.lookup(k2)).toBeUndefined();
-    expect(store.lookup(key("other", "fr", "ctx"))).toBe("vo");
-    expect(store.size()).toBe(2);
-  });
-
-  it("an alias survives eviction of an older spelling when it names a newer record", () => {
-    const store = createTmStore({ maxEntries: 2, normalizeWhitespace: true });
-    store.record(k1, "first");
-    store.record(k2, "second"); // alias now names k2
-    store.record(key("third", "fr", "ctx"), "v3"); // evicts k1, alias kept
-    expect(store.lookup(k1)).toBe("second"); // k1's normalized form resolves to k2
-    expect(store.lookup(k3)).toBe("second");
-    expect(store.lookup(k2)).toBe("second");
-    expect(store.size()).toBe(2);
-  });
-
   it("never throws on a key it cannot decode", () => {
     const store = createTmStore({ normalizeWhitespace: true });
     expect(store.lookup("garbage")).toBeUndefined();
@@ -241,18 +193,36 @@ describe("serialize/parse", () => {
     ]);
   });
 
-  it("round-trips values, size and the LRU bound", () => {
-    const store = createTmStore({ maxEntries: 3 });
+  it("round-trips values and size — every entry survives the trip", () => {
+    const store = createTmStore();
     store.record(key("a", "fr", "ctx"), "1");
     store.record(key("b", "fr", "ctx"), "2");
     store.record(key("c", "fr", "ctx"), "3");
-    store.record(key("d", "fr", "ctx"), "4"); // evicts a
+    store.record(key("d", "fr", "ctx"), "4");
 
-    const revived = parse(serialize(store), { maxEntries: 3 });
+    const revived = parse(serialize(store));
     expect(revived.refused).toEqual([]);
-    expect(revived.store.size()).toBe(3);
-    expect(revived.store.lookup(key("a", "fr", "ctx"))).toBeUndefined();
+    expect(revived.store.size()).toBe(4);
+    expect(revived.store.lookup(key("a", "fr", "ctx"))).toBe("1");
     expect(revived.store.lookup(key("d", "fr", "ctx"))).toBe("4");
+  });
+
+  it("with keepKeys, omits every entry whose built key is not in the set", () => {
+    const store = createTmStore();
+    store.record(key("alpha", "fr", "strict"), "bonjour");
+    store.record(key("beta", "de", "loose"), "hallo");
+    const keep = new Set([key("beta", "de", "loose")]);
+    const document = JSON.parse(serialize(store, { keepKeys: keep }));
+    expect(document.entries).toEqual([
+      { key: { sourceHash: "beta", targetLang: "de", policyContext: "loose" }, value: "hallo" },
+    ]);
+  });
+
+  it("without keepKeys, serializes every entry", () => {
+    const store = createTmStore();
+    store.record(key("alpha", "fr", "strict"), "bonjour");
+    store.record(key("beta", "de", "loose"), "hallo");
+    expect(JSON.parse(serialize(store)).entries).toHaveLength(2);
   });
 
   it("re-derives tier-2 aliases on parse — they are not serialized state", () => {
@@ -263,16 +233,34 @@ describe("serialize/parse", () => {
     expect(revived.store.lookup(key("alpha  beta", "fr", "ctx"))).toBe("v");
   });
 
-  it("trims a document larger than the cap to its newest entries, without refusals", () => {
-    const store = createTmStore();
-    store.record(key("a", "fr", "ctx"), "1");
-    store.record(key("b", "fr", "ctx"), "2");
-    store.record(key("c", "fr", "ctx"), "3");
-    const revived = parse(serialize(store), { maxEntries: 2 });
-    expect(revived.refused).toEqual([]); // trimming is eviction, not refusal
-    expect(revived.store.size()).toBe(2);
-    expect(revived.store.lookup(key("a", "fr", "ctx"))).toBeUndefined();
-    expect(revived.store.lookup(key("c", "fr", "ctx"))).toBe("3");
+  it("replays a document far larger than any old bound whole, without refusals", () => {
+    const entries = [];
+    for (let index = 0; index < 1001; index++) {
+      entries.push({
+        key: { sourceHash: `h${index}`, targetLang: "fr", policyContext: "ctx" },
+        value: `v${index}`,
+      });
+    }
+    const { store, refused } = parse(
+      JSON.stringify({ tmSchemaVersion: TM_SCHEMA_VERSION, entries }),
+    );
+    expect(refused).toEqual([]);
+    expect(store.size()).toBe(1001);
+    expect(store.lookup(key("h0", "fr", "ctx"))).toBe("v0");
+    expect(store.lookup(key("h1000", "fr", "ctx"))).toBe("v1000");
+  });
+
+  it("duplicate keys inside one document resolve to their last occurrence", () => {
+    const entries = [
+      { key: { sourceHash: "a", targetLang: "fr", policyContext: "c" }, value: "first" },
+      { key: { sourceHash: "a", targetLang: "fr", policyContext: "c" }, value: "second" },
+    ];
+    const { store, refused } = parse(
+      JSON.stringify({ tmSchemaVersion: TM_SCHEMA_VERSION, entries }),
+    );
+    expect(refused).toEqual([]);
+    expect(store.size()).toBe(1);
+    expect(store.lookup(key("a", "fr", "c"))).toBe("second");
   });
 
   it("refuses to serialize something that is not a store", () => {

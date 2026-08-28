@@ -674,20 +674,36 @@ export async function run(inputs, context, io) {
     if (result.outcome.outcome === "proposed") {
       publishedSources.set(result.outcome.destinationPath, result.sourceFingerprint);
     } else {
-      // A noop is a re-check, not a publication: the model endorsed the bytes
-      // already on disk, so the destination keeps its recorded record —
-      // re-pinned with this run's currency so the next run can prove the pair
-      // unchanged and skip it (#88). A never-recorded pair stays unrecorded:
-      // nothing was translated, so there is nothing to carry.
+      // A noop is a re-check that came back as an endorsement: the model saw
+      // the bytes already on disk and answered that they already convey the
+      // current source. The record is re-pinned onto exactly those bytes —
+      // this run's source, policy and version — so the next run proves the
+      // pair unchanged and skips it at zero model calls (#88, #95). The
+      // endorsed bytes enter the memory under the same key a publication
+      // would use, so a later manual edit on this pair still finds a
+      // verified base to merge against. A never-recorded pair stays
+      // unrecorded: adopting pre-existing files is a human decision, not
+      // something an endorsement does behind the protection gate.
       const recorded = recordedRecords.find(
         (record) => record.destinationPath === result.outcome.destinationPath,
       );
-      if (recorded !== undefined) {
+      const endorsed = job.existing;
+      if (recorded !== undefined && endorsed !== undefined) {
         rePinned.set(result.outcome.destinationPath, {
           ...recorded,
+          sourceFingerprint: result.sourceFingerprint,
+          translationFingerprint: contentFingerprint(endorsed),
           policyFingerprint: policyDigest,
           transformationVersion: TRANSFORMATION_VERSION,
         });
+        memory.record(
+          buildTmKey({
+            sourceHash: result.sourceFingerprint,
+            targetLang: result.outcome.lang,
+            policyContext: policyDigest,
+          }),
+          endorsed,
+        );
       }
     }
     slots[job.slot] = result.outcome;
@@ -812,9 +828,22 @@ export async function run(inputs, context, io) {
       /** @type {string} */ (proposal.content),
     );
   }
+  // The memory is serialized down to exactly the entries the records above
+  // reference: the state→memory join can never lose a base to eviction,
+  // because there is no eviction — the file is bounded by the state it
+  // serves, and entries no record references are dropped here.
+  const liveKeys = new Set(
+    records.map((record) =>
+      buildTmKey({
+        sourceHash: record.sourceFingerprint,
+        targetLang: record.language,
+        policyContext: record.policyFingerprint,
+      }),
+    ),
+  );
   const stateBlob = await world.forge.createBlob(renderState(records));
   changes.push({ path: STATE_PATH, blobSha: stateBlob.sha });
-  const tmBlob = await world.forge.createBlob(serializeTm(memory));
+  const tmBlob = await world.forge.createBlob(serializeTm(memory, { keepKeys: liveKeys }));
   changes.push({ path: TM_PATH, blobSha: tmBlob.sha });
   const tree = await world.forge.createTree(ref.sha, changes);
   const commit = await world.forge.createCommit(

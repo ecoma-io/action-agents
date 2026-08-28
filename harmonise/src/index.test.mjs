@@ -1838,13 +1838,13 @@ describe("run with manual-edit protection and three-way merge", () => {
     expect(state.records[0]?.translationFingerprint).toBe(contentFingerprint(EDITED));
   });
 
-  it("keeps a no-op answer a no-op on a drifted pair — nothing merged, nothing republished", async () => {
+  it("converges a drifted pair the model endorses — the record catches up to the disk", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // The answer is byte-identical to the drifted target, so the pair is a
-    // no-op before the merge is ever consulted — a no-op carries no fresh
-    // text, and protection does not turn it into a publication. The
-    // recorded state is re-pinned with the run's currency (#88) — the model
-    // endorsed the bytes — but nothing was merged or republished.
+    // The source changed, so the model path runs; the model answers that the
+    // manual edit on disk already conveys it (a noop). The endorsement
+    // re-pins the record onto exactly the disk bytes with this run's
+    // currency (#88, #95) — the old pin kept the stale fingerprint and the
+    // pair re-translated forever.
     const chatDouble = chat([proposes(EDITED)]);
     const forgeDouble = forge({
       ".github/action-agents/harmonise/harmonise.json5": CONFIG,
@@ -1860,18 +1860,45 @@ describe("run with manual-edit protection and three-way merge", () => {
     ).resolves.toBeUndefined();
 
     expect(chatDouble.calls()).toBe(1);
-    // The re-pinned record reaches the state file, but nothing was merged
-    // or republished — the target's manual edit stays untouched.
-    const state = stateBlobOf(forgeDouble);
-    expect(state.records).toEqual([viPublication()]);
-    const tree = /** @type {{ args: unknown[] }} */ (
-      forgeDouble.writes.find((w) => w.op === "createTree")
-    );
-    const changes = /** @type {{ path: string }[]} */ (tree.args[1]);
-    expect(changes.map((change) => change.path)).toEqual([STATE_PATH, TM_PATH]);
     const out = logged(log);
     expect(out).toMatch(/\[existing\] unchanged/);
     expect(out).not.toMatch(/three-way merge/);
+    // The record was re-pinned onto the endorsed bytes with this run's
+    // source: nothing was merged or republished, and the manual edit is the
+    // recorded publication now.
+    const healed = viPublication({ source: NEW_SOURCE, translation: EDITED });
+    expect(stateBlobOf(forgeDouble)).toEqual({ records: [healed] });
+    // The endorsed bytes are in the memory under the healed record's key, so
+    // a later manual edit on this pair still finds a verified base.
+    expect(
+      tmOf(forgeDouble).lookup(
+        buildTmKey({
+          sourceHash: contentFingerprint(NEW_SOURCE),
+          targetLang: "vi",
+          policyContext: POLICY,
+        }),
+      ),
+    ).toBe(EDITED);
+    // Second run: the pair is provably unchanged — zero model calls, zero
+    // writes, the honest green run. The memory file is the one this run
+    // published, prune included.
+    const publishedMemory = /** @type {string} */ (
+      blobsOf(forgeDouble)[blobsOf(forgeDouble).length - 1]
+    );
+    const secondForge = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": NEW_SOURCE,
+      "manual/vi/dev.md": EDITED,
+      [STATE_PATH]: renderState([healed]),
+      [TM_PATH]: publishedMemory,
+    });
+    const secondChat = chat([new Error("the model must not be called")]);
+    const secondIo = /** @type {any} */ ({ forge: secondForge, chat: secondChat, evidence });
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), secondIo),
+    ).resolves.toBeUndefined();
+    expect(secondChat.calls()).toBe(0);
+    expect(secondForge.writes).toEqual([]);
   });
 
   describe("run with the proposal branch unmerged", () => {
