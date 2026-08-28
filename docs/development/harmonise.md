@@ -182,6 +182,7 @@ replace each term with a per-term unique placeholder
   ↓ LLM translates (preserves placeholders)
 validate placeholder count and integrity per term
   ↓ restore each placeholder to exact original glossary term
+validate link identity against the source document
 translated document
 ```
 
@@ -393,7 +394,11 @@ Structural validation occurs after translation:
 - **Placeholders:** All glossary and skip placeholders must be present and intact
 - **Position:** Fenced code blocks must appear in the same order; heading text may change
 
-**Validation is limited to counting and syntax checking.** The action does not parse or validate Markdown semantics beyond these rules. Code block content may change; link destinations may change; heading text may change.
+Link identity is validated after translation, in the same pass as the structural checks. The source document — restored from its protected form, exactly what the model saw — and the sanitised translation are each collected into a list of links: inline links, images, reference definitions and autolinks, with each one's destination, title, line and visible text. The two lists must describe the same links: every destination, title and link text is matched one-to-one per kind, through the same inventory resolvers the link rewriter localized with (an internal destination counts as unchanged when it resolves to the same target document or image, so a rewritten spelling is never mistaken for drift).
+
+A pair whose links do not match fails with one violation line per difference: a re-targeted destination, an added link with no source counterpart, or a removed one. Reordering prose is not a violation — links ride with their sentences, so matching is per kind and per identity, not by document position. Refused or malformed destinations compare verbatim: whatever the model produced must still resolve the way the source did.
+
+**Validation is limited to counting, syntax checking, and link identity.** The action does not parse or validate Markdown semantics beyond these rules. Code block content may change; heading text may change; link destinations may not.
 
 ### Non-goal
 
@@ -529,6 +534,7 @@ A pair that skips does not fail the run; it is recorded in the report.
 - LLM returns empty content → run fails after retries;
 - Generation failure for missing translation → run fails;
 - Structural validation failure → run fails;
+- Link validation failure (a re-targeted, added or removed link) → run fails, pair recorded as failed after the one retry;
 
 **Answer parsing:** The action accepts plain JSON or JSON wrapped in markdown code blocks (`json...`). Provider drift in formatting is tolerated as long as the JSON is parseable. Malformed JSON that cannot be parsed causes failure after retries.
 

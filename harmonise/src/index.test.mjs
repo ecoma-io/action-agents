@@ -567,6 +567,29 @@ describe("run", () => {
     expect(error.message).toMatch(/structural validation failed/);
   });
 
+  it("fails a pair whose answer re-targets a link, after exactly one retry", async () => {
+    const chatDouble = chat([
+      proposes("# Dev\n\nSee [api](https://evil.example).\n"),
+      proposes("# Dev\n\nSee [api](https://evil.example).\n"),
+    ]);
+    const ioDouble = /** @type {any} */ ({
+      forge: forge({
+        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+        "manual/dev.md": "# Dev\n\nSee [api](api.md).\n",
+        "manual/api.md": "# API\n",
+      }),
+      chat: chatDouble,
+      evidence,
+    });
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(
+      /link validation failed: line 3: link destination changed: 'api\.md' → 'https:\/\/evil\.example'/,
+    );
+    expect(chatDouble.calls()).toBe(2);
+  });
+
   it("resolves a planned target's links before the translation exists", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const ioDouble = io(

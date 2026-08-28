@@ -9,7 +9,9 @@
 
 import { describe, expect, it } from "vitest";
 
-import { sanitizeTranslationHtml } from "./plan.mjs";
+import { buildInventory } from "./inventory.mjs";
+import { parseLanguagePattern } from "./patterns.mjs";
+import { preparePair, sanitizeTranslationHtml, translatePair } from "./plan.mjs";
 
 describe("sanitizeTranslationHtml", () => {
   it("strips script tags from prose", () => {
@@ -172,5 +174,152 @@ describe("sanitizeTranslationHtml", () => {
     for (const [index, line] of inputLines.entries()) {
       expect(resultLines[index]?.length).toBe(line.length);
     }
+  });
+});
+
+describe("translatePair", () => {
+  /**
+   * A real inventory over a tiny tree — resolveDocument answers exactly the
+   * files the tree holds, the way the run resolves them.
+   *
+   * @param {string[]} paths
+   * @returns {import("./inventory.mjs").Inventory}
+   */
+  function inventoryFor(paths) {
+    return buildInventory({
+      entries: paths.map((path) => ({ path, type: "blob" })),
+      config: {
+        sourceLanguage: "en",
+        languages: {
+          en: parseLanguagePattern("manual/{document}.md"),
+          vi: parseLanguagePattern("manual/vi/{document}.md"),
+        },
+        ignore: [],
+        glossary: [],
+        instructions: { languages: {} },
+      },
+      documents: [],
+    });
+  }
+
+  /**
+   * A chat double that answers with canned bodies, repeating the last one,
+   * and counts the requests it received.
+   *
+   * @param {string[]} bodies
+   * @returns {import("#core/chat.mjs").Chat & { calls: () => number }}
+   */
+  function chatWith(bodies) {
+    let cursor = 0;
+    let calls = 0;
+    return /** @type {import("#core/chat.mjs").Chat & { calls: () => number }} */ ({
+      calls: () => calls,
+      async complete() {
+        const body = bodies[Math.min(cursor, bodies.length - 1)];
+        cursor++;
+        calls++;
+        return { content: body ?? "", toolCalls: [], finishReason: "stop" };
+      },
+    });
+  }
+
+  /** @param {string} content @returns {string} a JSON answer proposing a translation */
+  function proposes(content) {
+    return JSON.stringify({ drift: true, summary: "kept in step", content });
+  }
+
+  const evidence = /** @type {import("#core/untrusted.mjs").Evidence} */ ({
+    /** @param {string} label @param {string} content */
+    wrap(label, content) {
+      return `[${label}]\n${content}`;
+    },
+  });
+  const config = /** @type {import("./config.mjs").HarmoniseConfig} */ ({
+    sourceLanguage: "en",
+    languages: { vi: parseLanguagePattern("manual/vi/{document}.md") },
+    ignore: [],
+    glossary: [],
+    instructions: { languages: {} },
+  });
+  const sourceText = "# Dev\n\nSee [api](api.md).\n";
+
+  /**
+   * Prepares the dev → vi pair; the resolver answers `manual/vi/api.md`,
+   * which localizes back to the same `api.md` spelling, so the protected
+   * text keeps `[api](api.md)` unchanged.
+   */
+  function prepare() {
+    return preparePair({
+      slug: "dev",
+      lang: "vi",
+      sourcePath: "manual/dev.md",
+      target: { path: "manual/vi/dev.md", state: "missing" },
+      sourceText,
+      inventory: inventoryFor(["manual/dev.md", "manual/api.md", "manual/vi/api.md"]),
+      config,
+    });
+  }
+
+  /** @param {import("./plan.mjs").PreparedPair} prepared @param {string} answerBody */
+  function translate(prepared, answerBody) {
+    return translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat: chatWith([answerBody]),
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+  }
+
+  it("accepts an honest translation with its links untouched", async () => {
+    const prepared = prepare();
+    const chat = chatWith([proposes(prepared.protectedText)]);
+    const result = await translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    expect(result.outcome).toBe("proposal");
+    expect(result.summary).toBe("kept in step");
+    expect(chat.calls()).toBe(1);
+  });
+
+  it("rejects a re-targeted link on the first attempt", async () => {
+    const prepared = prepare();
+    const evil = proposes(
+      prepared.protectedText.replace("[api](api.md)", "[api](https://evil.example)"),
+    );
+    const chat = chatWith([evil, evil]);
+    await expect(
+      translatePair({
+        prepared,
+        sourceLanguage: "en",
+        existingText: undefined,
+        model: "gpt-x",
+        chat,
+        evidence,
+        repository: { name: "acme/docs", description: "Documentation" },
+        documents: { languages: {} },
+      }),
+    ).rejects.toThrowError(
+      /link validation failed: line 3: link destination changed: 'api\.md' → 'https:\/\/evil\.example'/,
+    );
+    expect(chat.calls()).toBe(1);
+  });
+
+  it("leaves sanitizer output alone when no links changed", async () => {
+    // The sanitizer blanks dangerous HTML before validation runs; a
+    // translation with no link drift passes regardless.
+    const prepared = prepare();
+    const result = await translate(prepared, proposes(prepared.protectedText));
+    expect(result.outcome).toBe("proposal");
   });
 });
