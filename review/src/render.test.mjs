@@ -55,6 +55,22 @@ describe("renderComment", () => {
     expect(body).not.toContain("Nits");
   });
 
+  it("at low, a mixed concern+nit list renders the concern only", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [
+        { severity: "concern", file: "src/a.mjs", line: 2, message: "real" },
+        { severity: "nit", file: "src/a.mjs", line: 1, message: "m" },
+      ],
+      strictness: "low",
+    });
+    expect(body).toContain("### Concerns (1)");
+    expect(body).toContain("- `src/a.mjs:2` — real");
+    expect(body).not.toContain("Nits");
+  });
+
   it("leads partials with a prominent banner naming the bound", () => {
     const body = renderComment({
       status: "Partial",

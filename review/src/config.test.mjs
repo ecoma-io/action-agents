@@ -104,6 +104,7 @@ describe("validateConfig", () => {
     const config = validateConfig(null);
     expect(config).toEqual({
       strictness: "medium",
+      strategy: "standard",
       language: "en",
       ignore: [],
       maxDiffLines: 5000,
@@ -114,10 +115,20 @@ describe("validateConfig", () => {
 
   it("refuses unknown keys, bad strictness, bad language tags and non-positive budgets", () => {
     expect(() => validateConfig({ strickness: "low" })).toThrow(/unknown config key/);
+    expect(() => validateConfig({ stratagy: "standard" })).toThrow(/unknown config key/);
     expect(() => validateConfig({ strictness: "extreme" })).toThrow(/one of low, medium, high/);
     expect(() => validateConfig({ language: "not a tag!" })).toThrow(/BCP-47/);
     expect(() => validateConfig({ maxDiffLines: 0 })).toThrow(/at least 1/);
     expect(() => validateConfig({ maxDiffLines: 1.5 })).toThrow(/whole number/);
+  });
+
+  it("accepts strategy and defaults it to standard when absent", () => {
+    expect(validateConfig({}).strategy).toBe("standard");
+    expect(validateConfig({ strategy: "standard" }).strategy).toBe("standard");
+    expect(validateConfig({ strategy: "adversarial" }).strategy).toBe("adversarial");
+    // A present-and-invalid strategy refuses exactly like strictness.
+    expect(() => validateConfig({ strategy: "paranoid" })).toThrow(/one of standard, adversarial/);
+    expect(() => validateConfig({ strategy: null })).toThrow(/one of standard, adversarial/);
   });
 
   it("defaults absent keys but refuses present-and-invalid ones", () => {

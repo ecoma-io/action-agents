@@ -31,6 +31,10 @@ import { json5Parse } from "#core/json5-parse.mjs";
  */
 
 /**
+ * @typedef {"standard" | "adversarial"} Strategy
+ */
+
+/**
  * @typedef {object} ReviewRule
  * @property {string[]} include globs over repository-relative paths, `!` negates within the list
  * @property {string} instruction the rule document's path on the default branch
@@ -39,6 +43,7 @@ import { json5Parse } from "#core/json5-parse.mjs";
 /**
  * @typedef {object} ReviewConfig
  * @property {Strictness} strictness
+ * @property {Strategy} strategy
  * @property {string} language a BCP-47 tag shaping prose, never the contract
  * @property {string[]} ignore the universe filter, glob dialect
  * @property {number} maxDiffLines counted additions plus deletions, never asked of a model
@@ -60,6 +65,8 @@ const DEFAULT_LOCATIONS = [
 const CONVENTION_INSTRUCTION_PATH = ".github/action-agents/review/instruction.md";
 
 const STRICTNESS = /** @type {const} */ (["low", "medium", "high"]);
+
+const STRATEGY = /** @type {const} */ (["standard", "adversarial"]);
 
 // Well-formed enough to be a tag; permissive where real tags vary. Language
 // shapes reviewer prose only — severity, paths, lines and schema never move.
@@ -152,6 +159,7 @@ export function validateConfig(raw) {
   if (raw === null) {
     return {
       strictness: "medium",
+      strategy: "standard",
       language: "en",
       ignore: [],
       maxDiffLines: 5000,
@@ -163,6 +171,7 @@ export function validateConfig(raw) {
   for (const key of Object.keys(raw)) {
     if (
       key !== "strictness" &&
+      key !== "strategy" &&
       key !== "language" &&
       key !== "ignore" &&
       key !== "maxDiffLines" &&
@@ -170,8 +179,8 @@ export function validateConfig(raw) {
       key !== "instructions"
     ) {
       throw new Error(
-        `unknown config key '${key}' — the file holds strictness, language, ignore, ` +
-          `maxDiffLines, rules and instructions`,
+        `unknown config key '${key}' — the file holds strictness, strategy, language, ` +
+          `ignore, maxDiffLines, rules and instructions`,
       );
     }
   }
@@ -189,6 +198,17 @@ export function validateConfig(raw) {
     );
   }
   const strictness = /** @type {Strictness} */ (strictnessValue);
+
+  const strategyValue = raw["strategy"] === undefined ? "standard" : raw["strategy"];
+  if (
+    typeof strategyValue !== "string" ||
+    !STRATEGY.includes(/** @type {Strategy} */ (strategyValue))
+  ) {
+    throw new Error(
+      `strategy must be one of standard, adversarial — got '${String(strategyValue)}'`,
+    );
+  }
+  const strategy = /** @type {Strategy} */ (strategyValue);
 
   const languageValue = raw["language"] === undefined ? "en" : raw["language"];
   if (typeof languageValue !== "string" || !LANGUAGE_TAG.test(languageValue)) {
@@ -277,6 +297,7 @@ export function validateConfig(raw) {
 
   return {
     strictness,
+    strategy,
     language: languageValue,
     ignore,
     maxDiffLines: maxDiffLinesValue,

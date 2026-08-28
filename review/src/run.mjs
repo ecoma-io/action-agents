@@ -137,6 +137,8 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     title: snapshot.title,
     body: snapshot.body,
     language: config.language,
+    strictness: config.strictness,
+    strategy: config.strategy,
     reviewed: inventory.reviewed,
     instruction: documents.instruction,
     activeRules,
@@ -186,7 +188,11 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     reviewed: inventory.reviewed,
     workspace,
   });
+
   for (const rejection of validated.rejections) io.info(`review: finding rejected — ${rejection}`);
+  // Strictness is review policy, not a rendering detail: at low the nits
+  // leave the published set here — each drop logged, concerns untouchable.
+  const findings = applyStrictness(validated.findings, config.strictness, (line) => io.info(line));
 
   const status =
     outcome.bound === undefined
@@ -196,7 +202,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     status: status.label,
     headSha,
     summary: validated.summary,
-    findings: validated.findings,
+    findings,
     strictness: config.strictness,
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
@@ -231,9 +237,37 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   });
   return {
     outcome: "published",
-    reason: `${status.label} review published (${validated.findings.length} findings)`,
+    reason: `${status.label} review published (${findings.length} findings)`,
     commentId: upsert.id,
   };
+}
+
+/**
+ * The strictness policy over the validated list. At `low` a nit is below
+ * the inclusion bar: it leaves the set here, before rendering, and its drop
+ * is logged like any other refusal — the model never controls its own bar,
+ * and `medium`/`high` keep every finding. Rendering still omits low's nits
+ * section, which this makes trivially empty rather than load-bearing.
+ *
+ * @param {import("./answer.mjs").Finding[]} findings the validated, capped list
+ * @param {import("./config.mjs").Strictness} strictness
+ * @param {(line: string) => void} info the run's log sink
+ * @returns {import("./answer.mjs").Finding[]} the published set
+ */
+function applyStrictness(findings, strictness, info) {
+  if (strictness !== "low") return findings;
+  /** @type {import("./answer.mjs").Finding[]} */
+  const kept = [];
+  for (const finding of findings) {
+    if (finding.severity === "nit") {
+      info(
+        `review: nit dropped at low strictness — ${finding.file}:${String(finding.line)} ${finding.message}`,
+      );
+      continue;
+    }
+    kept.push(finding);
+  }
+  return kept;
 }
 
 /**

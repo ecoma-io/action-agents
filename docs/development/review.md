@@ -137,6 +137,12 @@ removed when `review` ships rather than deprecated later.
   // instruction document, not here.
   strictness: "medium",
 
+  // The review's posture, orthogonal to strictness. "standard" (the
+  // default) reviews normally; "adversarial" tells the reviewer to treat
+  // its candidate findings as hypotheses pending verification. It shapes
+  // how the model reviews — never what the contract enforces.
+  strategy: "standard",
+
   // The language findings are written in, as a BCP-47 tag.
   language: "en",
 
@@ -171,8 +177,8 @@ removed when `review` ships rather than deprecated later.
 
 ### Validation, all of it at startup
 
-- `strictness` is one of the three values, `language` a well-formed BCP-47
-  tag, `maxDiffLines` at least 1;
+- `strictness` is one of the three values, `strategy` one of the two,
+  `language` a well-formed BCP-47 tag, `maxDiffLines` at least 1;
 - every rule's instruction document must exist on the default branch;
 - instruction and rule documents carry the same 8 KiB cap as every action's
   documents on [the configuration page](configuration.md) — overflow is
@@ -345,8 +351,9 @@ instruction document, or by anything the model says.
 Assembled in one order, then extended as the loop runs:
 
 ```text
-1  system    the task, the output contract, the repository's name and
-             description, the base…head range under review
+1  system    the task, the output contract, the review-mode paragraphs, the
+             repository's name and description, the base…head range under
+             review
 2  custom    the instruction document, if it exists
 3  rules     every rule whose include matches a changed file, its document,
              in config order
@@ -360,6 +367,19 @@ message — several providers reject multiple system messages, and one message
 leaves no ordering ambiguity. Tier 4 opens the single `user` message as
 wrapped evidence blocks; from then on each tool result rides in a `tool`
 message of its own, as the chat-completions wire format requires.
+
+Two config keys each contribute a short mode paragraph to tier 1.
+`strictness` picks the effort posture: `low` investigates lightly, prioritises
+concerns and reports only what it is confident matters; `medium` states the
+default — a normal, thorough review that anchors every finding; `high` is
+strict and evidence-driven — every finding verified against concrete code
+before reporting, no unconfirmed hypotheses, reading every changed file stated
+as the expectation (coverage enforcement is a later mechanism, not prose).
+`strategy: "adversarial"` appends a second paragraph at any strictness:
+candidate findings are hypotheses pending verification, counterexamples are
+actively sought, and a separate verification stage follows. The paragraphs
+steer effort only — no ceiling, contract or enforcement is ever promised in
+prose.
 
 One thing is placed deliberately low: the pull request's title and body are
 attacker-authored text, so they enter as wrapped evidence, below every
@@ -474,11 +494,13 @@ checked against the reviewed snapshot:
 
 An invalid finding is rejected individually and logged with the finding that
 produced it — the run is not failed for one bad anchor among good ones, and
-nothing is coerced into looking valid. Strictness then filters what survives:
-at `low`, nits are discarded; at `medium`, nits are kept and rendered
-collapsed; at `high`, everything is kept, nothing collapsed. Filtering and
-rendering are deterministic code — the model never controls its own inclusion
-bar.
+nothing is coerced into looking valid. Strictness is review policy, not a
+rendering detail: after the cap, at `low` every surviving nit is dropped from
+the published set and its drop logged — a nit at `low` never reaches the
+comment, the published count or the reader, and concerns always survive
+(concerns sort first, so the cap can never evict one). At `medium` and
+`high` every finding survives to rendering. Filtering and rendering are
+deterministic code — the model never controls its own inclusion bar.
 
 Survivors are deduplicated — identity is `(file, line, severity, message)`
 with the message trimmed, so only exact logical duplicates collapse, never two
@@ -561,7 +583,8 @@ Reviewed head `414dd39a…`
 
 At `medium` strictness the nits section renders inside a collapsible
 `<details>` block — each nit still individually anchored, one click away, not
-hidden. At `low` there is no nits section; at `high` there is no collapsing.
+hidden. At `low` there is no nits section — the nits were already dropped by
+policy before rendering; at `high` there is no collapsing.
 
 The body carries the status, the reviewed head SHA, the summary and the
 findings — and nothing volatile: no timestamp (the comment interface shows
