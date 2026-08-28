@@ -299,8 +299,13 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
 
   // The declared gates decide the concluding posture — the loop's bound
   // accounting, the coverage condition, the publication invariants. The
-  // model's summary text is never consulted; each refusal names its gate
-  // in the log, and the first failure's reason leads the partial comment.
+  // provenance facts are the FINAL published set — the collection the
+  // comment body (and, once wired, the artifact) carries: post nit-drop,
+  // post verification — and the gate re-derives every published finding's
+  // anchor from the run's recorded reads itself, not from the references
+  // the findings already wear. The model's summary text is never
+  // consulted; each refusal names its gate in the log, and the first
+  // failure's reason leads the partial comment.
   const report = evaluateGates({
     conclusion: { held: true },
     bound: {
@@ -313,7 +318,11 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
       maxEvidenceBytes: outcome.maxEvidenceBytes,
     },
     coverage: { report: outcome.coverage, strictness: config.strictness },
-    provenance: { published: anchored.published, quarantined: anchored.quarantined },
+    provenance: {
+      published,
+      quarantined: anchored.quarantined,
+      ledger: readsFromRecordedReads(recordedReads),
+    },
     verification: verified.accounting,
   });
   for (const result of report.failed) {
