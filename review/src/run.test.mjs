@@ -301,6 +301,85 @@ describe("dry run", () => {
   });
 });
 
+describe("strictness policy and strategy", () => {
+  const MIXED_ANSWER =
+    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+    '{"severity":"nit","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"mixed"}';
+
+  it("at low, nits leave the published set: concerns only, each drop logged", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub({ config: '{ strictness: "low" }' });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat: chatStub(MIXED_ANSWER), now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("- `src/a.mjs:2` — off-by-one");
+    expect(body).not.toContain("style nit");
+    expect(body).not.toContain("Nits");
+    expect(logged.some((line) => line.includes("nit dropped at low strictness"))).toBe(true);
+  });
+
+  it("at medium the same answer keeps its nit, and absent strategy equals explicit standard byte for byte", async () => {
+    const forgeDefault = forgeStub();
+    const forgeExplicit = forgeStub({ config: '{ strategy: "standard" }' });
+    const defaultRun = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forgeDefault, chatStub(MIXED_ANSWER)),
+    });
+    const explicitRun = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forgeExplicit, chatStub(MIXED_ANSWER)),
+    });
+    expect(defaultRun.outcome).toBe("published");
+    expect(explicitRun.outcome).toBe("published");
+    // medium+standard is today's behavior: same findings, same validation,
+    // same rendered body. (The marker id is run-scoped, so the comparison
+    // starts after the marker line.)
+    const afterMarker = (/** @type {{ body?: string } | undefined} */ upsert) =>
+      (upsert?.body ?? "").split("\n").slice(1).join("\n");
+    expect(afterMarker(forgeExplicit.calls.upserts[0])).toBe(
+      afterMarker(forgeDefault.calls.upserts[0]),
+    );
+    const body = forgeDefault.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("<details>");
+    expect(body).toContain("- `src/a.mjs:1` — style nit");
+  });
+
+  it("adversarial+high: the system message carries both mode paragraphs", async () => {
+    /** @type {{ messages?: import("#core/chat.mjs").ChatMessage[] }[]} */
+    const requests = [];
+    const chat =
+      /** @type {import("#core/chat.mjs").Chat} */
+      ({
+        async complete(request) {
+          requests.push(request);
+          return { content: MIXED_ANSWER, toolCalls: [], finishReason: "stop" };
+        },
+      });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forgeStub({ config: '{ strictness: "high", strategy: "adversarial" }' }), chat),
+    });
+    expect(result.outcome).toBe("published");
+    expect(requests).toHaveLength(1);
+    const system = requests[0]?.messages?.find((message) => message.role === "system")?.content;
+    expect(system).toContain('strictness "high"');
+    expect(system).toContain('Review strategy — "adversarial"');
+    expect(system).toContain("hypotheses pending");
+  });
+});
+
 describe("failure posture", () => {
   it("fails red on a twice-invalid final answer and writes nothing", async () => {
     const forge = forgeStub();
