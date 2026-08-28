@@ -171,7 +171,7 @@ function rewriteDestinations(masked, line, from, context) {
  * @param {number} openerAt position of `](`
  * @returns {number | null}
  */
-function openingBracket(masked, openerAt) {
+export function openingBracket(masked, openerAt) {
   let depth = 1;
   for (let cursor = openerAt - 1; cursor >= 0; cursor--) {
     const char = masked[cursor] ?? "";
@@ -193,26 +193,17 @@ function openingBracket(masked, openerAt) {
  * @returns {string | null}
  */
 function localize(raw, isImage, context) {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  if (/^\/{1,2}/.test(trimmed)) return null; // root-relative or protocol-relative
-  if (/^#/.test(trimmed)) return null; // same-page anchor
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return null; // any scheme
+  const absolute = resolveLocalDestination(raw, context.sourceDocPath);
+  if (absolute === null) return null;
 
   // A trailing quoted title rides along untouched: only the path part moves.
+  const trimmed = raw.trim();
   const titled = /^\s*(\S+)\s+(['"]).*\2\s*$/.exec(trimmed);
   const pathPart = titled?.[1] ?? trimmed;
   const titleTail = titled !== null ? trimmed.slice(titled[1]?.length ?? 0) : "";
-
   const split = splitDestination(pathPart);
-  if (split === null) return null;
+  if (split === null) return null; // refused inside resolveLocalDestination — kept for the type
   const { rawPath, tail } = split;
-
-  const decoded = decodeSegments(rawPath);
-  if (decoded === null || decoded === "" || decoded.startsWith("/")) return null;
-
-  const absolute = normalizePath(`${directoryOf(context.sourceDocPath)}/${decoded}`);
-  if (absolute === null) return null;
 
   const resolved = isImage ? context.resolveImage(absolute) : context.resolveDocument(absolute);
   if (resolved === null || resolved === absolute) return null;
@@ -235,6 +226,41 @@ function localize(raw, isImage, context) {
   // directory, re-encoded conservatively.
   const relative = relativePath(directoryOf(context.translatedDocPath), resolved);
   return `${relative.map(encodeSegment).join("/")}${tail}${titleTail}`;
+}
+
+/**
+ * The refusal half of `localize`, exported for post-model link validation:
+ * where a destination points when the ladder treats it as local, judged from
+ * `fromDocPath`'s directory. Every shape the ladder refuses — empty,
+ * root-relative, protocol-relative, same-page anchors, schemes, whitespace
+ * in the path, malformed or escaping percent-encodings — returns null,
+ * meaning "stay as authored"; everything else returns the normalized
+ * repository-absolute path. Sharing the ladder keeps validation's notion of
+ * "refused" identical to the rewriter's by construction, so the two can
+ * never drift apart.
+ *
+ * @param {string} raw the destination exactly as written
+ * @param {string} fromDocPath repository path of the document holding the link
+ * @returns {string | null}
+ */
+export function resolveLocalDestination(raw, fromDocPath) {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  if (/^\/{1,2}/.test(trimmed)) return null; // root-relative or protocol-relative
+  if (/^#/.test(trimmed)) return null; // same-page anchor
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return null; // any scheme
+
+  // A trailing quoted title rides along untouched: only the path part moves.
+  const titled = /^\s*(\S+)\s+(['"]).*\2\s*$/.exec(trimmed);
+  const pathPart = titled?.[1] ?? trimmed;
+
+  const split = splitDestination(pathPart);
+  if (split === null) return null;
+
+  const decoded = decodeSegments(split.rawPath);
+  if (decoded === null || decoded === "" || decoded.startsWith("/")) return null;
+
+  return normalizePath(`${directoryOf(fromDocPath)}/${decoded}`);
 }
 
 /**
@@ -263,7 +289,7 @@ function insertLanguageTag(rawPath, tag) {
  * @param {string} destination
  * @returns {{ rawPath: string, tail: string } | null}
  */
-function splitDestination(destination) {
+export function splitDestination(destination) {
   const hash = destination.indexOf("#");
   const query = destination.indexOf("?");
   const cut =

@@ -12,6 +12,7 @@
  */
 
 import { rewriteLinks } from "./links.mjs";
+import { collectLinks, validateLinkGraph } from "./link-graph.mjs";
 import { protectDocument } from "./protect.mjs";
 import { restoreDocument } from "./protect.mjs";
 import { parseTranslationAnswer } from "./answer.mjs";
@@ -65,6 +66,8 @@ export function preparationRefusal(sourceText) {
  * @property {string} protectedText the source as the model will receive it
  * @property {ReturnType<typeof protectDocument>} protection
  * @property {number} linksRewritten destinations that moved during preparation
+ * @property {(absPath: string) => string | null} resolveDocument a linked document's localized target, or null when absent and unplanned
+ * @property {(absPath: string) => string | null} resolveImage an image's localized variant, or null when the file does not exist
  */
 
 /**
@@ -104,6 +107,8 @@ export function preparePair({ slug, lang, sourcePath, target, sourceText, invent
     protectedText: rewritten.text,
     protection,
     linksRewritten: rewritten.count,
+    resolveDocument: context.resolveDocument,
+    resolveImage: context.resolveImage,
   };
 }
 
@@ -180,6 +185,28 @@ export async function translatePair(input) {
   );
   if (violations.length > 0) {
     throw new Error(`structural validation failed: ${violations.join("; ")}`);
+  }
+
+  // Link identity: the rewriter decided where every internal reference
+  // points before the model saw the document, and the answer must come back
+  // pointing there still. Both sides are collected from text the candidate
+  // is actually judged against — the rewritten source with placeholders
+  // restored, because skip regions return byte-for-byte inside the
+  // candidate — and validated with the same inventory resolvers the rewrite
+  // localized with.
+  const linkVerdict = validateLinkGraph({
+    sourceLinks: collectLinks(
+      restoreDocument(input.prepared.protectedText, input.prepared.protection),
+    ),
+    candidateLinks: collectLinks(sanitised),
+    context: {
+      translatedDocPath: input.prepared.destinationPath,
+      resolveDocument: input.prepared.resolveDocument,
+      resolveImage: input.prepared.resolveImage,
+    },
+  });
+  if (linkVerdict.violations.length > 0) {
+    throw new Error(`link validation failed: ${linkVerdict.violations.join("; ")}`);
   }
 
   return { outcome: "proposal", text: sanitised, summary: answer.summary };

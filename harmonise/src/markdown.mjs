@@ -192,6 +192,36 @@ export function maskDestinations(line) {
   }
   return out.join("");
 }
+/**
+ * Where one inline construct's parentheses close: the index of the `)` that
+ * ends the destination that opens just past `start`, scanned with paren
+ * depth and backslash escapes — the same extent scan the link rewriter and
+ * the destination mask walk their lines with, shared so extraction agrees
+ * with both on where a construct's bytes end. -1 when the line ends first:
+ * a construct that never closes proves nothing and belongs to no scanner.
+ *
+ * @param {string} masked a line with code spans masked
+ * @param {number} start just past the `(`, or at the opening angle bracket
+ * @returns {number} the index of the closing `)`, or -1
+ */
+export function destinationEnd(masked, start) {
+  let cursor = start;
+  let depth = 1;
+  while (cursor < masked.length) {
+    const char = masked[cursor] ?? "";
+    if (char === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (char === "(") depth++;
+    if (char === ")") {
+      depth--;
+      if (depth === 0) return cursor;
+    }
+    cursor++;
+  }
+  return -1;
+}
 
 /**
  * The structural profile a translation is compared against: fence count,
