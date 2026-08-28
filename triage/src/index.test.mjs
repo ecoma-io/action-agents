@@ -459,6 +459,17 @@ describe("run — the sheet half", () => {
 
     expect(world.forge.writes).toEqual([]);
   });
+  it("flattens a multi-line rationale to one log line", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      answer: '{"labels":["bug"],"rationale":"first line\\nsecond line\\tplus"}',
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toContain("rationale: first line second line plus");
+  });
 
   it("narrows the sheet the workflow names, and the model sees only that", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -618,16 +629,82 @@ describe("run — no sheet, the comment half", () => {
 
   it("upserts rather than commenting twice", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const existing = [{ login: "action-agents[bot]" }];
-    const world = io({ files: {}, answer: COMMENT_ANSWER, comments: existing });
-    // The existing comment carries the marker; the fake's body is blank, so
-    // give it one the upsert can find.
-    world.forge.writes.length = 0;
+    const world = io({
+      files: {},
+      answer: COMMENT_ANSWER,
+      comments: [
+        {
+          login: "action-agents[bot]",
+          body: "<!-- action-agents:triage:0badcafe --> earlier classification",
+        },
+      ],
+    });
 
     await run(inputs(), readContext(runner), world);
-    // A blank body means no marker, so the upsert creates; the marker-id
-    // preservation and duplicate deletion are comment.mjs's own tests.
-    expect(world.forge.writes.length).toBeGreaterThanOrEqual(1);
+
+    // The marker comment we own is claimed: exactly one API call, and it is
+    // the update of that comment's id — never a second comment beside it
+    // (updateComment = PATCH of the found comment; no createComment, no
+    // deleteComment anywhere in the writes).
+    expect(world.forge.writes).toHaveLength(1);
+    const write = world.forge.writes[0];
+    if (write === undefined) throw new Error("no comment was written");
+    expect(write.op).toBe("updateComment");
+    expect(write.args[0]).toBe(1);
+    const body = String(write.args[1]);
+    expect(body).toContain("<!-- action-agents:triage:");
+    expect(body).toContain("**bug report**");
+  });
+
+  it("falls back to '(no classification)' when the answer sanitises to nothing", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // An empty classification string is refused by the parser, so the only
+    // route to the fallback is a classification whose every character is
+    // stripped: here a bare structural token.
+    const world = io({ files: {}, answer: '{"classification":"<!--","rationale":"kept"}' });
+
+    await run(inputs(), readContext(runner), world);
+
+    const write = world.forge.writes[0];
+    if (write === undefined) throw new Error("no comment was written");
+    const body = String(write.args[1]);
+    expect(body).toContain("**(no classification)**");
+    expect(body).toContain("> kept");
+  });
+
+  it("flattens a multi-line classification and rationale to one line each", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {},
+      answer: '{"classification":"bug\\nreport\\tall","rationale":"line one\\nline two"}',
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    const write = world.forge.writes[0];
+    if (write === undefined) throw new Error("no comment was written");
+    const body = String(write.args[1]);
+    expect(body).toContain("**bug report all**");
+    expect(body).toContain("> line one line two");
+  });
+
+  it("cuts the rationale at the 300-char cap without splitting a surrogate pair", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // 287 ASCII, one two-unit emoji, padding: a UTF-16 slice(0, 288) would
+    // cut the emoji in half; the codepoint cap must keep it whole.
+    const answer = JSON.stringify({
+      classification: "bug report",
+      rationale: `${"a".repeat(287)}\u{1F980}${"b".repeat(25)}`,
+    });
+    const world = io({ files: {}, answer });
+
+    await run(inputs(), readContext(runner), world);
+
+    const write = world.forge.writes[0];
+    if (write === undefined) throw new Error("no comment was written");
+    const body = String(write.args[1]);
+    expect(body).toContain(`> ${"a".repeat(287)}\u{1F980}…[truncated]`);
+    expect(body).toContain("**bug report**");
   });
 
   it("writes nothing in a dry run, and says what it would have written", async () => {
@@ -727,6 +804,59 @@ describe("run — failure posture", () => {
     await expect(run(inputs(), context, world)).rejects.toThrow(
       /runs on 'issues' and 'pull_request'/,
     );
+  });
+  it("refuses a payload with no issue object, before anything is fetched", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: {} });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /carries no 'issue' object/,
+    );
+    expect(world.forge.reads).toEqual([]);
+    expect(world.request()).toBeNull();
+  });
+
+  it("refuses a pull_request payload with no pull_request object, by name", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: {} });
+
+    await expect(run(inputs(), prContext, world)).rejects.toThrow(
+      /carries no 'pull_request' object/,
+    );
+    expect(world.forge.reads).toEqual([]);
+    expect(world.request()).toBeNull();
+  });
+
+  it("refuses an issue without a number", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: { issue: { title: "Import fails on Node 24" } } });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /'issue' has no number and title/,
+    );
+    expect(world.forge.reads).toEqual([]);
+    expect(world.request()).toBeNull();
+  });
+
+  it("refuses an issue without a title", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: { issue: { number: 7 } } });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /'issue' has no number and title/,
+    );
+    expect(world.forge.reads).toEqual([]);
+    expect(world.request()).toBeNull();
+  });
+
+  it("refuses a comment-mode answer with no classification string", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ files: {}, answer: '{"rationale":"no classification field"}' });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /has no classification string/,
+    );
+    expect(world.forge.writes).toEqual([]);
   });
 
   it("refuses a label the repository no longer has, before the model is called", async () => {
