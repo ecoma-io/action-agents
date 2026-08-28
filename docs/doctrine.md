@@ -153,6 +153,29 @@ The security policy at the repository root carries the table that second point
 is read off, along with the threat model it answers. It is the authority; this
 page is the architectural half of the same argument.
 
+## What the code decides
+
+The route above bounds what a model's answer may do; inside one run, the same
+law decides what a model's answer may claim. Every judgement that could have
+been the model's is the code's, and the answer is data the code rules on:
+
+- **Provenance quarantine** — `review` attaches provenance from the reads the
+  loop actually recorded; a finding without recorded evidence is quarantined,
+  never published.
+- **Adversarial verification** — the verification pass's verdicts can only
+  remove a finding, never add or reword one.
+- **Declared run gates** — the concluding posture is a set of gates evaluated
+  over code-ledgered results, the result and the gate kept apart, so a green
+  answer cannot declare itself complete.
+- **Bounded concurrency** — `harmonise`'s pairs translate through a
+  fixed-capacity pool whose outcomes return in input order; completion order
+  never reaches the record.
+- **Manual-edit protection, three-way merge** — a target that drifted outside
+  the action is merged against a base the translation memory proves, and a
+  merge that cannot be proven fails the pair closed.
+- **Code-owned accounting** — the report model and the machine-readable run
+  artifact are built in code; both are landed, wiring tracked.
+
 ## Rules that are runnable, and rules that are not
 
 A rule nobody can run is not a rule. Where a constraint on this page can be

@@ -592,23 +592,18 @@ A pair that skips does not fail the run; it is recorded in the report. A run whe
 
 **Answer parsing:** The action accepts plain JSON or JSON wrapped in markdown code blocks (`json...`). Provider drift in formatting is tolerated as long as the JSON is parseable. Malformed JSON that cannot be parsed causes failure after retries.
 
-## Capabilities as of v0.3.0
+## Capabilities
 
-What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. As of v0.3.0 the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `prompt`, `answer` and `pull-request`, plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
+What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. On `main` today the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `prompt`, `answer` and `pull-request` — and, wired on `main` since `v0.3.0` through `plan` and `src/index.mjs`, `frontmatter`, `blocks`, `tm`, `pool`, `protection` and `threeway`: the translation memory (#64) is read once per run, consulted per pair as advisory reference, and recorded on publication; pairs translate under the bounded-concurrent pool (#85), outcomes returned in input order so completion order never reaches the record; and a target that drifted outside harmonise is merged three-way against the base the memory proves (#91), a merge that cannot be proven failing the pair closed. Plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
 
-Seven pure modules are **landed, wiring tracked** — merged and tested, not yet imported by the production path, therefore not behaviour a run exhibits:
+Two pure modules are **landed, wiring tracked** — merged and tested, not yet imported by the production path, therefore not behaviour a run exhibits:
 
-| Module            | Landed as                                  |
-| ----------------- | ------------------------------------------ |
-| `tm.mjs`          | translation memory store (#64)             |
-| `frontmatter.mjs` | deterministic frontmatter protection (#68) |
-| `blocks.mjs`      | changed-block planning (#70)               |
-| `terms.mjs`       | deterministic terminology system (#71)     |
-| `pool.mjs`        | bounded-concurrency pool (#72)             |
-| `protection.mjs`  | manual-edit protection policy (#73)        |
-| `threeway.mjs`    | three-way target merge (#76)               |
+| Module       | Landed as                              |
+| ------------ | -------------------------------------- |
+| `terms.mjs`  | deterministic terminology system (#71) |
+| `report.mjs` | incremental report model (#86)         |
 
-Do not read them as active behavior; the out-of-scope list below still describes what a run does until a change wires a module in.
+Do not read them as active behaviour: no run consults the terminology system, and a run's report today is the action log and the pull-request body, not `report.mjs`'s model.
 
 What `harmonise` uses from `core/`, module by module: +
 
@@ -626,7 +621,7 @@ No `comment.mjs` — `harmonise` writes no comments; the marker-upsert idea reap
 
 The following features are explicitly out of scope for v1 and are not to be implemented:
 
-- Translation memory or caching layer;
+- A translation cache — the memory offers prior wording as reference and carries the merge base, but a hit never substitutes for a model call;
 - Glossary fuzzy matching, stemming, or automatic synonym detection;
 - Automatic glossary extraction from documents;
 - Semantic Markdown rewriting or HTML AST transformation;
@@ -636,7 +631,7 @@ The following features are explicitly out of scope for v1 and are not to be impl
 - Agentic multi-agent translation systems;
 - Automatic merging of generated PRs;
 - Translation database or CMS integration;
-- Parallel multi-document translation (beyond one-pair-per-request parallelism);
+- Parallel multi-document translation beyond the bounded pool's hard cap;
 - Per-section translation (section-wise rewriting);
 - Nested skip regions;
 - User-defined skip syntax or selectors;
