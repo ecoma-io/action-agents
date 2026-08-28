@@ -12,6 +12,7 @@
  */
 
 import { createEvidence } from "#core/untrusted.mjs";
+import { PHASES, PHASE_PROCEDURES } from "./phases.mjs";
 
 /**
  * The review-behavior modes. Strictness is one paragraph, strategy a second
@@ -71,6 +72,7 @@ export function buildPrompt(parts, evidence = createEvidence()) {
   const systemParts = [
     SYSTEM_CONTRACT.replace("{language}", parts.language),
     STRICTNESS_MODES[parts.strictness],
+    ...PHASES.map((phase) => PHASE_PROCEDURES[phase]),
     ...(parts.lanes.length > 0 ? [renderLaneProcedure(parts.laneBudgets)] : []),
     `Repository: ${parts.repoName}${parts.repoDescription === "" ? "" : ` — ${parts.repoDescription}`}`,
     `Reviewing base ${parts.baseSha} → head ${parts.headSha}.`,

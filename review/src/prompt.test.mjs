@@ -212,3 +212,21 @@ describe("risk lane procedure and annotations", () => {
     ).toThrow(/cannot account for the whole universe/);
   });
 });
+
+describe("review phase paragraphs", () => {
+  it("renders one paragraph per declared phase, in machine order", () => {
+    const system = systemOf(parts({}));
+    const order = ["orient", "investigate", "verify", "conclude"].map((phase) =>
+      system.indexOf(`Review phase — "${phase}"`),
+    );
+    for (const position of order) expect(position).toBeGreaterThan(-1);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(system.match(/Review phase —/g) ?? []).toHaveLength(4);
+  });
+
+  it("keeps the phase paragraphs out of the evidence message", () => {
+    const { messages } = buildPrompt(parts({}));
+    const user = /** @type {string} */ (messages[1]?.content);
+    expect(user).not.toContain("Review phase");
+  });
+});

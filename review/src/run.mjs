@@ -195,6 +195,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     maxTurns: inputs.maxTurns,
     contextWindow: inputs.contextWindow,
     expectedPaths,
+    strictness: config.strictness,
   });
   for (const line of outcome.log) io.info(`review: ${line}`);
   io.info(
