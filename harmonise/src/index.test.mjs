@@ -66,7 +66,7 @@ function files() {
  *
  * @param {Record<string, string>} files
  * @param {{ path: string, type: string }[]} [tree]
- * @returns {import("#core/forge.mjs").Forge & { writes: { op: string, args: unknown[] }[], reads: { path: string, ref: string | undefined }[], baseSha: string }}
+ * @returns {import("#core/forge.mjs").Forge & { writes: { op: string, args: unknown[] }[], reads: { path: string, ref: string | undefined }[], refLookups: string[], baseSha: string }}
  */
 function forge(
   files,
@@ -84,16 +84,22 @@ function forge(
   const writes = [];
   /** @type {{ path: string, ref: string | undefined }[]} */
   const reads = [];
+  /** @type {string[]} */
+  const refLookups = [];
   let blobSeq = 0;
   return /** @type {any} */ ({
     writes,
     reads,
+    refLookups,
     baseSha,
     /** @param {string} path @param {{ ref?: string }} [opts] */
     async getContents(path, opts = {}) {
       const ref = opts.ref;
       reads.push({ path, ref });
-      const branch = ref !== undefined ? branches[ref] : undefined;
+      const branch =
+        ref !== undefined
+          ? Object.values(branches).find((candidate) => candidate.sha === ref)
+          : undefined;
       const source = branch !== undefined ? branch.files : files;
       const content = source[path];
       return content === undefined ? null : { content };
@@ -103,6 +109,7 @@ function forge(
     },
     /** @param {string} name */
     async getRef(name) {
+      refLookups.push(name);
       const branch = branches[name];
       return branch !== undefined ? { sha: branch.sha } : { sha: baseSha };
     },
@@ -1732,10 +1739,11 @@ describe("run with manual-edit protection and three-way merge", () => {
     expect(error.message).toMatch(/1 pair\(s\) failed/);
     expect(error.message).toMatch(/manual-edit protection refused/);
     // The refusal is loud only after both authorities were tried: the
-    // memory was sought on the branch tip first, then the default branch.
+    // memory was sought at the resolved branch snapshot first, then at the
+    // audited default snapshot — both reads pin a SHA, never a name.
     expect(forgeDouble.reads.filter((r) => r.path === TM_PATH).map((r) => r.ref)).toEqual([
-      "harmonise/en",
-      "main",
+      forgeDouble.baseSha,
+      forgeDouble.baseSha,
     ]);
     // The refused pair consumed no pool slot and no model call.
     expect(chatDouble.calls()).toBe(1);
@@ -1928,8 +1936,8 @@ describe("run with manual-edit protection and three-way merge", () => {
       expect(out).not.toMatch(/manual-edit protection refused/);
       // Both advisory files resolved from the branch tip alone — no
       // default-branch read for either, state or memory.
-      expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH]);
-      expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH]);
+      expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH_SHA]);
+      expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH_SHA]);
       // The optimistic lock still guards the branch tip this run found.
       const branchWrite = /** @type {{ args: [string, string, string | null] }} */ (
         /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "upsertBranch"))
@@ -1971,8 +1979,34 @@ describe("run with manual-edit protection and three-way merge", () => {
       );
       // State stopped at the branch; the memory read the branch first, then
       // fell through to the default branch.
-      expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH]);
-      expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH, "main"]);
+      expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH_SHA]);
+      expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH_SHA, forgeDouble.baseSha]);
+    });
+
+    it("resolves the branch tip once — one ref read feeds both advisory files", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const chatDouble = chat([proposes(FRESH)]);
+      const forgeDouble = forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": NEW_SOURCE,
+          "manual/vi/dev.md": EDITED,
+        },
+        undefined,
+        { branches: { [BRANCH]: { sha: BRANCH_SHA, files: branchFiles() } } },
+      );
+      const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+      await expect(
+        run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+      ).resolves.toBeUndefined();
+
+      // The branch tip was resolved exactly once this run, and both advisory
+      // reads pinned to that one SHA: a push landing between two reads can
+      // never pair a state from one commit with a memory from another (#148).
+      expect(forgeDouble.refLookups.filter((name) => name === BRANCH)).toHaveLength(1);
+      expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH_SHA]);
+      expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH_SHA]);
     });
   });
 });

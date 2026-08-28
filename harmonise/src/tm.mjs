@@ -469,11 +469,14 @@ export function parse(text, options = {}) {
 /**
  * Reads the translation memory from the repository, trying the harmonise
  * branch tip first, then the default branch — the same snapshot authority
- * `readState` uses, so a state record written by one run can always resolve
- * the merge base it references on the next run even while the proposal pull
- * request is still unmerged. A run publishes `state.json` and `tm.json` in
- * one commit on the `harmonise/<lang>` branch; reading both from that same
- * branch tip keeps the state→memory join resolvable across the open PR.
+ * `readState` uses. The caller resolves the branch tip ONCE and passes that
+ * SHA to both advisory reads: a state record written by one run can always
+ * resolve the merge base it references on the next run while the proposal
+ * pull request is still unmerged, and a push landing between the two reads
+ * can never pair a state from one commit with a memory from another. A run
+ * publishes `state.json` and `tm.json` in one commit on the
+ * `harmonise/<lang>` branch; reading both at that resolved tip keeps the
+ * state→memory join resolvable across the open PR.
  *
  * Mirrors `readState`:
  * - `getContents` is injected so tests can double the forge layer.
@@ -494,18 +497,20 @@ export function parse(text, options = {}) {
  * three-way merge base: there a memory without the recorded entry is a
  * manual-edit protection refusal — never a silent overwrite.
  *
- * @param {{ getContents: ContentsReader, branch: string, defaultBranch: string }} args
+ * @param {{ getContents: ContentsReader, branchRef: string | null, defaultRef: string }} args
+ *   `branchRef` is the resolved harmonise branch tip SHA, or `null` when the
+ *   branch does not exist; `defaultRef` is the resolved default-branch SHA.
  * @returns {Promise<{ store: TmStore, origin: "branch" | "default" } | null>}
  */
-export async function readTm({ getContents, branch, defaultBranch }) {
-  const fromBranch = await getContents(TM_PATH, { ref: branch });
+export async function readTm({ getContents, branchRef, defaultRef }) {
+  const fromBranch = branchRef === null ? null : await getContents(TM_PATH, { ref: branchRef });
   if (fromBranch !== null) {
     // The branch's file was found: no fall-through to the default branch,
     // whatever parse makes of the bytes.
     return { store: parse(fromBranch.content).store, origin: "branch" };
   }
 
-  const fromDefault = await getContents(TM_PATH, { ref: defaultBranch });
+  const fromDefault = await getContents(TM_PATH, { ref: defaultRef });
   if (fromDefault !== null) {
     return { store: parse(fromDefault.content).store, origin: "default" };
   }

@@ -208,8 +208,8 @@ describe("readState", () => {
     );
     const result = await readState({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).toEqual({ records: [record()], origin: "branch" });
     expect(refs).toEqual([BRANCH]);
@@ -224,8 +224,8 @@ describe("readState", () => {
     );
     const result = await readState({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).toEqual({ records: [record()], origin: "default" });
     expect(refs).toEqual([BRANCH, DEFAULT]);
@@ -235,8 +235,8 @@ describe("readState", () => {
     const reader = contentsReader({});
     const result = await readState({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).toBeNull();
   });
@@ -255,7 +255,7 @@ describe("readState", () => {
       return base(path, options);
     };
     await expect(
-      readState({ getContents: failing, branch: BRANCH, defaultBranch: DEFAULT }),
+      readState({ getContents: failing, branchRef: BRANCH, defaultRef: DEFAULT }),
     ).rejects.toThrow(/HTTP 500/);
   });
 
@@ -266,8 +266,8 @@ describe("readState", () => {
     });
     const result = await readState({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).toBeNull();
   });
@@ -278,8 +278,8 @@ describe("readState", () => {
     });
     const result = await readState({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).toBeNull();
   });
