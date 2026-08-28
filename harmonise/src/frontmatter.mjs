@@ -196,7 +196,7 @@ function parseFrontmatter(raw) {
   const keys = [];
   /** @type {Mapping[]} */
   const stack = [{ childIndent: -1, seen: new Set(), owner: null }];
-  let frame = stack[0] ?? root();
+  let frame = /** @type {Mapping} */ (stack[0]);
   /** A `key:` line awaiting resolution: a map if the next content line is deeper, an empty scalar if not. @type {{ key: ParsedKey, end: number } | null} */
   let pending = null;
   let offset = 0; // char offset of the current line's first character
@@ -281,7 +281,7 @@ function parseFrontmatter(raw) {
     // Belong to the nearest open mapping this indent still fits.
     while (stack.length > 1 && frame.childIndent > indent) {
       stack.pop();
-      frame = stack[stack.length - 1] ?? root();
+      frame = /** @type {Mapping} */ (stack[stack.length - 1]);
     }
     if (frame.childIndent === -1) {
       frame.childIndent = indent;
@@ -374,16 +374,6 @@ function parseFrontmatter(raw) {
     pending.key.valueEnd = pending.end;
   }
   return { ok: true, keys };
-}
-
-/**
- * The root mapping, recreated only when the stack invariant is somehow
- * violated — which cannot happen, but `noUncheckedIndexedAccess` asks.
- *
- * @returns {Mapping}
- */
-function root() {
-  return { childIndent: -1, seen: new Set(), owner: null };
 }
 
 /**
