@@ -956,3 +956,145 @@ describe("evidence provenance", () => {
     ).toHaveLength(2);
   });
 });
+
+describe("run gates", () => {
+  const TWO_FILES = [
+    {
+      filename: "src/a.mjs",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -1 +1,2 @@\n+x",
+    },
+    {
+      filename: "src/b.mjs",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -1 +1,2 @@\n+y",
+    },
+  ];
+
+  /**
+   * @param {import("./run.mjs").ReviewForge} forge
+   * @param {import("#core/chat.mjs").Chat} chat
+   * @param {(line: string) => void} info
+   */
+  function loggingIo(forge, chat, info) {
+    return { forge, chat, now: () => 0, info };
+  }
+
+  it("attributes a strict-coverage refusal to the coverage gate and still publishes partial", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub({ files: TWO_FILES, config: '{ strictness: "high" }' });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: loggingIo(forge, chatStub(), (line) => logged.push(line)),
+    });
+    expect(result.outcome).toBe("published");
+    expect(logged).toContain(
+      "review: gate coverage failed — 2 of 2 changed files were never read: src/a.mjs, src/b.mjs.",
+    );
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("2 of 2 changed files were never read: src/a.mjs, src/b.mjs.");
+  });
+
+  it("attributes an exhausted turn budget to the bound gate in the log and the body", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub();
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "t1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content: "",
+        toolCalls: [{ id: "t2", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content: "",
+        toolCalls: [{ id: "t3", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content: "",
+        toolCalls: [{ id: "t4", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content: "",
+        toolCalls: [{ id: "t5", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      { content: '{"findings":[],"summary":"out of turns"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS, // maxTurns: 5 — the script's fifth reading turn fires the bound
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: loggingIo(forge, chat, (line) => logged.push(line)),
+    });
+    expect(result.outcome).toBe("published");
+    expect(logged).toContain(
+      "review: gate bound failed — the reading-turn budget was reached before the reviewer stopped asking questions.",
+    );
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain(
+      "the reading-turn budget was reached before the reviewer stopped asking questions.",
+    );
+  });
+
+  it("a run whose gates all pass publishes complete and logs no gate refusals", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub({ files: TWO_FILES });
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [
+          { id: "c1", name: "read_file", arguments: '{"path":"src/a.mjs"}' },
+          { id: "c2", name: "read_file", arguments: '{"path":"src/b.mjs"}' },
+        ],
+      },
+      { content: '{"findings":[],"summary":"read everything"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: loggingIo(forge, chat, (line) => logged.push(line)),
+    });
+    expect(result.outcome).toBe("published");
+    expect(logged.some((line) => line.startsWith("review: gate"))).toBe(false);
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("**Review** — Complete");
+  });
+
+  it("attributes a twice-invalid answer to the conclusion gate before any verification spend", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    let completeCalls = 0;
+    const chat = {
+      async complete() {
+        completeCalls++;
+        return { content: "prose, not JSON", toolCalls: [], finishReason: "stop" };
+      },
+    };
+    const forge = forgeStub();
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        io: loggingIo(forge, /** @type {any} */ (chat), (line) => logged.push(line)),
+      }),
+    ).rejects.toThrow(/failed the output contract twice/);
+    expect(logged).toContain("review: gate conclusion failed — the answer holds no JSON object");
+    // Exactly the first ask and the one re-ask: the conclusion gate's refusal
+    // fires before validation, verification or publication spend a call.
+    expect(completeCalls).toBe(2);
+  });
+});

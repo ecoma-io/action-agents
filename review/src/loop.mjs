@@ -56,6 +56,10 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @property {PhaseName} phase the machine's phase at exit
  * @property {number} readingTurns
  * @property {number} toolCalls
+ * @property {number} evidenceBytes the evidence captured by the loop
+ * @property {number} maxTurns the turn cap the loop enforced
+ * @property {number} maxToolCalls the tool-call cap the loop enforced
+ * @property {number} maxEvidenceBytes the evidence cap the loop enforced
  * @property {ChatMessage[]} transcript the loop's final transcript, for the re-ask
  * @property {string[]} log lines for the runner's log
  */
@@ -183,6 +187,10 @@ export async function runLoop({
         phase,
         readingTurns: ledger.readingTurns,
         toolCalls: ledger.toolCalls,
+        evidenceBytes: ledger.evidenceBytes,
+        maxTurns,
+        maxToolCalls,
+        maxEvidenceBytes,
         transcript,
         log,
       };
@@ -260,6 +268,9 @@ export async function runLoop({
         transcript,
         expectedPaths: expected,
         phase,
+        maxTurns,
+        maxToolCalls,
+        maxEvidenceBytes,
       });
     }
   }
@@ -289,11 +300,14 @@ function readCoverage(expectedPaths, ledger) {
  * @param {object} input
  * @param {(offeredTools: import("#core/chat.mjs").ChatTool[] | undefined, pending?: ChatMessage[]) => Promise<{ response: { content: string }, transcript: ChatMessage[] }>} input.ask
  * @param {Ledger} input.ledger
- * @param {string[]} input.log
- * @param {Bound} input.bound
- * @param {ChatMessage[]} input.transcript
+ * @param {string[]} input.log the log line accumulator
+ * @param {Bound} input.bound the bound that fired at the exit
+ * @param {ChatMessage[]} input.transcript the transcript at the bound's firing
  * @param {string[]} input.expectedPaths the diff-derived expected set
  * @param {PhaseName} input.phase the machine's phase at the exit
+ * @param {number} input.maxTurns the turn cap the loop enforced
+ * @param {number} input.maxToolCalls the tool-call cap the loop enforced
+ * @param {number} input.maxEvidenceBytes the evidence cap the loop enforced
  * @returns {Promise<LoopOutcome>}
  */
 async function conclude({
@@ -304,6 +318,9 @@ async function conclude({
   transcript: _transcript,
   expectedPaths,
   phase,
+  maxTurns,
+  maxToolCalls,
+  maxEvidenceBytes,
 }) {
   const { response, transcript: finalTranscript } = await ask(undefined, [
     {
@@ -321,6 +338,10 @@ async function conclude({
     phase,
     readingTurns: ledger.readingTurns,
     toolCalls: ledger.toolCalls,
+    evidenceBytes: ledger.evidenceBytes,
+    maxTurns,
+    maxToolCalls,
+    maxEvidenceBytes,
     transcript: finalTranscript,
     log,
   };
