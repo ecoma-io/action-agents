@@ -58,7 +58,7 @@ function files() {
  *
  * @param {Record<string, string>} files
  * @param {{ path: string, type: string }[]} [tree]
- * @returns {import("#core/forge.mjs").Forge & { writes: { op: string, args: unknown[] }[], baseSha: string }}
+ * @returns {import("#core/forge.mjs").Forge & { writes: { op: string, args: unknown[] }[], reads: { path: string, ref: string | undefined }[], baseSha: string }}
  */
 function forge(
   files,
@@ -66,24 +66,37 @@ function forge(
     { path: "manual/dev.md", type: "blob" },
     { path: "manual/vi/dev.md", type: "blob" },
   ],
+  /** @type {{ branches?: Record<string, { sha: string, files: Record<string, string> }> }} */ options = {},
 ) {
+  const branches = /** @type {Record<string, { sha: string, files: Record<string, string> }>} */ (
+    options.branches ?? {}
+  );
   const baseSha = "a".repeat(40);
   /** @type {{ op: string, args: unknown[] }[]} */
   const writes = [];
+  /** @type {{ path: string, ref: string | undefined }[]} */
+  const reads = [];
   let blobSeq = 0;
   return /** @type {any} */ ({
     writes,
+    reads,
     baseSha,
-    /** @param {string} path */
-    async getContents(path) {
-      const content = files[path];
+    /** @param {string} path @param {{ ref?: string }} [opts] */
+    async getContents(path, opts = {}) {
+      const ref = opts.ref;
+      reads.push({ path, ref });
+      const branch = ref !== undefined ? branches[ref] : undefined;
+      const source = branch !== undefined ? branch.files : files;
+      const content = source[path];
       return content === undefined ? null : { content };
     },
     async getRepository() {
       return { defaultBranch: "main", name: "action-agents", description: "AI GitHub Actions" };
     },
-    async getRef() {
-      return { sha: baseSha };
+    /** @param {string} name */
+    async getRef(name) {
+      const branch = branches[name];
+      return branch !== undefined ? { sha: branch.sha } : { sha: baseSha };
     },
     /** @param {string} _sha */
     async listTree(_sha) {
@@ -1378,6 +1391,12 @@ describe("run with manual-edit protection and three-way merge", () => {
     );
     expect(error.message).toMatch(/1 pair\(s\) failed/);
     expect(error.message).toMatch(/manual-edit protection refused/);
+    // The refusal is loud only after both authorities were tried: the
+    // memory was sought on the branch tip first, then the default branch.
+    expect(forgeDouble.reads.filter((r) => r.path === TM_PATH).map((r) => r.ref)).toEqual([
+      "harmonise/en",
+      "main",
+    ]);
     // The refused pair consumed no pool slot and no model call.
     expect(chatDouble.calls()).toBe(1);
     const treeWrite = /** @type {{ args: [string, { path: string }[]] }} */ (
@@ -1482,6 +1501,116 @@ describe("run with manual-edit protection and three-way merge", () => {
     const out = logged(log);
     expect(out).toMatch(/\[existing\] unchanged/);
     expect(out).not.toMatch(/three-way merge/);
+  });
+
+  describe("run with the proposal branch unmerged", () => {
+    // The proposal branch's tip as a prior run left it: state and memory
+    // ride the branch, the default branch knows neither file yet.
+    const BRANCH = "harmonise/en";
+    const BRANCH_SHA = "b".repeat(40);
+
+    /**
+     * The branch snapshot: state and memory exactly as the publication
+     * tests' single commit would have left them, on the branch tip.
+     *
+     * @param {{ state?: boolean, memory?: boolean }} [options]
+     * @returns {Record<string, string>}
+     */
+    function branchFiles({ state = true, memory = true } = {}) {
+      /** @type {Record<string, string>} */
+      const files = {};
+      if (state) files[STATE_PATH] = renderState([viPublication()]);
+      if (memory) files[TM_PATH] = memoryWith(VI_BASE_KEY, BASE);
+      return files;
+    }
+
+    /**
+     * The forge double's reads of one path, in call order, by ref.
+     *
+     * @param {{ reads: { path: string, ref: string | undefined }[] }} forgeDouble
+     * @param {string} path
+     * @returns {(string | undefined)[]}
+     */
+    function readsOf(forgeDouble, path) {
+      return forgeDouble.reads.filter((r) => r.path === path).map((r) => r.ref);
+    }
+
+    it("joins state to memory from the branch tip while the PR is open — TM reads stop at the branch", async () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const chatDouble = chat([proposes(FRESH)]);
+      const forgeDouble = forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": NEW_SOURCE,
+          "manual/vi/dev.md": EDITED,
+          // Neither advisory file on the default branch: the branch is the
+          // only place they exist, exactly as while the PR is unmerged.
+        },
+        undefined,
+        { branches: { [BRANCH]: { sha: BRANCH_SHA, files: branchFiles() } } },
+      );
+      const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+      await expect(
+        run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+      ).resolves.toBeUndefined();
+
+      expect(chatDouble.calls()).toBe(1);
+      // The merge base resolved from the branch TM: the manual edit is
+      // preserved and the fresh proposal adopted, never a refusal.
+      const blobs = blobsOf(forgeDouble);
+      expect(blobs[0]).toBe(MERGED);
+      const out = logged(log);
+      expect(out).toMatch(/three-way merge: 1 manual region\(s\) preserved, 1 fresh adopted/);
+      expect(out).not.toMatch(/manual-edit protection refused/);
+      // Both advisory files resolved from the branch tip alone — no
+      // default-branch read for either, state or memory.
+      expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH]);
+      expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH]);
+      // The optimistic lock still guards the branch tip this run found.
+      const branchWrite = /** @type {{ args: [string, string, string | null] }} */ (
+        /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "upsertBranch"))
+      );
+      expect(branchWrite.args[2]).toBe(BRANCH_SHA);
+    });
+
+    it("falls back to the default-branch memory when the branch carries state alone", async () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const chatDouble = chat([proposes(FRESH)]);
+      const forgeDouble = forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": NEW_SOURCE,
+          "manual/vi/dev.md": EDITED,
+          // The memory on the default branch: a past publication landed
+          // there before the branch workflow, say — still joinable.
+          [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
+        },
+        undefined,
+        {
+          branches: {
+            [BRANCH]: { sha: BRANCH_SHA, files: branchFiles({ memory: false }) },
+          },
+        },
+      );
+      const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+      await expect(
+        run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+      ).resolves.toBeUndefined();
+
+      expect(chatDouble.calls()).toBe(1);
+      // The join resolved across snapshots — branch state, default memory —
+      // and the merge went through.
+      expect(blobsOf(forgeDouble)[0]).toBe(MERGED);
+      expect(logged(log)).toMatch(
+        /three-way merge: 1 manual region\(s\) preserved, 1 fresh adopted/,
+      );
+      // State stopped at the branch; the memory read the branch first, then
+      // fell through to the default branch.
+      expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH]);
+      expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH, "main"]);
+    });
   });
 });
 
