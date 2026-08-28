@@ -568,6 +568,35 @@ body     action-authored, per-language sections:
 - Never use a stale base
 - Verify default branch before starting work
 
+#### Snapshot authority
+
+State (`state.json`) and the translation memory (`tm.json`) resolve from the
+same snapshot of repository history — the `harmonise/<lang>` branch tip first,
+then the default branch:
+
+- **Branch-first, both files:** A run publishes `state.json`, `tm.json` and
+  every translation in one commit on the proposal branch. The next run reads
+  both advisory files from that branch tip, so a state record can always
+  resolve the merge base it references — even while the pull request is still
+  unmerged.
+- **Default fallback, per file:** When the branch has no state file or no TM
+  file, the default branch's copy is used. The two files resolve
+  independently: state on the branch with the memory on the default is valid
+  (branch-first, two resolutions), and a record can still join against a
+  default-branch memory entry it matches.
+- **The branch's file is final:** When the branch carries a file, the default
+  branch is never read for it — a corrupt or foreign-schema branch file
+  degrades to an empty memory (or absent state), the same fail-closed rule
+  both files share, never a silent substitution of a stale default copy. The
+  memory stays advisory: an absent or corrupt memory leaves the run without
+  prior translations, and its only hard failure is a manual-edit protection
+  refusal when a merge base cannot be verified.
+- **Inventory and sources stay at the default tip:** The file tree, source
+  documents, instruction prose and configuration are read from the audited
+  default-branch HEAD — `ref.sha` — once at the start of the run. That
+  snapshot never changes mid-run, and the commit built from it parents on it.
+  The optimistic lock still guards the branch tip the run found.
+
 ### What `harmonise` never does
 
 - Edit a source-language document — the source is read-only in every run;

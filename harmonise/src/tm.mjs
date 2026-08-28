@@ -47,6 +47,17 @@ export const TM_MAX_ENTRIES = 1000;
 export const TM_SCHEMA_VERSION = 1;
 
 /**
+ * The path the translation memory occupies beside the sync state, written by
+ * the same publication that writes the state file. Advisory as a reference:
+ * a file that is missing, corrupt or of a foreign schema version is an empty
+ * memory — never an error, never a skip on its own. For a pair whose target
+ * drifted outside harmonise the memory is also the only source of the merge
+ * base, and there its absence is a manual-edit protection refusal — never a
+ * silent overwrite.
+ */
+export const TM_PATH = ".github/action-agents/harmonise/tm.json";
+
+/**
  * The three caller-supplied strings an entry is keyed by. All three are
  * opaque to this module; only equality ever matters.
  *
@@ -442,4 +453,62 @@ export function parse(text, options = {}) {
     store.record(buildTmKey(valid.key), valid.value);
   }
   return { store, refused };
+}
+
+// ── read from repository ─────────────────────────────────────────────────────
+
+/**
+ * The contents-reading slice of a forge client that `readTm` needs, identical
+ * to the one `readState` consumes: reads one file from the repository at an
+ * optional ref, or from the default branch when no ref is given. Absent is
+ * `null`.
+ *
+ * @typedef {import("./state.mjs").ContentsReader} ContentsReader
+ */
+
+/**
+ * Reads the translation memory from the repository, trying the harmonise
+ * branch tip first, then the default branch — the same snapshot authority
+ * `readState` uses, so a state record written by one run can always resolve
+ * the merge base it references on the next run even while the proposal pull
+ * request is still unmerged. A run publishes `state.json` and `tm.json` in
+ * one commit on the `harmonise/<lang>` branch; reading both from that same
+ * branch tip keeps the state→memory join resolvable across the open PR.
+ *
+ * Mirrors `readState`:
+ * - `getContents` is injected so tests can double the forge layer.
+ * - `404` (absent) is `null` from the injected reader; other `HttpError`s
+ *   propagate as thrown `ForgeError`s.
+ * - The branch owns its TM file the way it owns its state file: when the
+ *   branch carries the file, the default branch is never read, so a file
+ *   the branch has is never silently substituted by a stale default.
+ *
+ * One deliberate difference, `parse`'s contract rather than a new policy:
+ * `parseState` throws on a corrupt file, so `readState` degrades corruption
+ * to `null`; `parse` never throws — it refuses a whole corrupt document
+ * fail-closed and returns an empty store, reporting what it refused. A file
+ * that exists but fails to parse therefore yields an empty memory with the
+ * file's origin recorded, not `null` — the branch's file was found, its
+ * refusal is final, and the run proceeds exactly as a repository without a
+ * memory file always has. Advisory as a reference, and the only source of a
+ * three-way merge base: there a memory without the recorded entry is a
+ * manual-edit protection refusal — never a silent overwrite.
+ *
+ * @param {{ getContents: ContentsReader, branch: string, defaultBranch: string }} args
+ * @returns {Promise<{ store: TmStore, origin: "branch" | "default" } | null>}
+ */
+export async function readTm({ getContents, branch, defaultBranch }) {
+  const fromBranch = await getContents(TM_PATH, { ref: branch });
+  if (fromBranch !== null) {
+    // The branch's file was found: no fall-through to the default branch,
+    // whatever parse makes of the bytes.
+    return { store: parse(fromBranch.content).store, origin: "branch" };
+  }
+
+  const fromDefault = await getContents(TM_PATH, { ref: defaultBranch });
+  if (fromDefault !== null) {
+    return { store: parse(fromDefault.content).store, origin: "default" };
+  }
+
+  return null;
 }

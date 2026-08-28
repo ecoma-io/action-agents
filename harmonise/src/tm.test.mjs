@@ -11,8 +11,10 @@ import {
   buildTmKey,
   createTmStore,
   parse,
+  readTm,
   serialize,
   TM_MAX_ENTRIES,
+  TM_PATH,
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
 
@@ -361,5 +363,138 @@ describe("parse refusals", () => {
 
   it("throws on non-string input", () => {
     expect(() => parse(/** @type {any} */ (undefined))).toThrow(TypeError);
+  });
+});
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * A forge contents double: maps (path, ref) → text, mirroring
+ * `forge.getContents` — absent is `null`, other failures throw. Returns the
+ * bare function, the shape `readTm` receives.
+ *
+ * @param {Record<string, Record<string, string | null>>} byRef ref → path → content
+ * @param {{ onCall?: (path: string, ref?: string) => void }} [hooks]
+ * @returns {import("./tm.mjs").ContentsReader}
+ */
+function contentsReader(byRef, hooks = {}) {
+  return async (path, options = {}) => {
+    const ref = options.ref;
+    hooks.onCall?.(path, ref);
+    const files = byRef[ref ?? ""];
+    if (files === undefined) return null;
+    const content = files[path];
+    return content === null || content === undefined ? null : { content };
+  };
+}
+
+// ── readTm ───────────────────────────────────────────────────────────────────
+
+describe("readTm", () => {
+  const BRANCH = "harmonise/en";
+  const DEFAULT = "main";
+  /** One entry as valid serialized TM. */
+  function tmText() {
+    const store = createTmStore();
+    store.record(buildTmKey({ sourceHash: "abc", targetLang: "vi", policyContext: "p" }), "base");
+    return serialize(store);
+  }
+
+  it("pins the TM path", () => {
+    expect(TM_PATH).toBe(".github/action-agents/harmonise/tm.json");
+  });
+
+  it("reads the branch tip first and reports origin 'branch'", async () => {
+    const refs = /** @type {string[]} */ ([]);
+    const reader = contentsReader(
+      { [BRANCH]: { [TM_PATH]: tmText() }, [DEFAULT]: { [TM_PATH]: "stale" } },
+      { onCall: (_path, ref) => refs.push(ref ?? "") },
+    );
+    const result = await readTm({
+      getContents: reader,
+      branch: BRANCH,
+      defaultBranch: DEFAULT,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.origin).toBe("branch");
+    expect(
+      result?.store.lookup(buildTmKey({ sourceHash: "abc", targetLang: "vi", policyContext: "p" })),
+    ).toBe("base");
+    expect(refs).toEqual([BRANCH]);
+  });
+
+  it("falls back to the default branch when the branch has no TM file", async () => {
+    const refs = /** @type {string[]} */ ([]);
+    const reader = contentsReader(
+      { [DEFAULT]: { [TM_PATH]: tmText() } },
+      { onCall: (_path, ref) => refs.push(ref ?? "") },
+    );
+    const result = await readTm({
+      getContents: reader,
+      branch: BRANCH,
+      defaultBranch: DEFAULT,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.origin).toBe("default");
+    expect(
+      result?.store.lookup(buildTmKey({ sourceHash: "abc", targetLang: "vi", policyContext: "p" })),
+    ).toBe("base");
+    expect(refs).toEqual([BRANCH, DEFAULT]);
+  });
+
+  it("returns null when no branch carries the file", async () => {
+    const reader = contentsReader({});
+    const result = await readTm({
+      getContents: reader,
+      branch: BRANCH,
+      defaultBranch: DEFAULT,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("propagates a non-404 error from the forge layer", async () => {
+    const base = contentsReader({});
+    const failing = /** @type {import("./tm.mjs").ContentsReader} */ (
+      async (path, options = {}) => {
+        if (options?.ref === BRANCH) {
+          throw new Error("HTTP 500: the forge is on fire");
+        }
+        return base(path, options);
+      }
+    );
+    await expect(
+      readTm({ getContents: failing, branch: BRANCH, defaultBranch: DEFAULT }),
+    ).rejects.toThrow(/HTTP 500/);
+  });
+
+  it("degrades corrupt TM on the branch to an empty store — no default substitution", async () => {
+    const refs = /** @type {string[]} */ ([]);
+    const reader = contentsReader(
+      { [BRANCH]: { [TM_PATH]: "{not json" }, [DEFAULT]: { [TM_PATH]: tmText() } },
+      { onCall: (_path, ref) => refs.push(ref ?? "") },
+    );
+    const result = await readTm({
+      getContents: reader,
+      branch: BRANCH,
+      defaultBranch: DEFAULT,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.origin).toBe("branch");
+    expect(result?.store.size()).toBe(0);
+    expect(refs).toEqual([BRANCH]);
+  });
+
+  it("degrades corrupt TM on the default branch to an empty store", async () => {
+    const reader = contentsReader({
+      [DEFAULT]: { [TM_PATH]: "[]" },
+    });
+    const result = await readTm({
+      getContents: reader,
+      branch: BRANCH,
+      defaultBranch: DEFAULT,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.origin).toBe("default");
+    expect(result?.store.size()).toBe(0);
   });
 });

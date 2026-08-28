@@ -54,7 +54,7 @@ import {
 } from "./plan.mjs";
 import { protectionDecision } from "./protection.mjs";
 import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
-import { buildTmKey, createTmStore, parse as parseTm, serialize as serializeTm } from "./tm.mjs";
+import { buildTmKey, createTmStore, readTm, serialize as serializeTm, TM_PATH } from "./tm.mjs";
 import { mergeThreeWay, summarizeMerge } from "./threeway.mjs";
 import { runPool } from "./pool.mjs";
 import {
@@ -71,16 +71,8 @@ import {
 
 export const ACTION = "harmonise";
 
-/**
- * The path the translation memory occupies beside the sync state, written by
- * the same publication that writes the state file. Advisory as a reference:
- * a file that is missing, corrupt or of a foreign schema version is an empty
- * memory — never an error, never a skip on its own. For a pair whose target
- * drifted outside harmonise the memory is also the only source of the merge
- * base, and there its absence is a manual-edit protection refusal — never a
- * silent overwrite.
- */
-export const TM_PATH = ".github/action-agents/harmonise/tm.json";
+/** The TM file path lives with the document format it names, in tm.mjs. */
+export { TM_PATH };
 
 /**
  * The caller's half of the recovery contract: `recovery.mjs` names a delay,
@@ -274,18 +266,29 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     recordedRecords = [];
   }
 
-  // The translation memory is advisory both ways. Reading: a file that is
-  // missing, unreadable, corrupt or of a foreign schema version leaves an
-  // empty store — no prior translations are offered and the run proceeds
-  // exactly as a repository without a memory file always has. Writing:
+  // The translation memory resolves from the same snapshot authority as the
+  // sync state above: the harmonise branch tip first, then the default
+  // branch. A run publishes state.json and tm.json in one commit on the
+  // proposal branch, so reading both from that branch tip keeps the
+  // state→memory join resolvable while the pull request is still unmerged —
+  // a record can always reach the merge base it references. The memory is
+  // advisory both ways: a file that is missing, unreadable, corrupt or of a
+  // foreign schema version leaves an empty store — no prior translations are
+  // offered and the run proceeds exactly as a repository without a memory
+  // file always has. A corrupt branch file degrades to absent the same way
+  // state does, without silently substituting a stale default. Writing:
   // entries recorded on publication are offered to later runs as reference
   // only; everything the model returns passes the same deterministic
   // validation with or without a hit.
   /** @type {ReturnType<typeof createTmStore>} */
   let memory = createTmStore();
   try {
-    const stored = await f.getContents(TM_PATH, { ref: ref.sha });
-    if (stored !== null) memory = parseTm(stored.content).store;
+    const stored = await readTm({
+      getContents: (path, options) => f.getContents(path, options),
+      branch: ownBranch,
+      defaultBranch: repository.defaultBranch,
+    });
+    if (stored !== null) memory = stored.store;
   } catch {
     memory = createTmStore();
   }
