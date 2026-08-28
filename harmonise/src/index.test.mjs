@@ -299,6 +299,113 @@ describe("readInputs", () => {
   });
 });
 
+describe("run — request-timeout-ms wiring", () => {
+  // The floor test above ("refuses a request-timeout-ms under the 1000 ms
+  // floor") pins what `readInputs` accepts. These two pin that the accepted
+  // number actually reaches the HTTP client `realIo` builds — the hop the
+  // floor exists to guard.
+
+  /**
+   * A chat-completions transport that answers by echoing the prepared
+   * document back — restoration then reproduces the source byte-for-byte —
+   * recording every abort signal it was handed.
+   *
+   * @param {AbortSignal[]} signals
+   * @returns {typeof globalThis.fetch}
+   */
+  function echoingFetch(signals) {
+    return /** @type {typeof globalThis.fetch} */ (
+      async (_url, init) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("no abort signal reached the chat request");
+        }
+        signals.push(signal);
+        const body = /** @type {{ messages?: { content?: string }[] }} */ (
+          JSON.parse(typeof init?.body === "string" ? init.body : "{}")
+        );
+        const user = body.messages?.[body.messages.length - 1]?.content ?? "";
+        const opened = /\[evidence:([0-9a-f]+) source-document\]\n/.exec(user);
+        const from = opened === null ? 0 : opened.index + opened[0].length;
+        const end = opened === null ? -1 : user.indexOf(`\n\n[end-evidence:${opened[1]}]`, from);
+        const source = end === -1 ? user.slice(from) : user.slice(from, end);
+        const content =
+          opened === null
+            ? JSON.stringify({ drift: true, summary: "nothing found", content: "??" })
+            : JSON.stringify({ drift: true, summary: "kept in step", content: source });
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+    );
+  }
+
+  /**
+   * A transport that never answers: every request hangs until its abort
+   * signal fires, then rejects with the signal's abort reason.
+   *
+   * @param {AbortSignal[]} signals
+   * @returns {typeof globalThis.fetch}
+   */
+  function hangingFetch(signals) {
+    return /** @type {typeof globalThis.fetch} */ (
+      (_url, init) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("no abort signal reached the chat request");
+        }
+        signals.push(signal);
+        return new Promise((_resolve, reject) => {
+          if (signal.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+    );
+  }
+
+  it("forwards the configured request-timeout-ms to the chat client as an abort signal", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {AbortSignal[]} */
+    const signals = [];
+
+    await run(
+      { ...readInputs(runner), requestTimeoutMs: 2500 },
+      context(),
+      /** @type {any} */ ({ forge: forge(files()), fetchImpl: echoingFetch(signals) }),
+    );
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  it("aborts a hanging provider on every attempt across the recovery policy and fails red", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {AbortSignal[]} */
+    const signals = [];
+
+    await expect(
+      run(
+        { ...readInputs(runner), requestTimeoutMs: 1000 },
+        context(),
+        /** @type {any} */ ({
+          forge: forge(files()),
+          fetchImpl: hangingFetch(signals),
+          sleep: async () => {},
+        }),
+      ),
+    ).rejects.toThrow(/classified transport, exhausted/);
+
+    expect(signals).toHaveLength(9);
+    expect(new Set(signals).size).toBe(9);
+  }, 60_000);
+});
+
 describe("run", () => {
   it("publishes one branch, one commit and one pull request on a real run", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);

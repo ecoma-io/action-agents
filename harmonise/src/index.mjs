@@ -143,28 +143,35 @@ export function readInputs(env = process.env) {
  * @property {Forge} forge
  * @property {ReturnType<typeof createChat>} chat
  * @property {ReturnType<typeof createEvidence>} evidence
- * @property {(ms: number) => Promise<void>} [sleep]
+ * @property {(ms: number) => Promise<void>} sleep
  */
 
 /**
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
+ * @param {Partial<Io> & { fetchImpl?: typeof globalThis.fetch }} [overrides] injectable members; the chat client is built with `fetchImpl` when no `chat` is given
  * @returns {Io}
  */
-function realIo(inputs, context) {
+function realIo(inputs, context, overrides = {}) {
   return {
-    forge: createForge({
-      owner: context.owner,
-      repo: context.repo,
-      token: inputs.githubToken,
-      apiUrl: context.apiUrl,
-    }),
-    chat: createChat({
-      apiUrl: inputs.apiUrl,
-      apiKey: inputs.apiKey,
-      timeoutMs: inputs.requestTimeoutMs,
-    }),
-    evidence: createEvidence(),
+    forge:
+      overrides.forge ??
+      createForge({
+        owner: context.owner,
+        repo: context.repo,
+        token: inputs.githubToken,
+        apiUrl: context.apiUrl,
+      }),
+    chat:
+      overrides.chat ??
+      createChat({
+        apiUrl: inputs.apiUrl,
+        apiKey: inputs.apiKey,
+        timeoutMs: inputs.requestTimeoutMs,
+        ...(overrides.fetchImpl !== undefined ? { fetchImpl: overrides.fetchImpl } : {}),
+      }),
+    evidence: overrides.evidence ?? createEvidence(),
+    sleep: overrides.sleep ?? defaultSleep,
   };
 }
 
@@ -211,11 +218,13 @@ function realIo(inputs, context) {
 /**
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
- * @param {Io} [io]
+ * @param {Partial<Io> & { fetchImpl?: typeof globalThis.fetch }} [io] injectable for tests; real clients omit it, and realIo builds every member
  * @returns {Promise<void>}
  */
-export async function run(inputs, context, io = realIo(inputs, context)) {
-  const { raw } = await loadConfigFile({ forge: io.forge, configPath: inputs.configPath });
+export async function run(inputs, context, io) {
+  /** @type {Io} */
+  const world = realIo(inputs, context, io ?? {});
+  const { raw } = await loadConfigFile({ forge: world.forge, configPath: inputs.configPath });
   let config = validateConfig(raw);
 
   const requested = inputs.sourceLanguage;
@@ -227,14 +236,14 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   }
   config = { ...config, sourceLanguage: requested };
 
-  const repository = await io.forge.getRepository();
-  const ref = await io.forge.getRef(repository.defaultBranch);
+  const repository = await world.forge.getRepository();
+  const ref = await world.forge.getRef(repository.defaultBranch);
 
   // The action's own branch is snapshotted now, before any work: at update
   // time its tip must be where this run left it, or another writer moved it
   // mid-run and is refused rather than overwritten.
   /** @type {import("#core/forge.mjs").Forge} */
-  const f = io.forge;
+  const f = world.forge;
   const ownBranch = branchName(config.sourceLanguage);
   const branchBefore = await f.getRef(ownBranch).catch((cause) => {
     if (cause instanceof Error && /HTTP 404/.test(cause.message)) return null;
@@ -245,7 +254,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   // config and instructions describe one instant of the repository, and the
   // commit built from them parents on that same instant.
   /** @type {(path: string) => Promise<{ content: string } | null>} */
-  const readAtBase = (path) => io.forge.getContents(path, { ref: ref.sha });
+  const readAtBase = (path) => world.forge.getContents(path, { ref: ref.sha });
 
   // The recorded state is advisory and fails closed: a file that is missing,
   // unreadable, unparseable, or of a foreign schema version leaves no
@@ -313,7 +322,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
 
   // Completeness is a contract: a listing GitHub had to truncate throws
   // rather than becoming an inventory that looks finished.
-  const entries = await io.forge.listTree(ref.sha);
+  const entries = await world.forge.listTree(ref.sha);
   const inventory = buildInventory({
     entries,
     config,
@@ -554,8 +563,8 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           existingText: job.existing,
           priorTranslation: prior,
           model: inputs.model,
-          chat: io.chat,
-          evidence: io.evidence,
+          chat: world.chat,
+          evidence: world.evidence,
           repository: { name: repository.name, description: repository.description },
           documents,
         });
@@ -575,7 +584,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
             } (classified ${failureClass}, ${action})`,
           };
         }
-        await (io.sleep ?? defaultSleep)(DELAY_MS[delayClass(failureClass, attempt)]);
+        await world.sleep(DELAY_MS[delayClass(failureClass, attempt)]);
       }
     }
 
@@ -765,7 +774,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   // commit on top, one branch pointing at it, one request carrying it.
   const changes = [];
   for (const proposal of proposed) {
-    const blob = await io.forge.createBlob(/** @type {string} */ (proposal.content));
+    const blob = await world.forge.createBlob(/** @type {string} */ (proposal.content));
     changes.push({ path: proposal.destinationPath, blobSha: blob.sha });
   }
   // The state file rides the same commit as the translations it describes:
@@ -802,19 +811,19 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       /** @type {string} */ (proposal.content),
     );
   }
-  const stateBlob = await io.forge.createBlob(renderState(records));
+  const stateBlob = await world.forge.createBlob(renderState(records));
   changes.push({ path: STATE_PATH, blobSha: stateBlob.sha });
-  const tmBlob = await io.forge.createBlob(serializeTm(memory));
+  const tmBlob = await world.forge.createBlob(serializeTm(memory));
   changes.push({ path: TM_PATH, blobSha: tmBlob.sha });
-  const tree = await io.forge.createTree(ref.sha, changes);
-  const commit = await io.forge.createCommit(
+  const tree = await world.forge.createTree(ref.sha, changes);
+  const commit = await world.forge.createCommit(
     `${title}\n\nAuthored by harmonise from ${ref.sha}.`,
     tree.sha,
     ref.sha,
   );
   // The optimistic lock is the action's own branch tip as this run found it:
   // unchanged means nobody else touched our branch while we worked.
-  await io.forge.upsertBranch(
+  await world.forge.upsertBranch(
     branch,
     commit.sha,
     /** @type {string | null} */ (branchBefore?.sha ?? null),
@@ -832,7 +841,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     skipped: skippedLines,
     failures: failedLines,
   });
-  const pullRequest = await io.forge.upsertPullRequest({
+  const pullRequest = await world.forge.upsertPullRequest({
     base: repository.defaultBranch,
     head: branch,
     title,

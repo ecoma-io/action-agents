@@ -18,8 +18,8 @@ import { tmpdir } from "node:os";
 import * as p from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
+import { TransportError } from "#core/http.mjs";
 import { readContext } from "#core/runtime.mjs";
-
 import {
   ACTION,
   PULL_REQUEST_ACTIVITY_TYPES,
@@ -314,6 +314,148 @@ describe("run over the real forge", () => {
       expect(url.startsWith("https://ghe.example.com/api/v3/")).toBe(true);
     }
   });
+});
+
+describe("run — request-timeout-ms wiring", () => {
+  // The floor refusal above ("refuses knob values under their floors") pins
+  // what `readInputs` accepts. These two pin that the accepted number
+  // actually reaches the HTTP client `run` builds — the hop the floor
+  // exists to guard.
+
+  /**
+   * The cheapest non-draft pull request: enough for the orchestrator to
+   * reach the model instead of returning the draft snapshot, and nothing
+   * more. Every write stays behind the dry-run gate.
+   *
+   * @returns {import("#core/forge.mjs").Forge}
+   */
+  function reviewableForge() {
+    return /** @type {any} */ ({
+      async getRepository() {
+        return { defaultBranch: "main", name: "widgets", description: "" };
+      },
+      async getPullRequest() {
+        return {
+          number: 41,
+          state: "open",
+          draft: false,
+          merged: false,
+          title: "",
+          body: "",
+          head: { ref: "x", sha: "a".repeat(40) },
+          base: { ref: "main", sha: "b".repeat(40) },
+        };
+      },
+      async getContents() {
+        return null;
+      },
+      async listPullRequestFiles() {
+        return [
+          {
+            filename: "src/a.mjs",
+            status: "modified",
+            additions: 1,
+            deletions: 0,
+            patch: "@@ -1 +1,2 @@\n+x",
+          },
+        ];
+      },
+      async listComments() {
+        return [];
+      },
+    });
+  }
+
+  /**
+   * A transport that records every abort signal it was handed and never
+   * answers: each request hangs until its signal fires, then rejects with
+   * the signal's abort reason.
+   *
+   * @param {AbortSignal[]} signals
+   * @returns {typeof globalThis.fetch}
+   */
+  function hangingFetch(signals) {
+    return /** @type {typeof globalThis.fetch} */ (
+      (_url, init) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("no abort signal reached the chat request");
+        }
+        signals.push(signal);
+        return new Promise((_resolve, reject) => {
+          if (signal.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+    );
+  }
+
+  it("forwards the configured request-timeout-ms to the chat client as an abort signal", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {AbortSignal[]} */
+    const signals = [];
+    const env = runnerEnv({
+      extra: {
+        GITHUB_WORKSPACE: mkdtempSync(p.join(tmpdir(), "review-wiring-a-")),
+        "INPUT_DRY-RUN": "true",
+        "INPUT_REQUEST-TIMEOUT-MS": "2500",
+      },
+    });
+    await expect(
+      run(readInputs(env), readContext(env), {
+        forge: reviewableForge(),
+        fetchImpl: /** @type {typeof globalThis.fetch} */ (
+          async (_url, init) => {
+            const signal = init?.signal;
+            if (!(signal instanceof AbortSignal)) {
+              throw new Error("no abort signal reached the chat request");
+            }
+            signals.push(signal);
+            return new Response(
+              JSON.stringify({
+                choices: [{ message: { role: "assistant", content: "{}" }, finish_reason: "stop" }],
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            );
+          }
+        ),
+        now: () => 0,
+        info: () => undefined,
+      }),
+    ).rejects.toThrow(/the final answer failed the output contract twice/);
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[1]).toBeInstanceOf(AbortSignal);
+  });
+
+  it("aborts a hanging provider on every attempt and fails with the transport error", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {AbortSignal[]} */
+    const signals = [];
+    const env = runnerEnv({
+      extra: {
+        GITHUB_WORKSPACE: mkdtempSync(p.join(tmpdir(), "review-wiring-b-")),
+        "INPUT_DRY-RUN": "true",
+        "INPUT_REQUEST-TIMEOUT-MS": "1000",
+      },
+    });
+
+    await expect(
+      run(readInputs(env), readContext(env), {
+        forge: reviewableForge(),
+        fetchImpl: hangingFetch(signals),
+        now: () => 0,
+        info: () => undefined,
+      }),
+    ).rejects.toThrow(TransportError);
+
+    expect(signals).toHaveLength(3);
+    expect(new Set(signals).size).toBe(3);
+  }, 30_000);
 });
 
 describe("writeRunArtifact", () => {

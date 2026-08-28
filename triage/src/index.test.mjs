@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createEvidence } from "#core/untrusted.mjs";
 import { PastFileCeilingError } from "#core/forge.mjs";
+import { TransportError } from "#core/http.mjs";
 import { readContext } from "#core/runtime.mjs";
 
 import { ACTION, main, readInputs, run } from "./index.mjs";
@@ -317,6 +318,82 @@ describe("readInputs", () => {
       /at least 1000/,
     );
   });
+});
+
+describe("run — request-timeout-ms wiring", () => {
+  // The floor test above ("refuses a request-timeout-ms under the 1000 ms
+  // floor") pins what `readInputs` accepts. These two pin that the accepted
+  // number actually reaches the HTTP client `realIo` builds — the hop the
+  // floor exists to guard.
+
+  it("forwards the configured request-timeout-ms to the chat client as an abort signal", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {AbortSignal[]} */
+    const signals = [];
+    /** @type {typeof globalThis.fetch} */
+    const fetchImpl = async (_url, init) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("no abort signal reached the chat request");
+      }
+      signals.push(signal);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            { message: { role: "assistant", content: LABELS_ANSWER }, finish_reason: "stop" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    await run(
+      inputs({ requestTimeoutMs: 2500 }),
+      readContext(runner),
+      /** @type {any} */ ({ forge: fakeForge({}), fetchImpl, readEvent: async () => issueEvent() }),
+    );
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  it("aborts a hanging provider on every attempt and fails with the transport error", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let calls = 0;
+    /** @type {AbortSignal[]} */
+    const signals = [];
+    /** @type {typeof globalThis.fetch} */
+    const fetchImpl = (_url, init) => {
+      calls += 1;
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("no abort signal reached the chat request");
+      }
+      signals.push(signal);
+      return new Promise((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+
+    await expect(
+      run(
+        inputs({ requestTimeoutMs: 1000 }),
+        readContext(runner),
+        /** @type {any} */ ({
+          forge: fakeForge({}),
+          fetchImpl,
+          readEvent: async () => issueEvent(),
+        }),
+      ),
+    ).rejects.toThrow(TransportError);
+
+    expect(calls).toBe(3);
+    expect(new Set(signals).size).toBe(3);
+  }, 30_000);
 });
 
 describe("run — the sheet half", () => {
