@@ -15,6 +15,7 @@ import {
   serialiseArtifact,
   withCommentId,
 } from "./artifact.mjs";
+import { utf8Compare } from "./order.mjs";
 import { MESSAGE_CHARS, renderComment } from "./render.mjs";
 import { VERDICT_REASON_CHARS } from "./verify.mjs";
 
@@ -1266,5 +1267,47 @@ describe("serialiseArtifact", () => {
     const withUndefined = /** @type {any} */ (structuredClone(buildArtifact(facts())));
     withUndefined.findings[0].message = undefined;
     expect(() => serialiseArtifact(withUndefined)).toThrow(ArtifactError);
+  });
+});
+
+describe("the canonical sort order", () => {
+  // The pipeline has one canonical order — UTF-8 byte order, the order
+  // `utf8Compare` defines. It governs every LIST the facts can rearrange
+  // (risk rows, coverage, findings — `assertUtf8Sorted` refuses anything
+  // else) and every KEY the serialiser emits: `stableStringify` sorts with
+  // the default code-unit `.sort()`, which agrees with byte order on every
+  // key the schema can hold. This pins that agreement over the artifact's
+  // whole nested key universe — a future key whose two orders diverge fails
+  // here, before it can make two runs of one review disagree in bytes.
+
+  /**
+   * Every object key list a value holds, however nested — arrays walked,
+   * objects collected in place.
+   *
+   * @param {unknown} value
+   * @param {string[][]} sink
+   * @returns {void}
+   */
+  function collectKeyLists(value, sink) {
+    if (Array.isArray(value)) {
+      for (const element of value) collectKeyLists(element, sink);
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      const object = /** @type {Record<string, unknown>} */ (value);
+      sink.push(Object.keys(object));
+      for (const nested of Object.values(object)) collectKeyLists(nested, sink);
+    }
+  }
+
+  it("byte order and the serialiser's default key sort agree on every key the artifact can hold", () => {
+    /** @type {string[][]} */
+    const keyLists = [];
+    collectKeyLists(buildArtifact(facts()), keyLists);
+    collectKeyLists(buildArtifact(facts({ provenance: {} })), keyLists);
+    expect(keyLists.length).toBeGreaterThan(10);
+    for (const keys of keyLists) {
+      expect([...keys].sort()).toEqual([...keys].sort(utf8Compare));
+    }
   });
 });
