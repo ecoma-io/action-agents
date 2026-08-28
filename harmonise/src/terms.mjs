@@ -116,7 +116,6 @@ export function compileTermBase(entries, lang) {
   /** @type {TermEntry[]} */
   const compiled = [];
   const terms = new Set();
-  const tokens = new Set();
 
   for (const entry of entries) {
     const config = readEntry(entry);
@@ -156,13 +155,7 @@ export function compileTermBase(entries, lang) {
     }
     const g = compiled.length + 1;
     const token = `[[harmonise:${tokenId(lang, config.term, rendering)}:g${String(g)}]]`;
-    if (tokens.has(token)) {
-      throw new Error(
-        `terms '${[...terms].pop()}' and '${config.term}' derive the same placeholder id — refused rather than risk token ambiguity`,
-      );
-    }
     terms.add(config.term);
-    tokens.add(token);
     compiled.push({ term: config.term, rendering, forbidden, token, g });
   }
 
