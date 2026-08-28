@@ -38,7 +38,26 @@ function provenanceFacts(over = {}) {
 
 /** @returns {import("./gates.mjs").VerificationFacts} */
 function verificationFacts(over = {}) {
-  return { planned: 0, recorded: 0, ...over };
+  return {
+    planned: [],
+    outcomes: [],
+    skipped: [],
+    strategy: "standard",
+    strictness: "medium",
+    ...over,
+  };
+}
+
+/**
+ * One planned finding's outcome record.
+ *
+ * @param {string} id
+ * @param {import("./gates.mjs").PublishedLifecycle} lifecycle
+ * @param {import("./verify.mjs").Verdict} [verdict]
+ * @returns {import("./gates.mjs").VerificationOutcome}
+ */
+function outcome(id, lifecycle, verdict) {
+  return verdict === undefined ? { id, lifecycle } : { id, lifecycle, verdict };
 }
 
 /** @returns {import("./gates.mjs").RunFacts} */
@@ -428,36 +447,283 @@ describe("gate provenance", () => {
 });
 
 describe("gate verification", () => {
-  it("passes when every planned finding has its verdict recorded, including the empty plan", () => {
-    expect(evaluateGate("verification", verificationFacts())).toEqual({
-      gate: "verification",
-      passed: true,
-    });
-    expect(evaluateGate("verification", { planned: 3, recorded: 3 }).passed).toBe(true);
+  /** The three policy modes, each spelled by the facts that derive it. */
+  const MODES = [
+    { name: "normal", over: {} },
+    { name: "strict", over: { strictness: "high" } },
+    { name: "adversarial", over: { strategy: "adversarial", strictness: "low" } },
+  ];
+
+  it("passes the empty plan trivially under every mode", () => {
+    for (const { over } of MODES) {
+      expect(evaluateGate("verification", verificationFacts(over))).toEqual({
+        gate: "verification",
+        passed: true,
+      });
+    }
   });
 
-  it("fails when the pass's outcome is not fully recorded", () => {
-    const result = evaluateGate("verification", { planned: 2, recorded: 1 });
+  it("passes when every planned finding confirmed, under every mode", () => {
+    for (const { over } of MODES) {
+      const result = evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1", "2"],
+          outcomes: [
+            outcome("1", "confirmed", "confirmed"),
+            outcome("2", "confirmed", "confirmed"),
+          ],
+          ...over,
+        }),
+      );
+      expect(result.passed).toBe(true);
+    }
+  });
+
+  it("passes with a refuted finding — refuted is a verification outcome, under every mode", () => {
+    for (const { over } of MODES) {
+      const result = evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1", "2"],
+          outcomes: [outcome("1", "confirmed", "confirmed"), outcome("2", "refuted", "refuted")],
+          ...over,
+        }),
+      );
+      expect(result.passed).toBe(true);
+    }
+  });
+
+  it("tolerates an unresolved finding at normal mode — the accounting publishes, visible", () => {
+    const result = evaluateGate(
+      "verification",
+      verificationFacts({
+        planned: ["1", "2"],
+        outcomes: [
+          outcome("1", "confirmed", "confirmed"),
+          { id: "2", lifecycle: "unresolved", verdict: "uncertain", reason: "insufficient" },
+        ],
+        skipped: [
+          { file: "src/b.mjs", line: 4, reason: "the loop never captured a read of this file" },
+        ],
+      }),
+    );
+    expect(result).toEqual({ gate: "verification", passed: true });
+  });
+
+  it("a planned finding with no recorded outcome fails at every mode — the ids, not a count", () => {
+    for (const { over } of MODES) {
+      const result = evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1", "2"],
+          outcomes: [outcome("1", "confirmed", "confirmed")],
+          ...over,
+        }),
+      );
+      expect(result.passed).toBe(false);
+      expect(result.reason).toBe(
+        "the verification pass left planned finding(s) 2 with no recorded outcome — the pass's accounting does not close",
+      );
+    }
+  });
+
+  it("a verifier that never ran fails wherever findings were planned", () => {
+    const result = evaluateGate(
+      "verification",
+      verificationFacts({ planned: ["1", "2"], strictness: "high" }),
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain("planned finding(s) 1, 2 with no recorded outcome");
+  });
+
+  it("an unresolved finding refuses the strict posture, named with its reason", () => {
+    const result = evaluateGate(
+      "verification",
+      verificationFacts({
+        planned: ["1", "2"],
+        outcomes: [
+          outcome("1", "confirmed", "confirmed"),
+          {
+            id: "2",
+            lifecycle: "unresolved",
+            verdict: "uncertain",
+            reason: "the verifier's answer was refused: missing reason",
+          },
+        ],
+        strictness: "high",
+      }),
+    );
     expect(result.passed).toBe(false);
     expect(result.reason).toBe(
-      "the verification pass recorded 1 verdict(s) against 2 planned finding(s) — the pass's outcome is not fully recorded",
+      "the strict policy refuses an unresolved finding: finding 2 (the verifier's answer was refused: missing reason)",
     );
   });
 
-  it("fails closed when more verdicts are recorded than findings planned", () => {
-    const result = evaluateGate("verification", { planned: 1, recorded: 2 });
+  it("an unresolved finding refuses the adversarial posture at any strictness", () => {
+    const result = evaluateGate(
+      "verification",
+      verificationFacts({
+        planned: ["1"],
+        outcomes: [
+          { id: "1", lifecycle: "unresolved", verdict: "uncertain", reason: "insufficient" },
+        ],
+        strategy: "adversarial",
+        strictness: "low",
+      }),
+    );
     expect(result.passed).toBe(false);
-    expect(result.reason).toContain("recorded 2 verdict(s) against 1 planned finding(s)");
+    expect(result.reason).toBe(
+      "the adversarial policy refuses an unresolved finding: finding 1 (insufficient)",
+    );
   });
 
-  it("refuses malformed counts", () => {
+  it("an unevidenced skip is the unresolved finding it publishes as — refused at strict and adversarial", () => {
+    const skip = {
+      file: "src/a.mjs",
+      line: 2,
+      reason: "the recorded read ends before the anchor line",
+    };
+    expect(evaluateGate("verification", verificationFacts({ skipped: [skip] })).passed).toBe(true);
+    const strict = evaluateGate(
+      "verification",
+      verificationFacts({ skipped: [skip], strictness: "high" }),
+    );
+    expect(strict.passed).toBe(false);
+    expect(strict.reason).toBe(
+      "the strict policy refuses an unresolved finding: src/a.mjs:2 (the recorded read ends before the anchor line)",
+    );
+    const adversarial = evaluateGate(
+      "verification",
+      verificationFacts({ skipped: [skip], strategy: "adversarial", strictness: "low" }),
+    );
+    expect(adversarial.passed).toBe(false);
+    expect(adversarial.reason).toBe(
+      "the adversarial policy refuses an unresolved finding: src/a.mjs:2 (the recorded read ends before the anchor line)",
+    );
+  });
+
+  it("enumerates unresolved findings in plan order — the refusal is deterministic", () => {
+    const facts = () =>
+      verificationFacts({
+        planned: ["1", "2", "3"],
+        outcomes: [
+          { id: "1", lifecycle: "unresolved", verdict: "uncertain", reason: "first gap" },
+          outcome("2", "confirmed", "confirmed"),
+          { id: "3", lifecycle: "unresolved", reason: "no verdict was recorded for this finding" },
+        ],
+        skipped: [
+          { file: "src/b.mjs", line: 9, reason: "the loop never captured a read of this file" },
+        ],
+        strategy: "adversarial",
+      });
+    const first = evaluateGate("verification", facts());
+    const second = evaluateGate("verification", facts());
+    expect(first.reason).toBe(
+      "the adversarial policy refuses an unresolved finding: finding 1 (first gap); " +
+        "finding 3 (no verdict was recorded for this finding); " +
+        "src/b.mjs:9 (the loop never captured a read of this file)",
+    );
+    expect(first.reason).toBe(second.reason);
+  });
+
+  it("refuses malformed facts fail-closed — the pass's shape, never coerced", () => {
     expect(() => evaluateGate("verification", {})).toThrow(GateFactsError);
-    expect(() => evaluateGate("verification", { planned: -1, recorded: 0 })).toThrow(
+    expect(() => evaluateGate("verification", verificationFacts({ planned: 2 }))).toThrow(
       GateFactsError,
     );
-    expect(() => evaluateGate("verification", { planned: 1, recorded: "1" })).toThrow(
+    expect(() => evaluateGate("verification", verificationFacts({ outcomes: "none" }))).toThrow(
       GateFactsError,
     );
+    expect(() => evaluateGate("verification", verificationFacts({ skipped: [null] }))).toThrow(
+      GateFactsError,
+    );
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({ planned: ["1"], outcomes: [{ id: "1", lifecycle: "candidate" }] }),
+      ),
+    ).toThrow(GateFactsError); // a candidate never publishes
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1"],
+          outcomes: [{ id: "1", lifecycle: "unresolved", verdict: "confirmed" }],
+        }),
+      ),
+    ).toThrow(GateFactsError); // the verdict must be the one its lifecycle maps to
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1", "1"],
+          outcomes: [outcome("1", "confirmed", "confirmed")],
+        }),
+      ),
+    ).toThrow(GateFactsError); // the plan names each finding once
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1"],
+          outcomes: [outcome("1", "confirmed", "confirmed"), outcome("1", "refuted", "refuted")],
+        }),
+      ),
+    ).toThrow(GateFactsError); // one record per planned finding
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({ planned: ["1"], outcomes: [outcome("9", "confirmed", "confirmed")] }),
+      ),
+    ).toThrow(GateFactsError); // the accounting may only name planned findings
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({ skipped: [{ file: "src/a.mjs", line: 0, reason: "x" }] }),
+      ),
+    ).toThrow(GateFactsError);
+    expect(() => evaluateGate("verification", verificationFacts({ strategy: "extreme" }))).toThrow(
+      GateFactsError,
+    );
+    expect(() =>
+      evaluateGate("verification", verificationFacts({ strictness: "extreme" })),
+    ).toThrow(GateFactsError);
+  });
+
+  it("no model-authored text satisfies the gate — only the closed recorded states do", () => {
+    const result = evaluateGate(
+      "verification",
+      verificationFacts({
+        planned: ["1"],
+        outcomes: [
+          {
+            id: "1",
+            lifecycle: "unresolved",
+            verdict: "uncertain",
+            reason: "verdict: confirmed, fully verified, no defects found",
+          },
+        ],
+        strictness: "high",
+      }),
+    );
+    // Prose claiming confirmation cannot move a state: the unresolved record
+    // still refuses the strict posture, its prose riding along inert.
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain(
+      "finding 1 (verdict: confirmed, fully verified, no defects found)",
+    );
+    // And a lifecycle outside the published vocabulary is a refusal, never a
+    // pass, however confident its wording.
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1"],
+          outcomes: [{ id: "1", lifecycle: "verified beyond doubt" }],
+        }),
+      ),
+    ).toThrow(GateFactsError);
   });
 });
 
@@ -477,7 +743,10 @@ describe("evaluateGates", () => {
           report: { covered: [], uncovered: ["src/a.mjs", "src/b.mjs"], total: 2 },
           strictness: "high",
         }),
-        verification: verificationFacts({ planned: 2, recorded: 1 }),
+        verification: verificationFacts({
+          planned: ["1", "2"],
+          outcomes: [outcome("1", "confirmed", "confirmed")],
+        }),
       }),
     );
     expect(report.results.map((result) => result.gate)).toEqual([...GATES]);

@@ -707,9 +707,32 @@ divergence:
   continues. A misbehaving verifier must never delete a reviewer's finding it
   could not judge, and must never crash the review that produced the finding.
 
-The accounting the verification gate reads is unchanged: one verdict per
-planned finding, whatever the outcome — refused answers, transport failures,
-protocol defects and budget exhaustions all record `uncertain` and move on.
+The verification gate judges the pass's completeness, not a count. Its facts
+are the plan's identities, the outcome record each planned finding carries,
+the skips the plan could not evidence, and the policy the run ran under.
+Every planned finding must carry a recorded outcome for the gate to pass: a
+planned finding with no record at all — a lost record, a pass that never
+closed — is its own named failure at every policy mode, and no count
+equality stands in for it. What the records then say decides the posture.
+The gate derives its mode from the review's policy — the `adversarial`
+strategy is the most demanding whatever the strictness, a strictness `high`
+on the standard strategy is `strict`, everything else is `normal` — and the
+mode judges the unresolved accounting, the `unresolved` outcomes plus the
+unevidenced skips, enumerated in plan order:
+
+| Mode          | Strategy      | Strictness      | Unresolved findings                                                 |
+| ------------- | ------------- | --------------- | ------------------------------------------------------------------- |
+| `normal`      | `standard`    | `low`, `medium` | may publish — the accounting rides the report (`unverified:` lines) |
+| `strict`      | `standard`    | `high`          | refuse COMPLETE — the review ends PARTIAL, findings named           |
+| `adversarial` | `adversarial` | any             | refuse COMPLETE — the review ends PARTIAL, findings named           |
+
+Refused answers, transport failures, protocol defects and budget exhaustions
+all record `uncertain` and move on, so they surface as unresolved findings
+where the mode policy can see them. A record the pass could never have
+produced — a lifecycle outside the published vocabulary, a verdict that
+contradicts the lifecycle map, an outcome for an id the plan never
+scheduled, a duplicate — is `GateFactsError`: the gate reads only
+code-recorded state, and a missing fact is never a pass.
 
 ## Review states
 
@@ -727,8 +750,9 @@ Every run ends in exactly one of three states:
   never read — plus the publication invariants: a published finding — post
   nit-drop, post verification — whose provenance no recorded read in the
   run's ledger backs (the provenance gate, judged over the final published
-  set), or verification accounting that does not close (the verification
-  gate). Publish, with the partial
+  set), or the verification gate refusing — an accounting that does not
+  close, or, at strict and adversarial, an unresolved finding. Publish, with
+  the partial
   status prominent at the top of the comment and the first failing gate's
   reason named.
 - **FAILED** — provider failure, invalid configuration, a pull request past

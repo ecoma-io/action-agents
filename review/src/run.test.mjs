@@ -1123,6 +1123,11 @@ describe("adversarial verification pass", () => {
     expect(body).toContain("off-by-one");
     expect(body).toContain("a nit");
     expect(body).toContain("unverified: insufficient");
+    // The verification gate refuses an unresolved finding under the
+    // adversarial policy: the run still publishes, but as PARTIAL, with the
+    // unresolved findings named in the banner.
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("the adversarial policy refuses an unresolved finding");
     expect(
       logged.filter((line) => line.includes("uncertain") && line.includes("(finding ")),
     ).toHaveLength(2);
