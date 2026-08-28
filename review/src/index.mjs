@@ -121,7 +121,7 @@ export function readEvent(eventName, eventPath) {
 /**
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
- * @param {Partial<import("./run.mjs").Io>} [io] injectable for tests; real clients otherwise
+ * @param {Partial<import("./run.mjs").Io> & { fetchImpl?: typeof globalThis.fetch }} [io] injectable for tests; real clients otherwise
  * @returns {Promise<void>}
  */
 export async function run(inputs, context, io = {}) {
@@ -151,6 +151,7 @@ export async function run(inputs, context, io = {}) {
           apiUrl: inputs.apiUrl,
           apiKey: inputs.apiKey,
           timeoutMs: inputs.requestTimeoutMs,
+          ...(io.fetchImpl !== undefined ? { fetchImpl: io.fetchImpl } : {}),
         }),
       now: io.now ?? (() => Date.now()),
       info: io.info ?? ((message) => info(message)),

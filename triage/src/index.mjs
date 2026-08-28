@@ -90,53 +90,63 @@ export function readInputs(env = process.env) {
 /**
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
+ * @param {Partial<Io> & { fetchImpl?: typeof globalThis.fetch }} [overrides] injectable members; the chat client is built with `fetchImpl` when no `chat` is given
  * @returns {Io}
  */
-function realIo(inputs, context) {
+function realIo(inputs, context, overrides = {}) {
   return {
-    forge: createForge({
-      owner: context.owner,
-      repo: context.repo,
-      token: inputs.githubToken,
-      apiUrl: context.apiUrl,
-    }),
-    chat: createChat({
-      apiUrl: inputs.apiUrl,
-      apiKey: inputs.apiKey,
-      timeoutMs: inputs.requestTimeoutMs,
-    }),
-    evidence: createEvidence(),
-    now: () => Date.now(),
-    readEvent: async () => {
-      try {
-        return /** @type {Record<string, unknown>} */ (
-          JSON.parse(readFileSync(context.eventPath, "utf8"))
-        );
-      } catch (cause) {
-        const error = new Error(`the event payload at ${context.eventPath} does not parse`);
-        error.cause = cause;
-        throw error;
-      }
-    },
+    forge:
+      overrides.forge ??
+      createForge({
+        owner: context.owner,
+        repo: context.repo,
+        token: inputs.githubToken,
+        apiUrl: context.apiUrl,
+      }),
+    chat:
+      overrides.chat ??
+      createChat({
+        apiUrl: inputs.apiUrl,
+        apiKey: inputs.apiKey,
+        timeoutMs: inputs.requestTimeoutMs,
+        ...(overrides.fetchImpl !== undefined ? { fetchImpl: overrides.fetchImpl } : {}),
+      }),
+    evidence: overrides.evidence ?? createEvidence(),
+    now: overrides.now ?? (() => Date.now()),
+    readEvent:
+      overrides.readEvent ??
+      (async () => {
+        try {
+          return /** @type {Record<string, unknown>} */ (
+            JSON.parse(readFileSync(context.eventPath, "utf8"))
+          );
+        } catch (cause) {
+          const error = new Error(`the event payload at ${context.eventPath} does not parse`);
+          error.cause = cause;
+          throw error;
+        }
+      }),
   };
 }
 
 /**
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
- * @param {Io} [io]
+ * @param {Partial<Io> & { fetchImpl?: typeof globalThis.fetch }} [io] injectable for tests; real clients omit it, and realIo builds every member
  * @returns {Promise<void>}
  */
-export async function run(inputs, context, io = realIo(inputs, context)) {
-  const event = await io.readEvent();
+export async function run(inputs, context, io) {
+  /** @type {Io} */
+  const world = realIo(inputs, context, io ?? {});
+  const event = await world.readEvent();
   const thread = threadFromEvent(context.eventName, event);
 
   // The config file is fetched once, from the default branch — never the
   // working tree. A pull request cannot edit the policy that governs it.
-  const { raw } = await loadConfigFile({ forge: io.forge, configPath: inputs.configPath });
+  const { raw } = await loadConfigFile({ forge: world.forge, configPath: inputs.configPath });
   const config = validateConfig(raw);
   if (config !== null) {
-    await assertLabelsExist(io.forge, config);
+    await assertLabelsExist(world.forge, config);
   }
 
   const { sheet } = effectiveSheet({
@@ -144,13 +154,13 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     threadType: thread.type,
     narrowing: inputs.labels,
   });
-  const documents = await loadInstructions({ forge: io.forge, config, threadType: thread.type });
+  const documents = await loadInstructions({ forge: world.forge, config, threadType: thread.type });
 
   // PR: the diff counts the size measurement and the diff-stats evidence
   // both read. The event payload does not carry them, which is why the
   // files listing is walked here — and a pull request past that listing's
   // ceiling is refused rather than guessed at.
-  const files = thread.type === "pr" ? await io.forge.listPullRequestFiles(thread.number) : [];
+  const files = thread.type === "pr" ? await world.forge.listPullRequestFiles(thread.number) : [];
 
   const { messages } = buildPrompt({
     thread,
@@ -158,9 +168,9 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     sheet,
     documents,
     files,
-    evidence: io.evidence,
+    evidence: world.evidence,
   });
-  const { content } = await io.chat.complete({ model: inputs.model, messages });
+  const { content } = await world.chat.complete({ model: inputs.model, messages });
 
   const size =
     config?.size !== undefined && thread.type === "pr"
@@ -184,14 +194,14 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     }
     // The identity read sits behind every dry-run and label-sheet gate: paid
     // only by a run about to write a comment.
-    const ownLogins = await resolveOwnLogins(io.forge, info);
+    const ownLogins = await resolveOwnLogins(world.forge, info);
     const outcome = await upsertComment({
-      store: io.forge,
+      store: world.forge,
       action: ACTION,
       issueNumber: thread.number,
       buildBody: body,
       ownLogins,
-      startedAt: io.now(),
+      startedAt: world.now(),
       log: info,
     });
     info(`classification comment ${outcome.outcome} (${String(outcome.id)})`);
@@ -232,10 +242,10 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     return;
   }
   if (add.length + sizeAdd.length > 0) {
-    await io.forge.addLabels(thread.number, [...add, ...sizeAdd]);
+    await world.forge.addLabels(thread.number, [...add, ...sizeAdd]);
   }
   for (const name of replace) {
-    await io.forge.removeLabel(thread.number, name);
+    await world.forge.removeLabel(thread.number, name);
   }
 }
 
