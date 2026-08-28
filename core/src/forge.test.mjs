@@ -571,6 +571,8 @@ describe("write operations", () => {
     const patch = recorder.calls?.find((call) => call.method === "PATCH");
     expect(patch).toBeDefined();
     expect(JSON.parse(String(patch?.body))).toEqual({ sha: "newsha", force: true });
+    // The lock is re-read immediately before the write: two reads, then the PATCH.
+    expect(recorder.calls?.map((call) => call.method)).toEqual(["GET", "GET", "PATCH"]);
   });
 
   it("refuses with BranchMovedError when the branch moved under the run", async () => {
@@ -583,6 +585,31 @@ describe("write operations", () => {
     await expect(client.upsertBranch("harmonise/en", "newsha", SHA)).rejects.toThrow(
       /moved while the run worked/,
     );
+  });
+
+  it("re-reads the tip immediately before the PATCH and refuses a move caught in that window", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    let reads = 0;
+    const client = forge(
+      "o",
+      "r",
+      {
+        "GET /repos/o/r/git/ref/heads/harmonise%2Fen": () => {
+          reads += 1;
+          return json({ object: { sha: reads === 1 ? SHA : "e".repeat(40) } })();
+        },
+        "PATCH /repos/o/r/git/refs/heads/harmonise%2Fen": json({ object: { sha: "new" } }),
+      },
+      recorder,
+    );
+
+    // The lock read found the expected tip; the pre-write re-read catches the
+    // interleaved writer and refuses before the force-PATCH is ever issued.
+    await expect(client.upsertBranch("harmonise/en", "newsha", SHA)).rejects.toThrow(
+      BranchMovedError,
+    );
+    expect(recorder.calls?.some((call) => call.method === "PATCH")).toBe(false);
   });
 
   it("refuses with BranchMovedError when the branch appears under the run", async () => {
