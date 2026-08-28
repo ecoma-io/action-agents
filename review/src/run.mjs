@@ -16,12 +16,13 @@ import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/
 
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
-import { canConcludeReview, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
+import { parseDiffPaths, unifiedDiff } from "./coverage.mjs";
 import { createTools } from "./tools.mjs";
 import { classifyRisk } from "./risk.mjs";
 import { assignLanes, laneBudget } from "./lanes.mjs";
 import { buildPrompt } from "./prompt.mjs";
 import { runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
+import { evaluateGate, evaluateGates } from "./gates.mjs";
 import { parseAnswer, validateAnswer } from "./answer.mjs";
 import { applyVerdicts, parseVerdict, planVerification, verifierMessages } from "./verify.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
@@ -219,13 +220,25 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     });
     parsed = parseAnswer(second);
   }
-  if (!parsed.ok) {
-    throw new Error(`the final answer failed the output contract twice: ${parsed.defect}`);
+  // Gate `conclusion` — the output contract held after at most the one
+  // re-ask. The refusal fires here, before validation, verification or
+  // publication spend a single further call against an answer that never
+  // satisfied the contract.
+  const answer = parsed.ok
+    ? { rawFindings: parsed.rawFindings, summary: parsed.summary }
+    : undefined;
+  const conclusion = evaluateGate(
+    "conclusion",
+    parsed.ok ? { held: true } : { held: false, defect: parsed.defect },
+  );
+  if (answer === undefined || !conclusion.passed) {
+    io.info(`review: gate ${conclusion.gate} failed — ${conclusion.reason}`);
+    throw new Error(`the final answer failed the output contract twice: ${conclusion.reason}`);
   }
 
   const validated = validateAnswer({
-    rawFindings: parsed.rawFindings,
-    summary: parsed.summary,
+    rawFindings: answer.rawFindings,
+    summary: answer.summary,
     reviewed: inventory.reviewed,
     workspace,
   });
@@ -250,7 +263,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   // findings are put to one bounded adversarial call each, and its verdicts
   // can only remove. What it publishes is what renders and what the count
   // names — never both sets.
-  const published = await runVerificationPass({
+  const verified = await runVerificationPass({
     findings,
     policy: { strategy: config.strategy, strictness: config.strictness },
     lanes,
@@ -259,10 +272,34 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     model: inputs.model,
     info: (line) => io.info(`review: ${line}`),
   });
+  const published = verified.findings;
 
-  // The concluding state is code's verdict: a bound or a coverage gap names
-  // the partial reason; the model's summary text is never consulted.
-  const status = concludingStatus(outcome, config.strictness);
+  // The declared gates decide the concluding posture — the loop's bound
+  // accounting, the coverage condition, the publication invariants. The
+  // model's summary text is never consulted; each refusal names its gate
+  // in the log, and the first failure's reason leads the partial comment.
+  const report = evaluateGates({
+    conclusion: { held: true },
+    bound: {
+      bound: outcome.bound,
+      readingTurns: outcome.readingTurns,
+      maxTurns: outcome.maxTurns,
+      toolCalls: outcome.toolCalls,
+      maxToolCalls: outcome.maxToolCalls,
+      evidenceBytes: outcome.evidenceBytes,
+      maxEvidenceBytes: outcome.maxEvidenceBytes,
+    },
+    coverage: { report: outcome.coverage, strictness: config.strictness },
+    provenance: { published: anchored.published, quarantined: anchored.quarantined },
+    verification: verified.accounting,
+  });
+  for (const result of report.failed) {
+    io.info(`review: gate ${result.gate} failed — ${result.reason}`);
+  }
+  /** @type {{ label: "Complete" | "Partial", reason?: string }} */
+  const status = report.mayPublish
+    ? { label: "Complete" }
+    : { label: "Partial", reason: report.failed[0]?.reason ?? "the run's gates did not all pass" };
   const body = renderComment({
     status: status.label,
     headSha,
@@ -353,7 +390,7 @@ function applyStrictness(findings, strictness, info) {
  * @param {import("#core/chat.mjs").Chat} input.chat
  * @param {string} input.model
  * @param {(line: string) => void} input.info the run's log sink, `review:`-prefixed
- * @returns {Promise<import("./answer.mjs").Finding[]>} the publication set
+ * @returns {Promise<{ findings: import("./answer.mjs").Finding[], accounting: { planned: number, recorded: number } }>} the publication set plus the pass's own accounting — findings planned against verdicts recorded — as facts for the verification gate
  */
 async function runVerificationPass({ findings, policy, lanes, recordedReads, chat, model, info }) {
   const lanesByPath = new Map(lanes.map((lane) => [lane.path, lane.lane]));
@@ -385,7 +422,10 @@ async function runVerificationPass({ findings, policy, lanes, recordedReads, cha
         `(finding ${drop.id}): ${drop.reason}`,
     );
   }
-  return applied.findings;
+  return {
+    findings: applied.findings,
+    accounting: { planned: plan.items.length, recorded: verdicts.length },
+  };
 }
 
 /**
@@ -467,57 +507,4 @@ async function nothingToReview({ pullRequestNumber, headSha, io, dryRun, started
     }
   }
   return { outcome: "skip", reason: "universe empty and no prior review comment — nothing to do" };
-}
-
-/**
- * Where the bound that ended a review becomes the sentence the comment
- * leads with.
- *
- * @param {import("./loop.mjs").Bound} bound
- * @returns {string}
- */
-function partialReason(bound) {
-  switch (bound) {
-    case "max-turns":
-      return "the reading-turn budget was reached before the reviewer stopped asking questions.";
-    case "tool-calls":
-      return "the tool-call ceiling was reached before the reviewer stopped reading.";
-    case "evidence":
-      return "the evidence budget was reached before the reviewer finished reading.";
-  }
-}
-
-/**
- * The concluding state, decided by code: a fired bound is Partial with the
- * bound named; under the strict arm (`high`), unread expected files are
- * Partial with the gap named; otherwise Complete. The coverage verdict is
- * `canConcludeReview`'s — the model's summary text is never consulted.
- *
- * @param {import("./loop.mjs").LoopOutcome} outcome
- * @param {import("./config.mjs").Strictness} strictness
- * @returns {{ label: "Complete" | "Partial", reason?: string }}
- */
-function concludingStatus(outcome, strictness) {
-  if (outcome.bound !== undefined) {
-    return { label: "Partial", reason: partialReason(outcome.bound) };
-  }
-  if (!canConcludeReview(outcome.coverage, strictness)) {
-    return { label: "Partial", reason: coverageReason(outcome.coverage) };
-  }
-  return { label: "Complete" };
-}
-
-/**
- * The coverage gap becomes the sentence a partial review leads with, in
- * the same voice as `partialReason`'s.
- *
- * @param {import("./coverage.mjs").CoverageReport} report
- * @returns {string}
- */
-function coverageReason(report) {
-  const files = report.total === 1 ? "file was" : "files were";
-  return (
-    `${String(report.uncovered.length)} of ${String(report.total)} changed ${files} never ` +
-    `read: ${report.uncovered.join(", ")}.`
-  );
 }

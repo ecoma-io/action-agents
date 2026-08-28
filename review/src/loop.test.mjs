@@ -516,3 +516,68 @@ describe("review phases", () => {
     expect(final[2]?.content).toContain("current phase: investigate");
   });
 });
+
+describe("loop accounting facts", () => {
+  it("carries evidenceBytes and the enforced caps on a natural-stop outcome", async () => {
+    const chat = scriptedChat([{ content: '{"findings":[],"summary":"done"}' }]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 8,
+      contextWindow: 128_000,
+    });
+    expect(outcome.naturalStopped).toBe(true);
+    expect(typeof outcome.evidenceBytes).toBe("number");
+    expect(outcome.maxTurns).toBe(8);
+    expect(outcome.maxToolCalls).toBeGreaterThan(0);
+    expect(outcome.maxEvidenceBytes).toBeGreaterThan(0);
+  });
+
+  it("carries evidenceBytes and the enforced caps on a bound-fired outcome", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: "", toolCalls: [readCall({ id: "c2" })] },
+      { content: '{"findings":[],"summary":"concluded"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 2,
+      contextWindow: 128_000,
+    });
+    expect(outcome.bound).toBe("max-turns");
+    expect(outcome.naturalStopped).toBe(false);
+    expect(typeof outcome.evidenceBytes).toBe("number");
+    expect(outcome.evidenceBytes).toBeGreaterThan(0);
+    expect(outcome.maxTurns).toBe(2);
+    expect(outcome.maxToolCalls).toBeGreaterThan(0);
+    expect(outcome.maxEvidenceBytes).toBeGreaterThan(0);
+    expect(outcome.readingTurns).toBe(2);
+  });
+
+  it("reports evidence accumulating over successive reads", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: "", toolCalls: [readCall({ id: "c3" })] },
+      { content: '{"findings":[],"summary":"three calls"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 5,
+      contextWindow: 128_000,
+    });
+    // Three complete calls: two reads + one answer. Evidence accrues across
+    // the two reading turns but never exceeds the cap (512 KiB default).
+    expect(outcome.naturalStopped).toBe(true);
+    expect(outcome.readingTurns).toBe(2);
+    expect(outcome.evidenceBytes).toBeGreaterThan(0);
+    expect(outcome.evidenceBytes).toBeLessThanOrEqual(outcome.maxEvidenceBytes);
+  });
+});
