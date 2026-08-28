@@ -50,6 +50,16 @@ describe("the universe filter", () => {
     expect(inventory.reviewed.map((f) => f.filename)).toEqual(["src/moved-in.js"]);
     expect(inventory.ignored.map((f) => f.filename)).toEqual(["build/out.js"]);
   });
+
+  it("a removed file matching the ignore set stays outside the universe", () => {
+    const inventory = buildInventory({
+      files: [file("dist/gone.js", 0, 5, { status: "removed" }), file("src/a.mjs", 1, 0)],
+      ignore: ["dist/**"],
+      maxDiffLines: 100,
+    });
+    expect(inventory.ignored.map((f) => f.filename)).toEqual(["dist/gone.js"]);
+    expect(inventory.reviewed.map((f) => f.filename)).toEqual(["src/a.mjs"]);
+  });
 });
 
 describe("the diff budget", () => {

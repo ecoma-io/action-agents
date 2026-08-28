@@ -72,6 +72,10 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @property {number} toolCalls
  * @property {number} evidenceBytes
  * @property {string[]} filesRead
+ * @property {string[]} diffInspected the paths the code itself recorded as inspected — a
+ *   deletion's diff section rides in the initial prompt, so its removed content is on the
+ *   record without a read_file (which could not open the removed path anyway). Seeded
+ *   before the loop; nothing the model writes or calls can grow or shrink it.
  * @property {string[]} searchesRun
  * @property {string[]} toolErrors
  */
@@ -86,6 +90,8 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @param {number} input.contextWindow
  * @param {{ maxToolCalls?: number, evidenceBytes?: number }} [input.limits]
  * @param {string[]} [input.expectedPaths] the diff-derived expected set; defaults to none
+ * @param {string[]} [input.diffInspectedPaths] the code-recorded inspections — a deletion's own
+ *   diff section is the inspection of that path; defaults to none
  * @param {import("./config.mjs").Strictness} [input.strictness] the review policy; the conclude edge tightens at "high" (defaults to "medium")
  * @returns {Promise<LoopOutcome>}
  */
@@ -98,6 +104,7 @@ export async function runLoop({
   contextWindow,
   limits,
   expectedPaths,
+  diffInspectedPaths,
   strictness = "medium",
 }) {
   const maxToolCalls = limits?.maxToolCalls ?? MAX_TOOL_CALLS;
@@ -115,6 +122,7 @@ export async function runLoop({
     toolCalls: 0,
     evidenceBytes: 0,
     filesRead: [],
+    diffInspected: diffInspectedPaths ?? [],
     searchesRun: [],
     toolErrors: [],
   };
@@ -277,20 +285,21 @@ export async function runLoop({
 }
 
 /**
- * The read-coverage report at a loop exit: the expected set against the
- * ledger's recorded reads, each decoded from the JSON argument it was
- * stored as and normalised to the diff's canonical spelling. `track()`
- * only ever stores `JSON.stringify` output, so the decode cannot throw.
+ * The read-coverage report at a loop exit: the expected set against the reads on
+ * record — the ledger's `read_file` calls, each decoded from the JSON argument it
+ * was stored as (`track()` only ever stores `JSON.stringify` output, so the decode
+ * cannot throw), plus the code-recorded deletion inspections. Both sides are
+ * normalised to the diff's canonical spelling.
  *
  * @param {string[]} expectedPaths
  * @param {Ledger} ledger
  * @returns {import("./coverage.mjs").CoverageReport}
  */
 function readCoverage(expectedPaths, ledger) {
-  return coverageReport(
-    expectedPaths,
-    ledger.filesRead.map((entry) => normaliseReadPath(String(JSON.parse(entry)))),
-  );
+  return coverageReport(expectedPaths, [
+    ...ledger.filesRead.map((entry) => normaliseReadPath(String(JSON.parse(entry)))),
+    ...ledger.diffInspected,
+  ]);
 }
 
 /**
@@ -413,6 +422,12 @@ function renderState(ledger, phase) {
     `current phase: ${phase}`,
   ];
   if (ledger.filesRead.length > 0) parts.push(`files read:\n- ${ledger.filesRead.join("\n- ")}`);
+  if (ledger.diffInspected.length > 0) {
+    parts.push(
+      "inspected via their diff sections (deleted files; read_file cannot open them):\n- " +
+        ledger.diffInspected.join("\n- "),
+    );
+  }
   if (ledger.searchesRun.length > 0) {
     parts.push(`searches run:\n- ${ledger.searchesRun.join("\n- ")}`);
   }
