@@ -295,6 +295,9 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   /** Source fingerprint per proposed destination — what its state record pins. */
   /** @type {Map<string, string>} */
   const publishedSources = new Map();
+  /** Re-pinned record per noop destination — the pair's carried record made current. */
+  /** @type {Map<string, import("./state.mjs").SyncStateRecord>} */
+  const rePinned = new Map();
   /** @type {string[]} */
   const failedLines = [];
   /** @type {string[]} */
@@ -596,7 +599,25 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       failedLines.push(result.line);
       continue;
     }
-    publishedSources.set(result.outcome.destinationPath, result.sourceFingerprint);
+    if (result.outcome.outcome === "proposed") {
+      publishedSources.set(result.outcome.destinationPath, result.sourceFingerprint);
+    } else {
+      // A noop is a re-check, not a publication: the model endorsed the bytes
+      // already on disk, so the destination keeps its recorded record —
+      // re-pinned with this run's currency so the next run can prove the pair
+      // unchanged and skip it (#88). A never-recorded pair stays unrecorded:
+      // nothing was translated, so there is nothing to carry.
+      const recorded = recordedRecords.find(
+        (record) => record.destinationPath === result.outcome.destinationPath,
+      );
+      if (recorded !== undefined) {
+        rePinned.set(result.outcome.destinationPath, {
+          ...recorded,
+          policyFingerprint: policyDigest,
+          transformationVersion: TRANSFORMATION_VERSION,
+        });
+      }
+    }
     slots[job.slot] = result.outcome;
   }
 
@@ -662,9 +683,10 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     return;
   }
 
-  if (proposed.length === 0) {
+  if (proposed.length === 0 && rePinned.size === 0) {
     // All pairs in step: a green run and a log line — the honest common case
-    // on a schedule. No branch, no commit, no pull request.
+    // on a schedule. No branch, no commit, no pull request. A run that only
+    // re-pinned records is not this case: its state write still publishes.
     info("nothing to propose — no branch, no commit, no pull request");
     if (failureReport !== "") throw new Error(failureReport);
     return;
@@ -685,12 +707,15 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     changes.push({ path: proposal.destinationPath, blobSha: blob.sha });
   }
   // The state file rides the same commit as the translations it describes:
-  // prior records this publication does not supersede are carried, each
-  // proposed pair gains its record, and the merged file is one blob in the
-  // same tree. Content and the record of what produced it land as one
-  // instant, never two.
+  // prior records this publication does not supersede are carried — the
+  // re-pinned ones made current, the rest verbatim — each proposed pair
+  // gains its record, and the merged file is one blob in the same tree.
+  // Content and the record of what produced it land as one instant, never
+  // two.
   /** @type {import("./state.mjs").SyncStateRecord[]} */
-  const records = recordedRecords.filter((record) => !publishedSources.has(record.destinationPath));
+  const records = recordedRecords
+    .map((record) => rePinned.get(record.destinationPath) ?? record)
+    .filter((record) => !publishedSources.has(record.destinationPath));
   for (const proposal of proposed) {
     records.push({
       schemaVersion: STATE_SCHEMA_VERSION,
