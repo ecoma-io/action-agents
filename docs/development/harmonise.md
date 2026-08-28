@@ -589,20 +589,31 @@ The same law as `triage`: the provider unreachable after retries, a config that 
 
 A pair that skips does not fail the run; it is recorded in the report. A run where every pair skipped — none in step, none proposed — is red, not a green no-op.
 
+### The four recovery concepts
+
+`recovery.mjs` is the retry-policy authority for the pair loop — pure, dependency-free, and millisecond-free. Four concepts, each a pure function over declared data:
+
+1. **Classification** — what kind of failure happened. An answer that breaks the answer contract is tagged `RefusalError` in `plan` (the contract class); an HTTP status maps through `classFromStatus` — 401/403 are auth, the transport statuses (408, 425, 429, 500, 502, 503, 504) are transport, anything else is unknown; a core transport error is transport; anything else is unknown.
+2. **Backoff** — how long to wait before the next attempt. `delayClass` names the wait per class and attempt; the entry point owns the clock — it maps names to milliseconds (`DELAY_MS`: immediate 0, short 1 000, long 5 000) and sleeps. The policy module never measures time, so it stays trivially testable.
+3. **Retry-After** — server-advertised waits are honoured inside `core/src/http.mjs`, below the action; they never reach the pair loop.
+4. **Attempt limit** — how many retries a class is granted. `nextAction` answers `retry` or `give-up` from the policy: transport twice, unknown once, auth and refusal never.
+
+The failure line records the verdict — `… (classified transport, exhausted)` — so the log says why a pair is red, not just that it is.
+
 ### Translation-specific failures
 
-- Placeholder corruption (glossary or skip) → run fails, pair recorded as failed;
-- LLM returns malformed JSON → run fails after retries;
-- LLM returns empty content → run fails after retries;
-- Generation failure for missing translation → run fails;
-- Structural validation failure → run fails;
-- Link validation failure (a re-targeted, added or removed link) → run fails, pair recorded as failed after the one retry;
+An answer that violates the answer contract is a **refusal**: raised where the answer is judged (`plan`'s `judgeAnswer`) and never retried — a second identical call would return an identical answer.
 
-**Answer parsing:** The action accepts plain JSON or JSON wrapped in markdown code blocks (`json...`). Provider drift in formatting is tolerated as long as the JSON is parseable. Malformed JSON that cannot be parsed causes failure after retries.
+- Malformed JSON, or content that is empty or whitespace only → refusal, no retry;
+- Placeholder corruption (glossary or skip), a lost protected token, forged or tampered frontmatter → refusal, no retry;
+- Structural or link validation failure → refusal, no retry;
+- A provider error object at HTTP 200 → unknown, one retry under the policy;
+
+**Answer parsing:** The action accepts plain JSON or JSON wrapped in markdown code blocks (`json...`). Provider drift in formatting is tolerated as long as the JSON is parseable. JSON that cannot be parsed is a refusal: the pair fails on its first attempt, and the failure line names the class and the action taken.
 
 ## Capabilities
 
-What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. On `main` today the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `prompt`, `answer` and `pull-request` — and, wired on `main` since `v0.3.0` through `plan` and `src/index.mjs`, `frontmatter`, `blocks`, `tm`, `pool`, `protection` and `threeway`: the translation memory (#64) is read once per run, consulted per pair as advisory reference, and recorded on publication; pairs translate under the bounded-concurrent pool (#85), outcomes returned in input order so completion order never reaches the record; and a target that drifted outside harmonise is merged three-way against the base the memory proves (#91), a merge that cannot be proven failing the pair closed. Plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
+What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. On `main` today the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `prompt`, `answer` and `pull-request` — and, wired on `main` since `v0.3.0` through `plan` and `src/index.mjs`, `frontmatter`, `blocks`, `tm`, `pool`, `protection`, `threeway` and `recovery`: the translation memory (#64) is read once per run, consulted per pair as advisory reference, and recorded on publication; pairs translate under the bounded-concurrent pool (#85), outcomes returned in input order so completion order never reaches the record; a target that drifted outside harmonise is merged three-way against the base the memory proves (#91), a merge that cannot be proven failing the pair closed; and every pair's failure is classified and retried under the deterministic recovery policy (#107) — refusals and auth failures never, transport faults twice, unknown once, the policy's mapped backoff between attempts. Plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
 
 Two pure modules are **landed, wiring tracked** — merged and tested, not yet imported by the production path, therefore not behaviour a run exhibits:
 
@@ -673,6 +684,7 @@ The specification is living text, and changes to it are recorded here rather tha
 - **PR2:** Localized internal image references are specified and supported (the earlier "image rewriting removed" v1 limitation is superseded). Inventory completeness is a refusal contract: a truncated tree listing fails the run instead of being processed. Skip-directive syntax, protected-span boundaries, and pattern-overlap refusal are made exact.
 - **Correctness hardening:** Glossary detection is specified as whole-word — a term flanked by a letter, digit or underscore never matches — and its scope excludes link machinery: inline link and image destinations, reference-definition destinations, angle autolinks, and bare scheme URLs. Newline handling is pinned by test: protected content round-trips byte-for-byte under LF, CRLF, mixed newlines, and a missing final newline. Document resolution is answered from the inventory's own index rather than a per-link scan of `pairs`.
 - **Title customization (#30):** The commit subject and pull-request title — one line, always — may be renamed by the repository through the optional `pullRequest.title` config key. `{n}` and `{sourceLanguage}` are its only placeholders, substituted deterministically at publish time; absent, the built-in convention stands byte-for-byte unchanged. The pull-request body stays action-authored.
+- **Recovery wiring (#107):** The pair loop's fixed two-attempt retry is replaced by the deterministic recovery policy. Every failure is classified — refusal, transport, auth, unknown — and the class decides the retry: transport faults retry twice (up to three model calls per pair), unknown failures once, and refusals and auth failures never. Answer-contract violations — malformed JSON, empty content, placeholder corruption, lost protected tokens, structural and link validation failures, frontmatter tampering — are refusals: the one-retry allowance link and structural failures had is withdrawn, and the second call an unfixable answer used to spend is no longer made.
 
 ## Acceptance criteria
 

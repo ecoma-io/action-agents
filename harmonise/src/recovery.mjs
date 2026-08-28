@@ -192,6 +192,41 @@ export const DEFAULT_POLICY = deepFreeze({
 });
 
 /**
+ * The statuses that mean the credentials are the problem: rejected or
+ * forbidden. Nothing the pair carried caused them, and no retry changes what
+ * the token is.
+ *
+ * @type {readonly number[]}
+ */
+export const AUTH_STATUSES = Object.freeze([401, 403]);
+
+/**
+ * The statuses whose failure is on the provider's side and may pass on a
+ * later call — the same set the transport layer beneath this policy retries
+ * at the request level. A status in this row names `transport` once that
+ * layer has spent its own attempts and still failed.
+ *
+ * @type {readonly number[]}
+ */
+export const TRANSPORT_STATUSES = Object.freeze([408, 425, 429, 500, 502, 503, 504]);
+
+/**
+ * Classifies one HTTP response status into a declared failure class, for a
+ * caller raising from a status it did not tag itself. Total: any value that
+ * is not one of the declared statuses — an unrecognised 4xx, a nonsense
+ * number — lands in `unknown`, never in a guessed retryable class.
+ *
+ * @param {number} status
+ * @returns {FailureClass}
+ */
+export function classFromStatus(status) {
+  if (!Number.isSafeInteger(status)) return "unknown";
+  if (AUTH_STATUSES.includes(status)) return "auth";
+  if (TRANSPORT_STATUSES.includes(status)) return "transport";
+  return "unknown";
+}
+
+/**
  * The delay table, one row of delay names per declared class, sized to the
  * default policy: `transport` backs off `short` then `long`, `unknown` waits
  * `short` once, and `auth` and `refusal` are never delayed because they are

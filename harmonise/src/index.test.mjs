@@ -8,12 +8,17 @@
 //   2. **The key is masked before anything can print it.**
 //   3. **The report is honest about what it saw** — proposals, unchanged
 //      documents, skipped and failed pairs and orphans each get their line,
-//      and a malformed model answer costs exactly one retry before the pair
-//      is recorded as failed.
+//      and a failed pair's line names the recovery policy's verdict: a
+//      contract refusal is never retried, a transport fault is retried
+//      under the declared policy, an unknown failure once, and an auth
+//      failure never.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ACTION, main, readInputs, run, TM_PATH } from "./index.mjs";
+import { ChatError } from "#core/chat.mjs";
+import { HttpError, TransportError } from "#core/http.mjs";
+
+import { ACTION, DELAY_MS, main, readInputs, run, TM_PATH } from "./index.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
 import { renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
 import {
@@ -23,6 +28,7 @@ import {
   serialize as serializeTm,
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
+import { DELAY_CLASSES } from "./recovery.mjs";
 
 /**
  * @type {import("#core/runtime.mjs").Env}
@@ -521,6 +527,8 @@ describe("run", () => {
 
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error.message).toMatch(/fenced code block count changed: 2 → 1/);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(ioDouble.chat.calls()).toBe(1);
   });
 
   it("skips a pair whose existing translation is past the cap", async () => {
@@ -543,7 +551,7 @@ describe("run", () => {
     expect(error.message).toMatch(/existing translation is 33792 bytes, past the 32768-byte cap/);
   });
 
-  it("retries once on a malformed answer, then records the pair as failed", async () => {
+  it("refuses a malformed answer without spending a retry", async () => {
     const chatDouble = chat(["this is not json at all", "still not json"]);
     const ioDouble = /** @type {any} */ ({
       forge: forge(files()),
@@ -554,7 +562,8 @@ describe("run", () => {
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/does not parse as JSON|holds no JSON object/);
-    expect(chatDouble.calls()).toBe(2);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(chatDouble.calls()).toBe(1);
   });
 
   it("refuses an answer whose content is whitespace only", async () => {
@@ -562,6 +571,7 @@ describe("run", () => {
 
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error.message).toMatch(/no content beyond whitespace/);
+    expect(ioDouble.chat.calls()).toBe(1);
   });
 
   it("fails a pair whose answer lost a protected token, however fluent the prose", async () => {
@@ -582,6 +592,7 @@ describe("run", () => {
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/lost protected content|appears 0 times/);
+    expect(ioDouble.chat.calls()).toBe(1);
   });
 
   it("fails a pair whose answer corrupts Markdown structure", async () => {
@@ -597,9 +608,10 @@ describe("run", () => {
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/structural validation failed/);
+    expect(ioDouble.chat.calls()).toBe(1);
   });
 
-  it("fails a pair whose answer re-targets a link, after exactly one retry", async () => {
+  it("fails a pair whose answer re-targets a link, without spending a retry", async () => {
     const chatDouble = chat([
       proposes("# Dev\n\nSee [api](https://evil.example).\n"),
       proposes("# Dev\n\nSee [api](https://evil.example).\n"),
@@ -619,7 +631,142 @@ describe("run", () => {
     expect(error.message).toMatch(
       /link validation failed: line 3: link destination changed: 'api\.md' → 'https:\/\/evil\.example'/,
     );
-    expect(chatDouble.calls()).toBe(2);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(chatDouble.calls()).toBe(1);
+  });
+
+  describe("recovery policy in the pair loop", () => {
+    /**
+     * An Io whose chat is given and whose sleep records the waits the policy
+     * asks for instead of spending real time.
+     *
+     * @param {Record<string, string>} map
+     * @param {ReturnType<typeof chat>} chatDouble
+     * @returns {{ ioDouble: any, sleeps: number[] }}
+     */
+    function sleeping(map, chatDouble) {
+      /** @type {number[]} */
+      const sleeps = [];
+      const ioDouble = /** @type {any} */ ({
+        forge: forge(map),
+        chat: chatDouble,
+        evidence,
+        /** @param {number} ms */
+        async sleep(ms) {
+          sleeps.push(ms);
+        },
+      });
+      return { ioDouble, sleeps };
+    }
+
+    const overloaded = () =>
+      new HttpError("the request was refused", {
+        status: 503,
+        url: "https://api.example/v1/chat/completions",
+        excerpt: "overloaded",
+      });
+
+    it("retries a retryable status once with the mapped delay, then succeeds", async () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const chatDouble = chat([overloaded(), proposes("# Dev\n\nTraduit.\n")]);
+      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+
+      await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+
+      expect(chatDouble.calls()).toBe(2);
+      expect(sleeps).toEqual([DELAY_MS.short]);
+      expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
+    });
+
+    it("classifies a timed-out request as transport and retries", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const chatDouble = chat([
+        new TransportError("https://api.example/v1/chat/completions", "timed out"),
+        proposes("# Dev\n\nTraduit.\n"),
+      ]);
+      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+
+      await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+
+      expect(chatDouble.calls()).toBe(2);
+      expect(sleeps).toEqual([DELAY_MS.short]);
+    });
+
+    it("gives up on an auth status: one call, no wait", async () => {
+      const chatDouble = chat([
+        new HttpError("the request was refused", {
+          status: 401,
+          url: "https://api.example/v1/chat/completions",
+          excerpt: "bad credentials",
+        }),
+      ]);
+      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+
+      const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+
+      expect(error.message).toMatch(/every pair failed/);
+      expect(error.message).toMatch(/classified auth, give-up/);
+      expect(chatDouble.calls()).toBe(1);
+      expect(sleeps).toEqual([]);
+    });
+
+    it("gives up on a contract refusal: one call, no wait", async () => {
+      const chatDouble = chat([proposes("# Dev\n\nkeep()\n")]);
+      const { ioDouble, sleeps } = sleeping(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": "# Dev\n\n```js\nkeep()\n```\n",
+        },
+        chatDouble,
+      );
+
+      const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+
+      expect(error.message).toMatch(/every pair failed/);
+      expect(error.message).toMatch(/structural validation failed/);
+      expect(error.message).toMatch(/classified refusal, give-up/);
+      expect(chatDouble.calls()).toBe(1);
+      expect(sleeps).toEqual([]);
+    });
+
+    it("exhausts the transport retries with the mapped delays", async () => {
+      const chatDouble = chat([overloaded()]);
+      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+
+      const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+
+      expect(error.message).toMatch(/every pair failed/);
+      expect(error.message).toMatch(/classified transport, exhausted/);
+      expect(chatDouble.calls()).toBe(3);
+      expect(sleeps).toEqual([DELAY_MS.short, DELAY_MS.long]);
+    });
+
+    it("retries an unknown failure exactly once, then records the class", async () => {
+      const chatDouble = chat([
+        new ChatError("the provider answered with an error object", { excerpt: "quota" }),
+      ]);
+      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+
+      const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+
+      expect(error.message).toMatch(/every pair failed/);
+      expect(error.message).toMatch(/the provider answered with an error object: quota/);
+      expect(error.message).toMatch(/classified unknown, exhausted/);
+      expect(chatDouble.calls()).toBe(2);
+      expect(sleeps).toEqual([DELAY_MS.short]);
+    });
+  });
+
+  describe("DELAY_MS — the caller's delay mapping", () => {
+    it("maps every declared delay name to its millisecond cost", () => {
+      expect(Object.keys(DELAY_MS)).toEqual(["immediate", "short", "long"]);
+      expect(DELAY_MS.immediate).toBe(0);
+      expect(DELAY_MS.short).toBe(1_000);
+      expect(DELAY_MS.long).toBe(5_000);
+      for (const name of DELAY_CLASSES) {
+        expect(Number.isSafeInteger(DELAY_MS[name])).toBe(true);
+      }
+    });
   });
 
   it("resolves a planned target's links before the translation exists", async () => {
@@ -1602,7 +1749,8 @@ describe("run with frontmatter", () => {
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/frontmatter validation failed/);
     expect(error.message).toMatch(/slug/);
-    expect(chatDouble.calls()).toBe(2);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(chatDouble.calls()).toBe(1);
   });
 
   it("refuses to translate a document whose frontmatter does not parse", async () => {
@@ -1642,7 +1790,8 @@ describe("run with frontmatter", () => {
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/which this run never minted/);
-    expect(chatDouble.calls()).toBe(2);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(chatDouble.calls()).toBe(1);
   });
 });
 
@@ -1747,7 +1896,8 @@ describe("run with a translation memory", () => {
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/structural validation failed/);
     expect(error.message).toMatch(/fenced code block count changed/);
-    expect(chatDouble.calls()).toBe(2);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(chatDouble.calls()).toBe(1);
   });
 
   it("renders the prior-accepted-translation block in the prompt when the memory hits", async () => {
@@ -2031,10 +2181,11 @@ describe("run with a bounded-concurrency pool", () => {
 
   it("keeps a failing pair contained and follows the failure policy", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // Call 1 is api→vi's first attempt; its retry is call 2 (the retry
-    // issues immediately after the failure). Both fail; every other call
-    // succeeds with controlled timing, so the failure happens while a
-    // sibling is in flight.
+    // Call 1 is api→vi's first attempt; its one policy retry is call 2 — a
+    // plain failure classifies `unknown`, and the policy grants unknown
+    // exactly one retry. Both fail; every other call succeeds with
+    // controlled timing, so the failure happens while a sibling is in
+    // flight.
     const plan = [
       { delay: 0 },
       { fail: "provider overloaded" },
@@ -2054,13 +2205,21 @@ describe("run with a bounded-concurrency pool", () => {
         { path: "manual/api.md", type: "blob" },
       ],
     );
-    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+    const ioDouble = /** @type {any} */ ({
+      forge: forgeDouble,
+      chat: chatDouble,
+      evidence,
+      // The policy's wait between the failure and its one retry, replaced
+      // so the controlled timing below stays exact.
+      sleep: async () => undefined,
+    });
 
     const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
       (cause) => cause,
     );
     expect(error.message).toMatch(/1 pair\(s\) failed/);
     expect(error.message).toMatch(/vi manual\/api\.md: provider overloaded/);
+    expect(error.message).toMatch(/classified unknown, exhausted/);
 
     // The pool never aborted on the failure: the pair's retry ran (five
     // calls total) and the sibling lanes finished their work.

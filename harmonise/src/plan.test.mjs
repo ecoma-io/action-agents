@@ -9,6 +9,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { HttpError } from "#core/http.mjs";
+
 import { buildInventory } from "./inventory.mjs";
 import { parseAssetLayout, parseLanguagePattern } from "./patterns.mjs";
 import {
@@ -19,6 +21,7 @@ import {
   sanitizeTranslationHtml,
   translatePair,
 } from "./plan.mjs";
+import { RefusalError } from "./recovery.mjs";
 
 describe("sanitizeTranslationHtml", () => {
   it("strips script tags from prose", () => {
@@ -319,27 +322,51 @@ describe("translatePair", () => {
     expect(chat.calls()).toBe(1);
   });
 
-  it("rejects a re-targeted link on the first attempt", async () => {
+  it("rejects a re-targeted link on the first attempt, tagged refusal", async () => {
     const prepared = prepare();
     const evil = proposes(
       prepared.protectedText.replace("[api](api.md)", "[api](https://evil.example)"),
     );
     const chat = chatWith([evil, evil]);
-    await expect(
-      translatePair({
-        prepared,
-        sourceLanguage: "en",
-        existingText: undefined,
-        model: "gpt-x",
-        chat,
-        evidence,
-        repository: { name: "acme/docs", description: "Documentation" },
-        documents: { languages: {} },
-      }),
-    ).rejects.toThrowError(
+    const pending = translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    await expect(pending).rejects.toThrowError(
       /link validation failed: line 3: link destination changed: 'api\.md' → 'https:\/\/evil\.example'/,
     );
+    await expect(pending).rejects.toBeInstanceOf(RefusalError);
     expect(chat.calls()).toBe(1);
+  });
+
+  it("passes a transport-layer error through untagged", async () => {
+    const chat = /** @type {import("#core/chat.mjs").Chat} */ ({
+      async complete() {
+        throw new HttpError("the request was refused", {
+          status: 401,
+          url: "https://api.example/v1/chat/completions",
+          excerpt: "bad credentials",
+        });
+      },
+    });
+    const pending = translatePair({
+      prepared: prepare(),
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    await expect(pending).rejects.toBeInstanceOf(HttpError);
+    await expect(pending).rejects.not.toBeInstanceOf(RefusalError);
   });
 
   it("leaves sanitizer output alone when no links changed", async () => {

@@ -23,6 +23,7 @@ import {
   validateFrontmatter,
 } from "./frontmatter.mjs";
 import { parseTranslationAnswer } from "./answer.mjs";
+import { RefusalError } from "./recovery.mjs";
 import { buildTranslationPrompt } from "./prompt.mjs";
 import {
   compareStructuralProfiles,
@@ -254,6 +255,34 @@ export async function translatePair(input) {
   });
 
   const { content } = await input.chat.complete({ model: input.model, messages });
+
+  // Everything from the answer's arrival to the verdict is the answer's
+  // contract surface: parse, restoration, the byte cap, frontmatter,
+  // structure, links. A failure inside it is a deterministic refusal of
+  // this answer — the same answer refuses again — so it raises tagged
+  // `refusal` and the recovery policy never spends a model call re-asking
+  // it. The request above stays outside the frame: a transport fault keeps
+  // its own class.
+  try {
+    return judgeAnswer(content, input);
+  } catch (cause) {
+    throw new RefusalError(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+/**
+ * Judges one arrived answer against the contract the pair's preparation
+ * fixed, and returns the verdict: a proposal to carry onward, or a noop
+ * when the answer legitimately changed nothing. Throws on any contract
+ * failure — parse, restoration, the byte cap, frontmatter, structure,
+ * links; `translatePair` retags what this raises as a `RefusalError` on
+ * the way out.
+ *
+ * @param {string} content The model's answer content.
+ * @param {Parameters<typeof translatePair>[0]} input
+ * @returns {{ outcome: "noop", summary: string } | { outcome: "proposal", text: string, summary: string }}
+ */
+function judgeAnswer(content, input) {
   const answer = parseTranslationAnswer(content, {
     existingTranslation: input.existingText,
   });
