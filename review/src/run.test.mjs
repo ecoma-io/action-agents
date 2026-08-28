@@ -156,6 +156,29 @@ function readingChat(script) {
 }
 
 /**
+ * A chat stub that records the messages of every request — the prompt a
+ * run actually assembled, lanes included.
+ *
+ * @param {string} [finalAnswer]
+ * @returns {import("#core/chat.mjs").Chat & { captured: import("#core/chat.mjs").ChatMessage[][] }}
+ */
+function capturingChat(finalAnswer) {
+  /** @type {import("#core/chat.mjs").ChatMessage[][]} */
+  const captured = [];
+  return {
+    captured,
+    async complete(request) {
+      captured.push(request.messages);
+      return {
+        content: finalAnswer ?? '{"findings":[],"summary":"nothing to report"}',
+        toolCalls: [],
+        finishReason: "stop",
+      };
+    },
+  };
+}
+
+/**
  * @param {import("./run.mjs").ReviewForge} forge
  * @param {import("#core/chat.mjs").Chat} [chat]
  * @returns {import("./run.mjs").Io}
@@ -618,5 +641,63 @@ describe("coverage accounting and strict partial reviews", () => {
     await expect(
       reviewPullRequest({ inputs: INPUTS, context: CONTEXT, pullRequestNumber: 7, io: io(forge) }),
     ).rejects.toThrow(/cannot account for the whole universe/);
+  });
+});
+
+describe("risk lanes", () => {
+  const LANED_FILES = [
+    {
+      filename: "src/a.mjs",
+      status: "modified",
+      additions: 2,
+      deletions: 1,
+      patch: "@@ -1 +1,2 @@\n+x",
+    },
+    {
+      filename: "src/auth/login.ts",
+      status: "modified",
+      additions: 4,
+      deletions: 0,
+      patch: "@@ -1 +1,5 @@\n+token()",
+    },
+  ];
+
+  it("renders code-assigned lanes into the assembled prompt as data", async () => {
+    const forge = forgeStub({ files: LANED_FILES });
+    const chat = capturingChat();
+    await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    const [system, user] = chat.captured[0] ?? [];
+    // The procedure is code-authored prose: attention weighting, never an
+    // exemption, and the mode paragraphs stay authoritative.
+    expect(system?.content).toContain("Review lanes");
+    expect(system?.content).toContain("a lane is not an exemption");
+    expect(system?.content).toContain("every changed file still counts toward coverage");
+    expect(system?.content).toContain("The mode paragraphs above stay authoritative");
+    // maxTurns 5 over two occupied lanes: deep 3, skim 2 — remainder deepest-first.
+    expect(system?.content).toContain("deep: 3, standard: 0, skim: 2");
+    // The assignments themselves ride as data on the inventory lines.
+    const lines = (user?.content ?? "").split("\n");
+    expect(lines).toContain("- src/a.mjs (+2/-1, modified, lane: skim)");
+    expect(lines).toContain("- src/auth/login.ts (+4/-0, modified, lane: deep)");
+  });
+
+  it("a skim-lane file stays in the coverage universe — attention, not exemption", async () => {
+    const forge = forgeStub({ files: LANED_FILES, config: '{ strictness: "high" }' });
+    const chat = capturingChat(); // reads nothing, answers at once
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("2 of 2 changed files were never read: src/a.mjs, src/auth/login.ts.");
   });
 });
