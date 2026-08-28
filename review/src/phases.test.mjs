@@ -31,7 +31,6 @@ function context(over = {}) {
     maxTurns: 30,
     evidenceBytes: 0,
     evidenceLimit: 512 * 2 ** 10,
-    findingsRecorded: 0,
     lanesAssigned: true,
     strictness: "medium",
     ...over,
@@ -83,17 +82,9 @@ describe("legal transitions", () => {
     expect(nextPhase("investigate", full)).toBe("verify");
   });
 
-  it("investigate holds while files are uncovered and nothing is on the ledger", () => {
+  it("investigate holds while files are uncovered — no ledger fact ends it early", () => {
     const partial = context({ coverage: { covered: ["a.mjs"], uncovered: ["b.mjs"], total: 2 } });
     expect(nextPhase("investigate", partial)).toBe("investigate");
-  });
-
-  it("investigate ends on recorded findings even with files uncovered", () => {
-    const findings = context({
-      coverage: { covered: ["a.mjs"], uncovered: ["b.mjs"], total: 2 },
-      findingsRecorded: 3,
-    });
-    expect(nextPhase("investigate", findings)).toBe("verify");
   });
 
   it("investigate holds when there is no expected set to cover", () => {
@@ -235,7 +226,6 @@ describe("refusals", () => {
       "maxTurns",
       "evidenceBytes",
       "evidenceLimit",
-      "findingsRecorded",
     ])) {
       for (const value of badValues) {
         const failure = phaseFailure(() =>
@@ -365,7 +355,7 @@ describe("determinism", () => {
       ["conclude", { toolCalls: 4, maxToolCalls: 4 }],
       ["orient", { toolCalls: 2, maxToolCalls: 2, strictness: "high" }],
       ["investigate", { readingTurns: 2, lanesAssigned: false }],
-      ["verify", { findingsRecorded: 2, evidenceBytes: 1, evidenceLimit: 1 }],
+      ["verify", { evidenceBytes: 1, evidenceLimit: 1 }],
     ];
     const firstPass = scenario.map(([phase, over]) => nextPhase(phase, context(over)));
     const secondPass = scenario.map(([phase, over]) => nextPhase(phase, context(over)));

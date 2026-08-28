@@ -236,14 +236,47 @@ describe("compaction", () => {
 
     expect(outcome.log.some((line) => line.includes("compacted"))).toBe(true);
     const final = chat.requests.at(-1)?.messages ?? [];
-    // System + task kept verbatim; everything later collapsed to ONE state
-    // message — raw evidence and the model's prose are gone from context.
+    // System + task kept verbatim; raw evidence is gone from context. The
+    // scripted turns carry no prose, so nothing else survives — one state
+    // message replaces the rest.
     expect(final).toHaveLength(3);
     expect(final[0]?.content).toBe("system contract");
     expect(JSON.stringify(final)).not.toContain("[evidence:");
     expect(final[2]?.content).toContain("[state inventory]");
     expect(final[2]?.content).toContain("files read:");
     expect(final[2]?.content).toContain("src/big.mjs");
+  });
+
+  it("keeps the model's own analysis prose across compaction, verbatim", async () => {
+    writeFileSync(p.join(root, "src", "big.mjs"), "y".repeat(4000) + "\n");
+    const analysis =
+      "the guard at src/big.mjs:1 never bounds the index — this is the finding to verify.";
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ id: "c1", argumentsJson: '{"path":"src/big.mjs"}' })] },
+      {
+        content: analysis,
+        toolCalls: [readCall({ id: "c2", argumentsJson: '{"path":"src/big.mjs"}' })],
+      },
+      { content: '{"findings":[],"summary":"after compact"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 4,
+      contextWindow: 1000,
+    });
+
+    expect(outcome.log.some((line) => line.includes("compacted"))).toBe(true);
+    const final = chat.requests.at(-1)?.messages ?? [];
+    // The analysis prose survives verbatim with its toolCalls payload
+    // stripped: the results those calls produced ride in the state message,
+    // and a tool call without its answers would break the wire.
+    expect(final[2]).toEqual({ role: "assistant", content: analysis });
+    expect(JSON.stringify(final)).not.toContain("[evidence:");
+    expect(final[3]?.content).toContain("[state inventory]");
+    expect(final[3]?.content).toContain("src/big.mjs");
   });
 
   it("returns the post-compaction transcript so reaskFinalAnswer does not exceed the window", async () => {
