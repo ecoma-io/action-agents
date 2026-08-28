@@ -834,7 +834,7 @@ describe("adversarial verification pass", () => {
     };
   }
 
-  it("verifies a planned finding once and drops a refuted one from the comment, logging its identity", async () => {
+  it("verifies a planned finding once and publishes a refuted one in its own section, logging its identity", async () => {
     const forge = forgeStub();
     const chat = scriptedChat([
       READ,
@@ -850,11 +850,14 @@ describe("adversarial verification pass", () => {
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
-    expect(result.reason).toContain("(0 findings)");
+    // A refuted finding still counts — it published, as refuted.
+    expect(result.reason).toContain("(1 findings)");
     // Read turn, final answer, one verdict call — bounded, no retries.
     expect(chat.calls).toHaveLength(3);
     const body = forge.calls.upserts[0]?.body ?? "";
-    expect(body).not.toContain("off-by-one");
+    expect(body).toContain("off-by-one");
+    expect(body).toContain("the line is correct");
+    expect(body).toContain("Refuted during verification");
     expect(
       logged.some(
         (line) =>
@@ -924,7 +927,7 @@ describe("adversarial verification pass", () => {
     expect(logged.some((line) => line.includes("was refused"))).toBe(true);
   });
 
-  it("the strict arm drops an uncertain verdict", async () => {
+  it("an uncertain verdict publishes as unresolved at high strictness — nothing is dropped", async () => {
     const forge = forgeStub({ config: '{ strictness: "high", strategy: "adversarial" }' });
     const chat = scriptedChat([
       READ,
@@ -947,9 +950,12 @@ describe("adversarial verification pass", () => {
     // Adversarial + high: every finding planned, one call each.
     expect(chat.calls).toHaveLength(4);
     const body = forge.calls.upserts[0]?.body ?? "";
-    expect(body).not.toContain("off-by-one");
-    expect(body).not.toContain("a nit");
-    expect(logged.filter((line) => line.includes("uncertain, dropped"))).toHaveLength(2);
+    expect(body).toContain("off-by-one");
+    expect(body).toContain("a nit");
+    expect(body).toContain("unverified: insufficient");
+    expect(
+      logged.filter((line) => line.includes("uncertain") && line.includes("(finding ")),
+    ).toHaveLength(2);
   });
 
   it("an empty plan is a no-op — no verdict calls, findings published unchanged", async () => {
@@ -1028,7 +1034,9 @@ describe("adversarial verification pass", () => {
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
-    expect(forge.calls.upserts[0]?.body).not.toContain("no guard() definition");
+    expect(forge.calls.upserts[0]?.body).toContain("no guard() definition");
+    expect(forge.calls.upserts[0]?.body).toContain("Refuted during verification");
+    expect(forge.calls.upserts[0]?.body).toContain("the definition exists in src/helper.mjs");
     expect(logged.some((line) => line.includes("refuted") && line.includes("src/a.mjs:2"))).toBe(
       true,
     );
@@ -1050,8 +1058,9 @@ describe("adversarial verification pass", () => {
       io: { forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
-    // Uncertain at the default strictness publishes unchanged.
+    // Uncertain publishes as unresolved — marked unverified in place, never dropped.
     expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+    expect(forge.calls.upserts[0]?.body).toContain("unverified: the excerpt alone cannot decide");
     expect(chat.calls).toHaveLength(3);
   });
 
@@ -1273,7 +1282,8 @@ describe("adversarial verification pass", () => {
     });
     expect(result.outcome).toBe("published");
     expect(JSON.stringify(chat.calls[3] ?? [])).toContain("unknown tool 'delete_file'");
-    expect(forge.calls.upserts[0]?.body).not.toContain("off-by-one");
+    expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+    expect(forge.calls.upserts[0]?.body).toContain("Refuted during verification");
     expect(chat.calls).toHaveLength(4);
   });
 });

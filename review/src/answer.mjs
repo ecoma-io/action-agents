@@ -175,8 +175,8 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
   }
   // Only exact logical duplicates collapse — identity includes the message,
   // so two genuine findings sharing a line both survive. The same identity
-  // function keys `applyVerdicts`'s drop map, so a removal hits exactly one
-  // finding.
+  // function keys `applyVerdicts`'s plan matching, so a verdict binds to
+  // exactly one finding.
   /** @type {Set<string>} */
   const seen = new Set();
   const unique = kept.filter((finding) => {
@@ -201,8 +201,8 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
 
 /**
  * The exact logical identity two findings must share to collapse — the same
- * anchor and the same trimmed message. `applyVerdicts` keys drops by it, so
- * a removal hits exactly one finding.
+ * anchor and the same trimmed message. `applyVerdicts` binds verdicts by it,
+ * so a verdict hits exactly one finding.
  *
  * @param {Finding} finding
  * @returns {string}

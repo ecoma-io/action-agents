@@ -1,6 +1,6 @@
 // Tests for the adversarial verification pass — the pure module. The plan
 // is proven deterministic; the parser is proven fail-closed; the application
-// proves the verifier can only ever remove.
+// proves the verifier assigns a lifecycle state and deletes nothing.
 
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +9,8 @@ import {
   parseVerdict,
   planVerification,
   verifierMessages,
+  LIFECYCLE_OF_VERDICT,
+  PUBLISHED_LIFECYCLE_STATES,
   VERDICT_REASON_CHARS,
   EXCERPT_LINE_CHARS,
 } from "./verify.mjs";
@@ -186,71 +188,111 @@ describe("applyVerdicts", () => {
   const plannedFinding = finding();
   const plan = planVerification([plannedFinding], makePolicy());
 
-  it("publishes a confirmed finding unchanged", () => {
+  it("a confirmed verdict publishes the finding as confirmed, untouched apart from its state", () => {
     const applied = applyVerdicts(
       [plannedFinding],
       [{ id: "1", verdict: "confirmed", reason: "holds" }],
-      { strictness: "medium", plan },
+      plan,
     );
-    expect(applied.findings).toEqual([plannedFinding]);
-    expect(applied.drops).toHaveLength(0);
+    expect(applied.findings).toEqual([
+      { ...plannedFinding, id: "1", lifecycle: "confirmed", verdict: "confirmed", reason: "holds" },
+    ]);
     expect(applied.refusals).toHaveLength(0);
   });
 
-  it("drops a refuted finding, logging the finding's identity", () => {
+  it("publishes a refuted finding as refuted, its reason riding along — never deleted", () => {
     const applied = applyVerdicts(
       [plannedFinding],
       [{ id: "1", verdict: "refuted", reason: "the line is correct" }],
-      { strictness: "medium", plan },
+      plan,
     );
-    expect(applied.findings).toHaveLength(0);
-    expect(applied.drops).toEqual([
+    expect(applied.findings).toEqual([
       {
+        ...plannedFinding,
         id: "1",
-        file: "src/a.mjs",
-        line: 2,
+        lifecycle: "refuted",
         verdict: "refuted",
         reason: "the line is correct",
       },
     ]);
   });
 
-  it("publishes an uncertain finding at medium and drops it at high", () => {
-    /** @type {import("./verify.mjs").VerdictEntry[]} */
-    const verdicts = [{ id: "1", verdict: "uncertain", reason: "cannot decide" }];
-    const atMedium = applyVerdicts([plannedFinding], verdicts, { strictness: "medium", plan });
-    expect(atMedium.findings).toEqual([plannedFinding]);
-    const atHigh = applyVerdicts([plannedFinding], verdicts, { strictness: "high", plan });
-    expect(atHigh.findings).toHaveLength(0);
-    expect(atHigh.drops[0]?.verdict).toBe("uncertain");
+  it("an uncertain verdict publishes as unresolved — the pass deletes nothing at any strictness", () => {
+    const applied = applyVerdicts(
+      [plannedFinding],
+      [{ id: "1", verdict: "uncertain", reason: "cannot decide" }],
+      plan,
+    );
+    expect(applied.findings).toEqual([
+      {
+        ...plannedFinding,
+        id: "1",
+        lifecycle: "unresolved",
+        verdict: "uncertain",
+        reason: "cannot decide",
+      },
+    ]);
+  });
+
+  it("a planned finding with no recorded verdict fails closed to unresolved — never to silence", () => {
+    const applied = applyVerdicts([plannedFinding], [], plan);
+    expect(applied.findings).toEqual([
+      {
+        ...plannedFinding,
+        id: "1",
+        lifecycle: "unresolved",
+        reason: "no verdict was recorded for this finding",
+      },
+    ]);
+  });
+
+  it("a finding the plan could not evidence publishes unresolved with the skip's reason", () => {
+    const unevidenced = finding({ file: "src/gone.mjs" });
+    const skipPlan = planVerification([unevidenced], makePolicy());
+    expect(skipPlan.items).toHaveLength(0);
+    expect(skipPlan.skipped).toHaveLength(1);
+    const skip = /** @type {{ finding: unknown, reason: string }} */ (skipPlan.skipped[0]);
+    const applied = applyVerdicts([unevidenced], [], skipPlan);
+    expect(applied.findings).toEqual([
+      { ...unevidenced, lifecycle: "unresolved", reason: skip.reason },
+    ]);
+  });
+
+  it("an unplanned finding publishes with no lifecycle at all — verification never applied to it", () => {
+    const nit = finding({ severity: "nit", message: "typo" });
+    const emptyPlan = planVerification([nit], makePolicy({ lanes: { "src/a.mjs": "skim" } }));
+    expect(emptyPlan.items).toHaveLength(0);
+    expect(emptyPlan.skipped).toHaveLength(0);
+    const applied = applyVerdicts([nit], [], emptyPlan);
+    expect(applied.findings).toEqual([nit]);
+    expect(applied.findings[0]).not.toHaveProperty("lifecycle");
+    expect(applied.findings[0]).not.toHaveProperty("id");
   });
 
   it("refuses a verdict naming an id outside the plan — never maps by guess", () => {
     const applied = applyVerdicts(
       [plannedFinding],
       [{ id: "9", verdict: "refuted", reason: "wrong id" }],
-      { strictness: "medium", plan },
+      plan,
     );
-    expect(applied.findings).toEqual([plannedFinding]);
     expect(applied.refusals).toHaveLength(1);
     expect(applied.refusals[0]).toContain("9");
+    expect(applied.findings[0]?.lifecycle).toBe("unresolved");
   });
 
-  it("is fail-closed with an empty plan — every verdict refused, every finding published", () => {
-    const unplanned = finding({ severity: "nit", message: "typo" });
-    const emptyPlan = planVerification([unplanned], makePolicy({ lanes: { "src/a.mjs": "skim" } }));
-    expect(emptyPlan.items).toHaveLength(0);
+  it("an off-vocabulary verdict is refused and the finding stays unresolved — no model text moves state", () => {
     const applied = applyVerdicts(
-      [unplanned],
-      [{ id: "1", verdict: "refuted", reason: "no plan" }],
-      { strictness: "high", plan: emptyPlan },
+      [plannedFinding],
+      [{ id: "1", verdict: /** @type {any} */ ("totally-confirmed"), reason: "trust me" }],
+      plan,
     );
-    expect(applied.findings).toEqual([unplanned]);
     expect(applied.refusals).toHaveLength(1);
-    expect(applied.drops).toHaveLength(0);
+    expect(applied.findings[0]?.lifecycle).toBe("unresolved");
+    expect(applied.findings[0]?.verdict).toBeUndefined();
+    expect(applied.findings[0]?.reason).toBe("no verdict was recorded for this finding");
   });
 
-  it("removes only — the publication set is the input minus the drops", () => {
+  it("every verdict-bound finding publishes in input order, whatever its state", () => {
     const concern = finding({ line: 1, message: "one" });
     const nit = finding({ severity: "nit", line: 2, message: "two" });
     const other = finding({ line: 3, message: "three" });
@@ -260,11 +302,43 @@ describe("applyVerdicts", () => {
       [
         { id: "2", verdict: "refuted", reason: "gone" },
         { id: "1", verdict: "confirmed", reason: "holds" },
+        { id: "3", verdict: "uncertain", reason: "cannot decide" },
       ],
-      { strictness: "high", plan: wide },
+      wide,
     );
-    expect(applied.findings).toEqual([concern, other]);
-    expect(applied.drops).toHaveLength(1);
+    expect(applied.findings.map((f) => f.lifecycle)).toEqual([
+      "confirmed",
+      "refuted",
+      "unresolved",
+    ]);
+    expect(applied.findings.map((f) => f.message)).toEqual(["one", "two", "three"]);
+  });
+
+  it("is deterministic — the same inputs yield the same states in the same order", () => {
+    const verdicts = [
+      { id: "1", verdict: /** @type {const} */ ("refuted"), reason: "the line is correct" },
+    ];
+    const first = applyVerdicts([plannedFinding], verdicts, plan);
+    const second = applyVerdicts([plannedFinding], verdicts, plan);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+
+  it("a published finding never carries the candidate state", () => {
+    const concern = finding({ line: 1, message: "one" });
+    const nit = finding({ severity: "nit", line: 2, message: "two" });
+    const wide = planVerification([concern, nit], makePolicy({ strategy: "adversarial" }));
+    const applied = applyVerdicts(
+      [concern, nit],
+      [{ id: "1", verdict: "confirmed", reason: "holds" }],
+      wide,
+    );
+    for (const published of applied.findings) {
+      expect(PUBLISHED_LIFECYCLE_STATES).toContain(published.lifecycle ?? "confirmed");
+      expect(published.lifecycle).not.toBe("candidate");
+    }
+    expect(LIFECYCLE_OF_VERDICT.confirmed).toBe("confirmed");
+    expect(LIFECYCLE_OF_VERDICT.refuted).toBe("refuted");
+    expect(LIFECYCLE_OF_VERDICT.uncertain).toBe("unresolved");
   });
 });
 

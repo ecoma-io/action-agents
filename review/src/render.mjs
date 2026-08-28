@@ -16,7 +16,8 @@ import { sanitiseCommentText } from "#core/sanitise.mjs";
 
 import { evidenceRef } from "./provenance.mjs";
 /** @typedef {import("./answer.mjs").Finding} Finding */
-
+/** @typedef {import("./verify.mjs").VerifiedFinding} VerifiedFinding */
+/** @typedef {VerifiedFinding & { provenance?: Provenance }} RenderableFinding */
 /** @typedef {import("./provenance.mjs").Provenance} Provenance */
 
 export const SUMMARY_CHARS = 300;
@@ -27,7 +28,7 @@ export const MESSAGE_CHARS = 1000;
  * @property {"Complete" | "Partial"} status
  * @property {string} headSha the reviewed head, full 40 hex chars
  * @property {string} summary
- * @property {Finding[]} findings already validated, ordered, capped
+ * @property {RenderableFinding[]} findings already validated, ordered, capped — each carrying its verification state iff the pass scheduled it
  * @property {import("./config.mjs").Strictness} strictness decides collapsing, never inclusion — filtering happened earlier
  * @property {string} [partialReason] required when status is Partial
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the deterministic read-coverage report; rendered as a count line when the expected set is non-empty
@@ -69,9 +70,12 @@ export function renderComment({
     // A clean re-review must clear whatever an earlier push left behind.
     lines.push("", "No findings.");
   }
-
-  const concerns = findings.filter((finding) => finding.severity === "concern");
-  const nits = findings.filter((finding) => finding.severity === "nit");
+  const concerns = findings.filter(
+    (finding) => finding.severity === "concern" && finding.lifecycle !== "refuted",
+  );
+  const nits = findings.filter(
+    (finding) => finding.severity === "nit" && finding.lifecycle !== "refuted",
+  );
 
   if (concerns.length > 0) {
     lines.push("", `### Concerns (${String(concerns.length)})`, "");
@@ -89,6 +93,11 @@ export function renderComment({
       lines.push("", `### Nits (${String(nits.length)})`, "");
       for (const finding of nits) lines.push(listingOf(finding));
     }
+  }
+  const refuted = findings.filter((finding) => finding.lifecycle === "refuted");
+  if (refuted.length > 0) {
+    lines.push("", `### Refuted during verification (${String(refuted.length)})`, "");
+    for (const finding of refuted) lines.push(listingOf(finding));
   }
 
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
@@ -113,15 +122,28 @@ export function renderNothingToReview(headSha) {
 /**
  * One finding's listing. An anchored finding carries its provenance as
  * metadata and gains one short evidence line beneath — the covering read
- * the loop recorded, ledger data only, never model-composed text.
+ * the loop recorded, ledger data only, never model-composed text. A finding
+ * the pass resolved to a non-confirmed state gains one state line beneath:
+ * `unverified:` with why the pass could not decide, or `refuted:` with why
+ * the verifier contradicted the claim — code-owned labels around a
+ * sanitised reason, never the model's framing. A confirmed or unscheduled
+ * finding renders exactly as it always did.
  *
- * @param {Finding & { provenance?: Provenance }} finding
- * @returns {string}
+ * @param {RenderableFinding} finding
  */
 function listingOf(finding) {
   const listing = `- \`${defang(finding.file)}:${String(finding.line)}\` — ${sanitised(finding.message, MESSAGE_CHARS)}`;
-  if (finding.provenance === undefined) return listing;
-  return `${listing}\n  evidence: \`${defang(evidenceRef(finding.provenance))}\``;
+  const evidence =
+    finding.provenance === undefined
+      ? listing
+      : `${listing}\n  evidence: \`${defang(evidenceRef(finding.provenance))}\``;
+  if (finding.lifecycle === "unresolved") {
+    return `${evidence}\n  unverified: ${sanitised(finding.reason ?? "", MESSAGE_CHARS)}`;
+  }
+  if (finding.lifecycle === "refuted") {
+    return `${evidence}\n  refuted: ${sanitised(finding.reason ?? "", MESSAGE_CHARS)}`;
+  }
+  return evidence;
 }
 
 /**

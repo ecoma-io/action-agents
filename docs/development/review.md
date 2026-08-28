@@ -583,9 +583,29 @@ that keeps failing the contract is not something to hide behind a green check.
 The adversarial verification pass (#82) sits between the nit-drop and
 rendering. What the reviewer's answer calls a finding is, at this stage, only
 a claim; the pass tests each claim against evidence before it is allowed to
-publish. Its verdicts can only remove — confirmed findings publish unchanged,
-`refuted` drops (logged with the finding's identity so a wrong refute is
-visible), and `uncertain` follows the config's strictness.
+publish. Its verdicts never remove a finding — they assign it a lifecycle
+state (#101). A planned finding is a `candidate` from the moment the plan
+names it; the verdict moves it to exactly one of three published states, and
+the pass publishes all three:
+
+| State        | From verdict | Where it lands                                                                   |
+| ------------ | ------------ | -------------------------------------------------------------------------------- |
+| `confirmed`  | `confirmed`  | the severity sections, rendered exactly as before the pass existed               |
+| `refuted`    | `refuted`    | its own "Refuted during verification" section, the verdict's reason riding along |
+| `unresolved` | `uncertain`  | its severity section, marked `unverified:` with the verdict's reason             |
+
+`refuted` publishes rather than disappears — a wrong refute is visible where
+the work is, not buried in a log. `unresolved` publishes at every strictness:
+the pass deleting what it could not judge was the old contract's failure, and
+the strict arm no longer does it. The one state that never reaches a human is
+`candidate`. A planned finding no verdict reached fails closed to
+`unresolved` with a fixed reason, and a planned finding whose verification
+was skipped publishes `unresolved` with the skip's reason. Findings the pass
+never scheduled publish exactly as they arrived, no lifecycle attached —
+verification states exist only where verification ran. Strictness keeps its
+other jobs — the nit-drop at `low`, nit collapsing at `medium`, the coverage
+gate at `high` — but it no longer decides whether an unverifiable finding
+survives.
 
 ### What the verifier sees
 
@@ -638,10 +658,9 @@ divergence:
   reviewer's loop would treat the same defect as provider failure and go red,
   because the whole review's conversation is damaged. The verifier's
   conversation is per finding: one broken investigation is one finding
-  judged uncertain, published or dropped by the strictness rule, and the
-  review continues. A misbehaving verifier must never delete a reviewer's
-  finding it could not judge, and must never crash the review that produced
-  the finding.
+  judged `unresolved`, published marked `unverified:`, and the review
+  continues. A misbehaving verifier must never delete a reviewer's finding it
+  could not judge, and must never crash the review that produced the finding.
 
 The accounting the verification gate reads is unchanged: one verdict per
 planned finding, whatever the outcome — refused answers, transport failures,
@@ -804,8 +823,8 @@ declared run gates (#89) are all on the production path, reachable from
 `src/index.mjs`: lanes are assigned before the first model call
 (`assignLanes` in `run.mjs`), provenance is attached before the nit-drop and
 an unanchored finding is quarantined, never published (`attachProvenance` in
-`run.mjs`), verdicts in the verification pass can only remove
-(`runVerificationPass`), and the concluding posture — complete or partial —
+`run.mjs`), verdicts in the verification pass assign a lifecycle and delete
+nothing (`runVerificationPass`), and the concluding posture — complete or partial —
 is the declared gates' verdict over code-ledgered results (`evaluateGates` in
 `run.mjs`). One module is **landed, wiring tracked**: the machine-readable
 run artifact (#87) — merged and tested, not yet imported by the production

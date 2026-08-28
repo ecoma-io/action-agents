@@ -24,10 +24,16 @@
 import { findingIdentity } from "./answer.mjs";
 import { utf8Compare } from "./order.mjs";
 import { MESSAGE_CHARS } from "./render.mjs";
-import { VERDICT_REASON_CHARS } from "./verify.mjs";
+import {
+  LIFECYCLE_OF_VERDICT,
+  PUBLISHED_LIFECYCLE_STATES,
+  VERDICT_REASON_CHARS,
+} from "./verify.mjs";
 
 /** The artifact schema this module emits. Bumped only on a breaking shape change. */
 export const reviewArtifactSchemaVersion = 1;
+
+/** @typedef {import("./verify.mjs").PublishedLifecycle} PublishedLifecycle */
 
 const CLASSIFICATIONS = /** @type {const} */ (["published", "abandoned", "refused"]);
 const STRICTNESS = /** @type {const} */ (["low", "medium", "high"]);
@@ -51,9 +57,9 @@ const FACTS_KEYS = new Set([
 ]);
 const OUTCOME_KEYS = new Set(["classification", "reason"]);
 const POLICY_KEYS = new Set(["strictness", "strategy"]);
-const FINDING_KEYS = new Set(["id", "severity", "file", "line", "message"]);
+const FINDING_KEYS = new Set(["id", "severity", "file", "line", "message", "lifecycle"]);
 const FINDING_MANDATORY = new Set(["severity", "file", "line", "message"]);
-const VERDICT_KEYS = new Set(["id", "verdict", "reason"]);
+const VERDICT_KEYS = new Set(["id", "verdict", "reason", "lifecycle"]);
 const COVERAGE_KEYS = new Set(["total", "covered", "uncovered"]);
 const PHASE_KEYS = new Set(["from", "to"]);
 const PROVENANCE_KEYS = new Set(["commentId"]);
@@ -92,11 +98,15 @@ const ARTIFACT_KEYS = new Set([
 
 /**
  * One finding as the builder accepts it. `id` is the plan-local identity
- * `verify.mjs` attaches (`"1"` upward, in findings order); it is present iff
- * the finding was put to the verifier.
+ * `verify.mjs` attaches (`"1"` upward, in findings order); it and `lifecycle`
+ * are present iff the verification pass resolved the finding — a planned
+ * finding always carries both, a plannable finding the plan could not
+ * evidence carries `lifecycle: "unresolved"` alone, and a finding below the
+ * strategy's threshold carries neither.
  *
  * @typedef {object} ArtifactFinding
  * @property {string} [id]
+ * @property {PublishedLifecycle} [lifecycle]
  * @property {"concern" | "nit"} severity
  * @property {string} file repository-relative path, as the inventory spells it
  * @property {number} line 1-based line in the new file
@@ -110,6 +120,7 @@ const ARTIFACT_KEYS = new Set([
  * @typedef {object} ArtifactVerdict
  * @property {string} id the plan-local id shared with the finding
  * @property {"confirmed" | "refuted" | "uncertain"} verdict
+ * @property {PublishedLifecycle} lifecycle the state the verdict resolves to, checked against the code-owned map
  * @property {string} reason sanitised upstream, capped at VERDICT_REASON_CHARS
  */
 
@@ -151,7 +162,7 @@ const ARTIFACT_KEYS = new Set([
  * @property {string} headRef the reviewed head commit, full 40 hex chars
  * @property {RunOutcome} outcome
  * @property {RunPolicy} policy
- * @property {ArtifactFinding[]} findings the publication set; `id` present iff the finding was planned for verification
+ * @property {ArtifactFinding[]} findings the publication set; `id` and `lifecycle` present iff the verification pass resolved the finding
  * @property {ArtifactVerdict[]} verdicts one per verified finding, bound by the shared plan-local id
  * @property {CoverageSummary} coverage
  * @property {PhaseLogEntry[]} phases the transitions the loop logged, in order
@@ -167,6 +178,7 @@ const ARTIFACT_KEYS = new Set([
  * @property {string} file
  * @property {number} line
  * @property {string} message
+ * @property {PublishedLifecycle} [lifecycle] the pass's resolution, present iff the pass scheduled the finding
  */
 
 /**
@@ -175,6 +187,7 @@ const ARTIFACT_KEYS = new Set([
  * @typedef {object} RunArtifactVerdict
  * @property {string} findingIdentity the finding's durable identity
  * @property {"confirmed" | "refuted" | "uncertain"} verdict
+ * @property {PublishedLifecycle} lifecycle
  * @property {string} reason
  */
 
@@ -399,6 +412,8 @@ export function buildArtifact(runFacts) {
   const findingsOut = [];
   /** @type {Map<string, string>} plan-local id → the finding's durable identity */
   const idToIdentity = new Map();
+  /** @type {Map<string, PublishedLifecycle>} plan-local id → the finding's lifecycle */
+  const lifecycleById = new Map();
   /** @type {Set<string>} */
   const findingIds = new Set();
   for (let i = 0; i < findingsRaw.length; i += 1) {
@@ -413,6 +428,10 @@ export function buildArtifact(runFacts) {
     const file = asNonEmptyString(finding.file, `${label}.file`);
     const line = asPositiveInt(finding.line, `${label}.line`);
     const message = asBoundedString(finding.message, `${label}.message`, MESSAGE_CHARS);
+    const lifecycle =
+      "lifecycle" in finding
+        ? asEnum(finding.lifecycle, PUBLISHED_LIFECYCLE_STATES, `${label}.lifecycle`)
+        : undefined;
     const validated = { severity, file, line, message };
     const identity = findingIdentity(validated);
     if ("id" in finding) {
@@ -422,12 +441,22 @@ export function buildArtifact(runFacts) {
       }
       findingIds.add(id);
       idToIdentity.set(id, identity);
+      if (lifecycle === undefined) {
+        throw new ArtifactError(
+          `${label} carries a plan id but no lifecycle — a planned finding is never left a candidate — refused`,
+        );
+      }
+      lifecycleById.set(id, lifecycle);
     }
-    findingsOut.push({ identity, severity, file, line, message });
+    findingsOut.push(
+      lifecycle === undefined
+        ? { identity, severity, file, line, message }
+        : { identity, severity, file, line, message, lifecycle },
+    );
   }
 
   const verdictsRaw = asArray(facts.verdicts, "run facts.verdicts");
-  /** @type {{ id: string, verdict: "confirmed" | "refuted" | "uncertain", reason: string }[]} */
+  /** @type {{ id: string, verdict: "confirmed" | "refuted" | "uncertain", lifecycle: PublishedLifecycle, reason: string }[]} */
   const verdictsTemp = [];
   /** @type {Set<string>} */
   const verdictIds = new Set();
@@ -445,17 +474,40 @@ export function buildArtifact(runFacts) {
     }
     verdictIds.add(id);
     const verdictValue = asEnum(verdict.verdict, VERDICTS, `${label}.verdict`);
+    const verdictLifecycle = asEnum(
+      verdict.lifecycle,
+      PUBLISHED_LIFECYCLE_STATES,
+      `${label}.lifecycle`,
+    );
+    if (LIFECYCLE_OF_VERDICT[verdictValue] !== verdictLifecycle) {
+      throw new ArtifactError(
+        `${label}.lifecycle '${verdictLifecycle}' does not follow from verdict '${verdictValue}' — refused`,
+      );
+    }
     const verdictReason = asBoundedString(verdict.reason, `${label}.reason`, VERDICT_REASON_CHARS);
-    verdictsTemp.push({ id, verdict: verdictValue, reason: verdictReason });
+    verdictsTemp.push({
+      id,
+      verdict: verdictValue,
+      lifecycle: verdictLifecycle,
+      reason: verdictReason,
+    });
   }
 
   // Cross-reference integrity, both directions: every verdict id binds to a
-  // finding that carries it, and every finding id has a verdict. A graph that
-  // does not close is refused, never mapped by guess.
+  // finding that carries it, every finding id has a verdict, and a finding
+  // that states a lifecycle states the one its verdict resolves to. A graph
+  // that does not close is refused, never mapped by guess.
   for (const entry of verdictsTemp) {
     if (!findingIds.has(entry.id)) {
       throw new ArtifactError(
         `a verdict names finding id '${entry.id}', which no finding carries — refused`,
+      );
+    }
+    const findingLifecycle = lifecycleById.get(entry.id);
+    if (findingLifecycle !== undefined && findingLifecycle !== entry.lifecycle) {
+      throw new ArtifactError(
+        `finding id '${entry.id}' carries lifecycle '${findingLifecycle}', but its verdict ` +
+          `resolves to '${entry.lifecycle}' — refused`,
       );
     }
   }
@@ -469,6 +521,7 @@ export function buildArtifact(runFacts) {
   const verdictsOut = verdictsTemp.map((entry) => ({
     findingIdentity: /** @type {string} */ (idToIdentity.get(entry.id)),
     verdict: entry.verdict,
+    lifecycle: entry.lifecycle,
     reason: entry.reason,
   }));
 

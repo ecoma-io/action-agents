@@ -2,12 +2,10 @@
  * The adversarial verification pass — an evidence-bound check the code owns,
  * sitting between the nit-drop and rendering.
  *
- * The doctrine, stated once and enforced by every shape below:
- *
- * - The verifier checks findings; it does not have any. Its verdicts can
- *   only REMOVE a finding from the publication set — never add, reword,
- *   reclassify or relocate one. The published set is the input set minus
- *   the drops, byte for byte otherwise.
+ * - The verifier checks findings; it does not have any. Its verdicts assign a
+ *   lifecycle state — never add, reword, reclassify or relocate a finding, and
+ *   never delete one: `refuted` publishes as refuted, `uncertain` publishes as
+ *   unresolved, and no single verdict can make evidence vanish.
  * - The plan is policy. What gets verified is decided by the config-declared
  *   strategy (the severity threshold), by the attention lane code already
  *   assigned each file — a lane that itself encodes the config's strictness
@@ -22,7 +20,8 @@
  *   against a strict two-key contract; every deviation — unknown key, off-
  *   vocabulary verdict, missing reason, a verdict naming a finding outside
  *   the plan — is refused fail-closed and counts as `uncertain`. Reasons are
- *   sanitised and capped, then only ever rendered into the run log.
+ *   sanitised and capped, then only ever rendered into the run log and, for
+ *   a refuted or unresolved finding, beneath the finding itself.
  * - The pass is bounded by construction: one call per planned finding, no
  *   retry, no re-ask. An empty plan is a no-op, so strict-policy behavior is
  *   unchanged for findings left unverified.
@@ -36,7 +35,6 @@ import { createEvidence } from "#core/untrusted.mjs";
 
 /** @typedef {import("./answer.mjs").Finding} Finding */
 /** @typedef {import("./config.mjs").Strategy} Strategy */
-/** @typedef {import("./config.mjs").Strictness} Strictness */
 /** @typedef {import("./lanes.mjs").AttentionLane} AttentionLane */
 /** @typedef {import("#core/chat.mjs").ChatMessage} ChatMessage */
 
@@ -122,28 +120,61 @@ const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertain"]);
  */
 
 /**
- * One removal, carrying the finding's identity so a wrong refute is visible
- * in the run log.
+ * The finding lifecycle. `candidate` is a validated finding awaiting its
+ * verdict — the state every planned finding holds inside the pass, and the
+ * one state a published report can never carry: the pass resolves every
+ * finding it schedules to a terminal state before anything renders.
  *
- * @typedef {object} DropEntry
- * @property {string} id
- * @property {string} file
- * @property {number} line
- * @property {"refuted" | "uncertain"} verdict
- * @property {string} reason
+ * @typedef {"candidate" | PublishedLifecycle} Lifecycle
+ */
+
+/**
+ * The states a published finding may carry. Naming follows the verdict
+ * vocabulary; an `uncertain` verdict is no verdict, so it publishes as
+ * `unresolved` — visible, never deleted, never renamed by the model.
+ *
+ * @typedef {"confirmed" | "refuted" | "unresolved"} PublishedLifecycle
+ */
+
+/**
+ * The code-owned map from a parsed verdict to the lifecycle state it
+ * produces. The one legal transition a verdict can cause — pure, closed,
+ * and the only place a verdict turns into a state.
+ *
+ * @type {Readonly<Record<Verdict, PublishedLifecycle>>}
+ */
+export const LIFECYCLE_OF_VERDICT = Object.freeze({
+  confirmed: "confirmed",
+  refuted: "refuted",
+  uncertain: "unresolved",
+});
+
+/** The lifecycle vocabulary an artifact may record — a candidate never publishes. */
+export const PUBLISHED_LIFECYCLE_STATES = /** @type {const} */ ([
+  "confirmed",
+  "refuted",
+  "unresolved",
+]);
+
+/**
+ * One finding after the pass — the validated finding untouched, its
+ * verification outcome attached flat, the way provenance attaches. `id` and
+ * `lifecycle` are present iff the plan scheduled the finding; a finding
+ * below the strategy's threshold was never a verification candidate and
+ * publishes without them, byte for byte as it arrived.
+ *
+ * @typedef {Finding & {
+ *   id?: string,
+ *   lifecycle?: PublishedLifecycle,
+ *   verdict?: Verdict,
+ *   reason?: string,
+ * }} VerifiedFinding
  */
 
 /**
  * @typedef {object} AppliedVerdicts
- * @property {Finding[]} findings the publication set — the input minus the drops
- * @property {DropEntry[]} drops every removal, with its finding's identity
+ * @property {VerifiedFinding[]} findings the publication set — every input finding, in input order, each with its verification state
  * @property {string[]} refusals why each refused verdict was refused
- */
-
-/**
- * @typedef {object} ApplyPolicy the deterministic publication policy
- * @property {Strictness} strictness the config's strictness — `high` is the strict arm that drops `uncertain`
- * @property {VerificationPlan} plan the plan the verdicts may bind to, and nothing else
  */
 
 /**
@@ -318,21 +349,25 @@ export function parseVerdict(text) {
 }
 
 /**
- * Applies the verdicts to the findings: the publication set plus the drop
- * log. The verifier's only legal mutation is removal — confirmed findings
- * and unverified findings publish unchanged, `refuted` drops (logged with
- * the finding's identity so a wrong refute is visible), and `uncertain`
- * follows the config's strictness: the strict arm (`high`) drops, the
- * default publishes. A verdict naming an id outside the plan is refused
- * fail-closed — it never maps onto a finding by guess.
+ * Applies the verdicts to the findings: the publication set, every finding
+ * kept, each carrying its verification state. A bound verdict sets the state
+ * its verdict maps to — `confirmed` stays, `refuted` publishes as refuted
+ * with its reason riding along so a wrong refute is visible wherever the
+ * finding shows, `uncertain` publishes as unresolved. A planned finding with
+ * no recorded verdict — a crash, a lost record — fails closed to
+ * `unresolved`, never to silence. A verdict naming an id outside the plan is
+ * refused fail-closed — it never maps onto a finding by guess. Pure: the
+ * same findings, verdicts and plan always yield the same states in the same
+ * order, and no model-authored text can move a state — only a parsed verdict
+ * in the closed vocabulary can.
  *
  * @param {Finding[]} findings the post-nit-drop findings, the same array the plan was derived from
  * @param {VerdictEntry[]} verdicts
- * @param {ApplyPolicy} policy
+ * @param {VerificationPlan} plan the plan the verdicts may bind to, and nothing else
  * @returns {AppliedVerdicts}
  */
-export function applyVerdicts(findings, verdicts, policy) {
-  const byId = new Map(policy.plan.items.map((item) => [item.id, item]));
+export function applyVerdicts(findings, verdicts, plan) {
+  const byId = new Map(plan.items.map((item) => [item.id, item]));
   /** @type {Map<string, VerdictEntry>} */
   const decided = new Map();
   /** @type {string[]} */
@@ -351,29 +386,41 @@ export function applyVerdicts(findings, verdicts, policy) {
     }
     decided.set(entry.id, entry);
   }
-  /** Finding identity → drop, so the filter is value-exact and duplicate-proof. */
-  /** @type {Map<string, DropEntry>} */
-  const drops = new Map();
-  for (const [id, entry] of decided) {
-    const finding = /** @type {VerificationItem} */ (byId.get(id)).finding;
-    const drop =
-      entry.verdict === "refuted" ||
-      (entry.verdict === "uncertain" && policy.strictness === "high");
-    if (drop) {
-      drops.set(findingIdentity(finding), {
+  /** Finding identity → the plan's disposition for that finding, so the mapping is value-exact and duplicate-proof. */
+  const idByIdentity = new Map(plan.items.map((item) => [findingIdentity(item.finding), item.id]));
+  const skipByIdentity = new Map(plan.skipped.map((skip) => [findingIdentity(skip.finding), skip]));
+  /** @type {VerifiedFinding[]} */
+  const published = [];
+  for (const finding of findings) {
+    const id = idByIdentity.get(findingIdentity(finding));
+    if (id !== undefined) {
+      const entry = decided.get(id);
+      if (entry === undefined) {
+        published.push({
+          ...finding,
+          id,
+          lifecycle: "unresolved",
+          reason: "no verdict was recorded for this finding",
+        });
+        continue;
+      }
+      published.push({
+        ...finding,
         id,
-        file: finding.file,
-        line: finding.line,
-        verdict: entry.verdict === "refuted" ? "refuted" : "uncertain",
+        lifecycle: LIFECYCLE_OF_VERDICT[entry.verdict],
+        verdict: entry.verdict,
         reason: entry.reason,
       });
+      continue;
     }
+    const skip = skipByIdentity.get(findingIdentity(finding));
+    if (skip !== undefined) {
+      published.push({ ...finding, lifecycle: "unresolved", reason: skip.reason });
+      continue;
+    }
+    published.push(finding);
   }
-  return {
-    findings: findings.filter((finding) => !drops.has(findingIdentity(finding))),
-    drops: [...drops.values()],
-    refusals,
-  };
+  return { findings: published, refusals };
 }
 
 /**
