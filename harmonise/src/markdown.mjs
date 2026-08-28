@@ -467,6 +467,16 @@ function countInlineLinkConstructs(line) {
  * list blocks, blockquotes, tables, reference definitions, link constructs
  * and frontmatter extent. All of it is pure counting and syntax checking.
  *
+ * Raw HTML is deliberately not a block kind here: every non-fence, non-
+ * frontmatter line is scanned as plain text, so HTML-native structure
+ * (`<h1>`, `<ul>`/`<li>`, tag attributes) contributes nothing to the profile
+ * while any markdown constructs on those lines still count line-locally.
+ * HTML policy lives upstream — `sanitizeTranslationHtml` blanks dangerous
+ * HTML before a candidate reaches this function — and the blindness is
+ * symmetric across `compareStructuralProfiles`, so a translation that
+ * rewrites markdown structure INTO HTML is still caught: the candidate's
+ * heading and list counts drop against the source's.
+ *
  * @typedef {object} StructuralProfile
  * @property {number} fenceCount
  * @property {string[]} fenceDelimiters each block's opening delimiter character, in document order

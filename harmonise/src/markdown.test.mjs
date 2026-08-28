@@ -295,6 +295,116 @@ describe("structuralProfile", () => {
   });
 });
 
+describe("structuralProfile and raw HTML", () => {
+  // Documented behavior, pinned per the #119 P2-4 flag: the profile has no
+  // HTML block state. HTML-native structure is invisible to it, markdown
+  // constructs on HTML-region lines still count line-locally, and the
+  // blindness is symmetric across compareStructuralProfiles — so rewriting
+  // markdown structure INTO HTML is caught, while HTML-internal layout is
+  // out of the profile's contract (sanitisation owns that upstream).
+  it("reads raw HTML as plain lines: HTML-native structure is invisible, markdown constructs still count", () => {
+    const profile = structuralProfile(
+      '<div class="prose">\n<h1>Not a heading</h1>\n<ul><li>not a list</li></ul>\n[still](counted.md)\n</div>\n',
+    );
+
+    expect(profile.headingLevels).toEqual([]);
+    expect(profile.listBlocks).toEqual([]);
+    expect(profile.linkConstructs).toEqual({ inlineLinks: 1, images: 0, autolinks: 0 });
+  });
+
+  it("catches markdown structure rewritten into HTML through the comparison", () => {
+    const source = structuralProfile("# Title\n\n- one\n- two\n");
+    const candidate = structuralProfile("<h1>Title</h1>\n\n<ul><li>one</li><li>two</li></ul>\n");
+
+    expect(compareStructuralProfiles(source, candidate)).toEqual([
+      "heading count changed: 1 → 0",
+      "list block count changed: 1 → 0",
+    ]);
+  });
+});
+
+describe("structuralProfile bounds on pathological documents", () => {
+  // Each bounds test asserts a generous wall-clock ceiling (observed runtime
+  // is well under 100 ms) so a regression toward superlinear work fails CI
+  // instead of hanging it; the 30 s vitest timeout is the backstop. Memory
+  // is pinned via the profile's exact counts, not RSS.
+
+  it("terminates with exact counts on a ten-thousand-deep blockquote chain", () => {
+    const started = performance.now();
+    const profile = structuralProfile("> ".repeat(10_000) + "deepest\n");
+    const elapsed = performance.now() - started;
+
+    expect(profile.blockquoteBlocks).toEqual({ count: 1, maxDepths: [10_000] });
+    expect(elapsed).toBeLessThan(5_000);
+  }, 30_000);
+
+  it("terminates with an exact profile on a multi-megabyte 2,500-deep nested list", () => {
+    // A k-deep nested-list fixture is quadratic in bytes (two indent spaces
+    // per level), so 10k-deep lists would be a ~100 MB string: the depth
+    // floor here is set by fixture size, not parser stamina — the 10k-deep
+    // nesting case is the blockquote chain above, on a 20 KB fixture.
+    const lines = [];
+    for (let depth = 0; depth < 2_500; depth++) lines.push("  ".repeat(depth) + "- item");
+    const text = lines.join("\n") + "\n";
+    expect(text.length).toBeGreaterThan(5_000_000);
+
+    const started = performance.now();
+    const profile = structuralProfile(text);
+    const elapsed = performance.now() - started;
+
+    expect(profile.listBlocks).toEqual([
+      { ordered: false, marker: "-", items: 2_500, maxDepth: 2_500 },
+    ]);
+    expect(elapsed).toBeLessThan(5_000);
+  }, 30_000);
+
+  it("terminates with an exact full profile on a multi-megabyte document", () => {
+    const lines = [];
+    for (let index = 0; index < 25_000; index++) {
+      lines.push(`## Section ${index}`);
+      lines.push(
+        `Paragraph with [link ${index}](guide/${index}.md) and ![image](images/${index}.png).`,
+      );
+      lines.push("> a quoted line");
+      lines.push("");
+    }
+    const text = lines.join("\n") + "\n";
+    expect(text.length).toBeGreaterThan(2_000_000);
+
+    const started = performance.now();
+    const profile = structuralProfile(text);
+    const elapsed = performance.now() - started;
+
+    expect(profile.fenceCount).toBe(0);
+    expect(profile.frontmatter.present).toBe(false);
+    expect(profile.headingLevels).toHaveLength(25_000);
+    expect(profile.listBlocks).toEqual([]);
+    expect(profile.blockquoteBlocks.count).toBe(25_000);
+    expect(profile.blockquoteBlocks.maxDepths.every((depth) => depth === 1)).toBe(true);
+    expect(profile.tables).toEqual([]);
+    expect(profile.brokenInlineCount).toBe(0);
+    expect(profile.linkConstructs).toEqual({
+      inlineLinks: 25_000,
+      images: 25_000,
+      autolinks: 0,
+    });
+    expect(elapsed).toBeLessThan(5_000);
+  }, 30_000);
+
+  it("scans a single multi-megabyte line without superlinear work", () => {
+    const filler = "x".repeat(2_000_000);
+    const text = `# Heading\n\n${filler} [tail](destination.md\n`;
+
+    const started = performance.now();
+    const profile = structuralProfile(text);
+    const elapsed = performance.now() - started;
+
+    expect(profile.headingLevels).toEqual([1]);
+    expect(profile.brokenInlineCount).toBe(1);
+    expect(elapsed).toBeLessThan(5_000);
+  }, 30_000);
+});
+
 describe("compareStructuralProfiles", () => {
   it("passes identical profiles with no violations", () => {
     const source = structuralProfile("# A\n\n```js\nx\n```\n\n## B\n");
