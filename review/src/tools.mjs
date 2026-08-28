@@ -109,9 +109,11 @@ export const TOOL_SPECS = [
  * @param {Evidence} input.evidence the wrapper every result enters through
  * @param {string[]} input.ignore the config's universe filter, glob patterns
  * @param {ToolLimits} [input.limits]
- * @returns {{ execute: (name: string, argumentsJson: string) => ToolResult }}
+ * @param {Map<string, string>} [input.recordedReads] the verification ledger: every successful
+ *   read_file's raw bytes, keyed by the normalised requested path. The pass
+ *   verifies findings only against bytes the reviewer actually captured.
  */
-export function createTools({ workspace, evidence, ignore, limits = {} }) {
+export function createTools({ workspace, evidence, ignore, limits = {}, recordedReads }) {
   const listEntries = limits.listEntries ?? MAX_LIST_ENTRIES;
   const searchMatches = limits.searchMatches ?? MAX_SEARCH_MATCHES;
   const scanBytes = limits.scanBytes ?? MAX_SCAN_BYTES;
@@ -152,7 +154,7 @@ export function createTools({ workspace, evidence, ignore, limits = {} }) {
         const keys = expectKeys(args, ["path"]);
         if (keys !== "") return fail(keys);
         return expectPath(args["path"]).match((path) =>
-          readFile(workspace, evidence, ignore, path),
+          readFile(workspace, evidence, ignore, recordedReads, path),
         );
       }
 
@@ -320,10 +322,11 @@ function resolutionRefusal(requested, cause) {
  * @param {Workspace} workspace
  * @param {Evidence} evidence
  * @param {string[]} ignore
+ * @param {Map<string, string> | undefined} recordedReads when present, every successful text read is recorded here
  * @param {string} requestedPath
  * @returns {ToolResult}
  */
-function readFile(workspace, evidence, ignore, requestedPath) {
+function readFile(workspace, evidence, ignore, recordedReads, requestedPath) {
   if (matchGlob(ignore, p.posix.normalize(requestedPath))) {
     // Ignore matching happens on the canonical spelling, so ./dist/x.js is
     // refused exactly when dist/x.js is.
@@ -351,6 +354,11 @@ function readFile(workspace, evidence, ignore, requestedPath) {
   if (isBinary(buffer)) {
     return fail(`refusing '${requestedPath}': binary content — findings cannot anchor here`);
   }
+  // The verification pass judges findings only against bytes this loop
+  // actually captured, so the successful read is recorded before it is
+  // framed: raw UTF-8, keyed by the normalised requested path — the same
+  // spelling the coverage ledger matches findings against.
+  recordedReads?.set(p.posix.normalize(requestedPath), buffer.toString("utf8"));
   const header =
     `${entry.relative}\n` +
     (buffer.length < size
