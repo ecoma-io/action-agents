@@ -1,8 +1,7 @@
 name: Action Agents - AI-powered repository maintenance actions.
 description: >-
-  Three actions, one responsibility each — triage, review, harmonise — running
-  inside GitHub Actions against any OpenAI-compatible model, including one you host
-  yourself. No bundle to trust, no dependency to audit, no install before they start.
+  Root guard: not a runnable action. Use ecoma-io/action-agents/triage, review or
+  harmonise at a pinned ref.
 
 runs:
   using: composite
