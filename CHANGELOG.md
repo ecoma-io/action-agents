@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/ecoma-io/action-agents/compare/v0.1.1...v0.2.0) (2026-08-28)
+
+
+### Features
+
+* **harmonise:** structural fingerprint covers lists, tables, quotes, links, frontmatter ([#59](https://github.com/ecoma-io/action-agents/issues/59)) ([67c8e2d](https://github.com/ecoma-io/action-agents/commit/67c8e2d6a8d0608338b6f8413c95095c88756764))
+* **harmonise:** sync-state model and deterministic fingerprints ([#61](https://github.com/ecoma-io/action-agents/issues/61)) ([17b23d8](https://github.com/ecoma-io/action-agents/commit/17b23d80366b0a63107952d2b75fd62f7018eb6f))
+* **harmonise:** validate link identity after translation ([#57](https://github.com/ecoma-io/action-agents/issues/57)) ([cb8e9e3](https://github.com/ecoma-io/action-agents/commit/cb8e9e30d765f328d43e3b2b6280aa7f7199d46e))
+* **review:** deterministic risk classifier for changed files ([#60](https://github.com/ecoma-io/action-agents/issues/60)) ([9994a75](https://github.com/ecoma-io/action-agents/commit/9994a75b2e78905facc9d24a925482d555b14b8b))
+* **review:** strictness becomes review policy, add strategy config ([#62](https://github.com/ecoma-io/action-agents/issues/62)) ([92f7f4a](https://github.com/ecoma-io/action-agents/commit/92f7f4a4771bb97ef01911408f466385c3a90d33))
+
 ## [0.1.1](https://github.com/ecoma-io/action-agents/compare/v0.1.0...v0.1.1) (2026-08-28)
 
 
