@@ -36,7 +36,10 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: write
+  # No `pull-requests` scope: labels and comments are written through the
+  # issues API, whose endpoints accept a pull request number. The PR surface
+  # of this token — reviews, reviewers, merges — stays read-only, which is
+  # the least the write path needs and nothing more.
 
 # One triage run per thread: a rapid sequence of edits to the same issue
 # replaces the queued run rather than stacking classifications of stale
