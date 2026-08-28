@@ -802,6 +802,33 @@ export function assertFreshArtifact(artifact, headRef) {
 }
 
 /**
+ * Attaches the comment's identity to an artifact built before the comment
+ * existed. `buildArtifact` runs before publication so every refusal it can
+ * raise precedes anything irreversible; the one fact it cannot hold yet —
+ * the identity of the comment the run went on to write — is attached here,
+ * and the result serialises to exactly the bytes the post-comment build
+ * would have produced.
+ *
+ * @param {RunArtifact} artifact the artifact `buildArtifact` returned, provenance still empty
+ * @param {number} commentId the id the comment's upsert returned
+ * @returns {RunArtifact} a frozen artifact whose provenance names the comment
+ * @throws {ArtifactError} when the artifact already names a comment, or the id is not a positive integer
+ */
+export function withCommentId(artifact, commentId) {
+  const record = asRecord(artifact, "artifact");
+  const provenance = asRecord(record.provenance, "artifact.provenance");
+  if ("commentId" in provenance) {
+    throw new ArtifactError(
+      "artifact.provenance already names a comment — refusing to attach a second one",
+    );
+  }
+  const id = asPositiveInt(commentId, "commentId");
+  return /** @type {RunArtifact} */ (
+    deepFreeze({ ...record, provenance: { ...provenance, commentId: id } })
+  );
+}
+
+/**
  * Serialises a {@link RunArtifact} to a stable JSON string. Keys are sorted, so
  * the bytes are identical regardless of how the object was assembled — the
  * builder's fixed key order is the only order there is. A foreign object (wrong

@@ -326,8 +326,9 @@ describe("publication", () => {
     expect(body).toContain("**Review** — Complete");
     expect(body).toContain("- `src/a.mjs:2` — off-by-one");
     expect(body).toContain("evidence: `src/a.mjs:1-4`");
-    // Two reads pin the snapshot; the second guards publication.
-    expect(forge.calls.getPullRequests).toHaveLength(2);
+    // Four reads: one opens the run, one guards publication, one validates
+    // the record before the comment exists, one guards the write itself.
+    expect(forge.calls.getPullRequests).toHaveLength(4);
   });
 
   it("abandons instead of publishing when the head moved mid-review", async () => {
@@ -1903,6 +1904,114 @@ describe("the run artifact", () => {
     });
     expect(result.outcome).toBe("dry-run");
     expect(result.artifact).toBeUndefined();
+  });
+});
+
+describe("artifact freshness around publication", () => {
+  // The artifact is built and validated against a fresh read before the
+  // comment exists, and guarded again after publication by a read taken at
+  // write time — not by the object the pre-publication guard proved. Both
+  // reads are load-bearing: a tree without them performs exactly two PR
+  // reads on a published run and can record a head the pull request has
+  // already left.
+
+  const MOVED = "c".repeat(40);
+  const CONCERN =
+    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+  const READ = {
+    content: "",
+    toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+  };
+  const VERDICT = { content: '{"verdict":"confirmed","reason":"the read settles it"}' };
+
+  /**
+   * A forge whose PR reads and comment writes are recorded on one timeline,
+   * with an optional head that "moves" from the Nth read onward — the shape
+   * needed to assert which read guarded the record, and when.
+   *
+   * @param {{ movedAt?: number }} [options]
+   * @returns {ReturnType<typeof forgeStub> & { timeline: string[] }}
+   */
+  function sequencedForge({ movedAt = Number.POSITIVE_INFINITY } = {}) {
+    const forge = forgeStub();
+    /** @type {string[]} */
+    const timeline = [];
+    let reads = 0;
+    const innerGet = forge.getPullRequest.bind(forge);
+    const innerCreate = forge.createComment.bind(forge);
+    const innerUpdate = forge.updateComment.bind(forge);
+    forge.getPullRequest = async () => {
+      reads += 1;
+      const snap =
+        reads >= movedAt ? snapshot({ head: { ref: "feature", sha: MOVED } }) : await innerGet(7);
+      timeline.push(`read:${snap.head.sha.slice(0, 6)}`);
+      return snap;
+    };
+    forge.createComment = async (number, body) => {
+      timeline.push("create-comment");
+      return innerCreate(number, body);
+    };
+    forge.updateComment = async (id, body) => {
+      timeline.push("update-comment");
+      return innerUpdate(id, body);
+    };
+    return Object.assign(forge, { timeline });
+  }
+
+  it("the record is validated pre-comment and guarded at write time by two fresh reads", async () => {
+    const forge = sequencedForge();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.artifact?.provenance).toEqual({ commentId: 101 });
+    const upsertAt = forge.timeline.indexOf("create-comment");
+    expect(upsertAt).toBeGreaterThan(-1);
+    const validatedAt = forge.timeline.findIndex(
+      (entry, index) => index < upsertAt && index > 1 && entry.startsWith("read:"),
+    );
+    expect(validatedAt).toBeGreaterThan(1); // a read between the pre-publication guard and the comment
+    const guardedAt = forge.timeline.findIndex(
+      (entry, index) => index > upsertAt && entry.startsWith("read:"),
+    );
+    expect(guardedAt).toBeGreaterThan(upsertAt);
+    expect(forge.timeline).toHaveLength(guardedAt + 1); // the write-time read is the run's last act
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("a head moved after publication abandons with the comment standing and no artifact", async () => {
+    const forge = sequencedForge({ movedAt: 4 });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
+    });
+    expect(result.outcome).toBe("abandoned");
+    expect(result.artifact).toBeUndefined();
+    expect(result.commentId).toBeUndefined();
+    expect(result.reason).toContain("not written");
+    expect(forge.calls.upserts).toHaveLength(1); // the comment stands
+    expect(forge.timeline.at(-1)).toBe(`read:${MOVED.slice(0, 6)}`);
+  });
+
+  it("a head moved before the comment refuses with nothing written", async () => {
+    const forge = sequencedForge({ movedAt: 3 });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
+    });
+    expect(result.outcome).toBe("abandoned");
+    expect(result.artifact).toBeUndefined();
+    expect(result.commentId).toBeUndefined();
+    expect(result.reason).toContain("nothing written");
+    expect(forge.calls.upserts).toHaveLength(0); // nothing irreversible happened
+    expect(forge.timeline.at(-1)).toBe(`read:${MOVED.slice(0, 6)}`);
   });
 });
 

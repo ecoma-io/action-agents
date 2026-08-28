@@ -846,11 +846,14 @@ need.
 
 Every published run writes a machine-readable record of itself next to the
 comment — `buildArtifact` in `artifact.mjs`, called on the publication path
-in `run.mjs` right after the comment's identity is known, so the two records
-name each other. The artifact is the contract a machine can read where the
-comment is the contract a human reads; both are projections of the same
-final facts, and neither can drift from the other, because both are built
-from the same values in the same pass.
+in `run.mjs` **before** the comment exists, so every refusal the builder can
+raise refuses a run that has written nothing irreversible. The comment's
+identity is the one fact the record cannot hold yet: the upsert returns it
+and `withCommentId` attaches it, so the two records still name each other.
+The artifact is the contract a machine can read where the comment is the
+contract a human reads; both are projections of the same final facts, and
+neither can drift from the other, because both are built from the same
+values in the same pass.
 
 The schema is versioned (`schemaVersion: 2`) and the builder is fail-closed:
 a fact outside the declared key sets, a vocabulary word the code does not
@@ -884,11 +887,15 @@ strategy's threshold was never a candidate and publishes without a
 lifecycle, byte for byte as it arrived. A skipped candidate is unresolved
 with no id — the one state a finding can hold without one.
 
-Publication-only, and stale-refusing. A run that publishes nothing —
+Publication-only, and stale-refusing twice. A run that publishes nothing —
 `nothing-to-review`, a skip, an abandonment, a dry run — writes no artifact,
 and the newer-head rule extends to the record: `assertFreshArtifact` compares
-the artifact's head against the forge's pre-publication re-read and refuses a
-stale snapshot loudly rather than writing it.
+the artifact's head against a forge read taken before the comment exists, so
+a refusal there writes nothing at all, and again against a second read taken
+after the comment is published — the write-time guard. A head that moves in
+that last window leaves the comment standing and the record unwritten; the
+run reports the abandonment calmly rather than recording a snapshot the
+pull request has already left.
 
 The write is confined like every read. The `artifact-path` input (default
 `.review-artifact`) is resolved inside `GITHUB_WORKSPACE` or refused; `.git`
