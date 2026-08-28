@@ -849,6 +849,7 @@ describe("run — the untrusted-data ceiling (no steering)", () => {
     const body = String(hostile.forge.writes[0]?.args[1] ?? "");
     // Identical model answer, hostile vs honest body: an identical comment.
     // The marker is random per run, so identity is asserted under it.
+    /** @param {string} markerBody */
     const tail = (markerBody) => markerBody.slice(markerBody.indexOf("\n") + 1);
     expect(tail(body)).toBe(tail(String(honest.forge.writes[0]?.args[1] ?? "")));
     // The action's own marker is the only one — the forged marker is stripped.

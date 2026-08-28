@@ -1977,7 +1977,11 @@ describe("the untrusted-data ceiling (no steering)", () => {
     };
   }
 
-  /** Every tool list the run ever offered stayed inside the fixed registry. */
+  /**
+   * Every tool list the run ever offered stayed inside the fixed registry.
+   *
+   * @param {{ offeredTools: Array<import("#core/chat.mjs").ChatTool[] | undefined> }} chat
+   */
   function assertRegistryUnchanged(chat) {
     for (const offered of chat.offeredTools) {
       for (const tool of offered ?? []) {
@@ -2015,6 +2019,7 @@ describe("the untrusted-data ceiling (no steering)", () => {
     expect(hostile.outcome).toBe("published");
     expect(honest.outcome).toBe("published");
     // The marker is random per run; the rendered review under it is identical.
+    /** @param {string} comment */
     const under = (comment) => comment.slice(comment.indexOf("\n") + 1);
     expect(under(hostileForge.calls.upserts[0]?.body ?? "")).toBe(
       under(honestForge.calls.upserts[0]?.body ?? ""),
