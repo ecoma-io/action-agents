@@ -24,8 +24,8 @@
  *
  * Lines may be exempted by appending the explicit marker `<!-- roadmap ref -->`
  * or `# roadmap ref` (or the `historical ref` forms) to the ref-bearing line —
- * the guard around a deliberately-future (`@v2`) or deliberately-historical
- * (`@v0.1`) example, never an accident.
+ * the guard around a `uses:` line naming a version this repository has not
+ * published yet (a future `@v2` example), never an accident.
  *
  * Checks, in order, one per `uses:` line:
  *   1. the ref names an action subdirectory — there is no action at the

@@ -2,10 +2,6 @@ node_modules/
 coverage/
 pnpm-lock.yaml
 
-# esbuild's output, committed because the runner needs it. Reformatting a
-# generated file only makes the next build's diff noisier.
-dist/
-
 # Verbatim third-party legal text — reflowing it would alter a document that is
 # only valid unmodified.
 LICENSE

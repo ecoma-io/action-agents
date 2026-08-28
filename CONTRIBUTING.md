@@ -7,9 +7,9 @@ By contributing you agree that your work is licensed under the Apache License
 2.0, and that you have the right to grant that license — see
 [Ownership of what you contribute](#ownership-of-what-you-contribute).
 
-> **The repository is pre-release.** No action has shipped and there is no tag
-> to pin. What is written here is the shape the repository is built to, not a
-> description of a finished product.
+> **Status: released.** v0.1.0 shipped; the `v0.1` floating tag and the `v0.1.0`
+> exact tag are both pinnable. What follows still describes how the repository
+> is built and judged — a release does not change the rules.
 
 ## The one rule that decides most questions
 

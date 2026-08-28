@@ -14,7 +14,7 @@
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml/badge.svg" alt="Analysis" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/status-pre--release-orange.svg" alt="Status: pre-release" />
+  <a href="https://github.com/ecoma-io/action-agents/releases"><img src="https://img.shields.io/github/v/release/ecoma-io/action-agents.svg" alt="Latest release" /></a>
 </p>
 
 <p align="center">
@@ -37,7 +37,7 @@ Bảo trì kho lưu trữ là công việc mà không ai lên lịch: gán nhãn
 - **Agentic khi nó xứng đáng** — `review` quyết định đọc gì, xác minh trước khi yêu cầu, và gói gọn bản ghi của mình thay vì cắt ngắn diff của bạn.
 - **Giới hạn bởi workflow của bạn, không phải bởi prompt của chúng tôi** — cấu hình mô tả hành vi; khối `permissions:` là ranh giới bảo mật.
 
-> **Trạng thái: pre-release.** Kho lưu trữ đang được xây dựng và chưa có hành động nào được phát hành. Không có gì ở đây có thể được ghim cho tới khi thẻ đầu tiên tồn tại; ví dụ dưới đây được đánh dấu như vậy.
+> **Trạng thái: đã phát hành.** v0.1.0 đã ra mắt — cả `v0.1` (thẻ nổi) lẫn `v0.1.0` (thẻ chính xác) đều có thể ghim, và ví dụ dưới đây phân giải được.
 
 ## Get started
 
@@ -56,7 +56,7 @@ jobs:
       # review reads the working tree, so it needs a checkout
       - uses: actions/checkout@v5
 
-      - uses: ecoma-io/action-agents/review@v0.1 # roadmap ref
+      - uses: ecoma-io/action-agents/review@v0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
