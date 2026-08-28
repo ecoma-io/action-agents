@@ -31,7 +31,7 @@ inputs:
     required: false
     default: ""
   dry-run:
-    description: Report drift, propose nothing. Defaults to true, because the output of a real run is a pull request against your documentation rather than a comment. Edits are never pushed to a branch directly.
+    description: Report drift, propose nothing. Defaults to true, because the output of a real run is a pull request against your documentation rather than a comment. A real run writes exactly one ref — its own proposal branch `harmonise/<source-language>`, force-upserted with optimistic locking — and opens one pull request; the model never names the branch, and no other branch or ref is touched.
     required: false
     default: "true"
 

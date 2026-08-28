@@ -1,11 +1,10 @@
 # Development — the core ceilings
 
-The four modules the security policy's ceilings rest on, their contracts
-written before implementation: `untrusted.mjs`, `sanitise.mjs`,
-`comment.mjs` and `workspace.mjs`. The first three exist and carry their
-tests; `workspace.mjs` waits for `review`, its one consumer. The security
-policy at the repository root is the authority, this page is the
-architectural half.
+The four modules the security policy's ceilings rest on: `untrusted.mjs`,
+`sanitise.mjs`, `comment.mjs` and `workspace.mjs`. All four exist and carry
+their tests; `workspace.mjs`'s first consumer is `review`, which routes every
+workspace touch through it. The security policy at the repository root is the
+authority, this page is the architectural half.
 
 ## `core/untrusted.mjs` — evidence
 
