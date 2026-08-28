@@ -259,9 +259,10 @@ export async function run(inputs, context, io) {
   // The recorded state is advisory and fails closed: a file that is missing,
   // unreadable, unparseable, or of a foreign schema version leaves no
   // records, and a thrown read degrades the same way. A state problem may
-  // never block a translation and may never cause a skip — with no usable
-  // records every pair takes the model path, exactly as a repository
-  // without a state file always has.
+  // never block the run and may never cause a silent skip — with no usable
+  // records every pair is judged from the world alone: a missing target
+  // still translates, and existing bytes are human work that manual-edit
+  // protection preserves (merge against a verified base, or refuse).
   /** @type {import("./state.mjs").SyncStateRecord[]} */
   let recordedRecords = [];
   try {
@@ -477,28 +478,23 @@ export async function run(inputs, context, io) {
         }
         // Manual-edit protection. The policy turns the drift verdict plus the
         // target's presence into exactly one action class, and this wiring
-        // respects it: `preserve-required` on a proven outside edit — a valid
-        // record whose publication no longer matches the disk — forbids the
-        // blind overwrite. Such a pair proceeds only into a three-way merge
-        // against the verified last publication, and with no verifiable base
-        // it is refused outright: no model call, no slot, no silent
-        // overwrite. `preserve-required` without a provable edit (`unknown` —
-        // a corrupt record; `unrecorded` — nothing recorded) keeps the
-        // advisory degradation the state read already chose: the model path,
-        // exactly as a repository without usable records always ran.
+        // honors it in full: every `preserve-required` row proceeds only into
+        // a three-way merge against a verified base — which needs both the
+        // base and existing bytes on disk — and is refused outright
+        // otherwise, before any model call. No slot, no overwrite: generated
+        // text never silently displaces human work. An `unrecorded` pair
+        // never has a base to verify, an `unknown` pair cannot prove what
+        // harmonise last published, and a record whose target has vanished
+        // preserves the deletion.
         /** @type {string | undefined} */
         let mergeBase;
-        if (
-          protectionDecision(drift, existing !== undefined) === "preserve-required" &&
-          drift === "target-drift"
-        ) {
-          mergeBase = recordedMergeBase(recorded, target.lang, memory);
+        if (protectionDecision(drift, existing !== undefined) === "preserve-required") {
+          mergeBase =
+            existing !== undefined ? recordedMergeBase(recorded, target.lang, memory) : undefined;
           if (mergeBase === undefined) {
             failedLines.push(
               `${target.lang} ${pair.sourcePath}: manual-edit protection refused: ` +
-                `the target changed outside harmonise since the last publication, and no ` +
-                `recorded base translation could be verified to merge against — resolve ` +
-                `the edit by hand or restore the translation memory`,
+                protectionRefusalReason(drift, existing !== undefined),
             );
             continue;
           }
@@ -906,6 +902,45 @@ function recordedMergeBase(recorded, lang, memory) {
   );
   if (candidate === undefined) return undefined;
   return contentFingerprint(candidate) === recorded.translationFingerprint ? candidate : undefined;
+}
+
+/**
+ * The fail-closed reason a `preserve-required` pair was refused instead of
+ * merged: why no verified three-way path exists for this (verdict,
+ * existence) row. One honest string per reachable row — the report says
+ * what blocked the pair and what resolves it, never a generic error.
+ *
+ * @param {import("./drift.mjs").DriftVerdict} drift the pair's verdict
+ * @param {boolean} targetExists whether the target file exists on disk
+ * @returns {string} the refusal reason, one line
+ */
+function protectionRefusalReason(drift, targetExists) {
+  if (!targetExists) {
+    return (
+      "the record says harmonise published this destination, but the target is " +
+      "missing on disk — restore the file, or delete the record to let a fresh " +
+      "translation be created"
+    );
+  }
+  if (drift === "target-drift") {
+    return (
+      "the target changed outside harmonise since the last publication, and no " +
+      "recorded base translation could be verified to merge against — resolve " +
+      "the edit by hand or restore the translation memory"
+    );
+  }
+  if (drift === "unknown") {
+    return (
+      "the recorded state cannot prove what harmonise last published, and no " +
+      "verifiable base translation exists to merge against — resolve the edit " +
+      "by hand or restore the translation memory"
+    );
+  }
+  return (
+    "the target exists but harmonise has never recorded publishing it, and " +
+    "there is no base translation to merge against — adopt the file into the " +
+    "sync state by hand, or resolve it manually"
+  );
 }
 
 /**

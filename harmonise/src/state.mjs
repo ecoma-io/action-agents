@@ -318,7 +318,9 @@ export function parseState(text) {
  *   treated as absent (`null`). This follows from the doctrine: advisory
  *   state never blocks a run. The repository's actual bytes stay the sole
  *   authority; a corrupt advisory file degrades gracefully to "no prior
- *   state" so the run recomputes everything.
+ *   state" so the run recomputes everything. What recomputation means for a
+ *   pair with existing bytes is the protection policy's call: with no record
+ *   there is no verified base, so the pair is preserved — never overwritten.
  *
  * @param {{ getContents: ContentsReader, branch: string, defaultBranch: string }} args
  * @returns {Promise<{ records: SyncStateRecord[], origin: "branch" | "default" } | null>}

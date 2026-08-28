@@ -4,7 +4,7 @@ Shipped behaviour, not intent: `harmonise` is released and pinnable (`v0.1` thro
 
 ## What `harmonise` decides
 
-For every translated document in a repository: does it still convey what the source-language version says? Where it does not, the model returns a rewritten version, and the action proposes it. Where a translation does not exist, the model generates it, and the action proposes it. The pull request is opened unconditionally — one drift or thirty — so what bounds that operation is the workflow's `permissions:` block, never the model's answer. That is the branch of the doctrine's diagram where **the model chose the text and nothing about the call**: there is no sheet here, no operation for a model to pick, and the rewritten text never names a path — the action already knows which file each answer belongs to, because it enumerated the pair itself.
+For every translated document in a repository: does it still convey what the source-language version says? Where it does not, the model returns a rewritten version, and the action proposes it — unless manual-edit protection preserves the existing bytes and routes the pair to a merge or a refusal (see "Manual-edit protection" below). Where a translation does not exist, the model generates it, and the action proposes it. The pull request is opened unconditionally — one drift or thirty — so what bounds that operation is the workflow's `permissions:` block, never the model's answer. That is the branch of the doctrine's diagram where **the model chose the text and nothing about the call**: there is no sheet here, no operation for a model to pick, and the rewritten text never names a path — the action already knows which file each answer belongs to, because it enumerated the pair itself.
 
 ## Trigger and surface
 
@@ -501,6 +501,37 @@ The output contract is JSON — a verdict, a one-line summary of the drift, and 
 **The whole document, never a patch.** A line-numbered patch is a model composing a file format it cannot see — context that drifts by one line fails silently. A complete replacement cannot be subtly wrong about where it lands, and the pull request's diff shows the human exactly what changed. The cost is tokens on large documents, which is why the cap exists and why section-wise rewriting is a deliberate non-feature.
 
 An answer whose `content` is byte-identical to the translation it replaces is treated as no drift — a model that "rewrote" a file into itself proposes nothing, and no-op files do not go into a commit.
+
+### Manual-edit protection
+
+Existing bytes on disk are authoritative whenever they cannot be proven to be
+harmonise's own output. Drift detection names one of four facts (`canonical`,
+`target-drift`, `unrecorded`, `unknown`); the protection policy maps each fact,
+together with the target's presence, to exactly one action — and the wiring
+honors every row:
+
+| verdict        | target exists   | target missing |
+| -------------- | --------------- | -------------- |
+| `canonical`    | republish-safe  | refuse¹        |
+| `target-drift` | merge or refuse | refuse¹        |
+| `unrecorded`   | refuse          | create-allowed |
+| `unknown`      | refuse          | refuse         |
+
+¹ Unreachable by drift's own semantics — those verdicts require bytes on disk.
+The wiring refuses them if ever reached.
+
+Every `preserve-required` row updates only through a three-way merge against a
+verified base — the doctrine in `harmonise/src/protection.mjs`: human edits win
+ties, and generated text never silently displaces human work. A merge needs
+both a verified base (a translation-memory entry whose bytes hash exactly to
+the record's `translationFingerprint`) and existing bytes on disk. Without
+either, the pair refuses before any model call: a loud failed-pair line, a red
+run, the disk untouched. `(unrecorded, exists)` — the shape of every adoption
+of a repository with pre-existing translations — refuses rather than
+overwrites; `(unknown, missing)` — a record whose target was deleted — refuses
+rather than recreating the deletion. Resolving a refusal is a human decision:
+restore the translation memory or the recorded fingerprint, or adopt or delete
+the file by hand.
 
 ## The pull request
 
