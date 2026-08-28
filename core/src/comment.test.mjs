@@ -130,6 +130,30 @@ describe("creating", () => {
   });
 });
 
+describe("the default id generator", () => {
+  it("mints a distinct, marker-compatible id on every create when newId is not injected", async () => {
+    // No newId option anywhere in this loop: every id comes from the
+    // production default (crypto.randomBytes), the path the injected
+    // generators in the tests above exist to bypass.
+    /** @type {string[]} */
+    const ids = [];
+    for (let at = 0; at < 1000; at++) {
+      const api = store([]);
+      const outcome = await upsertComment({ ...baseOptions(api) });
+      expect(outcome.outcome).toBe("created");
+      const [entry] = await api.listComments(7);
+      const marker = parseMarker(entry?.body ?? "");
+      ids.push(marker === null ? "" : marker.id);
+    }
+
+    expect(ids).toHaveLength(1000);
+    expect(new Set(ids).size).toBe(1000); // every mint distinct
+    for (const id of ids) {
+      expect(id).toMatch(/^[0-9a-f-]{6,64}$/); // fits the marker's id slot
+    }
+  });
+});
+
 describe("updating", () => {
   it("updates the action's own comment, preserving its marker id", async () => {
     const mine = comment({ id: 5, body: `${markerLine("triage", "ee99a1b2")} old text` });
