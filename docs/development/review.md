@@ -710,10 +710,13 @@ divergence:
 The verification gate judges the pass's completeness, not a count. Its facts
 are the plan's identities, the outcome record each planned finding carries,
 the skips the plan could not evidence, and the policy the run ran under.
-Every planned finding must carry a recorded outcome for the gate to pass: a
-planned finding with no record at all — a lost record, a pass that never
-closed — is its own named failure at every policy mode, and no count
-equality stands in for it. What the records then say decides the posture.
+Every planned finding must carry a recorded outcome with a verdict behind it
+for the gate to pass: a planned finding with no record at all — a lost record —
+or whose record is `unresolved` carrying no verdict — the shape the pass itself
+writes when it never recorded one, a pass that never closed — is its own named
+failure at every policy mode, and no count equality stands in for it. Only an
+outcome whose verdict is genuinely `uncertain` is left to the mode policy. What
+the records then say decides the posture.
 The gate derives its mode from the review's policy — the `adversarial`
 strategy is the most demanding whatever the strictness, a strictness `high`
 on the standard strategy is `strict`, everything else is `normal` — and the
@@ -730,7 +733,8 @@ Refused answers, transport failures, protocol defects and budget exhaustions
 all record `uncertain` and move on, so they surface as unresolved findings
 where the mode policy can see them. A record the pass could never have
 produced — a lifecycle outside the published vocabulary, a verdict that
-contradicts the lifecycle map, an outcome for an id the plan never
+contradicts the lifecycle map, a resolved state with no verdict behind it, an
+outcome for an id the plan never
 scheduled, a duplicate — is `GateFactsError`: the gate reads only
 code-recorded state, and a missing fact is never a pass.
 
