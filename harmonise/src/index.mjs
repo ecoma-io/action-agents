@@ -29,7 +29,12 @@ import {
   setFailed,
 } from "#core/runtime.mjs";
 
-import { loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
+import {
+  MAX_PAIR_CONCURRENCY,
+  loadConfigFile,
+  loadInstructions,
+  validateConfig,
+} from "./config.mjs";
 import { buildInventory } from "./inventory.mjs";
 import { detectDrift } from "./drift.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
@@ -46,6 +51,7 @@ import {
 } from "./plan.mjs";
 import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
 import { buildTmKey, createTmStore, parse as parseTm, serialize as serializeTm } from "./tm.mjs";
+import { runPool } from "./pool.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -126,6 +132,27 @@ function realIo(inputs, context) {
  * @property {string | undefined} content the proposal text, undefined for unchanged
  *   and unchanged-skipped
  * @property {string} summary
+ */
+
+/**
+ * One translatable pair carried from the classification walk to the pool:
+ * everything its model path needs, so the pooled worker never re-reads.
+ *
+ * @typedef {object} PairJob
+ * @property {number} slot position in the stable pair order this pair fills
+ * @property {import("./plan.mjs").PreparedPair} prepared
+ * @property {string | undefined} existing the destination's current bytes, when it has any
+ * @property {import("./plan.mjs").PairBlockShape} blocks the pair's change shape
+ * @property {string} sourceFingerprint
+ * @property {string} lang
+ * @property {string} sourcePath
+ */
+
+/**
+ * One pooled pair's settled result, identified by pair — never by completion
+ * order: the outcome on success, the report line on failure.
+ *
+ * @typedef {{ ok: true, outcome: PairOutcome, sourceFingerprint: string } | { ok: false, line: string }} PairResult
  */
 
 /**
@@ -248,8 +275,15 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     );
   }
 
-  /** @type {PairOutcome[]} */
-  const outcomes = [];
+  /**
+   * One settled slot in the stable pair order — a pair's outcome once it has
+   * one (translated or unchanged-skipped), empty for a pair that failed, so
+   * the report and the publication below stay ordered by pair identity
+   * rather than by completion order.
+   *
+   * @type {(PairOutcome | undefined)[]}
+   */
+  const slots = [];
   /** Source fingerprint per proposed destination — what its state record pins. */
   /** @type {Map<string, string>} */
   const publishedSources = new Map();
@@ -257,7 +291,13 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   const failedLines = [];
   /** @type {string[]} */
   const skippedLines = [];
+  /** @type {PairJob[]} */
+  const jobs = [];
 
+  // The classification walk is sequential and ordered, exactly as before: it
+  // reads pinned bytes and decides, per pair, between the zero-model-call
+  // skip and the model path. Only the model path continues below — a skipped
+  // pair consumes no slot and no model call, exactly as the skip path made it.
   for (const pair of selected) {
     const file = await readAtBase(pair.sourcePath);
     if (file === null) {
@@ -344,7 +384,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           classifyPair(recorded, current) === "unchanged" &&
           detectDrift(recorded, existing) === "canonical"
         ) {
-          outcomes.push({
+          slots.push({
             lang: target.lang,
             sourcePath: pair.sourcePath,
             destinationPath: prepared.destinationPath,
@@ -362,68 +402,135 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           continue;
         }
 
-        // The memory is consulted only for pairs the model path already
-        // runs — a provably unchanged pair keeps its zero model calls.
-        const prior = memory.lookup(
-          buildTmKey({
-            sourceHash: sourceFingerprint,
-            targetLang: target.lang,
-            policyContext: policyDigest,
-          }),
-        );
-
-        let lastFailure = "";
-        /** @type {{ noop: boolean, text?: string, summary?: string } | undefined} */
-        let translated;
-        for (let attempt = 1; attempt <= ATTEMPTS_PER_PAIR; attempt++) {
-          try {
-            const result = await translatePair({
-              prepared,
-              sourceLanguage: config.sourceLanguage,
-              existingText: existing,
-              priorTranslation: prior,
-              model: inputs.model,
-              chat: io.chat,
-              evidence: io.evidence,
-              repository: { name: repository.name, description: repository.description },
-              documents,
-            });
-            translated =
-              result.outcome === "noop"
-                ? { noop: true, summary: result.summary }
-                : { noop: false, text: result.text, summary: result.summary };
-            lastFailure = "";
-            break;
-          } catch (cause) {
-            lastFailure = cause instanceof Error ? cause.message : String(cause);
-          }
-        }
-        if (translated === undefined || lastFailure !== "") {
-          failedLines.push(`${target.lang} ${pair.sourcePath}: ${lastFailure}`);
-        } else {
-          publishedSources.set(prepared.destinationPath, sourceFingerprint);
-          outcomes.push({
-            lang: target.lang,
-            sourcePath: pair.sourcePath,
-            destinationPath: prepared.destinationPath,
-            state: prepared.state,
-            outcome: translated.noop ? "unchanged" : "proposed",
-            stats: {
-              glossaryHits: prepared.protection.glossaryHits,
-              skippedSpans: prepared.protection.skippedSpans,
-              linksRewritten: prepared.linksRewritten,
-            },
-            blocks,
-            content: translated.text,
-            summary: /** @type {string} */ (translated.summary),
-          });
-        }
+        // The model path: carried to the pool below, not translated inline.
+        // The slot is reserved now and filled when the pooled worker settles,
+        // so a slow pair ahead never reshuffles the ones behind it.
+        jobs.push({
+          slot: slots.length,
+          prepared,
+          existing,
+          blocks,
+          sourceFingerprint,
+          lang: target.lang,
+          sourcePath: pair.sourcePath,
+        });
+        slots.push(undefined);
       } catch (cause) {
         failedLines.push(
           `${target.lang} ${pair.sourcePath}: ${cause instanceof Error ? cause.message : String(cause)}`,
         );
       }
     }
+  }
+
+  // The bound is a declared resource policy: the config states it, validated
+  // fail-closed at startup, and a module-level ceiling caps whatever it
+  // declares. Nothing a model returns can move it.
+  const concurrency = Math.min(config.concurrency, MAX_PAIR_CONCURRENCY);
+
+  /**
+   * One pair's model path, run under the pool: the memory lookup, the
+   * attempts, the deterministic contract validation inside `translatePair` —
+   * and never a publication. The worker never throws: a refusal or a
+   * transport failure settles as this pair's failed report line, leaving its
+   * siblings working.
+   *
+   * @param {PairJob} job
+   * @returns {Promise<PairResult>}
+   */
+  const translateJob = async (job) => {
+    // The memory is consulted only for pairs the model path already runs —
+    // a provably unchanged pair keeps its zero model calls.
+    const prior = memory.lookup(
+      buildTmKey({
+        sourceHash: job.sourceFingerprint,
+        targetLang: job.lang,
+        policyContext: policyDigest,
+      }),
+    );
+
+    let lastFailure = "";
+    /** @type {{ noop: boolean, text?: string, summary?: string } | undefined} */
+    let translated;
+    for (let attempt = 1; attempt <= ATTEMPTS_PER_PAIR; attempt++) {
+      try {
+        const result = await translatePair({
+          prepared: job.prepared,
+          sourceLanguage: config.sourceLanguage,
+          existingText: job.existing,
+          priorTranslation: prior,
+          model: inputs.model,
+          chat: io.chat,
+          evidence: io.evidence,
+          repository: { name: repository.name, description: repository.description },
+          documents,
+        });
+        translated =
+          result.outcome === "noop"
+            ? { noop: true, summary: result.summary }
+            : { noop: false, text: result.text, summary: result.summary };
+        lastFailure = "";
+        break;
+      } catch (cause) {
+        lastFailure = cause instanceof Error ? cause.message : String(cause);
+      }
+    }
+    if (translated === undefined || lastFailure !== "") {
+      return { ok: false, line: `${job.lang} ${job.sourcePath}: ${lastFailure}` };
+    }
+    return {
+      ok: true,
+      sourceFingerprint: job.sourceFingerprint,
+      outcome: {
+        lang: job.lang,
+        sourcePath: job.sourcePath,
+        destinationPath: job.prepared.destinationPath,
+        state: job.prepared.state,
+        outcome: translated.noop ? "unchanged" : "proposed",
+        stats: {
+          glossaryHits: job.prepared.protection.glossaryHits,
+          skippedSpans: job.prepared.protection.skippedSpans,
+          linksRewritten: job.prepared.linksRewritten,
+        },
+        blocks: job.blocks,
+        content: translated.text,
+        summary: /** @type {string} */ (translated.summary),
+      },
+    };
+  };
+
+  // Only the model path pools. The pool collects sibling failures (it never
+  // rejects) and reports results by input position — the walk order above —
+  // so completion order never reaches the outcomes, the logs or the report.
+  const { results, errors } = await runPool(jobs, translateJob, { concurrency });
+
+  // A worker never throws by construction; a collected error is the defense
+  // in depth for one that does, mapped back onto its pair like any failure.
+  for (const error of errors) {
+    const job = jobs[error.index];
+    if (job !== undefined) failedLines.push(`${job.lang} ${job.sourcePath}: ${error.message}`);
+  }
+
+  // Assembly in input order — the stable pair identity, never completion
+  // order: outcomes land in the walk the classification took, so the report
+  // and the single publication that follows the drain stay honest.
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    if (result === undefined) continue;
+    const job = jobs[index];
+    if (job === undefined) continue;
+    if (!result.ok) {
+      failedLines.push(result.line);
+      continue;
+    }
+    publishedSources.set(result.outcome.destinationPath, result.sourceFingerprint);
+    slots[job.slot] = result.outcome;
+  }
+
+  /** @type {PairOutcome[]} */
+  const outcomes = [];
+  for (const entry of slots) {
+    if (entry !== undefined) outcomes.push(entry);
   }
 
   // Every pair failing or skipping is red: work existed and none of it was

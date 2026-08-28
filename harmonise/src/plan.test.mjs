@@ -203,6 +203,7 @@ describe("translatePair", () => {
         ignore: [],
         glossary: [],
         instructions: { languages: {} },
+        concurrency: 2,
       },
       documents: [],
     });
@@ -246,6 +247,7 @@ describe("translatePair", () => {
     ignore: [],
     glossary: [],
     instructions: { languages: {} },
+    concurrency: 2,
   });
   const sourceText = "# Dev\n\nSee [api](api.md).\n";
 
@@ -351,6 +353,7 @@ describe("preparePair asset layouts", () => {
         ignore: [],
         glossary: [],
         instructions: { languages: {} },
+        concurrency: 2,
         ...(layouts === undefined
           ? {}
           : { assets: { layouts: layouts.map((t) => parseAssetLayout(t, "t")) } }),
@@ -365,6 +368,7 @@ describe("preparePair asset layouts", () => {
     ignore: [],
     glossary: [],
     instructions: { languages: {} },
+    concurrency: 2,
     assets: { layouts: [parseAssetLayout("assets/{lang}/{dir}/{base}.{ext}", "t")] },
   });
 

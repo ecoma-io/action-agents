@@ -73,6 +73,11 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
     },
   },
 
+  // How many translatable pairs one run may have in flight with the model at
+  // once — a positive integer. Absent it defaults to 2, a conservative
+  // starting point; the action hard-caps it at 4 whatever the file declares.
+  concurrency: 2,
+
   // Optional. The commit subject and pull-request title a run publishes,
   // when this repository's own law differs from the built-in convention.
   // `{n}` is how many documents the run proposes; `{sourceLanguage}` is the
@@ -127,6 +132,9 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
   next candidate;
 - all instruction documents, if present, must be ≤ 8 KiB — prose past the cap
   is refused rather than silently truncated.
+- `concurrency`, when present, must be a positive integer — anything else is
+  refused. The action hard-caps the run at 4 concurrent pairs regardless of a
+  larger declared value; absent, the default is 2.
 
 ## The document set
 
