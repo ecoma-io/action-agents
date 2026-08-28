@@ -33,7 +33,7 @@ function coverageFacts(over = {}) {
 
 /** @returns {import("./gates.mjs").ProvenanceFacts} */
 function provenanceFacts(over = {}) {
-  return { published: [], quarantined: [], ...over };
+  return { published: [], quarantined: [], ledger: [ledgerRead()], ...over };
 }
 
 /** @returns {import("./gates.mjs").VerificationFacts} */
@@ -63,6 +63,11 @@ function anchored(over = {}) {
     provenance: { path: "src/a.mjs", startLine: 1, endLine: 40 },
     ...over,
   };
+}
+
+/** The recorded read `anchored()`'s provenance names — ledger data, not the finding's claim. */
+function ledgerRead(over = {}) {
+  return { path: "src/a.mjs", startLine: 1, endLine: 40, ...over };
 }
 
 /** A quarantined finding — the #84 mechanism working as declared. */
@@ -236,7 +241,7 @@ describe("gate coverage", () => {
 });
 
 describe("gate provenance", () => {
-  it("passes when every published finding is anchored, quarantined or not", () => {
+  it("passes when every published finding's provenance is a recorded read covering its anchor", () => {
     const result = evaluateGate(
       "provenance",
       provenanceFacts({ published: [anchored()], quarantined: [quarantined()] }),
@@ -244,7 +249,39 @@ describe("gate provenance", () => {
     expect(result).toEqual({ gate: "provenance", passed: true });
   });
 
-  it("fails when an unanchored finding remains in the publication set", () => {
+  it("accepts a reference spelled differently but normalising to the anchored file", () => {
+    const result = evaluateGate(
+      "provenance",
+      provenanceFacts({
+        published: [anchored({ provenance: { path: "./src/a.mjs", startLine: 1, endLine: 40 } })],
+        quarantined: [],
+      }),
+    );
+    expect(result).toEqual({ gate: "provenance", passed: true });
+  });
+
+  it("fails the tautology regression: a published finding with no ledger-backed anchor", () => {
+    // The #105 defect's shape: a set published without any recorded read
+    // behind one of its findings. The pre-#105 gate re-checked the
+    // attached reference in isolation and could not fail on real input;
+    // this gate derives the verdict from the ledger.
+    const result = evaluateGate(
+      "provenance",
+      provenanceFacts({
+        published: [
+          { severity: "concern", file: "src/z.mjs", line: 2, message: "unanchored claim" },
+        ],
+        quarantined: [],
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toBe(
+      "an unanchored finding remains in the publication set: " +
+        "src/z.mjs:2 unanchored claim — no provenance reference a recorded read can back",
+    );
+  });
+
+  it("fails when the reference names another path after normalisation", () => {
     const result = evaluateGate(
       "provenance",
       provenanceFacts({
@@ -254,7 +291,8 @@ describe("gate provenance", () => {
     );
     expect(result.passed).toBe(false);
     expect(result.reason).toBe(
-      "an unanchored finding remains in the publication set: src/c.mjs:9 off-by-two",
+      "an unanchored finding remains in the publication set: " +
+        "src/c.mjs:9 off-by-two — provenance names src/a.mjs, not the anchored file",
     );
   });
 
@@ -266,6 +304,68 @@ describe("gate provenance", () => {
         quarantined: [],
       }),
     );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain("src/a.mjs:2 off-by-one");
+    expect(result.reason).toContain("provenance span 40-80 misses the anchor line");
+  });
+
+  it("fails when the reference matches no recorded read — a claim the ledger never made", () => {
+    const result = evaluateGate(
+      "provenance",
+      provenanceFacts({
+        published: [anchored({ provenance: { path: "src/a.mjs", startLine: 1, endLine: 30 } })],
+        quarantined: [],
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toContain("provenance does not match any recorded read");
+  });
+
+  it("judges the published list it receives — a finding the strictness drop removed is no longer its business", () => {
+    // The anchored set held a nit on src/drop.mjs too; the strictness drop
+    // removed it before publication. The gate judges the final set: the
+    // dropped finding's provenance is not required, the survivor's is.
+    const result = evaluateGate(
+      "provenance",
+      provenanceFacts({
+        published: [anchored()],
+        quarantined: [],
+        ledger: [ledgerRead(), ledgerRead({ path: "src/drop.mjs" })],
+      }),
+    );
+    expect(result).toEqual({ gate: "provenance", passed: true });
+  });
+
+  it("holds refuted and unresolved findings to the same provenance law — they still publish", () => {
+    const backed = provenanceFacts({
+      published: [
+        anchored({
+          id: "1",
+          lifecycle: "refuted",
+          verdict: "refuted",
+          reason: "the guard exists at line 5",
+        }),
+        anchored({
+          file: "src/b.mjs",
+          line: 3,
+          message: "unresolved claim",
+          provenance: { path: "src/b.mjs", startLine: 1, endLine: 30 },
+          id: "2",
+          lifecycle: "unresolved",
+          verdict: "uncertain",
+          reason: "the evidence ran out",
+        }),
+      ],
+      ledger: [ledgerRead(), ledgerRead({ path: "src/b.mjs", endLine: 30 })],
+      quarantined: [],
+    });
+    expect(evaluateGate("provenance", backed)).toEqual({ gate: "provenance", passed: true });
+
+    const unbacked = provenanceFacts({
+      published: [anchored({ provenance: undefined, lifecycle: "refuted", id: "1" })],
+      quarantined: [],
+    });
+    const result = evaluateGate("provenance", unbacked);
     expect(result.passed).toBe(false);
     expect(result.reason).toContain("src/a.mjs:2 off-by-one");
   });
@@ -296,14 +396,32 @@ describe("gate provenance", () => {
     }
   });
 
+  it("refuses a malformed ledger fail-closed — every entry checked, none coerced", () => {
+    expect(() =>
+      evaluateGate("provenance", { published: [], quarantined: [], ledger: "nope" }),
+    ).toThrow(GateFactsError);
+    expect(() => evaluateGate("provenance", provenanceFacts({ ledger: [{}] }))).toThrow(
+      GateFactsError,
+    );
+    expect(() =>
+      evaluateGate(
+        "provenance",
+        provenanceFacts({ ledger: [{ path: "a.mjs", startLine: 5, endLine: 2 }] }),
+      ),
+    ).toThrow(GateFactsError);
+  });
+
   it("refuses slices whose lists are not arrays or whose entries are not objects", () => {
-    expect(() => evaluateGate("provenance", { published: "none", quarantined: [] })).toThrow(
-      GateFactsError,
-    );
-    expect(() => evaluateGate("provenance", { published: [], quarantined: ["nit"] })).toThrow(
-      GateFactsError,
-    );
-    expect(() => evaluateGate("provenance", { published: [null], quarantined: [] })).toThrow(
+    expect(() =>
+      evaluateGate("provenance", { published: "none", quarantined: [], ledger: [] }),
+    ).toThrow(GateFactsError);
+    expect(() =>
+      evaluateGate("provenance", { published: [], quarantined: ["nit"], ledger: [] }),
+    ).toThrow(GateFactsError);
+    expect(() =>
+      evaluateGate("provenance", { published: [null], quarantined: [], ledger: [] }),
+    ).toThrow(GateFactsError);
+    expect(() => evaluateGate("provenance", { published: [], quarantined: [] })).toThrow(
       GateFactsError,
     );
   });

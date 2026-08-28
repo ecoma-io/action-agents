@@ -591,6 +591,38 @@ keys — the loop follows the re-ask rule of [the loop](#the-loop-and-the-prompt
 one corrective request, tools withheld, logged; failing it, red. A provider
 that keeps failing the contract is not something to hide behind a green check.
 
+## Evidence provenance
+
+The provenance pass (#84) runs right after finding validation, before the
+nit-drop: every finding is anchored to the recorded read that covers its
+file and line — the first covering read in ledger order — and a finding
+whose line no capture reached is quarantined, loudly, never published.
+Anchoring attaches a reference; the run's read ledger remains the evidence.
+
+The provenance run gate (#105) judges the **final published set** — the
+collection the comment body carries: post nit-drop, post verification,
+refuted and unresolved findings included. It re-derives every published
+finding's anchor from the ledger instead of trusting the reference a
+finding already wears: the reference must be well formed, name the
+finding's own file at the normalised spelling, cover the finding's line,
+and match a recorded read exactly — path and span together. Any miss
+refuses the gate with the finding named in the reason, and the review
+publishes partial. A claim no recorded read backs anchors nothing.
+
+The verifier's own reads stay out of that ledger. The verification pass
+investigates with bounded tools of its own, and those reads back the
+verdict — the pass's evidence wrap shows them — not the finding's anchor.
+Every published finding was anchored before the pass ran, so the
+reviewer's recorded reads are the anchor provenance for confirmed,
+refuted and unresolved findings alike.
+
+Coverage, not a claim about an untouched line, is the bar a contextual
+finding clears: a finding whose anchor line the diff does not touch is
+anchored when a recorded capture demonstrably contains the line it points
+at. Captures are recorded whole-file and spans are counted by the code
+from the captured bytes, so coverage means the anchor line's bytes were in
+evidence — a fabricated span matches no recorded read and refuses.
+
 ## The verification pass
 
 The adversarial verification pass (#82) sits between the nit-drop and
@@ -692,9 +724,11 @@ Every run ends in exactly one of three states:
   complete posture. The conditions are the ones this page already states — a
   bound ended it (`max-turns`, the tool-call ceiling, the evidence ceiling),
   or, at strictness `high`, the coverage ledger shows changed files that were
-  never read — plus the publication invariants: a published finding without
-  a covering recorded read (the provenance gate), or verification accounting
-  that does not close (the verification gate). Publish, with the partial
+  never read — plus the publication invariants: a published finding — post
+  nit-drop, post verification — whose provenance no recorded read in the
+  run's ledger backs (the provenance gate, judged over the final published
+  set), or verification accounting that does not close (the verification
+  gate). Publish, with the partial
   status prominent at the top of the comment and the first failing gate's
   reason named.
 - **FAILED** — provider failure, invalid configuration, a pull request past
@@ -836,12 +870,14 @@ declared run gates (#89) are all on the production path, reachable from
 `src/index.mjs`: lanes are assigned before the first model call
 (`assignLanes` in `run.mjs`), provenance is attached before the nit-drop and
 an unanchored finding is quarantined, never published (`attachProvenance` in
-`run.mjs`), verdicts in the verification pass assign a lifecycle and delete
-nothing (`runVerificationPass`), and the concluding posture — complete or partial —
-is the declared gates' verdict over code-ledgered results (`evaluateGates` in
-`run.mjs`). One module is **landed, wiring tracked**: the machine-readable
-run artifact (#87) — merged and tested, not yet imported by the production
-path, therefore not a byte any run writes.
+`run.mjs`), the provenance gate re-derives each published finding's anchor
+from the run's read ledger over the final published set (`evaluateProvenance`
+in `gates.mjs`), verdicts in the verification pass assign a lifecycle and
+delete nothing (`runVerificationPass`), and the concluding posture — complete
+or partial — is the declared gates' verdict over code-ledgered results
+(`evaluateGates` in `run.mjs`). One module is **landed, wiring tracked**: the
+machine-readable run artifact (#87) — merged and tested, not yet imported by
+the production path, therefore not a byte any run writes.
 
 | Module          | Kind     | What `review` gets                                                                                                                                                                                                                           |
 | --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

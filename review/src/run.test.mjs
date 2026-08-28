@@ -1650,4 +1650,67 @@ describe("run gates", () => {
     // fires before validation, verification or publication spend a call.
     expect(completeCalls).toBe(2);
   });
+
+  it("judges the post-drop set: at low strictness the gate sees the concern alone and the run completes", async () => {
+    // The anchored set holds a concern and a nit; the strictness drop
+    // removes the nit after provenance attached. The gate's `published` is
+    // the final set — the collection the comment carries — so the dropped
+    // nit is not judged and the concern's anchor is, against the ledger.
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub({ files: TWO_FILES, config: '{ strictness: "low" }' });
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content:
+          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+          '{"severity":"nit","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"mixed"}',
+      },
+      { content: '{"verdict":"confirmed","reason":"visible in the read"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: loggingIo(forge, chat, (line) => logged.push(line)),
+    });
+    expect(result.outcome).toBe("published");
+    expect(logged).toContain("review: nit dropped at low strictness — src/a.mjs:1 style nit");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("off-by-one");
+    expect(body).not.toContain("style nit");
+    expect(logged.some((line) => line.startsWith("review: gate"))).toBe(false);
+  });
+
+  it("publishes a refuted finding through the provenance gate — the post-verification set is what is judged", async () => {
+    /** @type {string[]} */
+    const logged = [];
+    const forge = forgeStub();
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content:
+          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
+      },
+      { content: '{"verdict":"refuted","reason":"the line is correct"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: loggingIo(forge, chat, (line) => logged.push(line)),
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.reason).toContain("(1 findings)");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("Refuted during verification");
+    // The gate judged the final set — refuted finding included — and passed.
+    expect(logged.some((line) => line.startsWith("review: gate"))).toBe(false);
+  });
 });

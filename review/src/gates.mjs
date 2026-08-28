@@ -21,12 +21,14 @@
  */
 
 import { canConcludeReview, normaliseReadPath } from "./coverage.mjs";
+import { validatedLedger } from "./provenance.mjs";
 
 /** @typedef {import("./answer.mjs").Finding} Finding */
 /** @typedef {import("./config.mjs").Strictness} Strictness */
 /** @typedef {import("./coverage.mjs").CoverageReport} CoverageReport */
 /** @typedef {import("./loop.mjs").Bound} Bound */
 /** @typedef {import("./provenance.mjs").QuarantinedFinding} QuarantinedFinding */
+/** @typedef {import("./provenance.mjs").LedgerRead} LedgerRead */
 
 /**
  * @typedef {"conclusion" | "bound" | "coverage" | "provenance" | "verification"} GateName
@@ -85,9 +87,10 @@ export class GateFactsError extends Error {
  */
 
 /**
- * @typedef {object} ProvenanceFacts the publication set against the ledger
- * @property {Finding[]} published findings cleared for publication, each anchored
+ * @typedef {object} ProvenanceFacts the final publication set against the ledger
+ * @property {Finding[]} published the set the comment publishes — post nit-drop, post verification, refuted and unresolved included
  * @property {QuarantinedFinding[]} quarantined findings quarantine removed from the publication set
+ * @property {LedgerRead[]} ledger the run's recorded reads, in recording order
  */
 
 /**
@@ -186,19 +189,22 @@ function assertedFinding(entry) {
 }
 
 /**
- * The anchor a published finding must carry — the same resolution
- * `attachProvenance` performs: a well-formed captured read whose path is
- * the finding's own file and whose span covers the finding's line. A
- * reference to some other file, or a span that misses the line, is not an
- * anchor.
+ * Why a published finding's provenance does not anchor it to the ledger,
+ * or nothing when it does. The attached reference must be well formed, name
+ * the finding's own file at the normalised spelling, cover the finding's
+ * line, and match a recorded read exactly — path and span together. The
+ * reference rides on the finding, so it is a claim; only the ledger's own
+ * entries are evidence, and a claim no recorded read backs anchors nothing.
  *
- * @param {{ file: string, line: number }} finding
- * @param {unknown} provenance
- * @returns {boolean}
+ * @param {Record<string, unknown>} finding an `assertedFinding` entry
+ * @param {LedgerRead[]} ledger the validated ledger
+ * @returns {string | undefined} the refusal clause, the finding named first
  */
-function isAnchor(finding, provenance) {
+function unanchoredBecause(finding, ledger) {
+  const name = `${finding["file"]}:${String(finding["line"])} ${finding["message"]}`;
+  const provenance = finding["provenance"];
   if (typeof provenance !== "object" || provenance === null || Array.isArray(provenance)) {
-    return false;
+    return `${name} — no provenance reference a recorded read can back`;
   }
   const record = /** @type {Record<string, unknown>} */ (provenance);
   if (
@@ -206,15 +212,25 @@ function isAnchor(finding, provenance) {
     !isCount(record["startLine"]) ||
     !isCount(record["endLine"])
   ) {
-    return false;
+    return `${name} — the provenance reference is malformed`;
   }
+  const path = normaliseReadPath(record["path"]);
   const startLine = /** @type {number} */ (record["startLine"]);
   const endLine = /** @type {number} */ (record["endLine"]);
-  return (
-    record["path"] === normaliseReadPath(finding.file) &&
-    finding.line >= startLine &&
-    finding.line <= endLine
+  if (path !== normaliseReadPath(String(finding["file"]))) {
+    return `${name} — provenance names ${path}, not the anchored file`;
+  }
+  const line = /** @type {number} */ (finding["line"]);
+  if (line < startLine || line > endLine) {
+    return `${name} — provenance span ${String(startLine)}-${String(endLine)} misses the anchor line`;
+  }
+  const backed = ledger.some(
+    (read) => read.path === path && read.startLine === startLine && read.endLine === endLine,
   );
+  if (!backed) {
+    return `${name} — provenance does not match any recorded read`;
+  }
+  return undefined;
 }
 
 /**
@@ -352,8 +368,23 @@ function evaluateCoverage(slice) {
  */
 function evaluateProvenance(slice) {
   const facts = assertedObject("provenance", slice);
-  if (!Array.isArray(facts["published"]) || !Array.isArray(facts["quarantined"])) {
-    throw new GateFactsError("provenance facts: 'published' and 'quarantined' must be arrays");
+  if (
+    !Array.isArray(facts["published"]) ||
+    !Array.isArray(facts["quarantined"]) ||
+    !Array.isArray(facts["ledger"])
+  ) {
+    throw new GateFactsError(
+      "provenance facts: 'published', 'quarantined' and 'ledger' must be arrays",
+    );
+  }
+  /** @type {LedgerRead[]} */
+  let ledger;
+  try {
+    ledger = validatedLedger(facts["ledger"]);
+  } catch (error) {
+    throw new GateFactsError(
+      `provenance facts: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   for (const entry of /** @type {unknown[]} */ (facts["quarantined"])) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
@@ -365,24 +396,22 @@ function evaluateProvenance(slice) {
       throw new GateFactsError("provenance facts: a quarantined entry must carry a reason string");
     }
   }
-  /** @type {Finding[]} */
+  /** @type {string[]} */
   const unanchored = [];
   for (const entry of /** @type {unknown[]} */ (facts["published"])) {
-    const finding = assertedFinding(entry);
-    if (!isAnchor(/** @type {{ file: string, line: number }} */ (finding), finding["provenance"])) {
-      unanchored.push(/** @type {Finding} */ (finding));
-    }
+    const clause = unanchoredBecause(assertedFinding(entry), ledger);
+    if (clause !== undefined) unanchored.push(clause);
   }
   // Quarantined findings are #84 working as declared — removed before
-  // publication, logged by identity. The gate refuses only when one would
-  // still publish: an unanchored finding remaining in the publication set.
+  // publication, logged by identity; the gate holds them to shape and
+  // reason only. The published list is the set the comment actually
+  // carries — post nit-drop, post verification — and every finding on it
+  // is anchored to the ledger anew: a claim its recorded reads do not
+  // back refuses the gate, the finding named.
   if (unanchored.length === 0) return { passed: true };
-  const named = unanchored
-    .map((finding) => `${finding.file}:${String(finding.line)} ${finding.message}`)
-    .join("; ");
   return {
     passed: false,
-    reason: `an unanchored finding remains in the publication set: ${named}`,
+    reason: `an unanchored finding remains in the publication set: ${unanchored.join("; ")}`,
   };
 }
 

@@ -159,12 +159,13 @@ export function evidenceRef(provenance) {
 /**
  * Fail-closed ledger validation: every entry is checked, whether or not a
  * finding ever consults it — a malformed entry is a code bug, and a repair
- * guess here would invent evidence.
+ * guess here would invent evidence. Shared with the provenance gate, which
+ * re-derives its verdicts from the same validated reads.
  *
  * @param {LedgerRead[]} ledger
  * @returns {LedgerRead[]}
  */
-function validatedLedger(ledger) {
+export function validatedLedger(ledger) {
   if (!Array.isArray(ledger)) throw new TypeError("the read ledger must be an array");
   return ledger.map((read, index) => {
     if (read === null || typeof read !== "object") {
