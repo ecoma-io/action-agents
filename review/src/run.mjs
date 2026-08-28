@@ -24,6 +24,7 @@ import { buildPrompt } from "./prompt.mjs";
 import { runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
 import { parseAnswer, validateAnswer } from "./answer.mjs";
 import { applyVerdicts, parseVerdict, planVerification, verifierMessages } from "./verify.mjs";
+import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
 
 /**
@@ -228,11 +229,22 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     reviewed: inventory.reviewed,
     workspace,
   });
-
   for (const rejection of validated.rejections) io.info(`review: finding rejected — ${rejection}`);
+  // Provenance is the code's own bookkeeping, applied before the nit-drop:
+  // a finding publishes only where the loop's recorded reads already went.
+  // An unanchored finding is quarantined — logged by identity, reason
+  // `unanchored` — never silently discarded, never published, never
+  // verified against evidence the loop does not hold.
+  const anchored = attachProvenance(validated.findings, readsFromRecordedReads(recordedReads));
+  for (const quarantined of anchored.quarantined) {
+    io.info(
+      `review: finding quarantined — unanchored: ${quarantined.finding.file}:${String(quarantined.finding.line)} ` +
+        `${quarantined.finding.message}`,
+    );
+  }
   // Strictness is review policy, not a rendering detail: at low the nits
   // leave the published set here — each drop logged, concerns untouchable.
-  const findings = applyStrictness(validated.findings, config.strictness, (line) => io.info(line));
+  const findings = applyStrictness(anchored.published, config.strictness, (line) => io.info(line));
 
   // The verification pass sits between the nit-drop and rendering: planned
   // findings are put to one bounded adversarial call each, and its verdicts

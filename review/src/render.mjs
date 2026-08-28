@@ -14,7 +14,10 @@
 
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
+import { evidenceRef } from "./provenance.mjs";
 /** @typedef {import("./answer.mjs").Finding} Finding */
+
+/** @typedef {import("./provenance.mjs").Provenance} Provenance */
 
 export const SUMMARY_CHARS = 300;
 export const MESSAGE_CHARS = 1000;
@@ -108,11 +111,17 @@ export function renderNothingToReview(headSha) {
 }
 
 /**
- * @param {Finding} finding
+ * One finding's listing. An anchored finding carries its provenance as
+ * metadata and gains one short evidence line beneath — the covering read
+ * the loop recorded, ledger data only, never model-composed text.
+ *
+ * @param {Finding & { provenance?: Provenance }} finding
  * @returns {string}
  */
 function listingOf(finding) {
-  return `- \`${defang(finding.file)}:${String(finding.line)}\` — ${sanitised(finding.message, MESSAGE_CHARS)}`;
+  const listing = `- \`${defang(finding.file)}:${String(finding.line)}\` — ${sanitised(finding.message, MESSAGE_CHARS)}`;
+  if (finding.provenance === undefined) return listing;
+  return `${listing}\n  evidence: \`${defang(evidenceRef(finding.provenance))}\``;
 }
 
 /**
