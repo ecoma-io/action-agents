@@ -16,6 +16,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatError } from "#core/chat.mjs";
+import { BranchMovedError } from "#core/forge.mjs";
 import { HttpError, TransportError } from "#core/http.mjs";
 
 import { ACTION, DELAY_MS, main, readInputs, run, TM_PATH } from "./index.mjs";
@@ -338,6 +339,44 @@ describe("run", () => {
     expect(commit.args[0]).toMatch(/^chore\(harmonise\): sync 1 document with en\n/);
     expect(pr.body).toMatch(/## What changed/);
     expect(logged(log)).toMatch(/opened pull request #42/);
+  });
+
+  it("refuses the run when the branch moved under it — the lock fires before the pull request", async () => {
+    // The run's own branch existed at start; by update time another writer
+    // had moved its tip. The fake mirrors core/forge's optimistic lock: the
+    // branch write is refused before it is recorded, exactly as the real
+    // forge refuses before the ref update.
+    const movedTo = "d".repeat(40);
+    const forgeDouble = forge(files(), undefined, {
+      branches: { "harmonise/en": { sha: "b".repeat(40), files: {} } },
+    });
+    forgeDouble.upsertBranch = /** @type {any} */ (
+      /**
+       * @param {string} branch
+       * @param {string} commitSha
+       * @param {string | null} expectedCurrentSha
+       */
+      async (branch, commitSha, expectedCurrentSha) => {
+        throw new BranchMovedError(branch, /** @type {string} */ (expectedCurrentSha), movedTo);
+      }
+    );
+    const ioDouble = io(forgeDouble);
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+
+    expect(error).toBeInstanceOf(BranchMovedError);
+    expect(error.message).toMatch(/branch 'harmonise\/en' moved while the run worked/);
+    // Refused, never overwritten: the write log ends at the commit — the
+    // branch never moved and no pull request was requested.
+    expect(forgeDouble.writes.map((w) => w.op)).toEqual([
+      "createBlob",
+      "createBlob",
+      "createBlob",
+      "createTree",
+      "createCommit",
+    ]);
   });
 
   it("updates an existing pull request in place instead of opening a twin", async () => {
