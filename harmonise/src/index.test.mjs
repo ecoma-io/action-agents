@@ -14,6 +14,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ACTION, main, readInputs, run } from "./index.mjs";
+import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
+import { renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
 
 /**
  * @type {import("#core/runtime.mjs").Env}
@@ -265,6 +267,7 @@ describe("run", () => {
     /** @typedef {{ op: string, args: unknown[] }} Write */
     const ops = forgeDouble.writes.map((w) => w.op);
     expect(ops).toEqual([
+      "createBlob",
       "createBlob",
       "createTree",
       "createCommit",
@@ -738,6 +741,254 @@ describe("run", () => {
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chat([]), evidence });
 
     await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(TruncatedTreeError);
+  });
+});
+
+describe("run with recorded state", () => {
+  // The policy digest this fixture's config hashes to: an empty glossary, no
+  // instruction prose, no per-language instructions, the current pipeline
+  // version — exactly what `run` folds into its own policy digest.
+  const POLICY = policyFingerprint({
+    glossary: [],
+    languageInstructions: {},
+    transformationVersion: TRANSFORMATION_VERSION,
+  });
+
+  const SOURCE = "# Dev\n\nProse.\n";
+  const TRANSLATED = "# Dev\n\nTraduit.\n";
+
+  /**
+   * A full sync-state record for the fixture's en→vi pair, pinning whatever
+   * source and translation bytes the caller states.
+   *
+   * @param {{ source?: string, translation?: string, schemaVersion?: number }} [overrides]
+   * @returns {import("./state.mjs").SyncStateRecord}
+   */
+  function viRecord({
+    source = SOURCE,
+    translation = TRANSLATED,
+    schemaVersion = STATE_SCHEMA_VERSION,
+  } = {}) {
+    return {
+      schemaVersion,
+      sourcePath: "manual/dev.md",
+      destinationPath: "manual/vi/dev.md",
+      language: "vi",
+      sourceFingerprint: contentFingerprint(source),
+      translationFingerprint: contentFingerprint(translation),
+      policyFingerprint: POLICY,
+      transformationVersion: TRANSFORMATION_VERSION,
+    };
+  }
+
+  /**
+   * The state blob among a forge double's writes, found by its shape — the
+   * one created blob carrying a `records` JSON document.
+   *
+   * @param {ReturnType<typeof forge>} forgeDouble
+   * @returns {{ records: import("./state.mjs").SyncStateRecord[] }}
+   */
+  function stateBlobOf(forgeDouble) {
+    const write = /** @type {unknown} */ (
+      forgeDouble.writes.find(
+        (w) =>
+          w.op === "createBlob" && typeof w.args[0] === "string" && w.args[0].includes('"records"'),
+      )
+    );
+    return JSON.parse(/** @type {{ args: [string] }} */ (write).args[0]);
+  }
+
+  it("skips a pair whose recorded state and target bytes both prove unchanged", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The transport is a tripwire: a single call fails the run and the test.
+    const chatDouble = chat([new Error("the model must not be called")]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": TRANSLATED,
+      [STATE_PATH]: renderState([viRecord()]),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(0);
+    expect(forgeDouble.writes).toEqual([]);
+    const out = logged(log);
+    expect(out).toMatch(/unchanged-skipped vi manual\/dev\.md → manual\/vi\/dev\.md/);
+    expect(out).toMatch(/nothing to propose/);
+  });
+
+  it("runs the model exactly as before when the source changed since the record", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = chat([proposes("# Dev\n\nNouvelle prose.\n")]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": TRANSLATED,
+      [STATE_PATH]: renderState([viRecord({ source: "# Dev\n\nOld text.\n" })]),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
+    expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
+  });
+
+  it("degrades a corrupt state file to the model path and completes", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": TRANSLATED,
+      [STATE_PATH]: "{ this is not json",
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
+  });
+
+  it("treats a foreign-schema state file as absent — the pair goes to the model", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": TRANSLATED,
+      [STATE_PATH]: renderState([viRecord({ schemaVersion: 999 })]),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
+  });
+
+  it("runs the model on target drift with unchanged content — recorded as translated", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const edited = "# Dev\n\nTraduit et mis à jour.\n";
+    // The record pins a translation the target's current bytes do not match:
+    // someone edited it outside harmonise. Content is unchanged, so only
+    // drift forces the conservative path here.
+    const chatDouble = chat([proposes(edited)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": edited,
+      [STATE_PATH]: renderState([viRecord({ translation: "# Dev\n\nAutre version.\n" })]),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    const out = logged(log);
+    expect(out).toMatch(/translated vi manual\/dev\.md/);
+    expect(out).not.toMatch(/unchanged-skipped/);
+  });
+
+  it("writes prior and proposed records into the same commit's state file", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
+    }`;
+    const french = "# Dev\n\nTraduit en français.\n";
+    const chatDouble = chat([proposes(french)]);
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": config,
+        "manual/dev.md": SOURCE,
+        "manual/vi/dev.md": TRANSLATED,
+        [STATE_PATH]: renderState([viRecord()]),
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/vi/dev.md", type: "blob" },
+        { path: "manual/fr/dev.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    // Only fr saw the model; vi was provably unchanged.
+    expect(chatDouble.calls()).toBe(1);
+    // One tree carries the translation and the state file together.
+    const tree = /** @type {{ args: unknown[] }} */ (
+      forgeDouble.writes.find((w) => w.op === "createTree")
+    );
+    const changes = /** @type {{ path: string }[]} */ (tree.args[1]);
+    expect(changes.map((change) => change.path)).toEqual(["manual/fr/dev.md", STATE_PATH]);
+    // The merged state file carries the preserved vi record and the new fr
+    // record, each pinning exactly the bytes this commit publishes.
+    const { records } = stateBlobOf(forgeDouble);
+    expect(records).toEqual([
+      {
+        schemaVersion: STATE_SCHEMA_VERSION,
+        sourcePath: "manual/dev.md",
+        destinationPath: "manual/fr/dev.md",
+        language: "fr",
+        sourceFingerprint: contentFingerprint(SOURCE),
+        translationFingerprint: contentFingerprint(french),
+        policyFingerprint: POLICY,
+        transformationVersion: TRANSFORMATION_VERSION,
+      },
+      viRecord(),
+    ]);
+  });
+
+  it("round-trips: the state file one run publishes makes the next run skip", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {Record<string, string>} */
+    const files = {
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+    };
+
+    // Run one: no state file, no existing translation — the model proposes.
+    const chatDouble = chat([proposes(TRANSLATED)]);
+    const firstForge = forge(files);
+    const firstIo = /** @type {any} */ ({ forge: firstForge, chat: chatDouble, evidence });
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), firstIo),
+    ).resolves.toBeUndefined();
+    expect(chatDouble.calls()).toBe(1);
+
+    // The merge this PR's commit models: the translation and the state file
+    // land on the branch the next run reads.
+    files["manual/vi/dev.md"] = TRANSLATED;
+    files[STATE_PATH] = JSON.stringify(stateBlobOf(firstForge));
+
+    // Run two: every verdict is provably unchanged — zero model calls.
+    const secondChat = chat([new Error("the model must not be called")]);
+    const secondForge = forge(files);
+    const secondIo = /** @type {any} */ ({ forge: secondForge, chat: secondChat, evidence });
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), secondIo),
+    ).resolves.toBeUndefined();
+
+    expect(secondChat.calls()).toBe(0);
+    expect(secondForge.writes).toEqual([]);
   });
 });
 

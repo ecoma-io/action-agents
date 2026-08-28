@@ -31,6 +31,10 @@ import {
 
 import { loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
 import { buildInventory } from "./inventory.mjs";
+import { detectDrift } from "./drift.mjs";
+import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
+import { readState, renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
+import { classifyPair } from "./stale.mjs";
 import { matchGlob } from "#core/glob.mjs";
 import { MAX_SOURCE_BYTES, preparationRefusal, preparePair, translatePair } from "./plan.mjs";
 import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
@@ -100,9 +104,10 @@ function realIo(inputs, context) {
  * @property {string} sourcePath
  * @property {string} destinationPath
  * @property {"existing" | "missing"} state
- * @property {"proposed" | "unchanged"} outcome
+ * @property {"proposed" | "unchanged" | "unchanged-skipped"} outcome
  * @property {{ glossaryHits: number, skippedSpans: number, linksRewritten: number }} stats
  * @property {string | undefined} content the proposal text, undefined for unchanged
+ *   and unchanged-skipped
  * @property {string} summary
  */
 
@@ -145,11 +150,41 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   /** @type {(path: string) => Promise<{ content: string } | null>} */
   const readAtBase = (path) => io.forge.getContents(path, { ref: ref.sha });
 
+  // The recorded state is advisory and fails closed: a file that is missing,
+  // unreadable, unparseable, or of a foreign schema version leaves no
+  // records, and a thrown read degrades the same way. A state problem may
+  // never block a translation and may never cause a skip — with no usable
+  // records every pair takes the model path, exactly as a repository
+  // without a state file always has.
+  /** @type {import("./state.mjs").SyncStateRecord[]} */
+  let recordedRecords = [];
+  try {
+    const state = await readState({
+      getContents: (path, options) => f.getContents(path, options),
+      branch: ownBranch,
+      defaultBranch: repository.defaultBranch,
+    });
+    if (state !== null) recordedRecords = state.records;
+  } catch {
+    recordedRecords = [];
+  }
+
   // Instruction prose is read once, capped, pinned to the audited tip, and
   // shared by every prompt.
   const documents = await loadInstructions({
     forge: { getContents: (path) => f.getContents(path, { ref: ref.sha }) },
     config,
+  });
+
+  // The translation policy as one digest: the same inputs the prompts are
+  // built from, hashed once and shared by every pair this run classifies.
+  const policyDigest = policyFingerprint({
+    glossary: config.glossary,
+    // Absent and explicit `undefined` hash identically, so omitting the key
+    // when no instruction document exists changes nothing.
+    ...(documents.instruction !== undefined ? { instruction: documents.instruction } : {}),
+    languageInstructions: documents.languages,
+    transformationVersion: TRANSFORMATION_VERSION,
   });
 
   // Completeness is a contract: a listing GitHub had to truncate throws
@@ -182,6 +217,9 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
 
   /** @type {PairOutcome[]} */
   const outcomes = [];
+  /** Source fingerprint per proposed destination — what its state record pins. */
+  /** @type {Map<string, string>} */
+  const publishedSources = new Map();
   /** @type {string[]} */
   const failedLines = [];
   /** @type {string[]} */
@@ -202,6 +240,9 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       }
       continue;
     }
+    // The source's content identity, hashed once per source document: every
+    // language's pair classifies against the same digest.
+    const sourceFingerprint = contentFingerprint(file.content);
 
     for (const target of pair.targets) {
       try {
@@ -235,6 +276,42 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           }
         }
 
+        // The deterministic gate. Only the exact conjunction — the recorded
+        // state proves source, policy and version all unchanged AND the
+        // target's bytes are still the recorded publication — consumes zero
+        // model calls. Every other verdict (`content-stale`, `policy-stale`,
+        // `new-pair`, `unknown`, `target-drift`, `unrecorded`) runs the
+        // model path exactly as before. Nothing model-shaped can reach this
+        // decision: both sides are digests of repository bytes.
+        const recorded =
+          recordedRecords.find((record) => record.destinationPath === prepared.destinationPath) ??
+          null;
+        const current = {
+          sourceFingerprint,
+          policyFingerprint: policyDigest,
+          transformationVersion: TRANSFORMATION_VERSION,
+        };
+        if (
+          classifyPair(recorded, current) === "unchanged" &&
+          detectDrift(recorded, existing) === "canonical"
+        ) {
+          outcomes.push({
+            lang: target.lang,
+            sourcePath: pair.sourcePath,
+            destinationPath: prepared.destinationPath,
+            state: prepared.state,
+            outcome: "unchanged-skipped",
+            stats: {
+              glossaryHits: prepared.protection.glossaryHits,
+              skippedSpans: prepared.protection.skippedSpans,
+              linksRewritten: prepared.linksRewritten,
+            },
+            content: undefined,
+            summary: "in step with the recorded publication; skipped without a model call",
+          });
+          continue;
+        }
+
         let lastFailure = "";
         /** @type {{ noop: boolean, text?: string, summary?: string } | undefined} */
         let translated;
@@ -263,6 +340,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
         if (translated === undefined || lastFailure !== "") {
           failedLines.push(`${target.lang} ${pair.sourcePath}: ${lastFailure}`);
         } else {
+          publishedSources.set(prepared.destinationPath, sourceFingerprint);
           outcomes.push({
             lang: target.lang,
             sourcePath: pair.sourcePath,
@@ -303,7 +381,8 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   );
   for (const entry of outcomes) {
     info(
-      `translated ${entry.lang} ${entry.sourcePath} → ${entry.destinationPath}` +
+      (entry.outcome === "unchanged-skipped" ? "unchanged-skipped" : "translated") +
+        ` ${entry.lang} ${entry.sourcePath} → ${entry.destinationPath}` +
         ` [${entry.state}] ${entry.outcome}` +
         ` glossary=${String(entry.stats.glossaryHits)}` +
         ` skip=${String(entry.stats.skippedSpans)}` +
@@ -357,6 +436,27 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     const blob = await io.forge.createBlob(/** @type {string} */ (proposal.content));
     changes.push({ path: proposal.destinationPath, blobSha: blob.sha });
   }
+  // The state file rides the same commit as the translations it describes:
+  // prior records this publication does not supersede are carried, each
+  // proposed pair gains its record, and the merged file is one blob in the
+  // same tree. Content and the record of what produced it land as one
+  // instant, never two.
+  /** @type {import("./state.mjs").SyncStateRecord[]} */
+  const records = recordedRecords.filter((record) => !publishedSources.has(record.destinationPath));
+  for (const proposal of proposed) {
+    records.push({
+      schemaVersion: STATE_SCHEMA_VERSION,
+      sourcePath: proposal.sourcePath,
+      destinationPath: proposal.destinationPath,
+      language: proposal.lang,
+      sourceFingerprint: /** @type {string} */ (publishedSources.get(proposal.destinationPath)),
+      translationFingerprint: contentFingerprint(/** @type {string} */ (proposal.content)),
+      policyFingerprint: policyDigest,
+      transformationVersion: TRANSFORMATION_VERSION,
+    });
+  }
+  const stateBlob = await io.forge.createBlob(renderState(records));
+  changes.push({ path: STATE_PATH, blobSha: stateBlob.sha });
   const tree = await io.forge.createTree(ref.sha, changes);
   const commit = await io.forge.createCommit(
     `${title}\n\nAuthored by harmonise from ${ref.sha}.`,
