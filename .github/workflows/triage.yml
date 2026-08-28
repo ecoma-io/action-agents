@@ -37,6 +37,13 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # `pull-requests: write` is load-bearing even though triage only writes
+  # labels: GitHub's token refuses the issues-API label write on a pull
+  # request number without this scope — HTTP 403 on `/issues/N/labels`,
+  # observed in run 33219882428 when the scope was briefly dropped. The
+  # scope also admits endpoints triage never calls (reviews, reviewers);
+  # GitHub offers no narrower scope that covers PR-thread labels, and the
+  # alternative is a dogfood that fails on every pull request thread.
 
 # One triage run per thread: a rapid sequence of edits to the same issue
 # replaces the queued run rather than stacking classifications of stale
