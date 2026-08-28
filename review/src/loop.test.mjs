@@ -315,3 +315,73 @@ describe("estimateTokens", () => {
     expect(withCall).toBeGreaterThan(0);
   });
 });
+
+describe("coverage accounting", () => {
+  it("reports the empty shape when the caller supplied no expected set", async () => {
+    const chat = scriptedChat([{ content: '{"findings":[],"summary":"done"}' }]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+    });
+    expect(outcome.coverage).toEqual({ covered: [], uncovered: [], total: 0 });
+  });
+
+  it("reports every expected file uncovered when the natural stop read none", async () => {
+    const chat = scriptedChat([{ content: '{"findings":[],"summary":"done"}' }]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "src/b.mjs"],
+    });
+    expect(outcome.coverage).toEqual({
+      covered: [],
+      uncovered: ["src/a.mjs", "src/b.mjs"],
+      total: 2,
+    });
+  });
+
+  it("counts a ./spelled read_file argument as covering its diff-spelled path", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ argumentsJson: '{"path":"./src/a.mjs"}' })] },
+      { content: '{"findings":[],"summary":"s"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs"],
+    });
+    expect(outcome.coverage.covered).toEqual(["src/a.mjs"]);
+    expect(outcome.coverage.uncovered).toEqual([]);
+  });
+
+  it("reports the reads the ledger holds at a bound exit", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: '{"findings":[],"summary":"done"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 1,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "src/b.mjs"],
+    });
+    expect(outcome.bound).toBe("max-turns");
+    expect(outcome.coverage.covered).toEqual(["src/a.mjs"]);
+    expect(outcome.coverage.total).toBe(2);
+  });
+});

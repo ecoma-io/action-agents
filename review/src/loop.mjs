@@ -33,6 +33,7 @@
  */
 
 import { TOOL_SPECS } from "./tools.mjs";
+import { coverageReport, normaliseReadPath } from "./coverage.mjs";
 
 /** @typedef {import("#core/chat.mjs").Chat} Chat */
 /** @typedef {import("#core/chat.mjs").ChatMessage} ChatMessage */
@@ -50,6 +51,7 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @property {string} candidate the final-answer candidate's text
  * @property {boolean} naturalStopped true when the model stopped on its own
  * @property {Bound | undefined} bound the reading bound that fired, when one did
+ * @property {import("./coverage.mjs").CoverageReport} coverage the deterministic read-coverage report over the expected set
  * @property {number} readingTurns
  * @property {number} toolCalls
  * @property {ChatMessage[]} transcript the loop's final transcript, for the re-ask
@@ -77,11 +79,22 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @param {number} input.maxTurns
  * @param {number} input.contextWindow
  * @param {{ maxToolCalls?: number, evidenceBytes?: number }} [input.limits]
+ * @param {string[]} [input.expectedPaths] the diff-derived expected set; defaults to none
  * @returns {Promise<LoopOutcome>}
  */
-export async function runLoop({ chat, model, tools, messages, maxTurns, contextWindow, limits }) {
+export async function runLoop({
+  chat,
+  model,
+  tools,
+  messages,
+  maxTurns,
+  contextWindow,
+  limits,
+  expectedPaths,
+}) {
   const maxToolCalls = limits?.maxToolCalls ?? MAX_TOOL_CALLS;
   const maxEvidenceBytes = limits?.evidenceBytes ?? MAX_CUMULATIVE_EVIDENCE_BYTES;
+  const expected = expectedPaths ?? [];
 
   if (messages[0] === undefined || messages[1] === undefined) {
     throw new Error("the loop needs a system message and a task message");
@@ -132,6 +145,7 @@ export async function runLoop({ chat, model, tools, messages, maxTurns, contextW
         candidate: response.content,
         naturalStopped: true,
         bound: undefined,
+        coverage: readCoverage(expected, ledger),
         readingTurns: ledger.readingTurns,
         toolCalls: ledger.toolCalls,
         transcript,
@@ -194,9 +208,26 @@ export async function runLoop({ chat, model, tools, messages, maxTurns, contextW
             ? "tool-calls"
             : "max-turns";
       log.push(`reading bound fired: ${bound}`);
-      return await conclude({ ask, ledger, log, bound, transcript });
+      return await conclude({ ask, ledger, log, bound, transcript, expectedPaths: expected });
     }
   }
+}
+
+/**
+ * The read-coverage report at a loop exit: the expected set against the
+ * ledger's recorded reads, each decoded from the JSON argument it was
+ * stored as and normalised to the diff's canonical spelling. `track()`
+ * only ever stores `JSON.stringify` output, so the decode cannot throw.
+ *
+ * @param {string[]} expectedPaths
+ * @param {Ledger} ledger
+ * @returns {import("./coverage.mjs").CoverageReport}
+ */
+function readCoverage(expectedPaths, ledger) {
+  return coverageReport(
+    expectedPaths,
+    ledger.filesRead.map((entry) => normaliseReadPath(String(JSON.parse(entry)))),
+  );
 }
 
 /**
@@ -209,9 +240,10 @@ export async function runLoop({ chat, model, tools, messages, maxTurns, contextW
  * @param {string[]} input.log
  * @param {Bound} input.bound
  * @param {ChatMessage[]} input.transcript
+ * @param {string[]} input.expectedPaths the diff-derived expected set
  * @returns {Promise<LoopOutcome>}
  */
-async function conclude({ ask, ledger, log, bound, transcript: _transcript }) {
+async function conclude({ ask, ledger, log, bound, transcript: _transcript, expectedPaths }) {
   const { response, transcript: finalTranscript } = await ask(undefined, [
     {
       role: "user",
@@ -224,6 +256,7 @@ async function conclude({ ask, ledger, log, bound, transcript: _transcript }) {
     candidate: response.content,
     naturalStopped: false,
     bound,
+    coverage: readCoverage(expectedPaths, ledger),
     readingTurns: ledger.readingTurns,
     toolCalls: ledger.toolCalls,
     transcript: finalTranscript,
