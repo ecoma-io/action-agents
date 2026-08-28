@@ -16,7 +16,7 @@
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml/badge.svg" alt="Analysis" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/status-pre--release-orange.svg" alt="Status: pre-release" />
+  <a href="https://github.com/ecoma-io/action-agents/releases"><img src="https://img.shields.io/github/v/release/ecoma-io/action-agents.svg" alt="Latest release" /></a>
 </p>
 
 <p align="center">
@@ -54,9 +54,9 @@ instruction.
 - **Bounded by your workflow, not by our prompt** — configuration describes
   behaviour; the `permissions:` block is the security boundary.
 
-> **Status: pre-release.** The repository is being built and no action has
-> shipped yet. Nothing here is pinnable until the first tag exists; the example
-> below is marked as such.
+> **Status: released.** v0.1.0 shipped — `v0.1` (floating) and `v0.1.0` (exact)
+> are both pinnable, and the example below resolves. See
+> [Pinning strategy](#pinning-strategy) for which to use.
 
 ## Get started
 
@@ -75,7 +75,7 @@ jobs:
       # review reads the working tree, so it needs a checkout
       - uses: actions/checkout@v5
 
-      - uses: ecoma-io/action-agents/review@v0.1 # roadmap ref
+      - uses: ecoma-io/action-agents/review@v0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -129,7 +129,7 @@ is a vulnerability in **your** repository, and no action can fix it for you.
 ### The root action
 
 The repository root contains an `action.yml`, but it is **not a runnable
-action**. It exists so that `uses: ecoma-io/action-agents@v0.1.0` resolves <!-- roadmap ref -->
+action**. It exists so that `uses: ecoma-io/action-agents@v0.1.0` resolves
 against a tag rather than failing with a missing-manifest error. When invoked,
 it immediately fails with an error naming the three real actions and telling you
 to pick one. This follows the pattern established by
