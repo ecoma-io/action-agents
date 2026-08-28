@@ -23,6 +23,7 @@ import { assignLanes, laneBudget } from "./lanes.mjs";
 import { buildPrompt } from "./prompt.mjs";
 import { runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
 import { parseAnswer, validateAnswer } from "./answer.mjs";
+import { applyVerdicts, parseVerdict, planVerification, verifierMessages } from "./verify.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
 
 /**
@@ -176,7 +177,11 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   });
 
   const workspace = createWorkspace({ root: context.workspace });
-  const tools = createTools({ workspace, evidence, ignore: config.ignore });
+  /** The verification ledger: bytes the loop actually captured, keyed by
+   * normalised path. The pass verifies only against these. */
+  /** @type {Map<string, string>} */
+  const recordedReads = new Map();
+  const tools = createTools({ workspace, evidence, ignore: config.ignore, recordedReads });
 
   const estimated = estimateTokens(messages);
   if (estimated > inputs.contextWindow / 2) {
@@ -229,6 +234,20 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   // leave the published set here — each drop logged, concerns untouchable.
   const findings = applyStrictness(validated.findings, config.strictness, (line) => io.info(line));
 
+  // The verification pass sits between the nit-drop and rendering: planned
+  // findings are put to one bounded adversarial call each, and its verdicts
+  // can only remove. What it publishes is what renders and what the count
+  // names — never both sets.
+  const published = await runVerificationPass({
+    findings,
+    policy: { strategy: config.strategy, strictness: config.strictness },
+    lanes,
+    recordedReads,
+    chat: io.chat,
+    model: inputs.model,
+    info: (line) => io.info(`review: ${line}`),
+  });
+
   // The concluding state is code's verdict: a bound or a coverage gap names
   // the partial reason; the model's summary text is never consulted.
   const status = concludingStatus(outcome, config.strictness);
@@ -237,7 +256,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     headSha,
     coverage: outcome.coverage,
     summary: validated.summary,
-    findings,
+    findings: published,
     strictness: config.strictness,
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
@@ -272,7 +291,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   });
   return {
     outcome: "published",
-    reason: `${status.label} review published (${findings.length} findings)`,
+    reason: `${status.label} review published (${published.length} findings)`,
     commentId: upsert.id,
   };
 }
@@ -303,6 +322,89 @@ function applyStrictness(findings, strictness, info) {
     kept.push(finding);
   }
   return kept;
+}
+
+/**
+ * The adversarial verification pass, between the nit-drop and rendering.
+ * Bounded by construction: exactly one call per planned finding, no retry —
+ * a transport failure or a refused answer counts as `uncertain` and moves
+ * on. Its verdicts can only remove; the plan is policy, and the ledger —
+ * what was read, what the lanes assigned — is evidence. Every decision is
+ * rendered into the run log: the plan, each drop with the finding's
+ * identity, each refusal.
+ *
+ * @param {object} input
+ * @param {import("./answer.mjs").Finding[]} input.findings the post-nit-drop set
+ * @param {{ strategy: import("./config.mjs").Strategy, strictness: import("./config.mjs").Strictness }} input.policy
+ * @param {import("./lanes.mjs").LaneAssignment[]} input.lanes the lanes code assigned before the loop
+ * @param {ReadonlyMap<string, string>} input.recordedReads the loop's captured read bytes
+ * @param {import("#core/chat.mjs").Chat} input.chat
+ * @param {string} input.model
+ * @param {(line: string) => void} input.info the run's log sink, `review:`-prefixed
+ * @returns {Promise<import("./answer.mjs").Finding[]>} the publication set
+ */
+async function runVerificationPass({ findings, policy, lanes, recordedReads, chat, model, info }) {
+  const lanesByPath = new Map(lanes.map((lane) => [lane.path, lane.lane]));
+  const plan = planVerification(findings, {
+    strategy: policy.strategy,
+    laneOf: (path) => lanesByPath.get(path),
+    recordedReads,
+  });
+  info(
+    `verification pass — planned ${String(plan.items.length)} of ${String(findings.length)} finding(s)`,
+  );
+  for (const skip of plan.skipped) {
+    info(
+      `verification pass — ${skip.finding.file}:${String(skip.finding.line)} left unverified: ${skip.reason}`,
+    );
+  }
+  /** @type {import("./verify.mjs").VerdictEntry[]} */
+  const verdicts = [];
+  for (const item of plan.items) {
+    verdicts.push({ id: item.id, ...(await oneVerdict({ item, chat, model, info })) });
+  }
+  const applied = applyVerdicts(findings, verdicts, { strictness: policy.strictness, plan });
+  for (const refusal of applied.refusals) {
+    info(`verification pass — ${refusal}`);
+  }
+  for (const drop of applied.drops) {
+    info(
+      `verification pass — ${drop.verdict}, dropped ${drop.file}:${String(drop.line)} ` +
+        `(finding ${drop.id}): ${drop.reason}`,
+    );
+  }
+  return applied.findings;
+}
+
+/**
+ * One bounded verification call: the prompt is code-composed from the plan
+ * item alone, the answer is parsed against the strict two-key contract, and
+ * any deviation or transport failure is `uncertain`. Never retried — the
+ * pass spends exactly one call per planned finding.
+ *
+ * @param {{ item: import("./verify.mjs").VerificationItem, chat: import("#core/chat.mjs").Chat, model: string, info: (line: string) => void }} input
+ * @returns {Promise<{ verdict: import("./verify.mjs").Verdict, reason: string }>}
+ */
+async function oneVerdict({ item, chat, model, info }) {
+  try {
+    const response = await chat.complete({ model, messages: verifierMessages(item) });
+    const parsed = parseVerdict(response.content);
+    if (parsed.ok) return { verdict: parsed.verdict, reason: parsed.reason };
+    info(
+      `verification pass — the answer to finding ${item.id} was refused (${parsed.defect}); ` +
+        `it counts as uncertain`,
+    );
+    return { verdict: "uncertain", reason: `the verifier's answer was refused: ${parsed.defect}` };
+  } catch (error) {
+    // Transport errors are ours, not the model's: their text may reach the
+    // log, and the finding stays — an infrastructure failure must never
+    // delete a reviewer's finding.
+    const detail = error instanceof Error ? error.message : String(error);
+    info(
+      `verification pass — the call for finding ${item.id} failed (${detail}); it counts as uncertain`,
+    );
+    return { verdict: "uncertain", reason: "the verification call failed" };
+  }
 }
 
 /**

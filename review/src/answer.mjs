@@ -173,13 +173,14 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
     }
     kept.push({ severity, file, line, message });
   }
-
   // Only exact logical duplicates collapse — identity includes the message,
-  // so two genuine findings sharing a line both survive.
+  // so two genuine findings sharing a line both survive. The same identity
+  // function keys `applyVerdicts`'s drop map, so a removal hits exactly one
+  // finding.
   /** @type {Set<string>} */
   const seen = new Set();
   const unique = kept.filter((finding) => {
-    const identity = `${finding.file}\u0000${String(finding.line)}\u0000${finding.severity}\u0000${finding.message.trim()}`;
+    const identity = findingIdentity(finding);
     if (seen.has(identity)) return false;
     seen.add(identity);
     return true;
@@ -196,6 +197,18 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
   }
 
   return { findings, summary, rejections };
+}
+
+/**
+ * The exact logical identity two findings must share to collapse — the same
+ * anchor and the same trimmed message. `applyVerdicts` keys drops by it, so
+ * a removal hits exactly one finding.
+ *
+ * @param {Finding} finding
+ * @returns {string}
+ */
+export function findingIdentity(finding) {
+  return `${finding.file}\u0000${String(finding.line)}\u0000${finding.severity}\u0000${finding.message.trim()}`;
 }
 
 /**
@@ -260,7 +273,7 @@ function countLines(workspace, relativePath) {
  * @param {string} text
  * @returns {string}
  */
-function stripFences(text) {
+export function stripFences(text) {
   const match = /^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n?```\s*$/.exec(text);
   return match?.[1] === undefined ? text : match[1];
 }
@@ -271,7 +284,7 @@ function stripFences(text) {
  * @param {string} text
  * @returns {string | null}
  */
-function extractObject(text) {
+export function extractObject(text) {
   const start = text.indexOf("{");
   if (start === -1) return null;
   let depth = 0;

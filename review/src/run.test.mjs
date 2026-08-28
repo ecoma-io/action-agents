@@ -701,3 +701,180 @@ describe("risk lanes", () => {
     expect(body).toContain("2 of 2 changed files were never read: src/a.mjs, src/auth/login.ts.");
   });
 });
+
+describe("adversarial verification pass", () => {
+  const CONCERN_ANSWER =
+    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+  const READ =
+    /** @type {{ content: string, toolCalls: { id: string, name: string, arguments: string }[] }} */ ({
+      content: "",
+      toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+    });
+
+  /**
+   * A chat stub scripted turn by turn that records every request's messages
+   * — the loop's reads and finals, then the pass's verdict calls.
+   *
+   * @param {Array<{ content: string, toolCalls?: { id: string, name: string, arguments: string }[] }>} script
+   * @returns {import("#core/chat.mjs").Chat & { calls: import("#core/chat.mjs").ChatMessage[][] }}
+   */
+  function scriptedChat(script) {
+    /** @type {import("#core/chat.mjs").ChatMessage[][]} */
+    const calls = [];
+    return {
+      calls,
+      async complete(request) {
+        calls.push(request.messages);
+        const next = script.shift();
+        if (next === undefined) throw new Error("script exhausted");
+        return {
+          content: next.content,
+          toolCalls: next.toolCalls ?? [],
+          finishReason: next.toolCalls !== undefined ? "tool_calls" : "stop",
+        };
+      },
+    };
+  }
+
+  it("verifies a planned finding once and drops a refuted one from the comment, logging its identity", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      { content: '{"verdict":"refuted","reason":"the line is correct"}' },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.reason).toContain("(0 findings)");
+    // Read turn, final answer, one verdict call — bounded, no retries.
+    expect(chat.calls).toHaveLength(3);
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).not.toContain("off-by-one");
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("refuted") && line.includes("src/a.mjs:2") && line.includes("(finding 1)"),
+      ),
+    ).toBe(true);
+    // The verdict call carries the code-authored contract and wrapped evidence.
+    const [system, user] = chat.calls[2] ?? [];
+    expect(system?.content).toContain('"confirmed"|"refuted"|"uncertain"');
+    expect(user?.content).toContain("[evidence:");
+  });
+
+  it("verifies only planned findings — a skim-lane nit at standard strategy never reaches a verdict call", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      {
+        content:
+          '{"findings":[{"severity":"nit","file":"src/a.mjs","line":2,"message":"a nit"}],"summary":"one nit"}',
+      },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    expect(chat.calls).toHaveLength(2);
+    expect(forge.calls.upserts[0]?.body).toContain("a nit");
+  });
+
+  it("a failed verification call counts as uncertain and publishes unchanged", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([READ, { content: CONCERN_ANSWER }]); // verdict call throws: exhausted
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(chat.calls).toHaveLength(3);
+    expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+    expect(logged.some((line) => line.includes("counts as uncertain"))).toBe(true);
+  });
+
+  it("a refused verdict answer counts as uncertain and publishes unchanged", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      { content: '{"verdict":"confirmed","reason":"ok","extra":1}' },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+    expect(logged.some((line) => line.includes("was refused"))).toBe(true);
+  });
+
+  it("the strict arm drops an uncertain verdict", async () => {
+    const forge = forgeStub({ config: '{ strictness: "high", strategy: "adversarial" }' });
+    const chat = scriptedChat([
+      READ,
+      {
+        content:
+          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},{"severity":"nit","file":"src/a.mjs","line":3,"message":"a nit"}],"summary":"two"}',
+      },
+      { content: '{"verdict":"uncertain","reason":"insufficient"}' },
+      { content: '{"verdict":"uncertain","reason":"insufficient"}' },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    // Adversarial + high: every finding planned, one call each.
+    expect(chat.calls).toHaveLength(4);
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).not.toContain("off-by-one");
+    expect(body).not.toContain("a nit");
+    expect(logged.filter((line) => line.includes("uncertain, dropped"))).toHaveLength(2);
+  });
+
+  it("an empty plan is a no-op — no verdict calls, findings published unchanged", async () => {
+    const forge = forgeStub();
+    const readChat = scriptedChat([
+      READ,
+      {
+        content:
+          '{"findings":[{"severity":"nit","file":"src/a.mjs","line":2,"message":"a nit"}],"summary":"one nit"}',
+      },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat: readChat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    // Read turn, final answer — the unplannable nit never earns a call.
+    expect(readChat.calls).toHaveLength(2);
+    expect(forge.calls.upserts[0]?.body).toContain("a nit");
+    expect(logged.some((line) => line.includes("planned 0 of 1 finding(s)"))).toBe(true);
+  });
+});
