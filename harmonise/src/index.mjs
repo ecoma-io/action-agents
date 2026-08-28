@@ -16,7 +16,7 @@
  */
 
 import { createChat } from "#core/chat.mjs";
-import { createForge } from "#core/forge.mjs";
+import { createForge, isRefAbsentError } from "#core/forge.mjs";
 import { HttpError, TransportError as HttpTransportError } from "#core/http.mjs";
 import { readSharedInputs } from "#core/inputs.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
@@ -249,7 +249,7 @@ export async function run(inputs, context, io) {
   const f = world.forge;
   const ownBranch = branchName(config.sourceLanguage);
   const branchBefore = await f.getRef(ownBranch).catch((cause) => {
-    if (cause instanceof Error && /HTTP 404/.test(cause.message)) return null;
+    if (isRefAbsentError(cause)) return null;
     throw cause;
   });
 

@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatError } from "#core/chat.mjs";
-import { BranchMovedError } from "#core/forge.mjs";
+import { BranchMovedError, ForgeError } from "#core/forge.mjs";
 import { DEFAULT_MAX_ATTEMPTS, HttpError, TransportError } from "#core/http.mjs";
 
 import { ACTION, DELAY_MS, main, readInputs, run, TM_PATH } from "./index.mjs";
@@ -492,6 +492,39 @@ describe("run", () => {
       "createTree",
       "createCommit",
     ]);
+  });
+
+  it("fails the run when the branch read's error text embeds 'HTTP 404' but the status is 500", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(files());
+    const inner = forgeDouble.getRef.bind(forgeDouble);
+    forgeDouble.getRef = /** @type {any} */ (
+      /** @param {string} name */
+      async (name) => {
+        if (name === "harmonise/en") {
+          throw new ForgeError(
+            "reading the ref of branch 'harmonise/en'",
+            new HttpError("the provider answered with an HTTP 404 page", {
+              status: 500,
+              url: "https://api.example/repos/o/r/git/ref/heads/harmonise%2Fen",
+            }),
+          );
+        }
+        return inner(name);
+      }
+    );
+    const ioDouble = io(forgeDouble);
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+
+    // The status is typed; the prose is not evidence. A 500 stays a failure
+    // even when its text embeds "HTTP 404" — never read as "the branch is
+    // absent", which would send the run on to create one.
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/reading the ref of branch 'harmonise\/en' failed/);
+    expect(forgeDouble.writes).toHaveLength(0);
   });
 
   it("updates an existing pull request in place instead of opening a twin", async () => {
