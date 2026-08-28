@@ -40,6 +40,11 @@ function status(status, body = "", headers = {}) {
   return () => new Response(body, { status, headers });
 }
 
+/** A transport-level timeout: what fetch rejects with when its attempt signal fires. @returns {DOMException} */
+function timedOut() {
+  return new DOMException("The operation was aborted due to timeout", "TimeoutError");
+}
+
 /**
  * A fetch that answers from a script: each call takes the next entry, which
  * is a Response factory (a body is consumed once, so every call needs a
@@ -339,6 +344,143 @@ describe("retries", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(settled).resolves.toMatchObject({ status: 200, text: '"after"' });
       expect(recorder.calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the retry wall-clock contract", () => {
+  // What the docs imply and the older retry tests never measured: how long
+  // the loop waits, who owns the waiting, and where the worst case ends.
+  // AbortSignal.timeout runs on a real timer fake timers cannot move, so a
+  // timed-out attempt is simulated the way its own signal ends it — fetch
+  // rejecting with a TimeoutError.
+  it("sleeps the full backoff after a timed-out attempt, then retries on a fresh signal", async () => {
+    vi.useFakeTimers();
+    try {
+      /** @type {AbortSignal[]} */
+      const signals = [];
+      /** @type {{ calls?: RecordedCall[] }} */
+      const recorder = {};
+      const inner = scripted([timedOut(), ok('"second time"')], recorder);
+      /** @type {typeof globalThis.fetch} */
+      const fetch = (_url, init) => {
+        signals.push(/** @type {AbortSignal} */ (init?.signal));
+        return inner(_url, init);
+      };
+      const http = createHttpClient({
+        baseUrl: "https://api.example",
+        fetchImpl: fetch,
+        timeoutMs: 5_000,
+        retryDelayMs: 1_000,
+      });
+      const settled = http.request("/x").catch((cause) => cause);
+
+      // Mid-backoff: one attempt spent, nothing settled early.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(recorder.calls).toHaveLength(1);
+
+      // The backoff for a first attempt is exactly retryDelayMs x 1.
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(settled).resolves.toMatchObject({ status: 200, text: '"second time"' });
+      expect(recorder.calls).toHaveLength(2);
+
+      // The retry ran on its own signal, not the one attempt one failed under.
+      expect(signals).toHaveLength(2);
+      expect(signals[0]).toBeInstanceOf(AbortSignal);
+      expect(signals[1]).toBeInstanceOf(AbortSignal);
+      expect(signals[1]).not.toBe(signals[0]);
+      expect(signals[1]?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps Retry-After at exactly thirty seconds however much the header demands", async () => {
+    vi.useFakeTimers();
+    try {
+      /** @type {{ calls?: RecordedCall[] }} */
+      const recorder = {};
+      const http = createHttpClient({
+        baseUrl: "https://api.example",
+        fetchImpl: scripted(
+          [status(429, "slow down", { "retry-after": "3600" }), ok('"finally"')],
+          recorder,
+        ),
+        retryDelayMs: 1_000,
+        timeoutMs: 5_000,
+      });
+      const settled = http.request("/x").catch((cause) => cause);
+
+      // The header demands an hour; the plain backoff would be one second.
+      // Neither delay runs: the retry fires neither a tick before nor a tick
+      // after the default cap of 30 000 ms.
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(recorder.calls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(settled).resolves.toMatchObject({ status: 200, text: '"finally"' });
+      expect(recorder.calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes no abort from the caller — the inter-attempt sleep is the client's alone", async () => {
+    vi.useFakeTimers();
+    try {
+      /** @type {{ calls?: RecordedCall[] }} */
+      const recorder = {};
+      const http = createHttpClient({
+        baseUrl: "https://api.example",
+        fetchImpl: scripted([timedOut(), ok('"carried on"')], recorder),
+        timeoutMs: 5_000,
+        retryDelayMs: 1_000,
+      });
+      // No channel exists to stop the loop: request reads no signal, so even
+      // an already-aborted one handed to it cannot touch the retry.
+      const wishfulAbort = { method: "GET", signal: AbortSignal.abort() };
+      const settled = http.request("/x", wishfulAbort).catch((cause) => cause);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(settled).resolves.toMatchObject({ status: 200, text: '"carried on"' });
+      expect(recorder.calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("has no overall wall-time budget — the worst case is maxAttempts x timeoutMs plus the sum of the delays", async () => {
+    vi.useFakeTimers();
+    try {
+      /** @type {{ calls?: RecordedCall[] }} */
+      const recorder = {};
+      const http = createHttpClient({
+        baseUrl: "https://api.example",
+        fetchImpl: scripted([timedOut(), timedOut(), timedOut()], recorder),
+        maxAttempts: 3,
+        timeoutMs: 5_000,
+        retryDelayMs: 1_000,
+      });
+      const settled = http.request("/x").catch((cause) => cause);
+
+      // Nothing bounds the loop except its own numbers: each attempt burns
+      // its timeoutMs, each gap its backoff. Three attempts timing out cost
+      // 3 x 5 000 ms plus backoff(1) + backoff(2) = 1 000 + 2 000 ms of wall
+      // time, and no caller input shortens that.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(recorder.calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1); // backoff(1) = 1 000
+      expect(recorder.calls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(recorder.calls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1); // backoff(2) = 2 000
+      expect(recorder.calls).toHaveLength(3);
+
+      const error = await settled;
+      expect(error).toBeInstanceOf(TransportError);
+      expect(error.message).toMatch(/timed out/);
     } finally {
       vi.useRealTimers();
     }
