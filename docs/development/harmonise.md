@@ -588,8 +588,12 @@ body     action-authored, per-language sections:
 
 #### Concurrency
 
-- **Optimistic locking with force-update:** Use Git ref update with the expected current HEAD SHA as the base
-- If the ref update fails because the branch was modified concurrently, fail with a clear error
+- **Optimistic locking with force-update:** the lock is the expected current
+  HEAD SHA, checked when the run reads the branch and re-checked by a fresh
+  read immediately before the ref update — a tip caught moving between the
+  two fails with a clear error rather than being force-overwritten
+- The re-read narrows, but cannot close, the interleaving window: GitHub's
+  ref API has no compare-and-swap, so the window stays one round trip wide
 - This runs **after** all LLM work, so late failure is accepted; the alternative requires a distributed lock mechanism GitHub does not provide
 - Consumers should configure GitHub Actions `concurrency:` group in their workflow to prevent concurrent schedule runs
 

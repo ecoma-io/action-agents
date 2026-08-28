@@ -87,9 +87,13 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    model's only power over that proposal is its text. The one ref a run ever
    writes is the action's own proposal branch, `harmonise/<source-language>`
    — named by the run's config, never by the model — force-upserted onto a
-   commit parented on the audited base, with optimistic locking that refuses
-   rather than overwrites a branch that moved under the run; no other branch
-   or ref is ever touched. GitHub's audit log records that ref write as a
+   commit parented on the audited base. The write is guarded, not atomic:
+   the ref API has no compare-and-swap, so the tip is re-read immediately
+   before the force-write and a branch caught moving under the run is
+   refused rather than overwritten — the residue is a window one round trip
+   wide, closed in our workflows by a `concurrency` group and inherited by
+   any consumer workflow that ships without one. No other branch or ref is
+   ever touched. GitHub's audit log records that ref write as a
    push, but it is not a model choice: the workflow's `permissions:` block
    bounds it, exactly as the paragraph above says an unconditional operation
    is bounded.

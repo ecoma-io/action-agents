@@ -675,7 +675,11 @@ export function createForge(config) {
      * when absent, force-updating it when present. The optimistic lock is the
      * caller's `expectedCurrentSha`: the tip the run read when it started. A
      * branch found elsewhere moved under the run, which is refused rather
-     * than overwritten.
+     * than overwritten. The ref API has no compare-and-swap, so the expected
+     * tip cannot ride on the PATCH itself: the update path re-reads the tip
+     * immediately before the force-write, leaving a window one round trip
+     * wide in which another writer's move could still slip through — and a
+     * tip caught moving in it is refused all the same.
      *
      * @param {string} branch the action's own branch; every documented caller names exactly `harmonise/<language>`
      * @param {string} commitSha
@@ -705,6 +709,16 @@ export function createForge(config) {
           }),
         );
         return;
+      }
+
+      // The PATCH is a force-write and the ref API has no compare-and-swap,
+      // so the expected tip cannot ride on the request itself. Re-reading
+      // the tip immediately before the write shrinks the window in which
+      // another writer's move goes unnoticed to one round trip, and a tip
+      // caught moving is refused here rather than force-overwritten.
+      const reread = await this.getRef(branch);
+      if (reread.sha !== expectedCurrentSha) {
+        throw new BranchMovedError(branch, expected, reread.sha);
       }
 
       await call(`updating the branch '${branch}'`, () =>
