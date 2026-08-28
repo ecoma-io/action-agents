@@ -11,7 +11,13 @@ import { describe, expect, it } from "vitest";
 
 import { buildInventory } from "./inventory.mjs";
 import { parseAssetLayout, parseLanguagePattern } from "./patterns.mjs";
-import { preparePair, sanitizeTranslationHtml, translatePair } from "./plan.mjs";
+import {
+  pairBlockShape,
+  planFrontmatterGuard,
+  preparePair,
+  sanitizeTranslationHtml,
+  translatePair,
+} from "./plan.mjs";
 
 describe("sanitizeTranslationHtml", () => {
   it("strips script tags from prose", () => {
@@ -444,5 +450,65 @@ describe("preparePair asset layouts", () => {
     });
 
     expect(result.outcome).toBe("proposal");
+  });
+});
+
+describe("pairBlockShape", () => {
+  it("plans when both sides provably carry blocks", () => {
+    const recorded = /** @type {any} */ ({
+      sourceBlocks: [{ content: "# A\n" }, { content: "# B\n" }],
+    });
+    expect(pairBlockShape(recorded, [{ content: "# A\n" }, { content: "# B changed\n" }])).toEqual({
+      planning: "planned",
+      changed: 1,
+      unchanged: 1,
+      added: 0,
+      removed: 0,
+    });
+  });
+
+  it("degrades to whole-file when the recorded state carries no blocks", () => {
+    const absent = {
+      planning: "whole-file",
+      reason: "the recorded state carries no block fingerprints to plan against",
+    };
+    expect(pairBlockShape(null, [{ content: "# A\n" }])).toEqual(absent);
+    expect(pairBlockShape(/** @type {any} */ ({}), [{ content: "# A\n" }])).toEqual(absent);
+  });
+
+  it("degrades to whole-file when no segmentation stage exists for the current source", () => {
+    const recorded = /** @type {any} */ ({ sourceBlocks: [{ content: "# A\n" }] });
+    expect(pairBlockShape(recorded, null)).toEqual({
+      planning: "whole-file",
+      reason: "no segmentation stage exists for the current source",
+    });
+  });
+
+  it("degrades to whole-file on recorded blocks that are not content-carrying blocks", () => {
+    const malformed = /** @type {any} */ ({ sourceBlocks: [{ content: 7 }] });
+    expect(pairBlockShape(malformed, [{ content: "# A\n" }]).planning).toBe("whole-file");
+    const notAList = /** @type {any} */ ({ sourceBlocks: "nope" });
+    expect(pairBlockShape(notAList, [{ content: "# A\n" }]).planning).toBe("whole-file");
+  });
+});
+
+describe("planFrontmatterGuard", () => {
+  it("passes a frontmatter-less document through as absent", () => {
+    expect(planFrontmatterGuard("# Dev\n\nProse.\n")).toEqual({ kind: "absent" });
+  });
+
+  it("refuses frontmatter the recognizer cannot parse", () => {
+    const result = planFrontmatterGuard("---\ntitle: a\ntitle: b\n---\n");
+    expect(result.kind).toBe("refused");
+    expect(result.kind === "refused" && result.code).toBe("duplicate-key");
+  });
+
+  it("plans a guard whose masked raw carries tokens and whose restore map holds the exact bytes", () => {
+    const result = planFrontmatterGuard("---\ntitle: Dev guide\nslug: dev\n---\n");
+    expect(result.kind).toBe("planned");
+    if (result.kind !== "planned") return;
+    expect(result.guard.maskedRaw).toContain("title: Dev guide");
+    expect(result.guard.maskedRaw).toMatch(/slug: \[\[harmonise:[0-9a-f]{16}:f1\]\]/);
+    expect([...result.guard.restoreMap.values()]).toEqual(["dev"]);
   });
 });

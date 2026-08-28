@@ -36,14 +36,30 @@ import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from ".
 import { readState, renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
 import { classifyPair } from "./stale.mjs";
 import { matchGlob } from "#core/glob.mjs";
-import { MAX_SOURCE_BYTES, preparationRefusal, preparePair, translatePair } from "./plan.mjs";
+import {
+  MAX_SOURCE_BYTES,
+  pairBlockShape,
+  planFrontmatterGuard,
+  preparationRefusal,
+  preparePair,
+  translatePair,
+} from "./plan.mjs";
 import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
+import { buildTmKey, createTmStore, parse as parseTm, serialize as serializeTm } from "./tm.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
 /** @typedef {import("#core/forge.mjs").Forge} Forge */
 
 export const ACTION = "harmonise";
+
+/**
+ * The path the translation memory occupies beside the sync state, written by
+ * the same publication that writes the state file. Advisory both ways: a
+ * file that is missing, corrupt or of a foreign schema version is an empty
+ * memory — never an error, never a skip.
+ */
+export const TM_PATH = ".github/action-agents/harmonise/tm.json";
 
 /** Semantic retries per pair: a malformed answer gets exactly one more try. */
 const ATTEMPTS_PER_PAIR = 2;
@@ -106,6 +122,7 @@ function realIo(inputs, context) {
  * @property {"existing" | "missing"} state
  * @property {"proposed" | "unchanged" | "unchanged-skipped"} outcome
  * @property {{ glossaryHits: number, skippedSpans: number, linksRewritten: number }} stats
+ * @property {import("./plan.mjs").PairBlockShape} blocks the pair's change shape
  * @property {string | undefined} content the proposal text, undefined for unchanged
  *   and unchanged-skipped
  * @property {string} summary
@@ -167,6 +184,22 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     if (state !== null) recordedRecords = state.records;
   } catch {
     recordedRecords = [];
+  }
+
+  // The translation memory is advisory both ways. Reading: a file that is
+  // missing, unreadable, corrupt or of a foreign schema version leaves an
+  // empty store — no prior translations are offered and the run proceeds
+  // exactly as a repository without a memory file always has. Writing:
+  // entries recorded on publication are offered to later runs as reference
+  // only; everything the model returns passes the same deterministic
+  // validation with or without a hit.
+  /** @type {ReturnType<typeof createTmStore>} */
+  let memory = createTmStore();
+  try {
+    const stored = await f.getContents(TM_PATH, { ref: ref.sha });
+    if (stored !== null) memory = parseTm(stored.content).store;
+  } catch {
+    memory = createTmStore();
   }
 
   // Instruction prose is read once, capped, pinned to the audited tip, and
@@ -240,6 +273,20 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       }
       continue;
     }
+    // Frontmatter protection is a property of the source, planned once for
+    // every language's pair: protected values must be tokens before any
+    // machinery sees the text. A plan that refuses is a pair that never
+    // reaches the model — fail-closed, never translated half-protected.
+    const frontmatter = planFrontmatterGuard(file.content);
+    if (frontmatter.kind === "refused") {
+      for (const target of pair.targets) {
+        skippedLines.push(
+          `${target.lang} ${pair.sourcePath}: frontmatter protection refused: ${frontmatter.message}`,
+        );
+      }
+      continue;
+    }
+    const fmGuard = frontmatter.kind === "planned" ? frontmatter.guard : undefined;
     // The source's content identity, hashed once per source document: every
     // language's pair classifies against the same digest.
     const sourceFingerprint = contentFingerprint(file.content);
@@ -254,6 +301,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           sourceText: file.content,
           inventory,
           config,
+          frontmatter: fmGuard,
         });
 
         const existing =
@@ -286,6 +334,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
         const recorded =
           recordedRecords.find((record) => record.destinationPath === prepared.destinationPath) ??
           null;
+        const blocks = pairBlockShape(recorded, null);
         const current = {
           sourceFingerprint,
           policyFingerprint: policyDigest,
@@ -306,11 +355,22 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
               skippedSpans: prepared.protection.skippedSpans,
               linksRewritten: prepared.linksRewritten,
             },
+            blocks,
             content: undefined,
             summary: "in step with the recorded publication; skipped without a model call",
           });
           continue;
         }
+
+        // The memory is consulted only for pairs the model path already
+        // runs — a provably unchanged pair keeps its zero model calls.
+        const prior = memory.lookup(
+          buildTmKey({
+            sourceHash: sourceFingerprint,
+            targetLang: target.lang,
+            policyContext: policyDigest,
+          }),
+        );
 
         let lastFailure = "";
         /** @type {{ noop: boolean, text?: string, summary?: string } | undefined} */
@@ -321,6 +381,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
               prepared,
               sourceLanguage: config.sourceLanguage,
               existingText: existing,
+              priorTranslation: prior,
               model: inputs.model,
               chat: io.chat,
               evidence: io.evidence,
@@ -352,6 +413,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
               skippedSpans: prepared.protection.skippedSpans,
               linksRewritten: prepared.linksRewritten,
             },
+            blocks,
             content: translated.text,
             summary: /** @type {string} */ (translated.summary),
           });
@@ -387,6 +449,12 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
         ` glossary=${String(entry.stats.glossaryHits)}` +
         ` skip=${String(entry.stats.skippedSpans)}` +
         ` links=${String(entry.stats.linksRewritten)}` +
+        (entry.blocks.planning === "planned"
+          ? ` blocks=planned changed:${String(entry.blocks.changed)}` +
+            ` unchanged:${String(entry.blocks.unchanged)}` +
+            ` added:${String(entry.blocks.added)}` +
+            ` removed:${String(entry.blocks.removed)}`
+          : ` blocks=whole-file`) +
         (entry.summary !== undefined ? ` — ${oneLine(entry.summary)}` : ""),
     );
   }
@@ -454,9 +522,23 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       policyFingerprint: policyDigest,
       transformationVersion: TRANSFORMATION_VERSION,
     });
+    // The memory rides the same commit: each proposed pair's exact source
+    // fingerprint is recorded with the translation that was accepted for it,
+    // so a later run that cannot prove unchanged-ness from the state file
+    // alone still has the accepted wording to offer as reference.
+    memory.record(
+      buildTmKey({
+        sourceHash: /** @type {string} */ (publishedSources.get(proposal.destinationPath)),
+        targetLang: proposal.lang,
+        policyContext: policyDigest,
+      }),
+      /** @type {string} */ (proposal.content),
+    );
   }
   const stateBlob = await io.forge.createBlob(renderState(records));
   changes.push({ path: STATE_PATH, blobSha: stateBlob.sha });
+  const tmBlob = await io.forge.createBlob(serializeTm(memory));
+  changes.push({ path: TM_PATH, blobSha: tmBlob.sha });
   const tree = await io.forge.createTree(ref.sha, changes);
   const commit = await io.forge.createCommit(
     `${title}\n\nAuthored by harmonise from ${ref.sha}.`,
