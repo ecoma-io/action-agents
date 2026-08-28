@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/ecoma-io/action-agents/compare/v0.4.0...v0.4.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **harmonise:** keep a noop pair's record current so later runs skip it ([#95](https://github.com/ecoma-io/action-agents/issues/95)) ([13d2987](https://github.com/ecoma-io/action-agents/commit/13d29873d0547df8a7abfd6b715796003d72b81a)), closes [#88](https://github.com/ecoma-io/action-agents/issues/88)
+* **workspace:** shorten the root action.yml description to the 125-character limit ([#98](https://github.com/ecoma-io/action-agents/issues/98)) ([827446e](https://github.com/ecoma-io/action-agents/commit/827446e013318b19ca8a54cadc6a401bff081771)), closes [#97](https://github.com/ecoma-io/action-agents/issues/97)
+
 ## [0.4.0](https://github.com/ecoma-io/action-agents/compare/v0.3.0...v0.4.0) (2026-08-28)
 
 
