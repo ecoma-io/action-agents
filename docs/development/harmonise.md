@@ -386,13 +386,28 @@ The LLM is responsible only for translating prose. It must not corrupt Markdown 
 
 ### Validation
 
-Structural validation occurs after translation:
+Structural validation occurs after translation. The action builds a profile
+of each document — source and translation — and refuses the pair on a
+mismatch:
 
-- **Fenced code blocks:** Count must match between source and translation
-- **Headings:** Level must not change (e.g., `#` cannot become `##`)
-- **Link/image syntax:** Must remain syntactically valid (balanced brackets/parens)
-- **Placeholders:** All glossary and skip placeholders must be present and intact
-- **Position:** Fenced code blocks must appear in the same order; heading text may change
+- **Fenced code blocks:** count must match; blocks must keep their order and character
+- **Headings:** level sequence must hold and the count must match; heading text may change
+- **Link/image syntax:** must remain syntactically valid (balanced brackets/parens), and visibly broken constructs must not increase
+- **Placeholders:** all glossary and skip placeholders must be present and intact
+- **Position:** fenced code blocks must appear in the same order
+- **Lists:** each top-level list block keeps its marker style, item count and nesting depth; renumbering (`3.` → `7.`) and reordering items of the same shape are accepted
+- **Blockquotes:** block count and per-block nesting depth
+- **Pipe tables:** table count, and per table the row count, column count and delimiter alignment
+- **Reference definitions:** their count
+- **Inline links, images and autolinks:** construct counts; destinations are the link machinery's business and are not compared here
+- **Frontmatter:** presence and line extent of a leading `---` block (an unclosed leading block is not frontmatter)
+
+**Conservative by default.** The profile refuses only unambiguous structural
+change. Paragraph splitting or merging, re-wrapped lines, emphasis changes,
+lazy continuations and horizontal rules never refuse. What a property cannot
+parse confidently on its own line it leaves unchecked in both documents:
+setext headings, lists inside blockquotes, tables inside list blocks,
+blockquote interiors, reference-style link usages, bare scheme URLs.
 
 Link identity is validated after translation, in the same pass as the structural checks. The source document — restored from its protected form, exactly what the model saw — and the sanitised translation are each collected into a list of links: inline links, images, reference definitions and autolinks, with each one's destination, title, line and visible text. The two lists must describe the same links: every destination, title and link text is matched one-to-one per kind, through the same inventory resolvers the link rewriter localized with (an internal destination counts as unchanged when it resolves to the same target document or image, so a rewritten spelling is never mistaken for drift).
 
