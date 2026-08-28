@@ -17,6 +17,7 @@
 
 import { createChat } from "#core/chat.mjs";
 import { createForge } from "#core/forge.mjs";
+import { HttpError, TransportError as HttpTransportError } from "#core/http.mjs";
 import { readSharedInputs } from "#core/inputs.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import {
@@ -56,6 +57,13 @@ import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs
 import { buildTmKey, createTmStore, parse as parseTm, serialize as serializeTm } from "./tm.mjs";
 import { mergeThreeWay, summarizeMerge } from "./threeway.mjs";
 import { runPool } from "./pool.mjs";
+import {
+  DEFAULT_POLICY,
+  classifyFailure,
+  classFromStatus,
+  delayClass,
+  nextAction,
+} from "./recovery.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -74,8 +82,46 @@ export const ACTION = "harmonise";
  */
 export const TM_PATH = ".github/action-agents/harmonise/tm.json";
 
-/** Semantic retries per pair: a malformed answer gets exactly one more try. */
-const ATTEMPTS_PER_PAIR = 2;
+/**
+ * The caller's half of the recovery contract: `recovery.mjs` names a delay,
+ * this file pays it in milliseconds. `short` mirrors one transport-layer
+ * backoff step; `long` is the wait before the policy's second transport
+ * retry. The pure policy module stays millisecond-free by design.
+ *
+ * @type {Readonly<Record<import("./recovery.mjs").DelayName, number>>}
+ */
+export const DELAY_MS = Object.freeze({ immediate: 0, short: 1_000, long: 5_000 });
+
+/**
+ * The run's clock: one awaited pause. Injectable as `io.sleep` so a test
+ * observes the policy's waits without spending real time.
+ *
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function defaultSleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * The pair loop's classification of anything a failed attempt raised. The
+ * transport layer's own verdicts map onto declared classes here — by status
+ * for an `HttpError`, by constructor for a network failure or a timeout —
+ * and everything else goes to `classifyFailure`: instances of the declared
+ * error classes classify as tagged at their raise sites (the answer
+ * contract's refusals inside `translatePair`), the rest land conservatively
+ * in `unknown`. Total: classifying a failure never throws.
+ *
+ * @param {unknown} cause
+ * @returns {import("./recovery.mjs").FailureClass}
+ */
+function classifyPairFailure(cause) {
+  if (cause instanceof HttpError) return classFromStatus(cause.status);
+  if (cause instanceof HttpTransportError) return "transport";
+  return classifyFailure(cause);
+}
 
 /**
  * @typedef {SharedInputs & { configPath: string, sourceLanguage: string, documents: string[], dryRun: boolean, requestTimeoutMs: number }} Inputs
@@ -105,6 +151,7 @@ export function readInputs(env = process.env) {
  * @property {Forge} forge
  * @property {ReturnType<typeof createChat>} chat
  * @property {ReturnType<typeof createEvidence>} evidence
+ * @property {(ms: number) => Promise<void>} [sleep]
  */
 
 /**
@@ -473,11 +520,12 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
   const concurrency = Math.min(config.concurrency, MAX_PAIR_CONCURRENCY);
 
   /**
-   * One pair's model path, run under the pool: the memory lookup, the
-   * attempts, the deterministic contract validation inside `translatePair` —
-   * and never a publication. The worker never throws: a refusal or a
-   * transport failure settles as this pair's failed report line, leaving its
-   * siblings working.
+   * One pair's model path, run under the pool: the memory lookup, then the
+   * retry policy from `recovery.mjs` wrapped around `translatePair` — a
+   * failure is classified, the policy decides retry or stop, and a retry
+   * waits the class's mapped delay — and never a publication. The worker
+   * never throws: a refusal, an exhausted class or a give-up settles as
+   * this pair's failed report line, leaving its siblings working.
    *
    * @param {PairJob} job
    * @returns {Promise<PairResult>}
@@ -493,10 +541,9 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
       }),
     );
 
-    let lastFailure = "";
-    /** @type {{ noop: boolean, text?: string, summary?: string } | undefined} */
+    /** @type {{ noop: boolean, text?: string, summary?: string }} */
     let translated;
-    for (let attempt = 1; attempt <= ATTEMPTS_PER_PAIR; attempt++) {
+    for (let attempt = 0; ; attempt += 1) {
       try {
         const result = await translatePair({
           prepared: job.prepared,
@@ -513,14 +560,20 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           result.outcome === "noop"
             ? { noop: true, summary: result.summary }
             : { noop: false, text: result.text, summary: result.summary };
-        lastFailure = "";
         break;
       } catch (cause) {
-        lastFailure = cause instanceof Error ? cause.message : String(cause);
+        const failureClass = classifyPairFailure(cause);
+        const action = nextAction(failureClass, attempt, DEFAULT_POLICY);
+        if (action !== "retry") {
+          return {
+            ok: false,
+            line: `${job.lang} ${job.sourcePath}: ${
+              cause instanceof Error ? cause.message : String(cause)
+            } (classified ${failureClass}, ${action})`,
+          };
+        }
+        await (io.sleep ?? defaultSleep)(DELAY_MS[delayClass(failureClass, attempt)]);
       }
-    }
-    if (translated === undefined || lastFailure !== "") {
-      return { ok: false, line: `${job.lang} ${job.sourcePath}: ${lastFailure}` };
     }
 
     // The publication text is the verified three-way merge when manual-edit

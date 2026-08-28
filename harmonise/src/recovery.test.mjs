@@ -3,18 +3,21 @@
 // What is pinned: the declared sets are exactly what the doctrine states and
 // are frozen; the classifier is total (it never throws, for anything a
 // `catch` could catch) and conservative (untagged, mis-tagged, and foreign
-// values land in `unknown`, never in a guessed retryable class); every
-// class, action and delay row of the default policy holds by its declared
-// rule, including every boundary of the attempt range — and an out-of-range
-// index is a decision (`exhausted`), never a crash; a caller-supplied policy
-// that names anything this module did not declare is refused with
-// `RecoveryPolicyError`, never coerced; and the delay table is fixed — an
-// override spends retries, it does not invent delay names.
+// values land in `unknown`, never in a guessed retryable class); the status
+// classifier maps the transport layer's own verdicts onto the declared
+// classes and is equally total (an unrecognized status lands in `unknown`);
+// every class, action and delay row of the default policy holds by its
+// declared rule, including every boundary of the attempt range — and an
+// out-of-range index is a decision (`exhausted`), never a crash; a
+// caller-supplied policy that names anything this module did not declare is
+// refused with `RecoveryPolicyError`, never coerced; and the delay table is
+// fixed — an override spends retries, it does not invent delay names.
 
 import { describe, expect, it } from "vitest";
 
 import {
   AuthError,
+  AUTH_STATUSES,
   DEFAULT_POLICY,
   DELAY_CLASSES,
   ERROR_CLASSES,
@@ -23,6 +26,8 @@ import {
   RecoveryPolicyError,
   TransportError,
   classifyFailure,
+  TRANSPORT_STATUSES,
+  classFromStatus,
   delayClass,
   nextAction,
 } from "./recovery.mjs";
@@ -136,6 +141,45 @@ describe("classifyFailure", () => {
     expect(classifyFailure(42)).toBe("unknown");
     expect(classifyFailure(true)).toBe("unknown");
     expect(classifyFailure(Symbol("boom"))).toBe("unknown");
+  });
+});
+
+describe("classFromStatus", () => {
+  it("the auth statuses are exactly the credentials failure, frozen", () => {
+    expect([...AUTH_STATUSES]).toEqual([401, 403]);
+    expect(Object.isFrozen(AUTH_STATUSES)).toBe(true);
+  });
+
+  it("the transport statuses mirror the transport layer's retryable set, frozen", () => {
+    expect([...TRANSPORT_STATUSES]).toEqual([408, 425, 429, 500, 502, 503, 504]);
+    expect(Object.isFrozen(TRANSPORT_STATUSES)).toBe(true);
+  });
+
+  it("a rejected or forbidden status names auth", () => {
+    expect(classFromStatus(401)).toBe("auth");
+    expect(classFromStatus(403)).toBe("auth");
+  });
+
+  it("a retryable provider-side status names transport", () => {
+    for (const status of TRANSPORT_STATUSES) {
+      expect(classFromStatus(status)).toBe("transport");
+    }
+  });
+
+  it("a recognized but unlisted status is conservative: unknown", () => {
+    expect(classFromStatus(400)).toBe("unknown");
+    expect(classFromStatus(404)).toBe("unknown");
+    expect(classFromStatus(409)).toBe("unknown");
+    expect(classFromStatus(422)).toBe("unknown");
+    expect(classFromStatus(418)).toBe("unknown");
+  });
+
+  it("is total over nonsense: anything that is not a declared status is unknown", () => {
+    expect(classFromStatus(Number.NaN)).toBe("unknown");
+    expect(classFromStatus(0)).toBe("unknown");
+    expect(classFromStatus(99.5)).toBe("unknown");
+    expect(classFromStatus(600)).toBe("unknown");
+    expect(classFromStatus(-500)).toBe("unknown");
   });
 });
 
