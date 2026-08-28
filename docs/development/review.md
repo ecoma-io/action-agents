@@ -430,8 +430,9 @@ The transcript is compacted before `context-window` is reached — when the
 token estimate crosses 80% of the window — deterministically, in code: the
 system message and the original task message with its diff evidence are kept;
 every later exchange is replaced by one state message holding the inventory a
-reviewer would need to continue — turns used, tools called, files read,
-search hits with their line numbers, tool errors, and the findings so far
+reviewer would need to continue — turns used, tools called, files read, the
+deletions already inspected via their diff sections, search hits with their
+line numbers, tool errors, and the findings so far
 verbatim. Raw tool bodies and the model's own prose along the way are
 discarded wholesale; findings survive because at that point they are
 code-validated structured data, not trusted prose. Compaction may run before
@@ -461,11 +462,23 @@ derivation, and the run is refused, red, before any model call. A deleted
 file is part of the expectation — a change that removes a path expects that
 path to have been looked at as much as one that edits it.
 
-The read record is the ledger's `read_file` calls, each recorded path
-normalised to the diff's canonical spelling, so `./src/a.mjs` and `src/a.mjs`
-are one file. `coverageReport(expected, read)` partitions the expected set
-into covered and uncovered; nothing the model wrote — summary, findings,
-self-assessment — enters the computation.
+For a deletion, the inspection is the deletion's own diff section. The
+removed lines ride in the initial prompt's evidence by construction, and
+`read_file` could not open the path anyway — the reviewed head no longer has
+it. So the run records the deletion as inspected in code before the loop
+starts: the paths come from the same inventory entries that rendered the
+sections (`status: "removed"`), pass through the same normalisation as a
+recorded read, and sit in the ledger beside the `read_file` calls. Nothing
+the model writes can grow or shrink that set, and no input widens it — an
+ignored deletion is outside the universe and never recorded. The expectation
+set itself does not move: a deletion stays expected, and what changes is only
+that the expectation can now be met.
+
+The read record is the ledger's `read_file` calls plus that code-recorded
+deletion set, every path normalised to the diff's canonical spelling, so
+`./src/a.mjs` and `src/a.mjs` are one file. `coverageReport(expected, read)`
+partitions the expected set into covered and uncovered; nothing the model
+wrote — summary, findings, self-assessment — enters the computation.
 
 The verdict is strictness's to set, and strictness is the maintainer's:
 

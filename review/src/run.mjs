@@ -17,7 +17,7 @@ import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/
 
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
-import { parseDiffPaths, unifiedDiff } from "./coverage.mjs";
+import { normaliseReadPath, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
 import { createTools, TOOL_SPECS } from "./tools.mjs";
 import { classifyRisk } from "./risk.mjs";
 import { assignLanes, laneBudget } from "./lanes.mjs";
@@ -147,6 +147,18 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     );
   }
 
+  // A deletion's own diff section is in the prompt by construction — the removed
+  // lines are the content there is to examine, and read_file cannot open a path
+  // the reviewed head no longer has. The code records that inspection up front:
+  // a deterministic set seeded into the loop's ledger, derived from the same
+  // inventory entries that rendered the sections, through the same normalisation
+  // the read record uses. Nothing the model writes can grow or shrink it, and
+  // the expected set itself does not move — a deletion stays expected; what
+  // changes is only that the expectation can now be met.
+  const diffInspectedPaths = inventory.reviewed
+    .filter((file) => file.status === "removed")
+    .map((file) => normaliseReadPath(file.filename));
+
   // ── Attention: lanes, fixed before any model call ───────────────────────
   // Per-file risk comes from the same deterministic classifier the plan
   // documents describe — one file per call, so each row is that file's
@@ -210,6 +222,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     maxTurns: inputs.maxTurns,
     contextWindow: inputs.contextWindow,
     expectedPaths,
+    diffInspectedPaths,
     strictness: config.strictness,
   });
   for (const line of outcome.log) io.info(`review: ${line}`);

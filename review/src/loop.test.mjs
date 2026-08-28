@@ -581,3 +581,47 @@ describe("loop accounting facts", () => {
     expect(outcome.evidenceBytes).toBeLessThanOrEqual(outcome.maxEvidenceBytes);
   });
 });
+
+describe("deletion coverage", () => {
+  it("records a deletion's inspection in code — covered with no read on record at all", async () => {
+    const chat = scriptedChat([{ content: '{"findings":[],"summary":"done"}' }]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 5,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "lib/gone.mjs"],
+      diffInspectedPaths: ["lib/gone.mjs"],
+    });
+    expect(outcome.naturalStopped).toBe(true);
+    expect(outcome.coverage).toEqual({
+      covered: ["lib/gone.mjs"],
+      uncovered: ["src/a.mjs"],
+      total: 2,
+    });
+  });
+
+  it("a read composes with the code-recorded set — both sides land covered", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: '{"findings":[],"summary":"read the survivor"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 5,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "lib/gone.mjs"],
+      diffInspectedPaths: ["lib/gone.mjs"],
+    });
+    expect(outcome.coverage).toEqual({
+      covered: ["lib/gone.mjs", "src/a.mjs"],
+      uncovered: [],
+      total: 2,
+    });
+  });
+});

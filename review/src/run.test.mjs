@@ -23,6 +23,8 @@ beforeAll(() => {
   wsRoot = mkdtempSync(p.join(tmpdir(), "run-test-ws-"));
   mkdirSync(p.join(wsRoot, "src"));
   writeFileSync(p.join(wsRoot, "src", "a.mjs"), "line1\nline2\nline3\n");
+  mkdirSync(p.join(wsRoot, "lib"));
+  writeFileSync(p.join(wsRoot, "lib", "new.mjs"), "moved\n");
   CONTEXT.workspace = wsRoot;
 });
 
@@ -673,6 +675,174 @@ describe("coverage accounting and strict partial reviews", () => {
     const body = forge.calls.upserts[0]?.body ?? "";
     expect(body).toContain("This review is partial");
     expect(body).toContain("never read");
+  });
+
+  it("at high strictness a deleting pull request completes — the deletion's own diff section is the inspection", async () => {
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "src/a.mjs",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -1 +1,2 @@\n+x",
+        },
+        {
+          filename: "lib/gone.mjs",
+          status: "removed",
+          additions: 0,
+          deletions: 1,
+          patch: "@@ -1 +0,0 @@\n-old",
+        },
+      ],
+      config: '{ strictness: "high" }',
+    });
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "c1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      { content: '{"findings":[],"summary":"read the one surviving file"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("**Review** — Complete");
+    expect(body).toContain("Changed files examined: 2/2.");
+  });
+
+  it("a deletion covered by code cannot mask an unread edit — the gap sentence names only the edit", async () => {
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "src/a.mjs",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -1 +1,2 @@\n+x",
+        },
+        {
+          filename: "lib/gone.mjs",
+          status: "removed",
+          additions: 0,
+          deletions: 1,
+          patch: "@@ -1 +0,0 @@\n-old",
+        },
+      ],
+      config: '{ strictness: "high" }',
+    });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("1 of 2 changed files were never read: src/a.mjs.");
+    expect(body).toContain("Changed files examined: 1/2.");
+  });
+
+  it("a delete-and-add rename: the old path rides covered, the new path must be read", async () => {
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "lib/old.mjs",
+          status: "removed",
+          additions: 0,
+          deletions: 1,
+          patch: "@@ -1 +0,0 @@\n-moved",
+        },
+        {
+          filename: "lib/new.mjs",
+          status: "added",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -0,0 +1 @@\n+moved",
+        },
+      ],
+      config: '{ strictness: "high" }',
+    });
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "c1", name: "read_file", arguments: '{"path":"lib/new.mjs"}' }],
+      },
+      { content: '{"findings":[],"summary":"the move is sound"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("**Review** — Complete");
+    expect(body).toContain("Changed files examined: 2/2.");
+  });
+
+  it("the same move with the new path unread ends partial naming only the addition", async () => {
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "lib/old.mjs",
+          status: "removed",
+          additions: 0,
+          deletions: 1,
+          patch: "@@ -1 +0,0 @@\n-moved",
+        },
+        {
+          filename: "lib/new.mjs",
+          status: "added",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -0,0 +1 @@\n+moved",
+        },
+      ],
+      config: '{ strictness: "high" }',
+    });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("1 of 2 changed files were never read: lib/new.mjs.");
+  });
+
+  it("a rename entry's new path is not auto-covered — only a removal is", async () => {
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "lib/new.mjs",
+          status: "renamed",
+          previousFilename: "lib/older.mjs",
+          additions: 0,
+          deletions: 0,
+        },
+      ],
+      config: '{ strictness: "high" }',
+    });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("1 of 1 changed file was never read: lib/new.mjs.");
   });
 
   it("a derivation that cannot account for the whole universe refuses the run", async () => {
