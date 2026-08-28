@@ -572,14 +572,20 @@ that keeps failing the contract is not something to hide behind a green check.
 
 Every run ends in exactly one of three states:
 
-- **COMPLETE** — the model terminated normally and produced a valid,
-  fully-validated answer. Publish: the marker comment is upserted with the
-  findings — or, when there are none, with a literal "No findings.", so a
-  clean re-review clears whatever an earlier push left behind.
-- **PARTIAL** — the review says so honestly: a bound ended it (`max-turns`,
-  the tool-call ceiling, the evidence ceiling), or, at strictness `high`, the
-  coverage ledger shows changed files that were never read. Publish, with the
-  partial status prominent at the top of the comment and the cause named.
+- **COMPLETE** — the model terminated normally, produced a valid,
+  fully-validated answer, and every declared run gate passed. Publish: the
+  marker comment is upserted with the findings — or, when there are none,
+  with a literal "No findings.", so a clean re-review clears whatever an
+  earlier push left behind.
+- **PARTIAL** — the review says so honestly: a declared run gate refused the
+  complete posture. The conditions are the ones this page already states — a
+  bound ended it (`max-turns`, the tool-call ceiling, the evidence ceiling),
+  or, at strictness `high`, the coverage ledger shows changed files that were
+  never read — plus the publication invariants: a published finding without
+  a covering recorded read (the provenance gate), or verification accounting
+  that does not close (the verification gate). Publish, with the partial
+  status prominent at the top of the comment and the first failing gate's
+  reason named.
 - **FAILED** — provider failure, invalid configuration, a pull request past
   the changed-file ceiling, a prompt past the initial budget, a broken
   conversation protocol, or a persistently malformed final answer — any
@@ -621,10 +627,12 @@ Changed files examined: 2/2.
 ### Concerns (1)
 
 - `core/src/chat.mjs:42` — message…
+  evidence: `core/src/chat.mjs:1-210`
 
 ### Nits (2)
 
 - `core/src/http.mjs:7` — message…
+  evidence: `core/src/http.mjs:1-88`
 ```
 
 At `medium` strictness the nits section renders inside a collapsible
@@ -634,7 +642,9 @@ policy before rendering; at `high` there is no collapsing.
 
 The body carries the status, the reviewed head SHA, the summary, the changed-
 files examination count (rendered whenever the expected set is non-empty,
-whatever the strictness) and the findings — and nothing volatile: no
+whatever the strictness) and the findings — each published finding carrying
+one evidence line beneath it, the covering read the loop recorded, ledger
+data only, never model-composed text — and nothing volatile: no
 timestamp (the comment interface shows
 when it was last updated), no run number, nothing that churns the comment
 without changing the review. Model-supplied text passes the sanitiser before
@@ -708,10 +718,19 @@ write surface is one comment.
 
 Everything the design once named as a delta is shipped in `core/` today — the
 table below is the contract `review` holds `core/` to, and the production path
-imports all of it. All of it is protocol or ceiling; none of it is loop.
-Nothing landed for `review` sits unwired: the coverage accounting (#69), the
-risk lanes (#74) and the structured phases (#77) are on the production path,
-reachable from `src/index.mjs`.
+imports all of it. All of it is protocol or ceiling; none of it is loop. The
+coverage accounting (#69), the risk lanes (#74), the structured phases (#77),
+the adversarial verification pass (#82), the evidence provenance (#84) and the
+declared run gates (#89) are all on the production path, reachable from
+`src/index.mjs`: lanes are assigned before the first model call
+(`assignLanes` in `run.mjs`), provenance is attached before the nit-drop and
+an unanchored finding is quarantined, never published (`attachProvenance` in
+`run.mjs`), verdicts in the verification pass can only remove
+(`runVerificationPass`), and the concluding posture — complete or partial —
+is the declared gates' verdict over code-ledgered results (`evaluateGates` in
+`run.mjs`). One module is **landed, wiring tracked**: the machine-readable
+run artifact (#87) — merged and tested, not yet imported by the production
+path, therefore not a byte any run writes.
 
 | Module          | Kind     | What `review` gets                                                                                                                                                                                                                           |
 | --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
