@@ -481,10 +481,12 @@ function unresolvedPlannedClause(id, reason) {
  * finding carries, the skips the plan could not evidence, and the policy the
  * run ran under. Three checks, in the order they bite:
  *
- * 1. Verdict coverage — every planned finding must carry an outcome record.
- *    A planned finding with no record at all is its own named failure at
- *    every mode: the pass's accounting does not close, and no count
- *    equality stands in for the missing record.
+ * 1. Verdict coverage — every planned finding must carry an outcome record
+ *    with a verdict behind it. A planned finding with no record at all, or
+ *    whose record is `unresolved` carrying no verdict — the shape the pass
+ *    itself writes when it never recorded a verdict for the finding — is
+ *    its own named failure at every mode: the pass's accounting does not
+ *    close, and no count equality stands in for the missing record.
  * 2. Unresolved accounting — the pass's `unresolved` outcomes and the
  *    plan's unevidenced skips are enumerated in plan order, so a refusal
  *    names exactly which findings verification could not settle.
@@ -495,10 +497,10 @@ function unresolvedPlannedClause(id, reason) {
  * The empty plan passes trivially: nothing was scheduled, so nothing is
  * missing. A record the pass could never have produced — a lifecycle
  * outside the published vocabulary, a verdict that contradicts
- * {@link LIFECYCLE_OF_VERDICT}, an outcome for an id the plan never
- * scheduled, a duplicate — is a `GateFactsError`: the gate reads only
- * code-recorded state, and a shape the code cannot have written is never
- * coerced into a judgment.
+ * {@link LIFECYCLE_OF_VERDICT}, a resolved state with no verdict behind it,
+ * an outcome for an id the plan never scheduled, a duplicate — is a
+ * `GateFactsError`: the gate reads only code-recorded state, and a shape
+ * the code cannot have written is never coerced into a judgment.
  *
  * @param {unknown} slice
  * @returns {GateVerdict}
@@ -571,6 +573,11 @@ function evaluateVerification(slice) {
         "verification facts: an outcome's 'verdict' must be the verdict its lifecycle maps to — 'confirmed', 'refuted' or 'uncertain'",
       );
     }
+    if (lifecycle !== "unresolved" && verdict === undefined) {
+      throw new GateFactsError(
+        "verification facts: an outcome whose lifecycle is 'confirmed' or 'refuted' must carry the verdict that resolved it",
+      );
+    }
     const reason = record["reason"];
     if (reason !== undefined && typeof reason !== "string") {
       throw new GateFactsError(
@@ -596,10 +603,21 @@ function evaluateVerification(slice) {
       );
     }
   }
-  // Verdict coverage first: a planned finding with no record at all is an
-  // accounting that does not close — at every mode, whatever the policy.
+  // Verdict coverage first. The `verdict` key is code-written, so its
+  // absence on an `unresolved` record is the pass's own "never recorded
+  // one" — the accounting does not close, at every mode, whatever the
+  // policy, exactly as for a record missing outright.
   /** @type {string[]} */
-  const unrecorded = planned.filter((id) => !outcomeById.has(id));
+  const unrecorded = [];
+  for (const id of planned) {
+    const record = outcomeById.get(id);
+    if (
+      record === undefined ||
+      (record["lifecycle"] === "unresolved" && record["verdict"] === undefined)
+    ) {
+      unrecorded.push(id);
+    }
+  }
   if (unrecorded.length > 0) {
     return {
       passed: false,

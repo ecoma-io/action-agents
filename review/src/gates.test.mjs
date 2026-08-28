@@ -528,6 +528,57 @@ describe("gate verification", () => {
     }
   });
 
+  it("a candidate the pass never recorded a verdict for fails at every mode — the collapse shape is not an uncertain one", () => {
+    for (const { over } of MODES) {
+      const result = evaluateGate(
+        "verification",
+        verificationFacts({
+          planned: ["1", "2"],
+          outcomes: [
+            outcome("1", "confirmed", "confirmed"),
+            {
+              id: "2",
+              lifecycle: "unresolved",
+              reason: "no verdict was recorded for this finding",
+            },
+          ],
+          ...over,
+        }),
+      );
+      expect(result.passed).toBe(false);
+      expect(result.reason).toBe(
+        "the verification pass left planned finding(s) 2 with no recorded outcome — the pass's accounting does not close",
+      );
+    }
+  });
+
+  it("the unrecorded candidate is named at normal mode — the uncertain one never reaches the policy", () => {
+    const result = evaluateGate(
+      "verification",
+      verificationFacts({
+        planned: ["1", "2"],
+        outcomes: [
+          {
+            id: "1",
+            lifecycle: "unresolved",
+            verdict: "uncertain",
+            reason: "the verifier's answer was refused: missing reason",
+          },
+          {
+            id: "2",
+            lifecycle: "unresolved",
+            reason: "no verdict was recorded for this finding",
+          },
+        ],
+        ...MODES.find((m) => m.name === "normal")?.over,
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toBe(
+      "the verification pass left planned finding(s) 2 with no recorded outcome — the pass's accounting does not close",
+    );
+  });
+
   it("a verifier that never ran fails wherever findings were planned", () => {
     const result = evaluateGate(
       "verification",
@@ -610,7 +661,12 @@ describe("gate verification", () => {
         outcomes: [
           { id: "1", lifecycle: "unresolved", verdict: "uncertain", reason: "first gap" },
           outcome("2", "confirmed", "confirmed"),
-          { id: "3", lifecycle: "unresolved", reason: "no verdict was recorded for this finding" },
+          {
+            id: "3",
+            lifecycle: "unresolved",
+            verdict: "uncertain",
+            reason: "no verdict was recorded for this finding",
+          },
         ],
         skipped: [
           { file: "src/b.mjs", line: 9, reason: "the loop never captured a read of this file" },
@@ -653,6 +709,18 @@ describe("gate verification", () => {
         }),
       ),
     ).toThrow(GateFactsError); // the verdict must be the one its lifecycle maps to
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({ planned: ["1"], outcomes: [{ id: "1", lifecycle: "confirmed" }] }),
+      ),
+    ).toThrow(GateFactsError); // a resolved state must carry the verdict that resolved it
+    expect(() =>
+      evaluateGate(
+        "verification",
+        verificationFacts({ planned: ["1"], outcomes: [{ id: "1", lifecycle: "refuted" }] }),
+      ),
+    ).toThrow(GateFactsError); // refuted without its verdict is the same unwritable shape
     expect(() =>
       evaluateGate(
         "verification",
