@@ -711,6 +711,65 @@ describe("run — where configuration is read from", () => {
   });
 });
 
+describe("run — the instructions half", () => {
+  const CONFIG_PATH = ".github/action-agents/triage/triage.json5";
+  const INSTRUCTION_PATH = ".github/action-agents/triage/instruction.md";
+  const ISSUE_INSTRUCTION_PATH = ".github/action-agents/triage/issue-instruction.md";
+  const PR_INSTRUCTION_PATH = ".github/action-agents/triage/pr-instruction.md";
+
+  it("loads the instruction documents into the prompt the model receives", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {
+        [CONFIG_PATH]: CONFIG,
+        [INSTRUCTION_PATH]: "Weigh failing tests above style nitpicks.",
+        [ISSUE_INSTRUCTION_PATH]: "Ask for a minimal reproduction when one is missing.",
+      },
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    const system = world.request()?.messages[0]?.content ?? "";
+    expect(system).toContain("Weigh failing tests above style nitpicks.");
+    expect(system).toContain("Ask for a minimal reproduction when one is missing.");
+  });
+
+  it("picks the pr document for a pull request", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      files: {
+        [CONFIG_PATH]: CONFIG,
+        [ISSUE_INSTRUCTION_PATH]: "Issue-only guidance.",
+        [PR_INSTRUCTION_PATH]: "PR-only guidance.",
+      },
+    });
+
+    await run(inputs(), prContext, world);
+
+    const system = world.request()?.messages[0]?.content ?? "";
+    expect(system).toContain("PR-only guidance.");
+    expect(system).not.toContain("Issue-only guidance.");
+  });
+
+  it("refuses an oversized instruction document before the model is asked", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {
+        [CONFIG_PATH]: CONFIG,
+        [INSTRUCTION_PATH]: "x".repeat(8193),
+      },
+    });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /past the 8192-byte cap/,
+    );
+    // A red run, not a silent skip: nothing reached the model, nothing was written.
+    expect(world.request()).toBeNull();
+    expect(world.forge.writes).toEqual([]);
+  });
+});
+
 describe("main", () => {
   it("turns a pipeline failure into a failed step, not a green one", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);

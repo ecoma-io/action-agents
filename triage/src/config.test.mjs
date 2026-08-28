@@ -1,4 +1,4 @@
-// Tests for the config file: discovery, validation, the effective sheet.
+// Tests for the config file: discovery, validation, the effective sheet, and instruction loading.
 //
 // The law with teeth here is narrowing — a workflow's `labels:` input
 // selects a subset of what the file declares, an undeclared name is refused
@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { effectiveSheet, loadConfigFile, validateConfig } from "./config.mjs";
+import { effectiveSheet, loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
 
 /** @typedef {Record<string, { content: string } | null>} Files */
 
@@ -87,6 +87,89 @@ describe("loadConfigFile", () => {
   it("refuses a file past the 64 KiB cap rather than truncating it", async () => {
     const forge = fakeForge({ [JSON5_PATH]: { content: `// ${"x".repeat(70 * 2 ** 10)}` } });
     await expect(loadConfigFile({ forge, configPath: "" })).rejects.toThrow(/past the/);
+  });
+});
+
+describe("loadInstructions", () => {
+  const INSTRUCTION = ".github/action-agents/triage/instruction.md";
+  const ISSUE_INSTRUCTION = ".github/action-agents/triage/issue-instruction.md";
+  const PR_INSTRUCTION = ".github/action-agents/triage/pr-instruction.md";
+
+  it("resolves the default paths for the thread's type when the config declares none", async () => {
+    const forge = fakeForge({
+      [INSTRUCTION]: { content: "General guidance." },
+      [ISSUE_INSTRUCTION]: { content: "Issue guidance." },
+      [PR_INSTRUCTION]: { content: "PR guidance." },
+    });
+
+    const forIssue = await loadInstructions({ forge, config: null, threadType: "issue" });
+    expect(forIssue).toEqual({
+      instruction: "General guidance.",
+      typeInstruction: "Issue guidance.",
+    });
+
+    const forPr = await loadInstructions({ forge, config: null, threadType: "pr" });
+    expect(forPr).toEqual({
+      instruction: "General guidance.",
+      typeInstruction: "PR guidance.",
+    });
+    expect(forge.reads).toEqual([INSTRUCTION, ISSUE_INSTRUCTION, INSTRUCTION, PR_INSTRUCTION]);
+  });
+
+  it("configured keys select exactly those documents", async () => {
+    const config = validateConfig({
+      instructions: {
+        instruction: "elsewhere/general.md",
+        "issue-instruction": "elsewhere/issues.md",
+      },
+    });
+    const forge = fakeForge({
+      "elsewhere/general.md": { content: "Configured general." },
+      "elsewhere/issues.md": { content: "Configured issues." },
+      [INSTRUCTION]: { content: "Default general." },
+      [ISSUE_INSTRUCTION]: { content: "Default issues." },
+    });
+
+    const documents = await loadInstructions({ forge, config, threadType: "issue" });
+    expect(documents).toEqual({
+      instruction: "Configured general.",
+      typeInstruction: "Configured issues.",
+    });
+    // The defaults exist on the default branch and are never read.
+    expect(forge.reads).toEqual(["elsewhere/general.md", "elsewhere/issues.md"]);
+  });
+
+  it("tolerates missing documents — nothing throws and nothing is returned", async () => {
+    const forge = fakeForge({});
+    const documents = await loadInstructions({ forge, config: null, threadType: "pr" });
+    expect(documents).toEqual({});
+  });
+
+  it("carries only the documents that exist", async () => {
+    const forge = fakeForge({ [INSTRUCTION]: { content: "General guidance." } });
+    const documents = await loadInstructions({ forge, config: null, threadType: "issue" });
+    expect(documents).toEqual({ instruction: "General guidance." });
+  });
+
+  it("accepts an instruction document of exactly 8192 bytes", async () => {
+    const forge = fakeForge({ [INSTRUCTION]: { content: "x".repeat(8192) } });
+    const documents = await loadInstructions({ forge, config: null, threadType: "pr" });
+    expect(documents.instruction).toHaveLength(8192);
+  });
+
+  it("refuses 8193 bytes, naming the size and the cap", async () => {
+    const forge = fakeForge({ [INSTRUCTION]: { content: "x".repeat(8193) } });
+    await expect(loadInstructions({ forge, config: null, threadType: "issue" })).rejects.toThrow(
+      /8193 bytes, past the 8192-byte cap/,
+    );
+  });
+
+  it("measures UTF-8 bytes, not code points", async () => {
+    // 4097 two-byte characters are 8194 bytes — past the cap at half its code-point length.
+    const forge = fakeForge({ [INSTRUCTION]: { content: "é".repeat(4097) } });
+    await expect(loadInstructions({ forge, config: null, threadType: "pr" })).rejects.toThrow(
+      /8194 bytes, past the 8192-byte cap/,
+    );
   });
 });
 
