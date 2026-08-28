@@ -166,6 +166,23 @@ describe("read_file", () => {
     expect(result.ok).toBe(true);
     expect(result.output).toMatch(/\[evidence truncated: \d+ of \d+ bytes shown\]/);
   });
+  it("records every captured byte past the 64 KiB wrap — the cut caps the transcript, not the record", () => {
+    const line = "z".repeat(96) + "\n"; // 97 bytes a line
+    const tree = mkdtempSync(p.join(tmpdir(), "tools-ceiling-"));
+    writeFileSync(p.join(tree, "big-file.mjs"), line.repeat(800)); // ~76 KiB captured
+    const recorded = new Map();
+    const tools = createTools({
+      workspace: createWorkspace({ root: tree }),
+      evidence: createEvidence(() => "deadbeefdeadbeef"),
+      ignore: [],
+      recordedReads: recorded,
+    });
+    const result = tools.execute("read_file", '{"path":"big-file.mjs"}');
+    expect(result.ok).toBe(true);
+    expect(recorded.get("big-file.mjs")?.length).toBe(97 * 800);
+    expect(result.output).toMatch(/\[evidence truncated: \d+ of \d+ bytes shown\]/);
+    expect(result.output.length).toBeLessThan(66 * 1024);
+  });
 });
 
 describe("list_files", () => {

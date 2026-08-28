@@ -301,7 +301,9 @@ transcript verbatim and treated as data.
   credentials live there); ignored paths; directories; symlinks and any other
   non-regular file; binary content — a NUL byte in the first 8 KiB marks a
   file binary. Text is returned as-is otherwise; the 64 KiB evidence cap
-  applies with its visible cut.
+  applies with its visible cut — the cut caps the transcript, not the run's
+  record: the capture ledger holds every byte the read captured, up to the
+  1 MiB read ceiling, whatever the wrapped block shows.
 - `list_files` — every regular file beneath the directory, recursively, one
   path per line relative to the workspace root, sorted byte-wise. Capped at
   500 entries with a marked cut. Ignored paths and `.git` are omitted.
@@ -672,6 +674,12 @@ The plan and its skips are unchanged: a finding is planned when the strategy
 is `adversarial`, or its severity is `concern`, or it sits on a deep lane —
 and planning still requires a recorded read that reaches the anchor, so the
 pass never verifies blind.
+
+Those gates judge the captured record, not the transcript. A recorded read
+holds up to the 1 MiB read ceiling of raw bytes per file; one wrapped block
+shows at most 64 KiB of it. An anchor line past the transcript's visible
+cut still resolves — the same record the verifier's excerpt is cut from —
+and no ceiling moved to make that true.
 
 ### What the verifier does
 
