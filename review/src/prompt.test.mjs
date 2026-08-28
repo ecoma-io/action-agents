@@ -22,6 +22,8 @@ function parts(over = {}) {
     language: "en",
     strictness: "medium",
     strategy: "standard",
+    lanes: [],
+    laneBudgets: { deep: 0, standard: 0, skim: 0 },
     reviewed: [],
     instruction: undefined,
     activeRules: [],
@@ -30,7 +32,18 @@ function parts(over = {}) {
   };
 }
 
-/** @param {import("./prompt.mjs").PromptParts} parts */
+/**
+ * @param {string} filename
+ * @returns {import("./inventory.mjs").ChangedFile}
+ */
+function file(filename) {
+  return { filename, status: "modified", additions: 2, deletions: 1 };
+}
+
+/**
+ * @param {import("./prompt.mjs").PromptParts} parts
+ * @returns {string}
+ */
 function systemOf(parts) {
   const { messages } = buildPrompt(parts);
   expect(messages).toHaveLength(2);
@@ -96,5 +109,106 @@ describe("adversarial strategy paragraph", () => {
     const user = /** @type {string} */ (messages[1]?.content);
     expect(user).not.toContain("Review mode");
     expect(user).not.toContain("Review strategy");
+  });
+});
+
+describe("risk lane procedure and annotations", () => {
+  /** Two lanes, one of each depth the inventory exercises. */
+  const LANES = [
+    {
+      path: "src/auth/login.ts",
+      risk: /** @type {const} */ ("high"),
+      lane: /** @type {const} */ ("deep"),
+    },
+    {
+      path: "src/util.ts",
+      risk: /** @type {const} */ ("low"),
+      lane: /** @type {const} */ ("skim"),
+    },
+  ];
+  const BUDGETS = { deep: 3, standard: 0, skim: 1 };
+
+  it("states the lane procedure once, with the effort split and the exemption refusal", () => {
+    const system = systemOf(
+      parts({
+        reviewed: [file("src/auth/login.ts"), file("src/util.ts")],
+        lanes: LANES,
+        laneBudgets: BUDGETS,
+      }),
+    );
+    expect(system).toContain("Review lanes");
+    expect(system).toContain('"deep", "standard" or "skim"');
+    expect(system).toContain("a lane is not an exemption");
+    expect(system).toContain("every changed file still counts toward coverage");
+    expect(system).toContain("The mode paragraphs above stay authoritative");
+    expect(system).toContain("deep: 3, standard: 0, skim: 1");
+    expect(system.match(/Review lanes/g) ?? []).toHaveLength(1);
+  });
+
+  it("no lane assignments, no procedure paragraph", () => {
+    expect(systemOf(parts())).not.toContain("Review lanes");
+  });
+
+  it("sits the procedure below the mode paragraphs, which stay authoritative", () => {
+    const system = systemOf(
+      parts({
+        strictness: "high",
+        strategy: "adversarial",
+        reviewed: [file("src/auth/login.ts"), file("src/util.ts")],
+        lanes: LANES,
+        laneBudgets: BUDGETS,
+      }),
+    );
+    expect(system.indexOf("Review mode — strictness")).toBeLessThan(system.indexOf("Review lanes"));
+    expect(system.indexOf("Review lanes")).toBeLessThan(system.indexOf("Review strategy"));
+  });
+
+  it("annotates every inventory line with its code-assigned lane", () => {
+    const { messages } = buildPrompt(
+      parts({
+        reviewed: [file("src/auth/login.ts"), file("src/util.ts")],
+        lanes: LANES,
+        laneBudgets: BUDGETS,
+      }),
+    );
+    const user = /** @type {string} */ (messages[1]?.content);
+    const deep = user.split("\n").find((line) => line.startsWith("- src/auth/login.ts"));
+    const skim = user.split("\n").find((line) => line.startsWith("- src/util.ts"));
+    expect(deep).toBe("- src/auth/login.ts (+2/-1, modified, lane: deep)");
+    expect(skim).toBe("- src/util.ts (+2/-1, modified, lane: skim)");
+  });
+
+  it("never phrases a skim lane as skippable in the data message", () => {
+    const { messages } = buildPrompt(
+      parts({
+        reviewed: [file("src/util.ts")],
+        lanes: [{ path: "src/util.ts", risk: "low", lane: "skim" }],
+        laneBudgets: { deep: 0, standard: 0, skim: 2 },
+      }),
+    );
+    const user = /** @type {string} */ (messages[1]?.content);
+    expect(user).toContain("lane: skim");
+    expect(user).not.toMatch(/skip|exempt|optional|ignore/);
+  });
+
+  it("refuses assignments that cannot account for the whole inventory", () => {
+    expect(() => buildPrompt(parts({ reviewed: [file("src/util.ts")], lanes: [] }))).toThrow(
+      /cannot account for the whole universe/,
+    );
+  });
+
+  it("refuses duplicate assignments that leave a file unlaned", () => {
+    expect(() =>
+      buildPrompt(
+        parts({
+          reviewed: [file("src/auth/login.ts"), file("src/util.ts")],
+          lanes: [
+            { path: "src/auth/login.ts", risk: "high", lane: "deep" },
+            { path: "src/auth/login.ts", risk: "high", lane: "deep" },
+          ],
+          laneBudgets: BUDGETS,
+        }),
+      ),
+    ).toThrow(/cannot account for the whole universe/);
   });
 });

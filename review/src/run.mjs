@@ -18,6 +18,8 @@ import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
 import { canConcludeReview, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
 import { createTools } from "./tools.mjs";
+import { classifyRisk } from "./risk.mjs";
+import { assignLanes, laneBudget } from "./lanes.mjs";
 import { buildPrompt } from "./prompt.mjs";
 import { runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
 import { parseAnswer, validateAnswer } from "./answer.mjs";
@@ -134,6 +136,17 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     );
   }
 
+  // ── Attention: lanes, fixed before any model call ───────────────────────
+  // Per-file risk comes from the same deterministic classifier the plan
+  // documents describe — one file per call, so each row is that file's
+  // own plan. Config and classifier are the only inputs: nothing the
+  // model says can move a file between lanes.
+  const lanes = assignLanes(
+    inventory.reviewed.map((file) => ({ path: file.filename, riskPlan: classifyRisk([file]) })),
+    config,
+  );
+  const laneBudgets = laneBudget(lanes, inputs.maxTurns);
+
   // ── The conversation's raw materials ────────────────────────────────────
   const activeRules = selectActiveRules(config.rules, inventory.reviewed);
   /** @type {Map<string, string>} */
@@ -154,6 +167,8 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     language: config.language,
     strictness: config.strictness,
     strategy: config.strategy,
+    lanes,
+    laneBudgets,
     reviewed: inventory.reviewed,
     instruction: documents.instruction,
     activeRules,
