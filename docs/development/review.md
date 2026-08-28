@@ -1,6 +1,6 @@
 # Development — `review`
 
-`review` is shipped behaviour — `v0.1` through `v0.3` are pinnable — and this
+`review` is shipped behaviour — released and pinnable — and this
 page is the architecture the running code is built to. It still reads as the
 implementation contract: every behaviour below is stated precisely enough to
 test, and is tested. The shared mechanism it

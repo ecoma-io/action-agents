@@ -7,9 +7,10 @@ By contributing you agree that your work is licensed under the Apache License
 2.0, and that you have the right to grant that license — see
 [Ownership of what you contribute](#ownership-of-what-you-contribute).
 
-> **Status: released.** v0.1.0 shipped; the `v0.1` floating tag and the `v0.1.0`
-> exact tag are both pinnable. What follows still describes how the repository
-> is built and judged — a release does not change the rules.
+> **Status: released.** Every tag is pinnable — floating and exact alike —
+> and [CHANGELOG.md](CHANGELOG.md) records what shipped. What follows still
+> describes how the repository is built and judged — a release does not
+> change the rules.
 
 ## The one rule that decides most questions
 

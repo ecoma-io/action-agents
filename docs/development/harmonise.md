@@ -1,6 +1,6 @@
 # Development — `harmonise`
 
-Shipped behaviour, not intent: `harmonise` is released and pinnable (`v0.1` through `v0.3`), and this page is the specification the running code implements, kept as the implementation contract — every behavior below is stated precisely enough to test, and is tested. The shared mechanism it rests on — file discovery, the default branch, precedence — is in [the configuration page](configuration.md); this page is the document model, the prompt and the pull request.
+Shipped behaviour, not intent: `harmonise` is released and pinnable, and this page is the specification the running code implements, kept as the implementation contract — every behavior below is stated precisely enough to test, and is tested. The shared mechanism it rests on — file discovery, the default branch, precedence — is in [the configuration page](configuration.md); this page is the document model, the prompt and the pull request.
 
 ## What `harmonise` decides
 

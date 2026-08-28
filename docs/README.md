@@ -18,7 +18,7 @@ a link that goes nowhere.
 | Providers                                                  | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless               |
 
 Doctrine comes first deliberately. The rows below it describe behaviour that
-exists — all three actions do their work, released as `v0.1` through `v0.3` —
+exists — all three actions do their work, released and pinnable —
 and the development pages carry each action's architecture: the contract the
 shipped code is still judged against, and the ceilings the actions share.
 
