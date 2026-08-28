@@ -175,7 +175,6 @@ The inventory is built **before** any translation begins. This is critical for l
 
 The inventory is only sound if it is complete. A partial enumeration silently treated as complete corrupts everything downstream — orphan detection, missing-translation detection, link resolution all answer wrongly while looking authoritative. Therefore:
 
-- The tree listing follows `Link: rel="next"` pagination when the endpoint offers it;
 - The Git Trees API answers in one response and signals overflow with its own `truncated` flag — **a truncated response is refused, not processed**. The run fails red naming the ceiling, and no pair is translated from an inventory known to be incomplete;
 - There is no v1 fallback that processes part of a large repository. A repository past the API's ceiling needs its documentation split before `harmonise` can serve it, and the failure says exactly that.
 
@@ -562,6 +561,15 @@ body     action-authored, per-language sections:
          No model text beyond the summary lines; no @mention of anyone.
 ```
 
+One run shape changes no translation file at all. When every pair came back in
+step but a recorded state record was re-pinned — a noop endorsement, proved
+against this run's source, policy and transformation version — the run still
+publishes: the commit carries only `state.json` and `tm.json` (paths in
+[Snapshot authority](#snapshot-authority)), the re-pinned record made current
+and the endorsed wording entered into the memory, so the next run skips the
+pair at zero model calls. The pull request is created if absent, updated in
+place if already open — exactly as with translation changes.
+
 ### Git lifecycle specification
 
 #### Branch naming
@@ -605,7 +613,7 @@ body     action-authored, per-language sections:
 
 #### Snapshot authority
 
-State (`state.json`) and the translation memory (`tm.json`) resolve from the
+State (`state.json`, at `.github/action-agents/harmonise/state.json`) and the translation memory (`tm.json`, at `.github/action-agents/harmonise/tm.json`) resolve from the
 same snapshot of repository history, literally: the `harmonise/<lang>` branch
 tip is resolved **once** per run, and that one SHA feeds both advisory reads.
 A push landing between the two reads can never pair a state from one commit
@@ -646,7 +654,7 @@ with a memory from another.
 - Create multiple PRs for one run;
 - `@mention` anyone in the PR body;
 
-All pairs in step → no commit, no branch, no pull request: a green run and a log line. That is the common case on a schedule, and it is the honest one.
+All pairs in step with no recorded state to re-pin → no commit, no branch, no pull request: a green run and a log line. That is the common case on a schedule, and it is the honest one. A run that re-pinned even one record is not this case — its state write still publishes, as the bookkeeping-only commit [the pull request](#the-pull-request) describes.
 
 ## Failure posture
 
