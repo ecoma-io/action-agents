@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/ecoma-io/action-agents/compare/v0.2.0...v0.3.0) (2026-08-28)
+
+
+### Features
+
+* **harmonise:** bounded-concurrency pool (pure module) ([#72](https://github.com/ecoma-io/action-agents/issues/72)) ([efcaa1b](https://github.com/ecoma-io/action-agents/commit/efcaa1be1f9f348d85db52d6c9898b7ddb641878))
+* **harmonise:** changed-block planning (pure module) ([#70](https://github.com/ecoma-io/action-agents/issues/70)) ([7cc2e0e](https://github.com/ecoma-io/action-agents/commit/7cc2e0e3d3767ecfb1b11b857f0152fb28232663))
+* **harmonise:** configurable deterministic asset-localization layouts ([#63](https://github.com/ecoma-io/action-agents/issues/63)) ([d0b4f4c](https://github.com/ecoma-io/action-agents/commit/d0b4f4c2f2425f89fe74b71e218f352ca4c96f97))
+* **harmonise:** deterministic frontmatter protection policy (pure module) ([#68](https://github.com/ecoma-io/action-agents/issues/68)) ([9e0db6b](https://github.com/ecoma-io/action-agents/commit/9e0db6b3686ce2fbe66e3628a7ad0d78a4b89b15))
+* **harmonise:** deterministic stale classification (pure module) ([#66](https://github.com/ecoma-io/action-agents/issues/66)) ([af48d5a](https://github.com/ecoma-io/action-agents/commit/af48d5a46904024fdea79097e2186b43f6b34a91))
+* **harmonise:** deterministic terminology system (pure module) ([#71](https://github.com/ecoma-io/action-agents/issues/71)) ([1f5c0ed](https://github.com/ecoma-io/action-agents/commit/1f5c0ed07989358123909a9ea108443ecd1a2d1d))
+* **harmonise:** manual-edit protection policy (pure module) ([#73](https://github.com/ecoma-io/action-agents/issues/73)) ([face571](https://github.com/ecoma-io/action-agents/commit/face57109f2503494e8cef8b0729ec915c261975))
+* **harmonise:** runtime-canonical drift detection (pure module) ([#67](https://github.com/ecoma-io/action-agents/issues/67)) ([015ae5e](https://github.com/ecoma-io/action-agents/commit/015ae5e5a5fa6e786e16597cbcfb9cdf239a87da))
+* **harmonise:** skip unchanged pairs without model calls ([#75](https://github.com/ecoma-io/action-agents/issues/75)) ([92c07bf](https://github.com/ecoma-io/action-agents/commit/92c07bf7580ac33f018fd7b8b940d97986d99175))
+* **harmonise:** three-way target merge (pure module) ([#76](https://github.com/ecoma-io/action-agents/issues/76)) ([6a31228](https://github.com/ecoma-io/action-agents/commit/6a31228941bd382d9f5c5c391a040a948616b678))
+* **harmonise:** translation memory store (pure module) ([#64](https://github.com/ecoma-io/action-agents/issues/64)) ([bea2998](https://github.com/ecoma-io/action-agents/commit/bea2998b72d47e004950cf8f76c7fb4424d79b73))
+* **review:** deterministic coverage accounting and strict partial review ([#69](https://github.com/ecoma-io/action-agents/issues/69)) ([962238f](https://github.com/ecoma-io/action-agents/commit/962238f136686a6d2e5a7ed5dc79685c813e8eb8))
+* **review:** risk-based review lanes ([#74](https://github.com/ecoma-io/action-agents/issues/74)) ([5e9de6a](https://github.com/ecoma-io/action-agents/commit/5e9de6afacca3a41de8efb8760c37015d0921b18))
+
 ## [0.2.0](https://github.com/ecoma-io/action-agents/compare/v0.1.1...v0.2.0) (2026-08-28)
 
 
