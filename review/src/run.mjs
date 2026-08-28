@@ -286,7 +286,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   // What it publishes is what renders and what the count names.
   const verified = await runVerificationPass({
     findings,
-    policy: { strategy: config.strategy },
+    policy: { strategy: config.strategy, strictness: config.strictness },
     lanes,
     recordedReads,
     workspace,
@@ -419,7 +419,7 @@ function applyStrictness(findings, strictness, info) {
  *
  * @param {object} input
  * @param {import("./answer.mjs").Finding[]} input.findings the post-nit-drop set
- * @param {{ strategy: import("./config.mjs").Strategy }} input.policy
+ * @param {{ strategy: import("./config.mjs").Strategy, strictness: import("./config.mjs").Strictness }} input.policy the config's strategy and strictness — the gate's mode policy is derived from both
  * @param {import("./lanes.mjs").LaneAssignment[]} input.lanes the lanes code assigned before the loop
  * @param {ReadonlyMap<string, string>} input.recordedReads the loop's captured read bytes
  * @param {import("#core/workspace.mjs").Workspace} input.workspace the confined resolver every verifier path goes through
@@ -427,7 +427,7 @@ function applyStrictness(findings, strictness, info) {
  * @param {import("#core/chat.mjs").Chat} input.chat
  * @param {string} input.model
  * @param {(line: string) => void} input.info the run's log sink, `review:`-prefixed
- * @returns {Promise<{ findings: import("./verify.mjs").VerifiedFinding[], accounting: { planned: number, recorded: number } }>}
+ * @returns {Promise<{ findings: import("./verify.mjs").VerifiedFinding[], accounting: import("./gates.mjs").VerificationFacts }>} the publication set and the recorded outcome the verification gate judges
  */
 async function runVerificationPass({
   findings,
@@ -477,7 +477,27 @@ async function runVerificationPass({
   }
   return {
     findings: applied.findings,
-    accounting: { planned: plan.items.length, recorded: verdicts.length },
+    accounting: {
+      planned: plan.items.map((item) => item.id),
+      outcomes: applied.findings.flatMap((finding) => {
+        if (finding.id === undefined || finding.lifecycle === undefined) return [];
+        return [
+          {
+            id: finding.id,
+            lifecycle: finding.lifecycle,
+            ...(finding.verdict !== undefined ? { verdict: finding.verdict } : {}),
+            ...(finding.reason !== undefined ? { reason: finding.reason } : {}),
+          },
+        ];
+      }),
+      skipped: plan.skipped.map((skip) => ({
+        file: skip.finding.file,
+        line: skip.finding.line,
+        reason: skip.reason,
+      })),
+      strategy: policy.strategy,
+      strictness: policy.strictness,
+    },
   };
 }
 

@@ -22,9 +22,12 @@
 
 import { canConcludeReview, normaliseReadPath } from "./coverage.mjs";
 import { validatedLedger } from "./provenance.mjs";
+import { LIFECYCLE_OF_VERDICT, PUBLISHED_LIFECYCLE_STATES } from "./verify.mjs";
 
 /** @typedef {import("./answer.mjs").Finding} Finding */
 /** @typedef {import("./config.mjs").Strictness} Strictness */
+/** @typedef {import("./config.mjs").Strategy} Strategy */
+/** @typedef {import("./verify.mjs").PublishedLifecycle} PublishedLifecycle */
 /** @typedef {import("./coverage.mjs").CoverageReport} CoverageReport */
 /** @typedef {import("./loop.mjs").Bound} Bound */
 /** @typedef {import("./provenance.mjs").QuarantinedFinding} QuarantinedFinding */
@@ -94,9 +97,36 @@ export class GateFactsError extends Error {
  */
 
 /**
+ * One planned finding's recorded outcome — what the verification pass itself
+ * attached to the finding, never a value the model's text carries. The id is
+ * the plan's identity, attached by code; the lifecycle is the state
+ * {@link LIFECYCLE_OF_VERDICT} assigned; the verdict is the parsed verdict
+ * that moved it, absent when the pass resolved the finding without one.
+ *
+ * @typedef {object} VerificationOutcome
+ * @property {string} id the plan-local identity
+ * @property {PublishedLifecycle} lifecycle the terminal state the pass assigned
+ * @property {string} [verdict] the parsed verdict, when one was recorded
+ * @property {string} [reason] the pass's own reason for the state
+ */
+
+/**
+ * A plannable finding the plan could not evidence — the pass never verifies
+ * blind, and the finding publishes `unresolved` carrying this reason.
+ *
+ * @typedef {object} VerificationSkipRecord
+ * @property {string} file
+ * @property {number} line
+ * @property {string} reason
+ */
+
+/**
  * @typedef {object} VerificationFacts the verify pass's recorded outcome
- * @property {number} planned findings the plan scheduled for verification
- * @property {number} recorded verdicts recorded — one per planned finding
+ * @property {string[]} planned the plan's identities, in plan order
+ * @property {VerificationOutcome[]} outcomes one record per planned finding
+ * @property {VerificationSkipRecord[]} skipped plannable findings the plan could not evidence
+ * @property {Strategy} strategy the review's strategy — `adversarial` widens both the plan and the acceptance policy
+ * @property {Strictness} strictness the review's strictness — the `high` arm refuses an unresolved finding
  */
 
 /**
@@ -133,6 +163,9 @@ const BOUND_REASONS = Object.freeze({
 
 /** The strictness arms, as the policy spells them. */
 const STRICTNESS_ARMS = /** @type {const} */ (["low", "medium", "high"]);
+
+/** The strategy arms, as the policy spells them. */
+const STRATEGY_ARMS = /** @type {const} */ (["standard", "adversarial"]);
 
 /**
  * @param {unknown} value
@@ -416,22 +449,187 @@ function evaluateProvenance(slice) {
 }
 
 /**
+ * The mode the verification gate judges under, derived from the review's
+ * policy — never configured directly: the adversarial strategy is the most
+ * demanding posture whatever the strictness; a `high` strictness on the
+ * standard strategy is `strict`; everything else is `normal`.
+ *
+ * @param {Strategy} strategy
+ * @param {Strictness} strictness
+ * @returns {"normal" | "strict" | "adversarial"}
+ */
+function verificationMode(strategy, strictness) {
+  if (strategy === "adversarial") return "adversarial";
+  return strictness === "high" ? "strict" : "normal";
+}
+
+/**
+ * The sentence one unresolved planned finding produces — its id and, when
+ * the pass recorded one, its own reason.
+ *
+ * @param {string} id
+ * @param {string | undefined} reason
+ * @returns {string}
+ */
+function unresolvedPlannedClause(id, reason) {
+  return reason === undefined ? `finding ${id}` : `finding ${id} (${reason})`;
+}
+
+/**
+ * Judges verification completeness over the recorded results, not counting.
+ * The facts are the plan's identities, the outcome record each planned
+ * finding carries, the skips the plan could not evidence, and the policy the
+ * run ran under. Three checks, in the order they bite:
+ *
+ * 1. Verdict coverage — every planned finding must carry an outcome record.
+ *    A planned finding with no record at all is its own named failure at
+ *    every mode: the pass's accounting does not close, and no count
+ *    equality stands in for the missing record.
+ * 2. Unresolved accounting — the pass's `unresolved` outcomes and the
+ *    plan's unevidenced skips are enumerated in plan order, so a refusal
+ *    names exactly which findings verification could not settle.
+ * 3. Mode policy — under `normal` the unresolved findings publish with the
+ *    accounting visible in the report; under `strict` and `adversarial` any
+ *    unresolved finding refuses the Complete posture.
+ *
+ * The empty plan passes trivially: nothing was scheduled, so nothing is
+ * missing. A record the pass could never have produced — a lifecycle
+ * outside the published vocabulary, a verdict that contradicts
+ * {@link LIFECYCLE_OF_VERDICT}, an outcome for an id the plan never
+ * scheduled, a duplicate — is a `GateFactsError`: the gate reads only
+ * code-recorded state, and a shape the code cannot have written is never
+ * coerced into a judgment.
+ *
  * @param {unknown} slice
  * @returns {GateVerdict}
  */
 function evaluateVerification(slice) {
   const facts = assertedObject("verification", slice);
-  if (!isCount(facts["planned"]) || !isCount(facts["recorded"])) {
+  if (
+    !isStringList(facts["planned"]) ||
+    !Array.isArray(facts["outcomes"]) ||
+    !Array.isArray(facts["skipped"])
+  ) {
     throw new GateFactsError(
-      "verification facts: 'planned' and 'recorded' must be non-negative integers",
+      "verification facts: 'planned' must be a string list and 'outcomes' and 'skipped' must be arrays",
     );
   }
-  const planned = /** @type {number} */ (facts["planned"]);
-  const recorded = /** @type {number} */ (facts["recorded"]);
-  if (planned === recorded) return { passed: true };
+  const strategy = facts["strategy"];
+  if (typeof strategy !== "string" || !STRATEGY_ARMS.includes(/** @type {Strategy} */ (strategy))) {
+    throw new GateFactsError(
+      "verification facts: 'strategy' must be one of 'standard', 'adversarial'",
+    );
+  }
+  const strictness = facts["strictness"];
+  if (
+    typeof strictness !== "string" ||
+    !STRICTNESS_ARMS.includes(/** @type {Strictness} */ (strictness))
+  ) {
+    throw new GateFactsError(
+      "verification facts: 'strictness' must be one of 'low', 'medium', 'high'",
+    );
+  }
+  const planned = /** @type {string[]} */ (facts["planned"]);
+  const plannedSet = new Set(planned);
+  if (plannedSet.size !== planned.length) {
+    throw new GateFactsError(
+      "verification facts: 'planned' carries a duplicate id — the plan names each finding once",
+    );
+  }
+  /** @type {Map<string, Record<string, unknown>>} */
+  const outcomeById = new Map();
+  for (const entry of /** @type {unknown[]} */ (facts["outcomes"])) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new GateFactsError("verification facts: an outcome must be an object");
+    }
+    const record = /** @type {Record<string, unknown>} */ (entry);
+    const id = record["id"];
+    if (typeof id !== "string" || !plannedSet.has(id)) {
+      throw new GateFactsError(
+        `verification facts: an outcome names '${String(id)}', which the plan never scheduled — the accounting may only name planned findings`,
+      );
+    }
+    if (outcomeById.has(id)) {
+      throw new GateFactsError(`verification facts: finding '${id}' carries two outcome records`);
+    }
+    const lifecycle = record["lifecycle"];
+    if (
+      typeof lifecycle !== "string" ||
+      !PUBLISHED_LIFECYCLE_STATES.includes(/** @type {PublishedLifecycle} */ (lifecycle))
+    ) {
+      throw new GateFactsError(
+        "verification facts: an outcome's 'lifecycle' must be one of 'confirmed', 'refuted', 'unresolved'",
+      );
+    }
+    const verdict = record["verdict"];
+    if (
+      verdict !== undefined &&
+      (typeof verdict !== "string" ||
+        LIFECYCLE_OF_VERDICT[/** @type {import("./verify.mjs").Verdict} */ (verdict)] !== lifecycle)
+    ) {
+      throw new GateFactsError(
+        "verification facts: an outcome's 'verdict' must be the verdict its lifecycle maps to — 'confirmed', 'refuted' or 'uncertain'",
+      );
+    }
+    const reason = record["reason"];
+    if (reason !== undefined && typeof reason !== "string") {
+      throw new GateFactsError(
+        "verification facts: an outcome's 'reason' must be a string when present",
+      );
+    }
+    outcomeById.set(id, record);
+  }
+  for (const entry of /** @type {unknown[]} */ (facts["skipped"])) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new GateFactsError("verification facts: a skip record must be an object");
+    }
+    const record = /** @type {Record<string, unknown>} */ (entry);
+    if (
+      typeof record["file"] !== "string" ||
+      typeof record["line"] !== "number" ||
+      !Number.isInteger(record["line"]) ||
+      record["line"] < 1 ||
+      typeof record["reason"] !== "string"
+    ) {
+      throw new GateFactsError(
+        "verification facts: a skip record must carry a file, a positive line and its reason",
+      );
+    }
+  }
+  // Verdict coverage first: a planned finding with no record at all is an
+  // accounting that does not close — at every mode, whatever the policy.
+  /** @type {string[]} */
+  const unrecorded = planned.filter((id) => !outcomeById.has(id));
+  if (unrecorded.length > 0) {
+    return {
+      passed: false,
+      reason: `the verification pass left planned finding(s) ${unrecorded.join(", ")} with no recorded outcome — the pass's accounting does not close`,
+    };
+  }
+  // The unresolved accounting: the pass's own unresolved outcomes, then the
+  // skips, in plan order — the enumeration a refusal names.
+  /** @type {string[]} */
+  const unresolved = [];
+  for (const id of planned) {
+    const record = outcomeById.get(id);
+    if (record !== undefined && record["lifecycle"] === "unresolved") {
+      unresolved.push(
+        unresolvedPlannedClause(id, /** @type {string | undefined} */ (record["reason"])),
+      );
+    }
+  }
+  for (const record of /** @type {VerificationSkipRecord[]} */ (facts["skipped"])) {
+    unresolved.push(`${record.file}:${String(record.line)} (${record.reason})`);
+  }
+  if (unresolved.length === 0) return { passed: true };
+  const mode = verificationMode(
+    /** @type {Strategy} */ (strategy),
+    /** @type {Strictness} */ (strictness),
+  );
+  if (mode === "normal") return { passed: true };
   return {
     passed: false,
-    reason: `the verification pass recorded ${String(recorded)} verdict(s) against ${String(planned)} planned finding(s) — the pass's outcome is not fully recorded`,
+    reason: `the ${mode} policy refuses an unresolved finding: ${unresolved.join("; ")}`,
   };
 }
 
