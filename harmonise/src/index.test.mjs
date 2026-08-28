@@ -1047,10 +1047,100 @@ describe("run with recorded state", () => {
     expect(out).toMatch(
       /^translated vi manual\/dev\.md → manual\/vi\/dev\.md \[existing\] unchanged\b/m,
     );
-    // The state file's records are deliberately left unasserted here: the
-    // write-back drops the noop pair's record outright (#88), and pinning
-    // either that drop or verbatim preservation would cement a shape that
-    // re-models the pair on every later run.
+    // The state file carries both records: the fr proposal's, and the vi
+    // record re-pinned to this run's policy digest — the model endorsed the
+    // published bytes, so the source and translation fingerprints are
+    // unchanged and only the currency fields move (#88).
+    const { records } = stateBlobOf(forgeDouble);
+    expect(records).toEqual([
+      {
+        schemaVersion: STATE_SCHEMA_VERSION,
+        sourcePath: "manual/dev.md",
+        destinationPath: "manual/fr/dev.md",
+        language: "fr",
+        sourceFingerprint: contentFingerprint(SOURCE),
+        translationFingerprint: contentFingerprint(french),
+        policyFingerprint: POLICY,
+        transformationVersion: TRANSFORMATION_VERSION,
+      },
+      viRecord(),
+    ]);
+  });
+
+  it("publishes the re-pinned state when nothing is proposed, and the next run skips at zero calls", async () => {
+    // The only pair is policy-stale and the model endorses the published
+    // bytes: a noop. No pair proposes, yet the re-pinned record must reach
+    // the state file — otherwise the pair costs one model call on every run
+    // forever (#88).
+    const staleVi = { ...viRecord(), policyFingerprint: contentFingerprint("an older policy") };
+    const chatDouble = chat([proposes(TRANSLATED)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": TRANSLATED,
+      [STATE_PATH]: renderState([staleVi]),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    // The publication carries the state file and the memory alone — no
+    // translation changed.
+    const tree = /** @type {{ args: unknown[] }} */ (
+      forgeDouble.writes.find((w) => w.op === "createTree")
+    );
+    const changes = /** @type {{ path: string }[]} */ (tree.args[1]);
+    expect(changes.map((change) => change.path)).toEqual([STATE_PATH, TM_PATH]);
+    expect(stateBlobOf(forgeDouble)).toEqual({ records: [viRecord()] });
+
+    // The merge this PR's commit models: the re-pinned state reaches the
+    // files the next run reads, and that run proves every verdict without
+    // a single model call.
+    /** @type {Record<string, string>} */
+    const nextFiles = {
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": TRANSLATED,
+      [STATE_PATH]: JSON.stringify(stateBlobOf(forgeDouble)),
+    };
+    const secondChat = chat([new Error("the model must not be called")]);
+    const secondForge = forge(nextFiles);
+    const secondIo = /** @type {any} */ ({ forge: secondForge, chat: secondChat, evidence });
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), secondIo),
+    ).resolves.toBeUndefined();
+
+    expect(secondChat.calls()).toBe(0);
+    expect(secondForge.writes).toEqual([]);
+  });
+
+  it("writes nothing when a never-recorded pair's answer is a noop", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // No state file, so no record: the model endorses the existing bytes (a
+    // noop) but nothing was ever translated, so nothing is recorded and the
+    // all-in-step early return stands (#88).
+    const chatDouble = chat([proposes(TRANSLATED)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": SOURCE,
+      "manual/vi/dev.md": TRANSLATED,
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    expect(forgeDouble.writes).toEqual([]);
+    const out = logged(log);
+    expect(out).toMatch(
+      /^translated vi manual\/dev\.md → manual\/vi\/dev\.md \[existing\] unchanged\b/m,
+    );
+    expect(out).toMatch(/nothing to propose/);
   });
 });
 
@@ -1358,11 +1448,13 @@ describe("run with manual-edit protection and three-way merge", () => {
     expect(state.records[0]?.translationFingerprint).toBe(contentFingerprint(EDITED));
   });
 
-  it("keeps a no-op answer a no-op on a drifted pair — nothing merged, nothing written", async () => {
+  it("keeps a no-op answer a no-op on a drifted pair — nothing merged, nothing republished", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     // The answer is byte-identical to the drifted target, so the pair is a
     // no-op before the merge is ever consulted — a no-op carries no fresh
-    // text, and protection does not turn it into a publication.
+    // text, and protection does not turn it into a publication. The
+    // recorded state is re-pinned with the run's currency (#88) — the model
+    // endorsed the bytes — but nothing was merged or republished.
     const chatDouble = chat([proposes(EDITED)]);
     const forgeDouble = forge({
       ".github/action-agents/harmonise/harmonise.json5": CONFIG,
@@ -1378,7 +1470,15 @@ describe("run with manual-edit protection and three-way merge", () => {
     ).resolves.toBeUndefined();
 
     expect(chatDouble.calls()).toBe(1);
-    expect(forgeDouble.writes).toEqual([]);
+    // The re-pinned record reaches the state file, but nothing was merged
+    // or republished — the target's manual edit stays untouched.
+    const state = stateBlobOf(forgeDouble);
+    expect(state.records).toEqual([viPublication()]);
+    const tree = /** @type {{ args: unknown[] }} */ (
+      forgeDouble.writes.find((w) => w.op === "createTree")
+    );
+    const changes = /** @type {{ path: string }[]} */ (tree.args[1]);
+    expect(changes.map((change) => change.path)).toEqual([STATE_PATH, TM_PATH]);
     const out = logged(log);
     expect(out).toMatch(/\[existing\] unchanged/);
     expect(out).not.toMatch(/three-way merge/);
