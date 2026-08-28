@@ -28,10 +28,24 @@ function facts(over = {}) {
     outcome: { classification: "published", reason: "Complete review published (2 findings)" },
     policy: { strictness: "high", strategy: "adversarial" },
     findings: [
-      { id: "1", severity: "concern", file: "src/a.mjs", line: 2, message: "off-by-one" },
+      {
+        id: "1",
+        lifecycle: "confirmed",
+        severity: "concern",
+        file: "src/a.mjs",
+        line: 2,
+        message: "off-by-one",
+      },
       { severity: "nit", file: "src/b.mjs", line: 9, message: "typo" },
     ],
-    verdicts: [{ id: "1", verdict: "confirmed", reason: "the captured bounds check the index" }],
+    verdicts: [
+      {
+        id: "1",
+        verdict: "confirmed",
+        lifecycle: "confirmed",
+        reason: "the captured bounds check the index",
+      },
+    ],
     coverage: { total: 2, covered: ["src/a.mjs"], uncovered: ["src/b.mjs"] },
     phases: [
       { from: "orient", to: "investigate" },
@@ -86,6 +100,7 @@ describe("buildArtifact", () => {
       file: "src/a.mjs",
       line: 2,
       message: "off-by-one",
+      lifecycle: "confirmed",
     });
     expect(second.identity).toBe(
       findingIdentity({ severity: "nit", file: "src/b.mjs", line: 9, message: "typo" }),
@@ -94,6 +109,7 @@ describe("buildArtifact", () => {
       {
         findingIdentity: first.identity,
         verdict: "confirmed",
+        lifecycle: "confirmed",
         reason: "the captured bounds check the index",
       },
     ]);
@@ -322,33 +338,42 @@ describe("buildArtifact refusals", () => {
       findings: [
         {
           id: "1",
+          lifecycle: "confirmed",
           severity: "concern",
           file: "src/a.mjs",
           line: 2,
           message: "x".repeat(MESSAGE_CHARS + 1),
         },
       ],
-      verdicts: [{ id: "1", verdict: "confirmed", reason: "ok" }],
+      verdicts: [{ id: "1", verdict: "confirmed", lifecycle: "confirmed", reason: "ok" }],
     });
     expect(() => buildArtifact(over)).toThrow(ArtifactError);
     const atCap = facts({
       findings: [
         {
           id: "1",
+          lifecycle: "confirmed",
           severity: "concern",
           file: "src/a.mjs",
           line: 2,
           message: "x".repeat(MESSAGE_CHARS),
         },
       ],
-      verdicts: [{ id: "1", verdict: "confirmed", reason: "ok" }],
+      verdicts: [{ id: "1", verdict: "confirmed", lifecycle: "confirmed", reason: "ok" }],
     });
     expect(() => buildArtifact(atCap)).not.toThrow();
   });
 
   it("refuses a verdict reason over the documented cap", () => {
     const over = facts({
-      verdicts: [{ id: "1", verdict: "confirmed", reason: "y".repeat(VERDICT_REASON_CHARS + 1) }],
+      verdicts: [
+        {
+          id: "1",
+          verdict: "confirmed",
+          lifecycle: "confirmed",
+          reason: "y".repeat(VERDICT_REASON_CHARS + 1),
+        },
+      ],
     });
     expect(() => buildArtifact(over)).toThrow(ArtifactError);
   });
@@ -435,10 +460,83 @@ describe("buildArtifact refusals", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
-          f.verdicts.push({ id: "1", verdict: "uncertain", reason: "duplicate" });
+          f.verdicts.push({
+            id: "1",
+            verdict: "uncertain",
+            lifecycle: "unresolved",
+            reason: "duplicate",
+          });
         }),
       ),
     ).toThrow(ArtifactError);
+  });
+
+  it("refuses a verdict whose lifecycle does not follow from the verdict", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.verdicts[0].lifecycle = "refuted";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a finding lifecycle that contradicts its verdict", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].lifecycle = "refuted";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a planned finding with no lifecycle — never left a candidate", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.findings[0].lifecycle;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a candidate lifecycle — a candidate never publishes", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].lifecycle = "candidate";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("accepts a skipped finding — unresolved with no id and no verdict", () => {
+    const skipped = facts({
+      findings: [
+        {
+          lifecycle: "unresolved",
+          severity: "concern",
+          file: "src/gone.mjs",
+          line: 4,
+          message: "unreachable",
+        },
+      ],
+      verdicts: [],
+      outcome: { classification: "published", reason: "Complete review published (1 findings)" },
+    });
+    const artifact = buildArtifact(skipped);
+    expect(artifact.verdicts).toEqual([]);
+    expect(artifact.findings[0]?.lifecycle).toBe("unresolved");
+  });
+
+  it("accepts an unplanned finding — no id, no lifecycle, published as it arrived", () => {
+    const skim = facts({
+      findings: [{ severity: "nit", file: "src/b.mjs", line: 9, message: "typo" }],
+      verdicts: [],
+    });
+    const artifact = buildArtifact(skim);
+    expect(artifact.findings[0]).not.toHaveProperty("lifecycle");
   });
 
   it("refuses a coverage summary that does not partition the expected set", () => {
@@ -573,13 +671,19 @@ describe("serialiseArtifact", () => {
         covered: ordered.coverage.covered,
         total: ordered.coverage.total,
       },
-      verdicts: ordered.verdicts.map((v) => ({ reason: v.reason, verdict: v.verdict, id: v.id })),
+      verdicts: ordered.verdicts.map((v) => ({
+        reason: v.reason,
+        verdict: v.verdict,
+        lifecycle: v.lifecycle,
+        id: v.id,
+      })),
       findings: ordered.findings.map((f) => ({
         message: f.message,
         line: f.line,
         file: f.file,
         severity: f.severity,
         ...(f.id === undefined ? {} : { id: f.id }),
+        ...(f.lifecycle === undefined ? {} : { lifecycle: f.lifecycle }),
       })),
       policy: { strategy: ordered.policy.strategy, strictness: ordered.policy.strictness },
       outcome: { reason: ordered.outcome.reason, classification: ordered.outcome.classification },

@@ -281,12 +281,12 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   const findings = applyStrictness(anchored.published, config.strictness, (line) => io.info(line));
 
   // The verification pass sits between the nit-drop and rendering: planned
-  // findings each get their own bounded investigation, and verdicts
-  // can only remove. What it publishes is what renders and what the count
-  // names — never both sets.
+  // findings each get their own bounded investigation, and verdicts assign
+  // each one its lifecycle state — refuted and unresolved publish, labeled.
+  // What it publishes is what renders and what the count names.
   const verified = await runVerificationPass({
     findings,
-    policy: { strategy: config.strategy, strictness: config.strictness },
+    policy: { strategy: config.strategy },
     lanes,
     recordedReads,
     workspace,
@@ -403,13 +403,14 @@ function applyStrictness(findings, strictness, info) {
  * verifier's own budget independent of the reviewer's. Manners defects
  * become tool errors the verifier can correct; protocol defects degrade
  * that finding to `uncertain` — a verifier misbehaving must never crash
- * the whole review. Verdicts can only remove; the plan is policy, and the
- * ledger — what was read, what the lanes assigned — is evidence. Every
- * decision is rendered into the run log.
+ * the whole review. Verdicts assign each planned finding its lifecycle
+ * state and delete nothing; the plan is policy, and the ledger — what was
+ * read, what the lanes assigned — is evidence. Every decision is rendered
+ * into the run log.
  *
  * @param {object} input
  * @param {import("./answer.mjs").Finding[]} input.findings the post-nit-drop set
- * @param {{ strategy: import("./config.mjs").Strategy, strictness: import("./config.mjs").Strictness }} input.policy
+ * @param {{ strategy: import("./config.mjs").Strategy }} input.policy
  * @param {import("./lanes.mjs").LaneAssignment[]} input.lanes the lanes code assigned before the loop
  * @param {ReadonlyMap<string, string>} input.recordedReads the loop's captured read bytes
  * @param {import("#core/workspace.mjs").Workspace} input.workspace the confined resolver every verifier path goes through
@@ -417,7 +418,7 @@ function applyStrictness(findings, strictness, info) {
  * @param {import("#core/chat.mjs").Chat} input.chat
  * @param {string} input.model
  * @param {(line: string) => void} input.info the run's log sink, `review:`-prefixed
- * @returns {Promise<{ findings: import("./answer.mjs").Finding[], accounting: { planned: number, recorded: number } }>}
+ * @returns {Promise<{ findings: import("./verify.mjs").VerifiedFinding[], accounting: { planned: number, recorded: number } }>}
  */
 async function runVerificationPass({
   findings,
@@ -452,14 +453,17 @@ async function runVerificationPass({
       ...(await oneVerdict({ item, chat, model, workspace, ignore, info })),
     });
   }
-  const applied = applyVerdicts(findings, verdicts, { strictness: policy.strictness, plan });
+  const applied = applyVerdicts(findings, verdicts, plan);
   for (const refusal of applied.refusals) {
     info(`verification pass — ${refusal}`);
   }
-  for (const drop of applied.drops) {
+  for (const finding of applied.findings) {
+    if (finding.verdict === undefined || finding.lifecycle === "confirmed") {
+      continue;
+    }
     info(
-      `verification pass — ${drop.verdict}, dropped ${drop.file}:${String(drop.line)} ` +
-        `(finding ${drop.id}): ${drop.reason}`,
+      `verification pass — ${finding.verdict} ${finding.file}:${String(finding.line)} ` +
+        `(finding ${finding.id}): ${finding.reason}`,
     );
   }
   return {

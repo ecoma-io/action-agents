@@ -164,6 +164,86 @@ describe("renderComment", () => {
     expect(empty).not.toContain("Changed files examined");
     expect(absent).not.toContain("Changed files examined");
   });
+  it("a confirmed finding renders byte-identically to an unverified one", () => {
+    /** @type {import("./render.mjs").RenderableFinding} */
+    const finding = {
+      severity: "concern",
+      file: "src/a.mjs",
+      line: 12,
+      message: "unchecked cast.",
+    };
+    const plain = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [finding],
+      strictness: "high",
+    });
+    const confirmed = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [
+        { ...finding, id: "1", lifecycle: "confirmed", verdict: "confirmed", reason: "holds" },
+      ],
+      strictness: "high",
+    });
+    expect(confirmed).toBe(plain);
+  });
+
+  it("publishes a refuted finding in its own section, out of the severity sections", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [
+        {
+          severity: "concern",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-by-one",
+          id: "1",
+          lifecycle: "refuted",
+          verdict: "refuted",
+          reason: "the line is correct",
+        },
+        { severity: "nit", file: "src/b.mjs", line: 8, message: "naming" },
+      ],
+      strictness: "high",
+    });
+    expect(body).toContain("### Refuted during verification (1)");
+    expect(body).toContain("- `src/a.mjs:2` — off-by-one");
+    expect(body).toContain("refuted: the line is correct");
+    expect(body).toContain("### Nits (1)");
+    expect(body.indexOf("Nits")).toBeLessThan(body.indexOf("Refuted during verification"));
+    // The refuted claim is a concern no more — the Concerns section stays empty.
+    expect(body).not.toContain("### Concerns");
+  });
+
+  it("marks an unresolved finding unverified in place — visible, never renamed", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [
+        {
+          severity: "concern",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-by-one",
+          id: "1",
+          lifecycle: "unresolved",
+          verdict: "uncertain",
+          reason: "cannot decide",
+        },
+      ],
+      strictness: "high",
+    });
+    expect(body).toContain("### Concerns (1)");
+    expect(body).toContain("- `src/a.mjs:2` — off-by-one");
+    expect(body).toContain("unverified: cannot decide");
+    expect(body).not.toContain("Refuted during verification");
+  });
 });
 
 describe("boundary bodies", () => {
