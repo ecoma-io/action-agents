@@ -412,8 +412,8 @@ describe("readTm", () => {
     );
     const result = await readTm({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("branch");
@@ -431,8 +431,8 @@ describe("readTm", () => {
     );
     const result = await readTm({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("default");
@@ -446,8 +446,8 @@ describe("readTm", () => {
     const reader = contentsReader({});
     const result = await readTm({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).toBeNull();
   });
@@ -463,7 +463,7 @@ describe("readTm", () => {
       }
     );
     await expect(
-      readTm({ getContents: failing, branch: BRANCH, defaultBranch: DEFAULT }),
+      readTm({ getContents: failing, branchRef: BRANCH, defaultRef: DEFAULT }),
     ).rejects.toThrow(/HTTP 500/);
   });
 
@@ -475,8 +475,8 @@ describe("readTm", () => {
     );
     const result = await readTm({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("branch");
@@ -490,8 +490,8 @@ describe("readTm", () => {
     });
     const result = await readTm({
       getContents: reader,
-      branch: BRANCH,
-      defaultBranch: DEFAULT,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("default");

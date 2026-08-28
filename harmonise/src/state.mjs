@@ -308,7 +308,10 @@ export function parseState(text) {
 
 /**
  * Reads the sync-state file from the repository, trying the harmonise branch
- * tip first, then the default branch.
+ * tip first, then the default branch. Both refs arrive already resolved —
+ * the caller resolves the branch tip once and feeds that SHA to every
+ * advisory read, so state and memory can never come from two different
+ * commits of the same branch.
  *
  * - `getContents` is injected so tests can double the forge layer.
  * - `404` (absent) is `null` from the injected reader — forge already
@@ -322,11 +325,13 @@ export function parseState(text) {
  *   pair with existing bytes is the protection policy's call: with no record
  *   there is no verified base, so the pair is preserved — never overwritten.
  *
- * @param {{ getContents: ContentsReader, branch: string, defaultBranch: string }} args
+ * @param {{ getContents: ContentsReader, branchRef: string | null, defaultRef: string }} args
+ *   `branchRef` is the resolved harmonise branch tip SHA, or `null` when the
+ *   branch does not exist; `defaultRef` is the resolved default-branch SHA.
  * @returns {Promise<{ records: SyncStateRecord[], origin: "branch" | "default" } | null>}
  */
-export async function readState({ getContents, branch, defaultBranch }) {
-  const fromBranch = await getContents(STATE_PATH, { ref: branch });
+export async function readState({ getContents, branchRef, defaultRef }) {
+  const fromBranch = branchRef === null ? null : await getContents(STATE_PATH, { ref: branchRef });
   if (fromBranch !== null) {
     try {
       const parsed = parseState(fromBranch.content);
@@ -341,7 +346,7 @@ export async function readState({ getContents, branch, defaultBranch }) {
     }
   }
 
-  const fromDefault = await getContents(STATE_PATH, { ref: defaultBranch });
+  const fromDefault = await getContents(STATE_PATH, { ref: defaultRef });
   if (fromDefault !== null) {
     try {
       const parsed = parseState(fromDefault.content);

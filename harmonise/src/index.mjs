@@ -241,7 +241,10 @@ export async function run(inputs, context, io) {
 
   // The action's own branch is snapshotted now, before any work: at update
   // time its tip must be where this run left it, or another writer moved it
-  // mid-run and is refused rather than overwritten.
+  // mid-run and is refused rather than overwritten. This one resolution is
+  // also the branch's snapshot authority — both advisory reads below pin to
+  // this exact commit, so a push landing between two reads can never split
+  // the state→memory join across two tips.
   /** @type {import("#core/forge.mjs").Forge} */
   const f = world.forge;
   const ownBranch = branchName(config.sourceLanguage);
@@ -268,8 +271,8 @@ export async function run(inputs, context, io) {
   try {
     const state = await readState({
       getContents: (path, options) => f.getContents(path, options),
-      branch: ownBranch,
-      defaultBranch: repository.defaultBranch,
+      branchRef: branchBefore === null ? null : branchBefore.sha,
+      defaultRef: ref.sha,
     });
     if (state !== null) recordedRecords = state.records;
   } catch {
@@ -277,10 +280,12 @@ export async function run(inputs, context, io) {
   }
 
   // The translation memory resolves from the same snapshot authority as the
-  // sync state above: the harmonise branch tip first, then the default
-  // branch. A run publishes state.json and tm.json in one commit on the
-  // proposal branch, so reading both from that branch tip keeps the
-  // state→memory join resolvable while the pull request is still unmerged —
+  // sync state above: ONE resolution of the harmonise branch tip — the
+  // snapshot taken before any work — feeds both advisory reads, so a run
+  // can never pair a state from one commit with a memory from another. A
+  // run publishes state.json and tm.json in one commit on the proposal
+  // branch, so reading both at that resolved tip keeps the state→memory
+  // join resolvable while the pull request is still unmerged —
   // a record can always reach the merge base it references. The memory is
   // advisory both ways: a file that is missing, unreadable, corrupt or of a
   // foreign schema version leaves an empty store — no prior translations are
@@ -295,8 +300,8 @@ export async function run(inputs, context, io) {
   try {
     const stored = await readTm({
       getContents: (path, options) => f.getContents(path, options),
-      branch: ownBranch,
-      defaultBranch: repository.defaultBranch,
+      branchRef: branchBefore === null ? null : branchBefore.sha,
+      defaultRef: ref.sha,
     });
     if (stored !== null) memory = stored.store;
   } catch {
