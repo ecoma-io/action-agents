@@ -37,9 +37,13 @@ Activity types: `opened`, `synchronize`, `reopened`, `ready_for_review`.
 `edited` is deliberately absent — a re-worded description does not change the
 code under review, and re-reviewing it would only churn the comment.
 `ready_for_review` is present so a pull request first opened as a draft is
-reviewed the moment it is declared ready. An event that reaches the action
-under any other name is a red refusal, not a silent success — the same posture
-as `triage`'s thread reader.
+reviewed the moment it is declared ready. The set is enforced in code, not
+only by the workflow filter: the action re-reads the payload's `action`
+field and refuses any activity type outside the declared set — and any
+payload that carries none — so a calling workflow whose `types:` filter is
+missing or wrong gets the same red refusal as one that triggered on the
+wrong event name, not a silent success. The same posture as `triage`'s
+thread reader.
 
 Permissions: `contents: read` and `pull-requests: write` — a comment is the
 whole write surface.

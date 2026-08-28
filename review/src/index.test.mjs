@@ -3,8 +3,8 @@
 // The orchestrator behind `run` has its own suite; what is pinned here is
 // the seam the runner touches: inputs read and validated against the
 // manifest, the key masked before anything prints, non-pull_request events
-// refused loudly, and a pull_request event handed to the orchestrator over
-// the injected io.
+// and unlisted activity types refused loudly, and a pull_request event
+// handed to the orchestrator over the injected io.
 
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { readContext } from "#core/runtime.mjs";
 
-import { ACTION, main, readEvent, readInputs, run } from "./index.mjs";
+import { ACTION, PULL_REQUEST_ACTIVITY_TYPES, main, readEvent, readInputs, run } from "./index.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 
@@ -30,7 +30,10 @@ let eventDir;
 function runnerEnv(options = {}) {
   if (eventDir === undefined) eventDir = mkdtempSync(p.join(tmpdir(), "review-entry-"));
   const eventPath = p.join(eventDir, "event.json");
-  writeFileSync(eventPath, JSON.stringify(options.event ?? { pull_request: { number: 41 } }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify(options.event ?? { action: "opened", pull_request: { number: 41 } }),
+  );
   return {
     "INPUT_GITHUB-TOKEN": "ghs_x",
     "INPUT_API-URL": "https://llm.example/v1",
@@ -64,11 +67,30 @@ describe("readInputs", () => {
 
 describe("readEvent", () => {
   it("extracts the pull request number from a pull_request event", () => {
-    const env = runnerEnv();
+    const env = runnerEnv({ event: { action: "opened", pull_request: { number: 41 } } });
     expect(readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toEqual({
       eventName: "pull_request",
       pullRequestNumber: 41,
     });
+  });
+
+  it("declares exactly the activity types the workflow filter does", () => {
+    expect([...PULL_REQUEST_ACTIVITY_TYPES]).toEqual([
+      "opened",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+    ]);
+  });
+
+  it("accepts every declared activity type", () => {
+    for (const action of PULL_REQUEST_ACTIVITY_TYPES) {
+      const env = runnerEnv({ event: { action, pull_request: { number: 41 } } });
+      expect(readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toEqual({
+        eventName: "pull_request",
+        pullRequestNumber: 41,
+      });
+    }
   });
 
   it("refuses any other event name before touching the payload", () => {
@@ -76,8 +98,24 @@ describe("readEvent", () => {
     expect(() => readEvent("workflow_dispatch", "/dev/null")).toThrow(/pull_request/);
   });
 
+  it("refuses an activity type outside the declared set", () => {
+    for (const action of ["edited", "labeled", "closed"]) {
+      const env = runnerEnv({ event: { action, pull_request: { number: 41 } } });
+      const read = () => readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH));
+      expect(read).toThrow(/runs on pull_request activity types/);
+      expect(read).toThrow(new RegExp(`carries '${action}'`));
+    }
+  });
+
+  it("refuses an event that carries no activity type", () => {
+    const env = runnerEnv({ event: { pull_request: { number: 41 } } });
+    expect(() => readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toThrow(
+      /runs on pull_request activity types/,
+    );
+  });
+
   it("refuses an event payload without a pull request", () => {
-    const env = runnerEnv({ event: {} });
+    const env = runnerEnv({ event: { action: "opened" } });
     expect(() => readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toThrow(
       /no pull_request\.number/,
     );
@@ -130,7 +168,7 @@ describe("run over injected io", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     /** @type {string[]} */
     const logged = [];
-    const env = runnerEnv({ event: { pull_request: { number: 9 } } });
+    const env = runnerEnv({ event: { action: "opened", pull_request: { number: 9 } } });
     try {
       await run(readInputs(env), readContext(env), {
         forge: {
