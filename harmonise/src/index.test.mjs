@@ -30,6 +30,7 @@ import {
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
 import { DELAY_CLASSES } from "./recovery.mjs";
+import { MAX_SOURCE_BYTES } from "./plan.mjs";
 
 /**
  * @type {import("#core/runtime.mjs").Env}
@@ -901,6 +902,55 @@ describe("run", () => {
     await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
     const out = logged(log);
     expect(out).toMatch(/skipped vi manual\/big\.md: 33792 bytes, past the 32768-byte cap/);
+    expect(out).toMatch(/translated vi manual\/dev\.md/);
+  });
+
+  it("accepts a source document of exactly the 32 KiB cap — the boundary is inclusive", async () => {
+    expect(MAX_SOURCE_BYTES).toBe(32768);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const source = "x".repeat(MAX_SOURCE_BYTES);
+    expect(new TextEncoder().encode(source).byteLength).toBe(MAX_SOURCE_BYTES);
+    const ioDouble = io(
+      forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/big.md": source,
+        },
+        [{ path: "manual/big.md", type: "blob" }],
+      ),
+    );
+
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    expect(logged(log)).toMatch(/translated vi manual\/big\.md/);
+  });
+
+  it("skips a source document of exactly one byte past the cap, naming the limit", async () => {
+    expect(MAX_SOURCE_BYTES).toBe(32768);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const source = "x".repeat(MAX_SOURCE_BYTES + 1);
+    expect(new TextEncoder().encode(source).byteLength).toBe(MAX_SOURCE_BYTES + 1);
+    const ioDouble = io(
+      forge(
+        {
+          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+          "manual/dev.md": "# Dev\n\nFine.\n",
+          "manual/big.md": source,
+        },
+        [
+          { path: "manual/dev.md", type: "blob" },
+          { path: "manual/big.md", type: "blob" },
+        ],
+      ),
+    );
+
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    const out = logged(log);
+    expect(out).toMatch(
+      new RegExp(
+        `skipped vi manual/big\\.md: ${String(MAX_SOURCE_BYTES + 1)} bytes, past the ` +
+          `${String(MAX_SOURCE_BYTES)}-byte cap`,
+      ),
+    );
     expect(out).toMatch(/translated vi manual\/dev\.md/);
   });
 
