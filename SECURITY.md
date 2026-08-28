@@ -83,8 +83,16 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    mail back. That single test decides all three actions without further
    argument — `triage` applies labels because labels sit above the line;
    `review` comments its findings and never files a verdict, because a verdict
-   sits below it; `harmonise` proposes an edit as a pull request and never
-   pushes, for the same reason.
+   sits below it; `harmonise` proposes an edit as a pull request, and the
+   model's only power over that proposal is its text. The one ref a run ever
+   writes is the action's own proposal branch, `harmonise/<source-language>`
+   — named by the run's config, never by the model — force-upserted onto a
+   commit parented on the audited base, with optimistic locking that refuses
+   rather than overwrites a branch that moved under the run; no other branch
+   or ref is ever touched. GitHub's audit log records that ref write as a
+   push, but it is not a model choice: the workflow's `permissions:` block
+   bounds it, exactly as the paragraph above says an unconditional operation
+   is bounded.
 
    The table records what may be _offered_, not what is — `triage`'s size is
    never on any sheet, because it is measured from the diff; that row is

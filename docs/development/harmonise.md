@@ -1,6 +1,6 @@
 # Development — `harmonise`
 
-Design, not behaviour: the complete implementation contract for `harmonise`. This page specifies every behavior the action must implement, written before implementation starts. The shared mechanism it rests on — file discovery, the default branch, precedence — is in [the configuration page](configuration.md); this page is the document model, the prompt and the pull request.
+Shipped behaviour, not intent: `harmonise` is released and pinnable (`v0.1` through `v0.3`), and this page is the specification the running code implements, kept as the implementation contract — every behavior below is stated precisely enough to test, and is tested. The shared mechanism it rests on — file discovery, the default branch, precedence — is in [the configuration page](configuration.md); this page is the document model, the prompt and the pull request.
 
 ## What `harmonise` decides
 
@@ -571,7 +571,7 @@ The same law as `triage`: the provider unreachable after retries, a config that 
 
 **PR behavior on failures:** If at least one pair succeeds, the run creates a PR containing the successful changes and exits red. The log records which pairs failed. If no pairs succeed, the run fails with no PR. This ensures partial work is reviewable while failures are not silently ignored.
 
-A pair that skips does not fail the run; it is recorded in the report.
+A pair that skips does not fail the run; it is recorded in the report. A run where every pair skipped — none in step, none proposed — is red, not a green no-op.
 
 ### Translation-specific failures
 
@@ -584,7 +584,25 @@ A pair that skips does not fail the run; it is recorded in the report.
 
 **Answer parsing:** The action accepts plain JSON or JSON wrapped in markdown code blocks (`json...`). Provider drift in formatting is tolerated as long as the JSON is parseable. Malformed JSON that cannot be parsed causes failure after retries.
 
-## What `harmonise` will need from `core/`
+## Capabilities as of v0.3.0
+
+What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. As of v0.3.0 the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `prompt`, `answer` and `pull-request`, plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
+
+Seven pure modules are **landed, wiring tracked** — merged and tested, not yet imported by the production path, therefore not behaviour a run exhibits:
+
+| Module            | Landed as                                  |
+| ----------------- | ------------------------------------------ |
+| `tm.mjs`          | translation memory store (#64)             |
+| `frontmatter.mjs` | deterministic frontmatter protection (#68) |
+| `blocks.mjs`      | changed-block planning (#70)               |
+| `terms.mjs`       | deterministic terminology system (#71)     |
+| `pool.mjs`        | bounded-concurrency pool (#72)             |
+| `protection.mjs`  | manual-edit protection policy (#73)        |
+| `threeway.mjs`    | three-way target merge (#76)               |
+
+Do not read them as active behavior; the out-of-scope list below still describes what a run does until a change wires a module in.
+
+What `harmonise` uses from `core/`, module by module: +
 
 | Module          | Kind     | What `harmonise` needs of it                                                                                                                                                                                         |
 | --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -621,21 +639,21 @@ Any feature that would transform `harmonise` into a generic translation framewor
 
 ## Known limitations & v1 simplifications
 
-This specification represents a substantial foundation for `harmonise`, but the adversarial review identified several areas for future refinement. These do not block implementation but should be noted:
+This specification is the contract the shipped code implements; what follows are v1 simplifications that are real in the code today, not open questions.
 
 **Document discovery:** The Git Trees API answers a recursive listing in one response and sets its `truncated` flag past its own ceiling (very large repositories). A truncated listing is refused, not processed — see [inventory completeness](#inventory-completeness). There is no v1 mode that works on a partial tree.
 
-**Edge cases:** Several edge cases are documented as requiring clarification or future specification:
+**Edge cases:** Every edge case the review flagged is answered in the shipped code:
 
-- Zero pairs discovered (valid config with no matches)
-- Pattern overlap leading to dual classification
-- Language key ref-name validation
-- ~~Commit/PR attribution and title format~~ — settled: the title is the repository's own via `pullRequest.title` (issue #30)
-- Dry-run report format and destination
+- Zero pairs discovered — refused at startup: a config whose source language matches nothing fails the run ("no document matches the source language … nothing to keep in step"), never a green run on nothing;
+- Pattern overlap — a file claimed by two patterns goes to the more specific one (more literal characters around the placeholder); two patterns of equal specificity are refused rather than guessed;
+- Language key ref-name validation — language keys are validated as BCP 47 tags (`^[a-zA-Z]{2,8}(-[a-zA-Z0-9]+)*$`), which is also what keeps the branch name `harmonise/<sourceLanguage>` a safe ref name;
+- ~~Commit/PR attribution and title format~~ — settled: the title is the repository's own via `pullRequest.title` (issue #30);
+- Dry-run report — the report is the action log and nothing is written; a pair that failed still turns a dry run red.
 
 **Link rewriting complexity:** Relative link recomputation across directories is specified; complex paths (deep nesting, encoded segments) resolve through the same deterministic algorithm, but exotic destinations — angle-bracket destinations, backslash separators — pass through untouched in v1.
 
-These limitations are acceptable for v1. The specification provides sufficient clarity for core implementation while leaving room for refinement based on real-world usage.
+These simplifications are visible in the code today and remain the intended shape for v1; refinement beyond them is future work, not undocumented drift.
 
 ## Amendments
 

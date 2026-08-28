@@ -8,21 +8,19 @@ a link that goes nowhere.
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | [Doctrine](doctrine.md)                                    | Where a new piece of code goes, and what an action may become                         |
 | [Development: configuration](development/configuration.md) | The shared config-file mechanism — discovery, format, the default branch, precedence  |
-| [Development: `triage`](development/triage.md)             | `triage`'s full design — schema, prompt, pipeline — written before its code           |
-| [Development: `harmonise`](development/harmonise.md)       | `harmonise`'s full design — document model, prompt, pull request — before its code    |
-| [Development: `review`](development/review.md)             | `review`'s full design — config, tool surface, agent loop — before its code           |
+| [Development: `triage`](development/triage.md)             | `triage`'s full design — schema, prompt, pipeline                                     |
+| [Development: `harmonise`](development/harmonise.md)       | `harmonise`'s full design — document model, prompt, pull request                      |
+| [Development: `review`](development/review.md)             | `review`'s full design — config, tool surface, agent loop                             |
 | [Development: the core ceilings](development/ceilings.md)  | The ceiling modules' contracts — evidence, sanitiser, marker comment, workspace, seam |
 | Getting started                                            | Adding one action to a workflow, and the permissions it needs                         |
 | Configuration                                              | `.github/action-agents/<action>.json5`, and the inputs each action takes              |
 | `triage`, `review`, `harmonise`                            | One page per action: what it decides, and what it is not allowed to decide            |
 | Providers                                                  | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless               |
 
-Doctrine comes first deliberately. The rows below it describe behaviour, and
-only `triage` does its work so far — `review` and `harmonise` still refuse
-loudly until their implementation lands, which is why a getting-started page
-would document steps that refuse. What is settled is the design those actions
-are being built toward: the doctrine for the whole, and the development pages
-for each action's architecture and for the ceilings they share.
+Doctrine comes first deliberately. The rows below it describe behaviour that
+exists — all three actions do their work, released as `v0.1` through `v0.3` —
+and the development pages carry each action's architecture: the contract the
+shipped code is still judged against, and the ceilings the actions share.
 
 Alongside it, the three documents at the repository root are the whole of what
 else exists, and each is complete on its own:

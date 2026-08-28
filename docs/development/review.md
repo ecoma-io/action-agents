@@ -1,9 +1,9 @@
 # Development — `review`
 
-Design, not behaviour: nothing on this page runs yet. This is the architecture
-`review` is to be built to, written before implementation starts — and, since
-implementation is now planned, it doubles as the implementation contract: every
-behaviour below is stated precisely enough to test. The shared mechanism it
+`review` is shipped behaviour — `v0.1` through `v0.3` are pinnable — and this
+page is the architecture the running code is built to. It still reads as the
+implementation contract: every behaviour below is stated precisely enough to
+test, and is tested. The shared mechanism it
 rests on — file discovery, the default branch, precedence — is in [the
 configuration page](configuration.md). The design was benchmarked against the
 configuration surfaces of the two established AI reviewers, CodeRabbit and
@@ -123,9 +123,10 @@ are honest no-ops: no work was claimed, so nothing is red.
 | `context-window` | the configured model's token budget — the agent compacts before reaching it; default 128000      |
 | `dry-run`        | review and log, comment nothing — default false, because the comment is the action's only output |
 
-The seed `action.yaml` carries an `instructions-path` input; the config file's
-instruction documents supersede it. Nothing has shipped, so the input is
-removed when `review` ships rather than deprecated later.
+There is no `instructions-path` input: the seed the design sketched was
+removed in the very change that shipped `review` (#37), so no release ever
+carried it, and instruction documents reach the action through the config
+file alone.
 
 ## The config file
 
@@ -703,22 +704,25 @@ action has one responsibility. Write or propose code, however small the fix.
 Edit the pull request's title or body. Resolve a thread. The action's whole
 write surface is one comment.
 
-## What `review` will need from `core/`
+## What `review` uses from `core/`
 
-These are normative deltas, named precisely enough to build against — the
-table is not a farewell to future work but the contract for it. All of it is
-protocol or ceiling; none of it is loop.
+Everything the design once named as a delta is shipped in `core/` today — the
+table below is the contract `review` holds `core/` to, and the production path
+imports all of it. All of it is protocol or ceiling; none of it is loop.
+Nothing landed for `review` sits unwired: the coverage accounting (#69), the
+risk lanes (#74) and the structured phases (#77) are on the production path,
+reachable from `src/index.mjs`.
 
-| Module          | Kind     | The delta `review` needs                                                                                                                                                                                                                                                                                                |
-| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `chat.mjs`      | protocol | the request gains optional `tools`; a response may then be tool calls — `{ content, toolCalls, finishReason }`, where a tool-call response has `content: null` and must not throw the way the content-only reader does today. With no tools requested, behaviour is byte-for-byte what `triage` and `harmonise` see now |
-| `forge.mjs`     | protocol | one new read, `getPullRequest(number)` → state, draft flag, head SHA, base SHA, title, body — and `listPullRequestFiles` retaining the `patch` and per-file blob `sha` GitHub already sends instead of discarding them                                                                                                  |
-| `glob.mjs`      | protocol | the one glob dialect of the configuration page, promoted when `review` becomes its third consumer — `triage` and `harmonise` each hold a private copy today                                                                                                                                                             |
-| `comment.mjs`   | ceiling  | the marker upsert gains an identity guard: only comments authored by known bot identities are candidates for update or deletion, so a quoted marker in a maintainer's comment is never claimed and never destroyed                                                                                                      |
-| `workspace.mjs` | ceiling  | path resolution confined to `GITHUB_WORKSPACE`, `.git` refused, regular files only — the resolver every workspace touch goes through, tools and non-tool reads alike — with `review` as its first consumer                                                                                                              |
-| `http.mjs`      | protocol | nothing new — timeouts, retries, cross-origin refusal and capped error excerpts already serve                                                                                                                                                                                                                           |
-| `untrusted.mjs` | ceiling  | nothing new — the evidence wrapper frames the diff and every tool result                                                                                                                                                                                                                                                |
-| `sanitise.mjs`  | ceiling  | nothing new — what finding text survives into the comment                                                                                                                                                                                                                                                               |
+| Module          | Kind     | What `review` gets                                                                                                                                                                                                                           |
+| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat.mjs`      | protocol | optional `tools` on the request; a response may carry tool calls — `{ content, toolCalls, finishReason }`, with a tool-call response's `content` null. With no tools requested, behaviour is byte-for-byte what `triage` and `harmonise` see |
+| `forge.mjs`     | protocol | `getPullRequest(number)` → state, draft flag, head SHA, base SHA, title, body — and `listPullRequestFiles` retaining the `patch` and per-file blob `sha` GitHub already sends                                                                |
+| `glob.mjs`      | protocol | the one glob dialect of the configuration page, promoted to `core/` — `triage`, `review` and `harmonise` all import it                                                                                                                       |
+| `comment.mjs`   | ceiling  | the marker upsert's identity guard: only comments authored by known bot identities are candidates for update or deletion, so a quoted marker in a maintainer's comment is never claimed and never destroyed                                  |
+| `workspace.mjs` | ceiling  | path resolution confined to `GITHUB_WORKSPACE`, `.git` refused, regular files only — every workspace touch goes through it, tools and non-tool reads alike, with `review` as its first consumer                                              |
+| `http.mjs`      | protocol | nothing new was needed — timeouts, retries, cross-origin refusal and capped error excerpts already serve                                                                                                                                     |
+| `untrusted.mjs` | ceiling  | nothing new was needed — the evidence wrapper frames the diff and every tool result                                                                                                                                                          |
+| `sanitise.mjs`  | ceiling  | nothing new was needed — what finding text survives into the comment                                                                                                                                                                         |
 
 There is no `core/agent.mjs` and there will not be one: the agent loop — what
 to read next, when to stop, how to compact — speaks no protocol and enforces

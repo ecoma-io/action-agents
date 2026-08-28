@@ -54,9 +54,9 @@ instruction.
 - **Bounded by your workflow, not by our prompt** — configuration describes
   behaviour; the `permissions:` block is the security boundary.
 
-> **Status: released.** v0.1.0 shipped — `v0.1` (floating) and `v0.1.0` (exact)
-> are both pinnable, and the example below resolves. See
-> [Pinning strategy](#pinning-strategy) for which to use.
+> **Status: released.** v0.3.0 shipped — `v0.1`–`v0.3` (floating) and
+> `v0.1.0`–`v0.3.0` (exact) are all pinnable, and the example below resolves.
+> See [Pinning strategy](#pinning-strategy) for which to use.
 
 ## Get started
 
