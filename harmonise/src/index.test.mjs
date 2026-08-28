@@ -1004,6 +1004,54 @@ describe("run with recorded state", () => {
     expect(secondChat.calls()).toBe(0);
     expect(secondForge.writes).toEqual([]);
   });
+  it("reports a policy-stale pair the model endorses as unchanged (noop)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
+    }`;
+    const french = "# Dev\n\nTraduit en français.\n";
+    // The vi record is policy-stale — its policy digest no longer matches
+    // this run's — so the pair goes to the model, which returns the exact
+    // bytes already published (a noop). fr has never been recorded, so the
+    // model proposes and the run publishes. Targets are processed fr first,
+    // then vi, so the answers line up in that order.
+    const staleVi = { ...viRecord(), policyFingerprint: contentFingerprint("an older policy") };
+    const chatDouble = chat([proposes(french), proposes(TRANSLATED)]);
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": config,
+        "manual/dev.md": SOURCE,
+        "manual/vi/dev.md": TRANSLATED,
+        [STATE_PATH]: renderState([staleVi]),
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/vi/dev.md", type: "blob" },
+        { path: "manual/fr/dev.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    // Both pairs reached the model: a stale policy digest is never a skip
+    // verdict, and the noop answer still costs a call.
+    expect(chatDouble.calls()).toBe(2);
+    const out = logged(log);
+    expect(out).toMatch(
+      /^translated fr manual\/dev\.md → manual\/fr\/dev\.md \[existing\] proposed\b/m,
+    );
+    expect(out).toMatch(
+      /^translated vi manual\/dev\.md → manual\/vi\/dev\.md \[existing\] unchanged\b/m,
+    );
+    // The state file's records are deliberately left unasserted here: the
+    // write-back drops the noop pair's record outright (#88), and pinning
+    // either that drop or verbatim preservation would cement a shape that
+    // re-models the pair on every later run.
+  });
 });
 
 describe("run with manual-edit protection and three-way merge", () => {

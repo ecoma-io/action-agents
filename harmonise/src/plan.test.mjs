@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { buildInventory } from "./inventory.mjs";
 import { parseAssetLayout, parseLanguagePattern } from "./patterns.mjs";
 import {
+  MAX_SOURCE_BYTES,
   pairBlockShape,
   planFrontmatterGuard,
   preparePair,
@@ -181,6 +182,24 @@ describe("sanitizeTranslationHtml", () => {
       expect(resultLines[index]?.length).toBe(line.length);
     }
   });
+  it("judges a javascript: scheme whose colon is a named character reference", () => {
+    // &colon; is one of the named references the URI table resolves; the
+    // scheme must be judged on the decoded value, however it is spelled.
+    const input = '<a href="javascript&colon;alert(1)">click</a>';
+    const result = sanitizeTranslationHtml(input);
+    expect(result).toBe(
+      "<a" + " ".repeat(1 + 'href="javascript&colon;alert(1)"'.length) + ">click</a>",
+    );
+  });
+
+  it("leaves unknown named and out-of-range numeric character references as written", () => {
+    // &nope; is no reference this sanitiser resolves, and &#x110000; /
+    // &#1114112; spell code points past U+10FFFF: none may be guessed at,
+    // so the attribute value passes through byte for byte.
+    const input = '<a href="https://example.com/?q=&nope;&#x110000;&#1114112;">text</a>';
+    const result = sanitizeTranslationHtml(input);
+    expect(result).toBe(input);
+  });
 });
 
 describe("translatePair", () => {
@@ -329,6 +348,54 @@ describe("translatePair", () => {
     const prepared = prepare();
     const result = await translate(prepared, proposes(prepared.protectedText));
     expect(result.outcome).toBe("proposal");
+  });
+  it("refuses a sanitised proposal past the byte cap, naming the count", async () => {
+    const prepared = prepare();
+    const filler = "Ordinary prose sentences carry the payload past the cap. ";
+    const big =
+      prepared.protectedText + filler.repeat(Math.ceil((MAX_SOURCE_BYTES + 1) / filler.length));
+    await expect(translate(prepared, proposes(big))).rejects.toThrowError(
+      new RegExp(
+        "^the translated document is " +
+          `${String(new TextEncoder().encode(big).byteLength)} bytes, past the ` +
+          `${String(MAX_SOURCE_BYTES)}-byte cap$`,
+      ),
+    );
+  });
+
+  it("records a noop when the sanitised proposal is byte-identical to what it replaces", async () => {
+    // The glossary mints a placeholder, so the answer echoing the protected
+    // text differs from the published bytes by one token; restoration and
+    // sanitisation erase exactly that difference. Identical bytes are no
+    // drift whatever the flag claimed — the pair must come back a noop, not
+    // a proposal.
+    const sourceText = "# Dev\n\nUse api here.\n";
+    const glossaryConfig = /** @type {import("./config.mjs").HarmoniseConfig} */ ({
+      ...config,
+      glossary: ["api"],
+    });
+    const prepared = preparePair({
+      slug: "dev",
+      lang: "vi",
+      sourcePath: "manual/dev.md",
+      target: { path: "manual/vi/dev.md", state: "existing" },
+      sourceText,
+      inventory: inventoryFor(["manual/dev.md"]),
+      config: glossaryConfig,
+    });
+    expect(prepared.protectedText).not.toBe(sourceText);
+    const result = await translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: sourceText,
+      model: "gpt-x",
+      chat: chatWith([proposes(prepared.protectedText)]),
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    expect(result.outcome).toBe("noop");
+    expect(result.summary).toBe("kept in step");
   });
 });
 

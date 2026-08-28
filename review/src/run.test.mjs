@@ -258,7 +258,26 @@ describe("the universe and the budget", () => {
       io: io(bare),
     });
     expect(skipped.outcome).toBe("skip");
+    expect(skipped.reason).toBe("universe empty and no prior review comment — nothing to do");
     expect(bare.calls.upserts).toHaveLength(0);
+  });
+
+  it("abandons a nothing-to-review run when the pull request moved — no comment written", async () => {
+    let reads = 0;
+    const forge = forgeStub({ files: [] });
+    forge.getPullRequest = async () => {
+      reads++;
+      return snapshot(reads >= 2 ? { head: { ref: "feature", sha: "c".repeat(40) } } : {});
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("abandoned");
+    expect(result.reason).toBe("#7 moved while it was being reviewed — nothing written");
+    expect(forge.calls.upserts).toHaveLength(0);
   });
 
   it("refuses diffs past the budget, red, naming both numbers — before any model call", async () => {
@@ -386,6 +405,9 @@ describe("strictness policy and strategy", () => {
     expect(body).not.toContain("style nit");
     expect(body).not.toContain("Nits");
     expect(logged.some((line) => line.includes("nit dropped at low strictness"))).toBe(true);
+    // The drop log names the finding it dropped, not just the fact of a
+    // drop: dropping the wrong nit must fail here.
+    expect(logged).toContain("review: nit dropped at low strictness — src/a.mjs:1 style nit");
   });
 
   it("at medium the same answer keeps its nit, and absent strategy equals explicit standard byte for byte", async () => {

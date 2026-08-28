@@ -250,6 +250,17 @@ describe("maskTerms", () => {
       /malformed/,
     );
   });
+  it("refuses a term base that is not an object", () => {
+    expect(() => maskTerms("text", /** @type {any} */ (null))).toThrow(
+      "the term base must be the object compileTermBase returned",
+    );
+  });
+
+  it("refuses a term base holding a malformed entry", () => {
+    expect(() =>
+      maskTerms("text", /** @type {any} */ ({ lang: "en", entries: [{ term: 7 }] })),
+    ).toThrow("the term base holds a malformed entry — compile it with compileTermBase");
+  });
 });
 
 describe("unmaskTerms", () => {
@@ -314,6 +325,11 @@ describe("unmaskTerms", () => {
 
   it("refuses a mask that was not built by maskTerms", () => {
     expect(() => unmaskTerms("text", /** @type {any} */ ({}))).toThrow(/malformed/);
+  });
+  it("refuses a mask that is not an object", () => {
+    expect(() => unmaskTerms("text", /** @type {any} */ (null))).toThrow(
+      "the mask must be the object maskTerms returned",
+    );
   });
 });
 
