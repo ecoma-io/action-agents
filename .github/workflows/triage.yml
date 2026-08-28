@@ -36,10 +36,14 @@ on:
 permissions:
   contents: read
   issues: write
-  # No `pull-requests` scope: labels and comments are written through the
-  # issues API, whose endpoints accept a pull request number. The PR surface
-  # of this token — reviews, reviewers, merges — stays read-only, which is
-  # the least the write path needs and nothing more.
+  # `pull-requests: write` is load-bearing even though labels are written
+  # through the issues API: GitHub's token refuses that write on a pull
+  # request number without this scope — HTTP 403 on `/issues/N/labels`,
+  # observed in run 33219882428 when the scope was briefly dropped. What
+  # the action never calls — reviews, reviewers, merges — stays out of
+  # reach only because it never issues those requests, not because the
+  # scope withholds them; the alternative is a dogfood that fails on
+  # every pull request thread.
 
 # One triage run per thread: a rapid sequence of edits to the same issue
 # replaces the queued run rather than stacking classifications of stale
