@@ -29,14 +29,13 @@
  */
 
 /**
- * The default memory cap. The store lives for one action run and holds
- * completed block translations; this is far above any real diff, and the LRU
- * bound below is what keeps a pathological input from growing memory without
- * limit. The cap is a memory bound, not a policy statement: an eviction
- * means the store forgot an old suggestion, never that anything remaining
- * became authoritative.
+ * The store is deliberately unbounded: it is the only source of a verified
+ * three-way merge base for a recorded pair, so "the store forgot an old
+ * suggestion" is a record that can never merge again. The bound lives at
+ * publication instead — `serialize`'s `keepKeys` option writes down exactly
+ * the entries the sync state's records reference, so `tm.json` stays as
+ * large as the state it serves and nothing referenced is ever evicted.
  */
-export const TM_MAX_ENTRIES = 1000;
 
 /**
  * The only schema version `serialize` emits and the only one `parse`
@@ -69,7 +68,6 @@ export const TM_PATH = ".github/action-agents/harmonise/tm.json";
 
 /**
  * @typedef {object} TmStoreOptions
- * @property {number} [maxEntries] eviction cap; defaults to `TM_MAX_ENTRIES`; must be a positive integer
  * @property {boolean} [normalizeWhitespace] enable the normalized-whitespace second lookup tier; default off
  */
 
@@ -193,35 +191,27 @@ function decodeTmKey(key) {
 }
 
 /**
- * Creates an in-memory store bounded by `maxEntries`.
+ * Creates an in-memory store. The store is unbounded by design: a missing
+ * entry is a merge base a state record can never reach again, so nothing
+ * that was once recorded is ever silently dropped at runtime. The size is
+ * bounded where the bound is meaningful — at publication, when `serialize`
+ * writes only the entries the sync state references.
  *
- * Eviction is deterministic LRU by insertion/access order. The entries Map's
- * iteration order IS the recency order: recording a new key places it at the
- * most-recent end, re-recording an existing key updates it in place and moves
- * it there too, a lookup hit moves the entry there as well, and when a record
- * pushes the size past the cap the Map's first key — the least-recently
- * inserted-or-accessed entry — is evicted until the size fits. No timestamps,
- * no randomness: replaying the same call sequence against a fresh store
- * evicts the same entries in the same order.
+ * The entries Map's iteration order is insertion/access order, oldest
+ * first: deterministic, with no timestamps and no randomness. Replaying the
+ * same call sequence against a fresh store yields the same iteration order.
  *
  * With `normalizeWhitespace: true`, a second lookup tier treats key
  * components as equal when they differ only in leading, trailing, or repeated
  * whitespace. The tier is an index from normalized key to the most recently
- * recorded primary key (last record wins — defined, not random); a tier-2 hit
- * refreshes that primary entry's recency, and evicting a primary entry drops
- * its alias only when the alias still names it, so an older spelling may lose
- * its tier-2 route while surviving exact lookups. The tier changes which KEY
- * answers, never how much it is trusted: the value still goes through the
- * caller's downstream checks like any other hit.
+ * recorded primary key (last record wins — defined, not random). The tier
+ * changes which KEY answers, never how much it is trusted: the value still
+ * goes through the caller's downstream checks like any other hit.
  *
  * @param {TmStoreOptions} [options]
  * @returns {TmStore}
  */
 export function createTmStore(options = {}) {
-  const maxEntries = options.maxEntries === undefined ? TM_MAX_ENTRIES : options.maxEntries;
-  if (!Number.isInteger(maxEntries) || maxEntries < 1) {
-    throw new TypeError(`maxEntries must be a positive integer, got ${String(maxEntries)}`);
-  }
   const normalizeWhitespace = options.normalizeWhitespace === true;
 
   /** Recency order IS iteration order: oldest first, freshest last. */
@@ -239,23 +229,6 @@ export function createTmStore(options = {}) {
     entries.delete(key);
     entries.set(key, entry);
   };
-
-  /** Evicts oldest entries until within the cap; drops aliases that name them. */
-  const evictOverflow = () => {
-    while (entries.size > maxEntries) {
-      const oldest = entries.entries().next();
-      // The loop condition guarantees a first entry; the guard keeps tsc
-      // honest about `noUncheckedIndexedAccess` all the same.
-      if (oldest.done === true) return;
-      const [oldestKey, evicted] = oldest.value;
-      entries.delete(oldestKey);
-      const normalized = normalizedKey(evicted.parts);
-      if (aliases.get(normalized) === oldestKey) {
-        aliases.delete(normalized);
-      }
-    }
-  };
-
   /**
    * Stores a translation under an exact key. Re-recording an existing key
    * updates the value and refreshes its recency without growing the store.
@@ -286,7 +259,6 @@ export function createTmStore(options = {}) {
     if (normalizeWhitespace) {
       aliases.set(normalizedKey(parts), key);
     }
-    evictOverflow();
   };
 
   /**
@@ -335,21 +307,32 @@ export function createTmStore(options = {}) {
 
 /**
  * JSON round-trip, versioned by `tmSchemaVersion`. Entries are written
- * oldest-first, so `parse` can replay them in order and the LRU order
- * survives the trip. Tier-2 aliases are derived state and are never written:
- * `parse` re-derives them from the keys themselves.
+ * oldest-first, so `parse` can replay them in order and the document stays
+ * deterministic across runs. Tier-2 aliases are derived state and are never
+ * written: `parse` re-derives them from the keys themselves.
+ *
+ * With `keepKeys`, the document omits every entry whose built key is not in
+ * the set — the publication-time prune. `harmonise` passes exactly the keys
+ * its sync-state records reference, so the file is bounded by the state it
+ * serves: a state record can always reach the merge base it references, and
+ * entries no record references do not accumulate forever.
  *
  * @param {TmStore} store
+ * @param {{ keepKeys?: Set<string> }} [options]
  * @returns {string}
  */
-export function serialize(store) {
+export function serialize(store, options = {}) {
   const internal = internals.get(store);
   if (internal === undefined) {
     throw new TypeError("serialize() expects a store created by createTmStore()");
   }
+  const keepKeys = options.keepKeys;
   /** @type {TmSerializedEntry[]} */
   const serialized = [];
   for (const entry of internal.entries.values()) {
+    if (keepKeys !== undefined && !keepKeys.has(buildTmKey(entry.parts))) {
+      continue;
+    }
     serialized.push({
       key: {
         sourceHash: entry.parts.sourceHash,
@@ -407,9 +390,10 @@ function entryProblem(entry) {
  * silently dropped: the returned `refused` array says exactly what was
  * rejected, where, and why, and the caller decides what a refusal means.
  *
- * Entries are replayed in document order (oldest first), so a document larger
- * than the cap keeps its newest entries — trimming is eviction, not refusal —
- * and duplicate keys inside one document resolve to their last occurrence.
+ * Entries are replayed in document order (oldest first), and duplicate keys
+ * inside one document resolve to their last occurrence. Every well-formed
+ * entry survives the trip: the store does not evict, so a document larger
+ * than any old bound is loaded whole.
  *
  * @param {string} text
  * @param {TmStoreOptions} [options]
