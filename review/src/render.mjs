@@ -32,6 +32,7 @@ export const MESSAGE_CHARS = 1000;
  * @property {import("./config.mjs").Strictness} strictness decides collapsing, never inclusion — filtering happened earlier
  * @property {string} [partialReason] required when status is Partial
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the deterministic read-coverage report; rendered as a count line when the expected set is non-empty
+ * @property {number} [quarantinedCount] findings withheld as unanchored before publication — rendered when nothing published, so a withheld review never reads as clean
  */
 
 /**
@@ -46,6 +47,7 @@ export function renderComment({
   strictness,
   partialReason,
   coverage,
+  quarantinedCount,
 }) {
   /** @type {string[]} */
   const lines = [];
@@ -68,7 +70,18 @@ export function renderComment({
 
   if (findings.length === 0 && status === "Complete") {
     // A clean re-review must clear whatever an earlier push left behind.
-    lines.push("", "No findings.");
+    // "No findings." is for none at all: findings the run withheld as
+    // unanchored are counted, never flattened into a clean bill.
+    if (quarantinedCount !== undefined && quarantinedCount > 0) {
+      const one = quarantinedCount === 1;
+      lines.push(
+        "",
+        `No published findings — ${String(quarantinedCount)} ${one ? "finding" : "findings"} withheld: ` +
+          `no recorded read reaches ${one ? "its" : "their"} anchor line${one ? "" : "s"}.`,
+      );
+    } else {
+      lines.push("", "No findings.");
+    }
   }
   const concerns = findings.filter(
     (finding) => finding.severity === "concern" && finding.lifecycle !== "refuted",

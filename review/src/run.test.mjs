@@ -24,6 +24,7 @@ beforeAll(() => {
   wsRoot = mkdtempSync(p.join(tmpdir(), "run-test-ws-"));
   mkdirSync(p.join(wsRoot, "src"));
   writeFileSync(p.join(wsRoot, "src", "a.mjs"), "line1\nline2\nline3\n");
+  writeFileSync(p.join(wsRoot, "src", "b.mjs"), "b1\nb2\nb3\n");
   mkdirSync(p.join(wsRoot, "lib"));
   writeFileSync(p.join(wsRoot, "lib", "new.mjs"), "moved\n");
   CONTEXT.workspace = wsRoot;
@@ -638,6 +639,70 @@ describe("coverage accounting and strict partial reviews", () => {
     expect(body).toContain("**Review** — Complete");
     expect(body).not.toContain("partial");
     expect(body).toContain("Changed files examined: 0/2.");
+  });
+
+  it("a refused read is not an examination: one captured of two ends partial at high", async () => {
+    // S1 regression: the coverage ledger once counted attempts, so a run
+    // whose only read of the second file was refused (the file is not on
+    // disk) concluded complete with zero captured bytes of it.
+    const files = [
+      {
+        filename: "src/a.mjs",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1,2 @@\n+x",
+      },
+      {
+        filename: "src/vanish.mjs",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1,2 @@\n+y",
+      },
+    ];
+    const forge = forgeStub({ files, config: '{ strictness: "high" }' });
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [
+          { id: "c1", name: "read_file", arguments: '{"path":"src/a.mjs"}' },
+          { id: "c2", name: "read_file", arguments: '{"path":"src/vanish.mjs"}' },
+        ],
+      },
+      { content: '{"findings":[],"summary":"read both"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("1 of 2 changed files were never read: src/vanish.mjs.");
+    expect(body).toContain("Changed files examined: 1/2.");
+  });
+
+  it("a quarantine-only review never reads as clean — the withheld count rides instead", async () => {
+    // H2 regression: findings all withheld as unanchored used to publish
+    // Complete with the literal "No findings." — a withheld review that
+    // read as a clean one.
+    const forge = forgeStub();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("**Review** — Complete");
+    expect(body).not.toContain("No findings.");
+    expect(body).toContain(
+      "No published findings — 1 finding withheld: no recorded read reaches its anchor line.",
+    );
   });
 
   it("at high strictness, reading both expected files concludes complete at 2/2", async () => {
@@ -1479,7 +1544,7 @@ describe("evidence provenance", () => {
     expect(result.outcome).toBe("published");
     const body = forge.calls.upserts[0]?.body ?? "";
     expect(body).not.toContain("off-by-one");
-    expect(body).toContain("No findings.");
+    expect(body).toContain("No published findings — 1 finding withheld");
     expect(
       logged.some(
         (line) =>
@@ -1510,7 +1575,7 @@ describe("evidence provenance", () => {
     });
     expect(result.outcome).toBe("published");
     const body = forge.calls.upserts[0]?.body ?? "";
-    expect(body).toContain("No findings.");
+    expect(body).toContain("No published findings — 2 findings withheld");
     expect(
       logged.filter((line) => line.includes("finding quarantined") && line.includes("unanchored")),
     ).toHaveLength(2);

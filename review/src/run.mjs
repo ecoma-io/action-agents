@@ -340,6 +340,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     summary: validated.summary,
     findings: published,
     strictness: config.strictness,
+    quarantinedCount: anchored.quarantined.length,
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
 

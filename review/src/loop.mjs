@@ -80,7 +80,8 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @property {number} readingTurns
  * @property {number} toolCalls
  * @property {number} evidenceBytes
- * @property {string[]} filesRead
+ * @property {string[]} filesRead the read_file paths whose bytes the loop captured —
+ *   recorded only on the tool's success, never for a refused attempt; entries are JSON-encoded
  * @property {string[]} diffInspected the paths the code itself recorded as inspected — a
  *   deletion's diff section rides in the initial prompt, so its removed content is on the
  *   record without a read_file (which could not open the removed path anyway). Seeded
@@ -242,7 +243,7 @@ export async function runLoop({
             `bytes of arguments — beyond any legitimate call`,
         );
       }
-      track(ledger, call.name, call.arguments);
+      const readPath = track(ledger, call.name, call.arguments);
 
       const result = tools.execute(call.name, call.arguments);
       if (result.fatal === true) {
@@ -254,6 +255,11 @@ export async function runLoop({
         ledger.toolErrors.push(`${call.name}: ${result.output.slice(0, 160)}`);
       } else {
         ledger.evidenceBytes += Buffer.byteLength(result.output, "utf8");
+        // Coverage counts captures: the read joins the ledger only where its
+        // bytes joined the evidence — a refused attempt is a tool error, not
+        // a read. Same success condition, same spelling, as the capture the
+        // tool recorded for the verification pass.
+        if (readPath !== undefined) ledger.filesRead.push(JSON.stringify(readPath));
       }
       transcript.push({ role: "tool", toolCallId: call.id, content: result.output });
     }
@@ -301,9 +307,10 @@ export async function runLoop({
 
 /**
  * The read-coverage report at a loop exit: the expected set against the reads on
- * record — the ledger's `read_file` calls, each decoded from the JSON argument it
- * was stored as (`track()` only ever stores `JSON.stringify` output, so the decode
- * cannot throw), plus the code-recorded deletion inspections. Both sides are
+ * record — the ledger's captured `read_file` calls (a refused attempt never
+ * enters the ledger), each decoded from the JSON argument it was stored as
+ * (`track()` only ever stores `JSON.stringify` output, so the decode cannot
+ * throw), plus the code-recorded deletion inspections. Both sides are
  * normalised to the diff's canonical spelling.
  *
  * @param {string[]} expectedPaths
@@ -438,7 +445,14 @@ function renderState(ledger, phase) {
     `reading turns used: ${String(ledger.readingTurns)}; tool calls made: ${String(ledger.toolCalls)}`,
     `current phase: ${phase}`,
   ];
-  if (ledger.filesRead.length > 0) parts.push(`files read:\n- ${ledger.filesRead.join("\n- ")}`);
+  if (ledger.filesRead.length > 0) {
+    // Display truncation only: the ledger entry keeps the full path; the
+    // state message shows a bounded spelling so one long path cannot eat
+    // the inventory.
+    parts.push(
+      `files read:\n- ${ledger.filesRead.map((entry) => entry.slice(0, 300)).join("\n- ")}`,
+    );
+  }
   if (ledger.diffInspected.length > 0) {
     parts.push(
       "inspected via their diff sections (deleted files; read_file cannot open them):\n- " +
@@ -456,19 +470,28 @@ function renderState(ledger, phase) {
 }
 
 /**
+ * Answers one question for the caller: is this a well-formed read_file, and
+ * what path did it name? The path is NOT recorded here — coverage counts
+ * captures, and a capture exists only once the tool succeeded; `runLoop`
+ * files the returned path on the success arm, the same condition under which
+ * the tool recorded the bytes for the verification pass. Search queries are
+ * inventory only, so they are still recorded here.
+ *
  * @param {Ledger} ledger
  * @param {string} name
  * @param {string} argumentsJson
+ * @returns {string | undefined} the named path when the call is a read_file with a string path
  */
 function track(ledger, name, argumentsJson) {
   try {
     const args = /** @type {Record<string, unknown>} */ (JSON.parse(argumentsJson));
     if (name === "read_file" && typeof args["path"] === "string") {
-      ledger.filesRead.push(JSON.stringify(String(args["path"]).slice(0, 300)));
+      return String(args["path"]);
     } else if (name === "search" && typeof args["query"] === "string") {
       ledger.searchesRun.push(JSON.stringify(String(args["query"]).slice(0, 60)));
     }
   } catch {
     // Unparsable arguments are fatal upstream; nothing to record here.
   }
+  return undefined;
 }
