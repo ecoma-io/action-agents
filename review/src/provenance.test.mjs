@@ -176,6 +176,17 @@ describe("readsFromRecordedReads", () => {
   });
 });
 
+describe("evidence-ceiling contract", () => {
+  it("an anchor past the 64 KiB transcript cut still resolves — the record, not the transcript, decides", () => {
+    const content = ("z".repeat(96) + "\n").repeat(800); // ~76 KiB captured; one block shows at most 64 KiB
+    const ledger = readsFromRecordedReads(new Map([["src/big.mjs", content]]));
+    expect(ledger[0]?.endLine).toBe(801);
+    const result = attachProvenance([finding({ file: "src/big.mjs", line: 800 })], ledger);
+    expect(result.published).toHaveLength(1);
+    expect(result.quarantined).toEqual([]);
+  });
+});
+
 describe("evidenceRef", () => {
   it("renders a range collapsed to one number for a single-line read", () => {
     expect(evidenceRef({ path: "src/a.mjs", startLine: 3, endLine: 3 })).toBe("src/a.mjs:3");
