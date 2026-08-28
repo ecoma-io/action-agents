@@ -323,4 +323,29 @@ describe("validateLinkGraph", () => {
       /image destination changed: '\.\.\/images\/p\.png' → '\.\.\/images\/other\.png'/,
     );
   });
+
+  it("keeps the violation report exact and ordered when every link in a large document is re-targeted", () => {
+    const count = 2_500;
+    const source = Array.from(
+      { length: count },
+      (_, index) => `See [item ${index}](guide/${index}.md).\n`,
+    ).join("");
+    const candidate = Array.from(
+      { length: count },
+      (_, index) => `See [item ${index}](https://evil.example/${index}).\n`,
+    ).join("");
+
+    const verdict = judge(source, candidate);
+
+    // Exactly one violation per re-targeted link, paired in document order —
+    // an exact count, not an unbounded set.
+    expect(verdict.ok).toBe(false);
+    expect(verdict.violations).toHaveLength(count);
+    expect(verdict.violations[0]).toBe(
+      "line 1: link destination changed: 'guide/0.md' → 'https://evil.example/0'",
+    );
+    expect(verdict.violations[count - 1]).toBe(
+      `line ${count}: link destination changed: 'guide/${count - 1}.md' → 'https://evil.example/${count - 1}'`,
+    );
+  });
 });
