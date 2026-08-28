@@ -62,6 +62,15 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @property {number} maxEvidenceBytes the evidence cap the loop enforced
  * @property {ChatMessage[]} transcript the loop's final transcript, for the re-ask
  * @property {string[]} log lines for the runner's log
+ * @property {PhaseLogEntry[]} phaseLog the phase transitions the loop took, in order — the artifact's phase record
+ */
+
+/**
+ * One phase transition the loop logged at the moment it happened.
+ *
+ * @typedef {object} PhaseLogEntry
+ * @property {PhaseName} from the phase the machine left
+ * @property {PhaseName} to the phase the machine entered
  */
 
 /**
@@ -128,6 +137,8 @@ export async function runLoop({
   };
   /** @type {ChatMessage[]} */
   let transcript = [...messages];
+  /** @type {PhaseLogEntry[]} */
+  const phaseLog = [];
   /** @type {string[]} */
   const log = [];
 
@@ -201,6 +212,7 @@ export async function runLoop({
         maxEvidenceBytes,
         transcript,
         log,
+        phaseLog,
       };
     }
 
@@ -245,11 +257,13 @@ export async function runLoop({
       }
       transcript.push({ role: "tool", toolCallId: call.id, content: result.output });
     }
-
     ledger.readingTurns++;
     const previousPhase = phase;
     phase = nextPhase(phase, phaseContext());
-    if (phase !== previousPhase) log.push(`phase: ${previousPhase} → ${phase}`);
+    if (phase !== previousPhase) {
+      log.push(`phase: ${previousPhase} → ${phase}`);
+      phaseLog.push({ from: previousPhase, to: phase });
+    }
     if (
       ledger.readingTurns >= maxTurns ||
       ledger.toolCalls >= maxToolCalls ||
@@ -279,6 +293,7 @@ export async function runLoop({
         maxTurns,
         maxToolCalls,
         maxEvidenceBytes,
+        phaseLog,
       });
     }
   }
@@ -317,7 +332,7 @@ function readCoverage(expectedPaths, ledger) {
  * @param {number} input.maxTurns the turn cap the loop enforced
  * @param {number} input.maxToolCalls the tool-call cap the loop enforced
  * @param {number} input.maxEvidenceBytes the evidence cap the loop enforced
- * @returns {Promise<LoopOutcome>}
+ * @param {PhaseLogEntry[]} input.phaseLog the transitions the loop logged
  */
 async function conclude({
   ask,
@@ -330,6 +345,7 @@ async function conclude({
   maxTurns,
   maxToolCalls,
   maxEvidenceBytes,
+  phaseLog,
 }) {
   const { response, transcript: finalTranscript } = await ask(undefined, [
     {
@@ -353,6 +369,7 @@ async function conclude({
     maxEvidenceBytes,
     transcript: finalTranscript,
     log,
+    phaseLog,
   };
 }
 

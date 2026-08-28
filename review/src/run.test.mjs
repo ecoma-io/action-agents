@@ -10,6 +10,7 @@ import * as p from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { reviewPullRequest } from "./run.mjs";
+import { findingIdentity } from "./answer.mjs";
 import { VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
 const HEAD = "a".repeat(40);
@@ -1717,5 +1718,190 @@ describe("run gates", () => {
     expect(body).toContain("Refuted during verification");
     // The gate judged the final set — refuted finding included — and passed.
     expect(logged.some((line) => line.startsWith("review: gate"))).toBe(false);
+  });
+});
+
+describe("the run artifact", () => {
+  const CONCERN =
+    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+  const READ = {
+    content: "",
+    toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+  };
+  const IDENTITY = findingIdentity({
+    severity: "concern",
+    file: "src/a.mjs",
+    line: 2,
+    message: "off-by-one",
+  });
+
+  it("a published run carries a machine record that agrees with the comment it rendered", async () => {
+    const forge = forgeStub();
+    const chat = readingChat([
+      READ,
+      { content: CONCERN },
+      { content: '{"verdict":"confirmed","reason":"the guard is real"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.commentId).toBe(101);
+    const artifact = result.artifact;
+    if (artifact === undefined) throw new Error("expected an artifact on publication");
+    expect(artifact.schemaVersion).toBe(2);
+    expect(artifact.repository).toBe("acme/widgets");
+    expect(artifact.pullRequest).toBe(7);
+    expect(artifact.headRef).toBe(HEAD);
+    expect(artifact.outcome).toEqual({
+      classification: "published",
+      reason: "Complete review published (1 findings)",
+    });
+    expect(artifact.policy).toEqual({ strictness: "medium", strategy: "standard" });
+    expect(artifact.risk).toHaveLength(1);
+    expect(artifact.risk[0]?.path).toBe("src/a.mjs");
+    expect(artifact.findings).toHaveLength(1);
+    expect(artifact.findings[0]?.identity).toBe(IDENTITY);
+    expect(artifact.findings[0]?.lifecycle).toBe("confirmed");
+    expect(artifact.findings[0]?.verdict).toBe("confirmed");
+    expect(artifact.findings[0]?.reason).toBe("the guard is real");
+    expect(artifact.findings[0]?.provenance).toEqual({
+      path: "src/a.mjs",
+      startLine: 1,
+      endLine: 4,
+    });
+    expect(artifact.verification.gate).toEqual({ passed: true });
+    expect(artifact.verification.verdicts).toEqual([
+      {
+        findingIdentity: IDENTITY,
+        verdict: "confirmed",
+        lifecycle: "confirmed",
+        reason: "the guard is real",
+      },
+    ]);
+    expect(artifact.gates.map((gate) => gate.gate)).toEqual([
+      "conclusion",
+      "bound",
+      "coverage",
+      "provenance",
+      "verification",
+    ]);
+    expect(artifact.gates.every((gate) => gate.passed)).toBe(true);
+    expect(artifact.coverage).toEqual({ total: 1, covered: ["src/a.mjs"], uncovered: [] });
+    expect(artifact.phases[0]).toEqual({ from: "orient", to: "investigate" });
+    expect(artifact.provenance).toEqual({ commentId: 101 });
+
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain(`Reviewed head \`${artifact.headRef}\``);
+    expect(body).toContain("Changed files examined: 1/1.");
+    expect(body).toContain("`src/a.mjs:2`");
+    expect(body).toContain("evidence: `src/a.mjs:1-4`");
+    expect(body).not.toContain("This review is partial");
+  });
+
+  it("a refuted verdict rides the artifact with its reason", async () => {
+    const forge = forgeStub();
+    const chat = readingChat([
+      READ,
+      { content: CONCERN },
+      { content: '{"verdict":"refuted","reason":"the line is correct"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    const artifact = result.artifact;
+    if (artifact === undefined) throw new Error("expected an artifact on publication");
+    expect(artifact.findings[0]?.lifecycle).toBe("refuted");
+    expect(artifact.findings[0]?.verdict).toBe("refuted");
+    expect(artifact.findings[0]?.reason).toBe("the line is correct");
+    expect(artifact.verification.verdicts).toHaveLength(1);
+    expect(artifact.verification.verdicts[0]?.lifecycle).toBe("refuted");
+    expect(artifact.verification.gate).toEqual({ passed: true });
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("Refuted during verification");
+  });
+
+  it("an unresolved finding carries its state on the row and no bound verdict", async () => {
+    const forge = forgeStub();
+    const chat = readingChat([
+      READ,
+      { content: CONCERN },
+      { content: "this is prose, not a verdict" },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge, chat),
+    });
+    const artifact = result.artifact;
+    if (artifact === undefined) throw new Error("expected an artifact on publication");
+    expect(artifact.findings[0]?.lifecycle).toBe("unresolved");
+    expect(artifact.findings[0]?.verdict).toBe("uncertain");
+    expect(artifact.findings[0]?.reason).toBeTruthy();
+    expect(artifact.verification.verdicts).toHaveLength(1);
+    expect(artifact.verification.verdicts[0]?.findingIdentity).toBe(IDENTITY);
+    expect(artifact.verification.verdicts[0]?.verdict).toBe("uncertain");
+    expect(artifact.verification.verdicts[0]?.lifecycle).toBe("unresolved");
+    expect(artifact.verification.gate).toEqual({ passed: true });
+  });
+
+  it("a draft writes no artifact", async () => {
+    const forge = forgeStub({ snapshotOverride: snapshot({ draft: true }) });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(result.artifact).toBeUndefined();
+  });
+
+  it("a closed pull request writes no artifact", async () => {
+    const forge = forgeStub({ snapshotOverride: snapshot({ state: "closed" }) });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(result.artifact).toBeUndefined();
+  });
+
+  it("a run abandoned for a moved head writes no artifact", async () => {
+    let reads = 0;
+    const forge = forgeStub();
+    forge.getPullRequest = async () => {
+      reads++;
+      return snapshot(reads >= 2 ? { head: { ref: "feature", sha: "c".repeat(40) } } : {});
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("abandoned");
+    expect(result.artifact).toBeUndefined();
+  });
+
+  it("a dry run writes no artifact", async () => {
+    const forge = forgeStub();
+    const result = await reviewPullRequest({
+      inputs: { ...INPUTS, dryRun: true },
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("dry-run");
+    expect(result.artifact).toBeUndefined();
   });
 });

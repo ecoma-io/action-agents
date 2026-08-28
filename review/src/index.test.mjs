@@ -6,14 +6,30 @@
 // and unlisted activity types refused loudly, and a pull_request event
 // handed to the orchestrator over the injected io.
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as p from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { readContext } from "#core/runtime.mjs";
 
-import { ACTION, PULL_REQUEST_ACTIVITY_TYPES, main, readEvent, readInputs, run } from "./index.mjs";
+import {
+  ACTION,
+  PULL_REQUEST_ACTIVITY_TYPES,
+  main,
+  readEvent,
+  readInputs,
+  run,
+  writeRunArtifact,
+} from "./index.mjs";
+import { buildArtifact, serialiseArtifact } from "./artifact.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 
@@ -70,6 +86,16 @@ describe("readInputs", () => {
     expect(() => readInputs(runnerEnv({ extra: { "INPUT_REQUEST-TIMEOUT-MS": "soon" } }))).toThrow(
       /must be a number/,
     );
+  });
+
+  it("defaults artifact-path to the manifest's default", () => {
+    expect(readInputs(runnerEnv()).artifactPath).toBe(".review-artifact");
+  });
+
+  it("reads an artifact-path override", () => {
+    expect(
+      readInputs(runnerEnv({ extra: { "INPUT_ARTIFACT-PATH": "out/reviews" } })).artifactPath,
+    ).toBe("out/reviews");
   });
 });
 
@@ -283,8 +309,156 @@ describe("run over the real forge", () => {
     // One call is enough to know where the forge lives; the loop proves every
     // call, not just the first, stayed on the runner's host.
     expect(requested.length).toBeGreaterThan(0);
+
     for (const url of requested) {
       expect(url.startsWith("https://ghe.example.com/api/v3/")).toBe(true);
+    }
+  });
+});
+
+describe("writeRunArtifact", () => {
+  const SHA = "a".repeat(40);
+
+  /** @returns {import("./artifact.mjs").RunArtifact} */
+  function artifactFixture() {
+    return buildArtifact({
+      repository: "acme/widgets",
+      pullRequest: 7,
+      headRef: SHA,
+      outcome: { classification: "published", reason: "Complete review published (1 findings)" },
+      policy: { strictness: "medium", strategy: "standard" },
+      risk: [{ path: "src/a.mjs", risk: "low", lane: "skim" }],
+      findings: [
+        {
+          severity: "concern",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-by-one",
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+        },
+      ],
+      verification: { gate: { passed: true } },
+      gates: [
+        { gate: "conclusion", passed: true },
+        { gate: "bound", passed: true },
+        { gate: "coverage", passed: true },
+        { gate: "provenance", passed: true },
+        { gate: "verification", passed: true },
+      ],
+      coverage: { total: 1, covered: ["src/a.mjs"], uncovered: [] },
+      phases: [{ from: "orient", to: "investigate" }],
+      provenance: { commentId: 101 },
+    });
+  }
+
+  it("writes a deterministically named file of deterministic bytes into the default directory", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    const file = writeRunArtifact({
+      workspace: root,
+      directory: ".review-artifact",
+      artifact: artifactFixture(),
+    });
+    expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-${SHA}.json`));
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).toBe(serialiseArtifact(artifactFixture()));
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 2, headRef: SHA });
+  });
+
+  it("creates a nested custom directory", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    const file = writeRunArtifact({
+      workspace: root,
+      directory: "out/reviews",
+      artifact: artifactFixture(),
+    });
+    expect(file).toBe(p.join(root, "out", "reviews", `review-artifact-${SHA}.json`));
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it("refuses a relative path that climbs out of the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    expect(() =>
+      writeRunArtifact({ workspace: root, directory: "../elsewhere", artifact: artifactFixture() }),
+    ).toThrow(/outside the workspace/);
+  });
+
+  it("refuses an absolute path outside the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    expect(() =>
+      writeRunArtifact({ workspace: root, directory: tmpdir(), artifact: artifactFixture() }),
+    ).toThrow(/outside the workspace/);
+  });
+
+  it("refuses a path through .git", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    expect(() =>
+      writeRunArtifact({
+        workspace: root,
+        directory: ".git/artifacts",
+        artifact: artifactFixture(),
+      }),
+    ).toThrow(/touches .git/);
+  });
+
+  it("refuses a symlinked directory that leaves the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    const outside = mkdtempSync(p.join(tmpdir(), "artifact-outside-"));
+    mkdirSync(p.join(outside, "real"));
+    symlinkSync(p.join(outside, "real"), p.join(root, "link"), "dir");
+    expect(() =>
+      writeRunArtifact({ workspace: root, directory: "link", artifact: artifactFixture() }),
+    ).toThrow(/outside the workspace/);
+  });
+});
+
+describe("run writes the artifact only after publication", () => {
+  it("a draft run writes no artifact file", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-draft-"));
+    const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+    try {
+      await run(readInputs(env), readContext(env), {
+        forge: {
+          getPullRequest: async () => ({
+            number: 41,
+            state: "open",
+            draft: true,
+            merged: false,
+            title: "",
+            body: "",
+            head: { ref: "x", sha: "a".repeat(40) },
+            base: { ref: "main", sha: "b".repeat(40) },
+          }),
+          async getRepository() {
+            return { defaultBranch: "main", name: "", description: "" };
+          },
+          async listPullRequestFiles() {
+            return [];
+          },
+          async listComments() {
+            return [];
+          },
+          async createComment() {
+            return { id: 1 };
+          },
+          async updateComment() {},
+          async deleteComment() {},
+          async getContents() {
+            return null;
+          },
+          async whoami() {
+            throw new Error("the draft path never reads the token's identity");
+          },
+        },
+        chat: {
+          complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
+        },
+        now: () => 0,
+        info: () => undefined,
+      });
+      expect(existsSync(p.join(root, ".review-artifact"))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 });

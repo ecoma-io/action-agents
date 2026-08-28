@@ -42,6 +42,16 @@ inputs:
     description: Review and log, comment nothing. Defaults to false, unlike `triage` and `harmonise` — a review's only output is the comment, so defaulting it on would make the action do nothing at all.
     required: false
     default: "false"
+  artifact-path:
+    description: >-
+      Directory inside the workspace where the machine-readable run record is
+      written after a published review, as a JSON file named after the
+      reviewed commit. The record carries the same facts the comment renders
+      — policy, risk table, findings with their verification states, gate
+      outcomes, coverage and the phase log — and the write never leaves the
+      workspace. When the review publishes nothing, no file is written.
+    required: false
+    default: ".review-artifact"
 
 runs:
   using: node24

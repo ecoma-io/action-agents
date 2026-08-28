@@ -1,20 +1,24 @@
 // Tests for the machine-readable run artifact — the pure module. The builder
 // is proven fail-closed; the serialiser is proven byte-stable; the artifact
-// round-trips the run's policy, coverage and phase log unchanged.
+// round-trips the run's policy, risk table, coverage, phase log and gate
+// table unchanged; and the comment is proven to be a projection of the same
+// facts the artifact records.
 
 import { describe, expect, it } from "vitest";
 
 import { findingIdentity } from "./answer.mjs";
 import {
   ArtifactError,
+  assertFreshArtifact,
   buildArtifact,
   reviewArtifactSchemaVersion,
   serialiseArtifact,
 } from "./artifact.mjs";
-import { MESSAGE_CHARS } from "./render.mjs";
+import { MESSAGE_CHARS, renderComment } from "./render.mjs";
 import { VERDICT_REASON_CHARS } from "./verify.mjs";
 
 const HEAD = "0".repeat(40);
+const OTHER_HEAD = "f".repeat(40);
 
 /**
  * @param {Partial<import("./artifact.mjs").RunFacts>} [over]
@@ -27,24 +31,37 @@ function facts(over = {}) {
     headRef: HEAD,
     outcome: { classification: "published", reason: "Complete review published (2 findings)" },
     policy: { strictness: "high", strategy: "adversarial" },
+    risk: [
+      { path: "src/a.mjs", risk: "medium", lane: "standard" },
+      { path: "src/b.mjs", risk: "low", lane: "skim" },
+    ],
     findings: [
       {
         id: "1",
         lifecycle: "confirmed",
+        verdict: "confirmed",
+        reason: "the captured bounds check the index",
         severity: "concern",
         file: "src/a.mjs",
         line: 2,
         message: "off-by-one",
+        provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
       },
-      { severity: "nit", file: "src/b.mjs", line: 9, message: "typo" },
-    ],
-    verdicts: [
       {
-        id: "1",
-        verdict: "confirmed",
-        lifecycle: "confirmed",
-        reason: "the captured bounds check the index",
+        severity: "nit",
+        file: "src/b.mjs",
+        line: 9,
+        message: "typo",
+        provenance: { path: "src/b.mjs", startLine: 9, endLine: 9 },
       },
+    ],
+    verification: { gate: { passed: true } },
+    gates: [
+      { gate: "conclusion", passed: true },
+      { gate: "bound", passed: true },
+      { gate: "coverage", passed: true },
+      { gate: "provenance", passed: true },
+      { gate: "verification", passed: true },
     ],
     coverage: { total: 2, covered: ["src/a.mjs"], uncovered: ["src/b.mjs"] },
     phases: [
@@ -77,7 +94,7 @@ describe("buildArtifact", () => {
   it("builds the expected artifact from valid facts", () => {
     const artifact = buildArtifact(facts());
     expect(artifact.schemaVersion).toBe(reviewArtifactSchemaVersion);
-    expect(artifact.schemaVersion).toBe(1);
+    expect(artifact.schemaVersion).toBe(2);
     expect(artifact.repository).toBe("octocat/example");
     expect(artifact.pullRequest).toBe(7);
     expect(artifact.headRef).toBe(HEAD);
@@ -86,6 +103,8 @@ describe("buildArtifact", () => {
       reason: "Complete review published (2 findings)",
     });
     expect(artifact.policy).toEqual({ strictness: "high", strategy: "adversarial" });
+    expect(artifact.risk).toEqual(facts().risk);
+    expect(artifact.gates).toEqual(facts().gates);
     expect(artifact.findings).toHaveLength(2);
     const [first, second] = artifact.findings;
     if (first === undefined || second === undefined) throw new Error("expected two findings");
@@ -101,18 +120,27 @@ describe("buildArtifact", () => {
       line: 2,
       message: "off-by-one",
       lifecycle: "confirmed",
+      verdict: "confirmed",
+      reason: "the captured bounds check the index",
+      provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
     });
     expect(second.identity).toBe(
       findingIdentity({ severity: "nit", file: "src/b.mjs", line: 9, message: "typo" }),
     );
-    expect(artifact.verdicts).toEqual([
-      {
-        findingIdentity: first.identity,
-        verdict: "confirmed",
-        lifecycle: "confirmed",
-        reason: "the captured bounds check the index",
-      },
-    ]);
+    expect(second).not.toHaveProperty("lifecycle");
+    expect(second).not.toHaveProperty("verdict");
+    expect(second).not.toHaveProperty("reason");
+    expect(artifact.verification).toEqual({
+      gate: { passed: true },
+      verdicts: [
+        {
+          findingIdentity: first.identity,
+          verdict: "confirmed",
+          lifecycle: "confirmed",
+          reason: "the captured bounds check the index",
+        },
+      ],
+    });
     expect(artifact.coverage).toEqual({
       total: 2,
       covered: ["src/a.mjs"],
@@ -122,29 +150,101 @@ describe("buildArtifact", () => {
     expect(artifact.provenance).toEqual({ commentId: 42 });
   });
 
+  it("derives every bound verdict from its finding — the ledger cannot disagree with the rows", () => {
+    const artifact = buildArtifact(facts());
+    const first = artifact.findings[0];
+    if (first === undefined) throw new Error("expected a finding");
+    expect(artifact.verification.verdicts).toHaveLength(1);
+    const entry = artifact.verification.verdicts[0];
+    expect(entry).toEqual({
+      findingIdentity: first.identity,
+      verdict: first.verdict,
+      lifecycle: first.lifecycle,
+      reason: first.reason,
+    });
+  });
+
+  it("gives an unresolved finding no verdict entry — the state rides on the finding itself", () => {
+    const skipped = facts({
+      findings: [
+        {
+          lifecycle: "unresolved",
+          reason: "the read that covered it was quarantined",
+          severity: "concern",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-by-one",
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+        },
+      ],
+      verification: { gate: { passed: true } },
+    });
+    const artifact = buildArtifact(skipped);
+    expect(artifact.verification.verdicts).toEqual([]);
+    expect(artifact.findings[0]?.lifecycle).toBe("unresolved");
+    expect(artifact.findings[0]).not.toHaveProperty("verdict");
+  });
+
+  it("carries an uncertain verdict as an unresolved lifecycle with its entry", () => {
+    const uncertain = facts({
+      findings: [
+        {
+          id: "1",
+          lifecycle: "unresolved",
+          verdict: "uncertain",
+          reason: "the evidence was ambiguous",
+          severity: "concern",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-by-one",
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+        },
+      ],
+    });
+    const artifact = buildArtifact(uncertain);
+    expect(artifact.verification.verdicts).toHaveLength(1);
+    expect(artifact.verification.verdicts[0]?.lifecycle).toBe("unresolved");
+    expect(artifact.findings[0]?.lifecycle).toBe("unresolved");
+  });
+
   it("is frozen — the code's record is not mutable by a consumer", () => {
     const artifact = buildArtifact(facts());
     expect(Object.isFrozen(artifact)).toBe(true);
     expect(Object.isFrozen(artifact.findings)).toBe(true);
     expect(Object.isFrozen(artifact.findings[0])).toBe(true);
+    expect(Object.isFrozen(artifact.verification)).toBe(true);
+    expect(Object.isFrozen(artifact.verification.verdicts)).toBe(true);
     expect(Object.isFrozen(artifact.outcome)).toBe(true);
   });
 
-  it("round-trips the policy, coverage and phase log unchanged", () => {
+  it("round-trips the policy, risk table, coverage, phase log and gate table unchanged", () => {
     const input = facts();
     const artifact = buildArtifact(input);
     expect(artifact.policy).toStrictEqual(input.policy);
+    expect(artifact.risk).toStrictEqual(input.risk);
     expect(artifact.coverage).toStrictEqual(input.coverage);
     expect(artifact.phases).toStrictEqual(input.phases);
+    expect(artifact.gates).toStrictEqual(input.gates);
   });
 
   it("preserves finding order as given — no reordering, no sorting", () => {
     const ordered = facts({
       findings: [
-        { severity: "nit", file: "src/z.mjs", line: 1, message: "zzz" },
-        { severity: "concern", file: "src/a.mjs", line: 1, message: "aaa" },
+        {
+          severity: "nit",
+          file: "src/z.mjs",
+          line: 1,
+          message: "zzz",
+          provenance: { path: "src/z.mjs", startLine: 1, endLine: 1 },
+        },
+        {
+          severity: "concern",
+          file: "src/a.mjs",
+          line: 1,
+          message: "aaa",
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 2 },
+        },
       ],
-      verdicts: [],
     });
     const artifact = buildArtifact(ordered);
     expect(artifact.findings.map((f) => f.file)).toEqual(["src/z.mjs", "src/a.mjs"]);
@@ -154,12 +254,11 @@ describe("buildArtifact", () => {
   it("allows an empty publication set — a run that found nothing", () => {
     const empty = facts({
       findings: [],
-      verdicts: [],
       outcome: { classification: "published", reason: "Complete review published (0 findings)" },
     });
     const artifact = buildArtifact(empty);
     expect(artifact.findings).toEqual([]);
-    expect(artifact.verdicts).toEqual([]);
+    expect(artifact.verification.verdicts).toEqual([]);
   });
 });
 
@@ -171,11 +270,18 @@ describe("buildArtifact refusals", () => {
     expect(() => buildArtifact(/** @type {any} */ ([facts()]))).toThrow(ArtifactError);
   });
 
-  it("refuses an unknown top-level key", () => {
+  it("refuses an unknown top-level key — including the retired separate verdicts list", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
           f.extra = "nope";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.verdicts = [{ id: "1", verdict: "confirmed", lifecycle: "confirmed", reason: "x" }];
         }),
       ),
     ).toThrow(ArtifactError);
@@ -195,15 +301,39 @@ describe("buildArtifact refusals", () => {
       },
     ],
     [
+      "risk row",
+      (/** @type {any} */ f) => {
+        f.risk[0].extra = "x";
+      },
+    ],
+    [
       "finding",
       (/** @type {any} */ f) => {
         f.findings[0].extra = "x";
       },
     ],
     [
-      "verdict",
+      "finding provenance",
       (/** @type {any} */ f) => {
-        f.verdicts[0].extra = "x";
+        f.findings[0].provenance.extra = "x";
+      },
+    ],
+    [
+      "verification",
+      (/** @type {any} */ f) => {
+        f.verification.extra = "x";
+      },
+    ],
+    [
+      "verification gate",
+      (/** @type {any} */ f) => {
+        f.verification.gate.extra = "x";
+      },
+    ],
+    [
+      "gate entry",
+      (/** @type {any} */ f) => {
+        f.gates[0].extra = "x";
       },
     ],
     [
@@ -246,6 +376,34 @@ describe("buildArtifact refusals", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
+          delete f.risk;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.verification;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.verification.gate;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.gates;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
           delete f.coverage;
         }),
       ),
@@ -260,7 +418,7 @@ describe("buildArtifact refusals", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
-          delete f.verdicts[0].id;
+          delete f.findings[0].provenance;
         }),
       ),
     ).toThrow(ArtifactError);
@@ -312,6 +470,18 @@ describe("buildArtifact refusals", () => {
       },
     ],
     [
+      "risk level",
+      (/** @type {any} */ f) => {
+        f.risk[0].risk = "existential";
+      },
+    ],
+    [
+      "attention lane",
+      (/** @type {any} */ f) => {
+        f.risk[0].lane = "deepish";
+      },
+    ],
+    [
       "severity",
       (/** @type {any} */ f) => {
         f.findings[0].severity = "blocker";
@@ -320,7 +490,19 @@ describe("buildArtifact refusals", () => {
     [
       "verdict value",
       (/** @type {any} */ f) => {
-        f.verdicts[0].verdict = "maybe";
+        f.findings[0].verdict = "maybe";
+      },
+    ],
+    [
+      "lifecycle state",
+      (/** @type {any} */ f) => {
+        f.findings[0].lifecycle = "candidate";
+      },
+    ],
+    [
+      "gate name",
+      (/** @type {any} */ f) => {
+        f.gates[0].gate = "vibes";
       },
     ],
     [
@@ -333,19 +515,60 @@ describe("buildArtifact refusals", () => {
     expect(() => buildArtifact(tampered(mutate))).toThrow(ArtifactError);
   });
 
-  it("refuses a finding message over the documented cap", () => {
+  it("refuses a risk table that is not byte-wise sorted by path or that duplicates a path", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          const [a, b] = f.risk;
+          f.risk = [b, a];
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.risk[1].path = "src/a.mjs";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.risk[0].path = "";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.risk = "nope";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.risk[0] = { path: "src/a.mjs", risk: "medium" };
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a finding message over the documented cap, accepts one at it", () => {
     const over = facts({
       findings: [
         {
           id: "1",
           lifecycle: "confirmed",
+          verdict: "confirmed",
+          reason: "ok",
           severity: "concern",
           file: "src/a.mjs",
           line: 2,
           message: "x".repeat(MESSAGE_CHARS + 1),
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
         },
       ],
-      verdicts: [{ id: "1", verdict: "confirmed", lifecycle: "confirmed", reason: "ok" }],
     });
     expect(() => buildArtifact(over)).toThrow(ArtifactError);
     const atCap = facts({
@@ -353,32 +576,39 @@ describe("buildArtifact refusals", () => {
         {
           id: "1",
           lifecycle: "confirmed",
+          verdict: "confirmed",
+          reason: "ok",
           severity: "concern",
           file: "src/a.mjs",
           line: 2,
           message: "x".repeat(MESSAGE_CHARS),
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
         },
       ],
-      verdicts: [{ id: "1", verdict: "confirmed", lifecycle: "confirmed", reason: "ok" }],
     });
     expect(() => buildArtifact(atCap)).not.toThrow();
   });
 
   it("refuses a verdict reason over the documented cap", () => {
     const over = facts({
-      verdicts: [
+      findings: [
         {
           id: "1",
-          verdict: "confirmed",
           lifecycle: "confirmed",
+          verdict: "confirmed",
           reason: "y".repeat(VERDICT_REASON_CHARS + 1),
+          severity: "concern",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-by-one",
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
         },
       ],
     });
     expect(() => buildArtifact(over)).toThrow(ArtifactError);
   });
 
-  it("refuses empty or non-string finding and verdict text", () => {
+  it("refuses empty or non-string finding and outcome text", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
@@ -396,7 +626,7 @@ describe("buildArtifact refusals", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
-          f.verdicts[0].reason = "";
+          f.findings[0].reason = "";
         }),
       ),
     ).toThrow(ArtifactError);
@@ -426,66 +656,65 @@ describe("buildArtifact refusals", () => {
     ).toThrow(ArtifactError);
   });
 
-  it("refuses a verdict that names a finding id no finding carries", () => {
+  it("refuses a finding provenance that captures no lines or names no path", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
-          f.verdicts[0].id = "99";
+          f.findings[0].provenance.startLine = 3;
+          f.findings[0].provenance.endLine = 1;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].provenance.startLine = 0;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].provenance.endLine = 1.5;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].provenance.path = "";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.findings[0].provenance.endLine;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].provenance = "src/a.mjs:1-3";
         }),
       ),
     ).toThrow(ArtifactError);
   });
 
-  it("refuses a finding id with no verdict", () => {
+  it("refuses a lifecycle without its reason, or a reason without a lifecycle", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
-          f.findings[0].id = "5";
+          delete f.findings[0].reason;
         }),
       ),
     ).toThrow(ArtifactError);
-  });
-
-  it("refuses a duplicate finding id", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
-          f.findings[1].id = "1";
-        }),
-      ),
-    ).toThrow(ArtifactError);
-  });
-
-  it("refuses a duplicate verdict id", () => {
-    expect(() =>
-      buildArtifact(
-        tampered((f) => {
-          f.verdicts.push({
-            id: "1",
-            verdict: "uncertain",
-            lifecycle: "unresolved",
-            reason: "duplicate",
-          });
-        }),
-      ),
-    ).toThrow(ArtifactError);
-  });
-
-  it("refuses a verdict whose lifecycle does not follow from the verdict", () => {
-    expect(() =>
-      buildArtifact(
-        tampered((f) => {
-          f.verdicts[0].lifecycle = "refuted";
-        }),
-      ),
-    ).toThrow(ArtifactError);
-  });
-
-  it("refuses a finding lifecycle that contradicts its verdict", () => {
-    expect(() =>
-      buildArtifact(
-        tampered((f) => {
-          f.findings[0].lifecycle = "refuted";
+          delete f.findings[0].lifecycle;
+          delete f.findings[0].verdict;
         }),
       ),
     ).toThrow(ArtifactError);
@@ -496,16 +725,79 @@ describe("buildArtifact refusals", () => {
       buildArtifact(
         tampered((f) => {
           delete f.findings[0].lifecycle;
+          delete f.findings[0].verdict;
+          delete f.findings[0].reason;
         }),
       ),
     ).toThrow(ArtifactError);
   });
 
-  it("refuses a candidate lifecycle — a candidate never publishes", () => {
+  it("refuses a lifecycle a candidate never publishes", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
           f.findings[0].lifecycle = "candidate";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a duplicate finding id", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[1].id = "1";
+          f.findings[1].lifecycle = "unresolved";
+          f.findings[1].verdict = "uncertain";
+          f.findings[1].reason = "second";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a verdict whose lifecycle does not follow from the verdict", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].lifecycle = "refuted";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a confirmed or refuted lifecycle with no verdict bound", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.findings[0].verdict;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a bound verdict missing its id, lifecycle or reason", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.findings[0].id;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.findings[0].reason;
+          f.findings[0].lifecycle = "unresolved";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a non-planned lifecycle above unresolved — only a skip survives without an id", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.findings[0].id;
         }),
       ),
     ).toThrow(ArtifactError);
@@ -516,27 +808,140 @@ describe("buildArtifact refusals", () => {
       findings: [
         {
           lifecycle: "unresolved",
+          reason: "the finding's file was gone from the workspace",
           severity: "concern",
           file: "src/gone.mjs",
           line: 4,
           message: "unreachable",
+          provenance: { path: "src/gone.mjs", startLine: 1, endLine: 4 },
         },
       ],
-      verdicts: [],
-      outcome: { classification: "published", reason: "Complete review published (1 findings)" },
     });
     const artifact = buildArtifact(skipped);
-    expect(artifact.verdicts).toEqual([]);
+    expect(artifact.verification.verdicts).toEqual([]);
     expect(artifact.findings[0]?.lifecycle).toBe("unresolved");
+    expect(artifact.findings[0]).not.toHaveProperty("id");
   });
 
   it("accepts an unplanned finding — no id, no lifecycle, published as it arrived", () => {
     const skim = facts({
-      findings: [{ severity: "nit", file: "src/b.mjs", line: 9, message: "typo" }],
-      verdicts: [],
+      findings: [
+        {
+          severity: "nit",
+          file: "src/b.mjs",
+          line: 9,
+          message: "typo",
+          provenance: { path: "src/b.mjs", startLine: 9, endLine: 9 },
+        },
+      ],
     });
     const artifact = buildArtifact(skim);
     expect(artifact.findings[0]).not.toHaveProperty("lifecycle");
+  });
+
+  it("refuses a gate table that is not the declared gates in the declared order", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates = f.gates.slice(0, 4);
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          const [first, second] = f.gates;
+          f.gates[0] = second;
+          f.gates[1] = first;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates[2].gate = "vibes";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates = "nope";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates[0].passed = "yes";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a gate outcome that passes with a reason or fails without one", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates[0].reason = "unexpected";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates[2].passed = false;
+          delete f.gates[2].reason;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates[2].passed = false;
+          f.gates[2].reason = "";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.verification.gate = { passed: true, reason: "unexpected" };
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.verification.gate = { passed: false };
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.verification.gate = { passed: "yes" };
+        }),
+      ),
+    ).toThrow(ArtifactError);
+  });
+
+  it("refuses a verification slice that disagrees with the gate table's verification entry", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.verification.gate = { passed: false, reason: "could not confirm one finding" };
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.gates[4].passed = false;
+          f.gates[4].reason = "could not confirm one finding";
+        }),
+      ),
+    ).toThrow(ArtifactError);
   });
 
   it("refuses a coverage summary that does not partition the expected set", () => {
@@ -595,7 +1000,7 @@ describe("buildArtifact refusals", () => {
     ).toThrow(ArtifactError);
   });
 
-  it("refuses a non-array findings or verdicts list", () => {
+  it("refuses a non-array findings, risk or gates list", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
@@ -606,7 +1011,7 @@ describe("buildArtifact refusals", () => {
     expect(() =>
       buildArtifact(
         tampered((f) => {
-          f.verdicts = "nope";
+          f.gates = "nope";
         }),
       ),
     ).toThrow(ArtifactError);
@@ -645,6 +1050,95 @@ describe("buildArtifact refusals", () => {
   });
 });
 
+describe("assertFreshArtifact", () => {
+  it("accepts an artifact whose head ref matches the pull request's head", () => {
+    const artifact = buildArtifact(facts());
+    expect(() => assertFreshArtifact(artifact, HEAD)).not.toThrow();
+  });
+
+  it("refuses a stale snapshot naming both heads", () => {
+    const artifact = buildArtifact(facts());
+    try {
+      assertFreshArtifact(artifact, OTHER_HEAD);
+      expect.unreachable("expected assertFreshArtifact to refuse");
+    } catch (error) {
+      const typed = /** @type {ArtifactError} */ (error);
+      expect(typed).toBeInstanceOf(ArtifactError);
+      expect(typed.message).toMatch(/stale snapshot/);
+      expect(typed.message).toContain(HEAD.slice(0, 12));
+      expect(typed.message).toContain(OTHER_HEAD.slice(0, 12));
+    }
+  });
+
+  it("refuses a head ref that is not a 40-char hex sha on either side", () => {
+    const artifact = buildArtifact(facts());
+    expect(() => assertFreshArtifact(artifact, "main")).toThrow(ArtifactError);
+    expect(() => assertFreshArtifact(artifact, "")).toThrow(ArtifactError);
+    const foreign = /** @type {any} */ ({ ...artifact, headRef: "main" });
+    expect(() => assertFreshArtifact(foreign, HEAD)).toThrow(ArtifactError);
+  });
+});
+
+describe("the comment is a projection of the same facts", () => {
+  const COMPLETE = "Complete";
+  const PARTIAL = "Partial";
+
+  it("renders the head, coverage counts and every anchored finding the artifact records", () => {
+    const input = facts();
+    const artifact = buildArtifact(input);
+    const body = renderComment({
+      status: COMPLETE,
+      headSha: input.headRef,
+      summary: "one concern survived verification",
+      findings: input.findings,
+      strictness: input.policy.strictness,
+      coverage: { ...input.coverage, covered: input.coverage.covered },
+    });
+    expect(body).toContain(`Reviewed head \`${artifact.headRef}\``);
+    expect(body).toContain(
+      `Changed files examined: ${String(artifact.coverage.covered.length)}/${String(artifact.coverage.total)}.`,
+    );
+    for (const finding of artifact.findings) {
+      expect(body).toContain(`\`${finding.file}:${String(finding.line)}\``);
+    }
+    const first = artifact.findings[0];
+    if (first === undefined) throw new Error("expected a finding");
+    expect(body).toContain("evidence: `src/a.mjs:1-3`");
+  });
+
+  it("a complete posture means every gate passed — a partial one names the gate the artifact refused", () => {
+    const input = facts();
+    const artifact = buildArtifact(input);
+    const allPassed = artifact.gates.every((gate) => gate.passed);
+    expect(allPassed).toBe(true);
+
+    const failedReason = "verification could not confirm one finding";
+    const partialFacts = facts({
+      gates: [
+        { gate: "conclusion", passed: true },
+        { gate: "bound", passed: true },
+        { gate: "coverage", passed: true },
+        { gate: "provenance", passed: true },
+        { gate: "verification", passed: false, reason: failedReason },
+      ],
+      verification: { gate: { passed: false, reason: failedReason } },
+    });
+    const partial = buildArtifact(partialFacts);
+    const failed = partial.gates.find((gate) => !gate.passed);
+    expect(failed?.reason).toBe(failedReason);
+    const body = renderComment({
+      status: PARTIAL,
+      headSha: partialFacts.headRef,
+      summary: "one concern survived verification",
+      findings: partialFacts.findings,
+      strictness: partialFacts.policy.strictness,
+      ...(failed?.reason === undefined ? {} : { partialReason: failed.reason }),
+      coverage: { ...partialFacts.coverage },
+    });
+    expect(body).toContain(`> ⚠️ This review is partial: ${failedReason}`);
+  });
+});
+
 describe("serialiseArtifact", () => {
   it("produces byte-identical output across two calls with identical input", () => {
     const first = serialiseArtifact(buildArtifact(facts()));
@@ -653,7 +1147,7 @@ describe("serialiseArtifact", () => {
   });
 
   it("includes the schema version", () => {
-    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":1');
+    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":2');
   });
 
   it("serialises to valid JSON that parses back to the artifact", () => {
@@ -671,19 +1165,29 @@ describe("serialiseArtifact", () => {
         covered: ordered.coverage.covered,
         total: ordered.coverage.total,
       },
-      verdicts: ordered.verdicts.map((v) => ({
-        reason: v.reason,
-        verdict: v.verdict,
-        lifecycle: v.lifecycle,
-        id: v.id,
-      })),
+      gates: ordered.gates.map((g) =>
+        "reason" in g
+          ? { reason: g.reason, passed: g.passed, gate: g.gate }
+          : { passed: g.passed, gate: g.gate },
+      ),
+      verification: {
+        gate: { passed: ordered.verification.gate.passed },
+      },
+      risk: ordered.risk.map((r) => ({ lane: r.lane, risk: r.risk, path: r.path })),
       findings: ordered.findings.map((f) => ({
         message: f.message,
         line: f.line,
         file: f.file,
         severity: f.severity,
+        provenance: {
+          endLine: f.provenance.endLine,
+          startLine: f.provenance.startLine,
+          path: f.provenance.path,
+        },
         ...(f.id === undefined ? {} : { id: f.id }),
         ...(f.lifecycle === undefined ? {} : { lifecycle: f.lifecycle }),
+        ...(f.verdict === undefined ? {} : { verdict: f.verdict }),
+        ...(f.reason === undefined ? {} : { reason: f.reason }),
       })),
       policy: { strategy: ordered.policy.strategy, strictness: ordered.policy.strictness },
       outcome: { reason: ordered.outcome.reason, classification: ordered.outcome.classification },
@@ -692,7 +1196,7 @@ describe("serialiseArtifact", () => {
       repository: ordered.repository,
     };
     const first = serialiseArtifact(buildArtifact(ordered));
-    const second = serialiseArtifact(buildArtifact(shuffled));
+    const second = serialiseArtifact(buildArtifact(/** @type {any} */ (shuffled)));
     expect(second).toBe(first);
   });
 
@@ -702,7 +1206,9 @@ describe("serialiseArtifact", () => {
       provenance: artifact.provenance,
       phases: artifact.phases,
       coverage: artifact.coverage,
-      verdicts: artifact.verdicts,
+      verification: artifact.verification,
+      gates: artifact.gates,
+      risk: artifact.risk,
       findings: artifact.findings,
       policy: artifact.policy,
       outcome: artifact.outcome,
@@ -711,7 +1217,7 @@ describe("serialiseArtifact", () => {
       repository: artifact.repository,
       schemaVersion: artifact.schemaVersion,
     };
-    expect(serialiseArtifact(shuffled)).toBe(serialiseArtifact(artifact));
+    expect(serialiseArtifact(/** @type {any} */ (shuffled))).toBe(serialiseArtifact(artifact));
   });
 
   it("refuses to serialise a foreign object", () => {
@@ -719,6 +1225,9 @@ describe("serialiseArtifact", () => {
     expect(() => serialiseArtifact(/** @type {any} */ ({ schemaVersion: 2 }))).toThrow(
       ArtifactError,
     );
+    expect(() =>
+      serialiseArtifact(/** @type {any} */ ({ ...buildArtifact(facts()), schemaVersion: 1 })),
+    ).toThrow(ArtifactError);
     expect(() => serialiseArtifact(/** @type {any} */ (null))).toThrow(ArtifactError);
     expect(() =>
       serialiseArtifact(/** @type {any} */ ({ ...buildArtifact(facts()), extra: "x" })),
