@@ -32,11 +32,12 @@
  * not a turn to hand back.
  */
 
-import { TOOL_SPECS } from "./tools.mjs";
 import { coverageReport, normaliseReadPath } from "./coverage.mjs";
+import { FIRST_PHASE, nextPhase, phaseTools } from "./phases.mjs";
 
 /** @typedef {import("#core/chat.mjs").Chat} Chat */
 /** @typedef {import("#core/chat.mjs").ChatMessage} ChatMessage */
+/** @typedef {import("./phases.mjs").PhaseName} PhaseName */
 
 export const MAX_TOOL_CALLS = 200;
 
@@ -52,6 +53,7 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @property {boolean} naturalStopped true when the model stopped on its own
  * @property {Bound | undefined} bound the reading bound that fired, when one did
  * @property {import("./coverage.mjs").CoverageReport} coverage the deterministic read-coverage report over the expected set
+ * @property {PhaseName} phase the machine's phase at exit
  * @property {number} readingTurns
  * @property {number} toolCalls
  * @property {ChatMessage[]} transcript the loop's final transcript, for the re-ask
@@ -80,6 +82,7 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @param {number} input.contextWindow
  * @param {{ maxToolCalls?: number, evidenceBytes?: number }} [input.limits]
  * @param {string[]} [input.expectedPaths] the diff-derived expected set; defaults to none
+ * @param {import("./config.mjs").Strictness} [input.strictness] the review policy; the conclude edge tightens at "high" (defaults to "medium")
  * @returns {Promise<LoopOutcome>}
  */
 export async function runLoop({
@@ -91,10 +94,13 @@ export async function runLoop({
   contextWindow,
   limits,
   expectedPaths,
+  strictness = "medium",
 }) {
   const maxToolCalls = limits?.maxToolCalls ?? MAX_TOOL_CALLS;
   const maxEvidenceBytes = limits?.evidenceBytes ?? MAX_CUMULATIVE_EVIDENCE_BYTES;
   const expected = expectedPaths ?? [];
+  /** @type {PhaseName} */
+  let phase = FIRST_PHASE;
 
   if (messages[0] === undefined || messages[1] === undefined) {
     throw new Error("the loop needs a system message and a task message");
@@ -114,6 +120,31 @@ export async function runLoop({
   const log = [];
 
   /**
+   * The machine's input, rebuilt from the ledger at every update — the
+   * coverage report over the expected set, the budgets as consumed against
+   * their caps, the lanes code fixed before the loop, the policy. No model
+   * text enters: the machine reads the ledger, not the transcript.
+   *
+   * @returns {import("./phases.mjs").PhaseContext}
+   */
+  function phaseContext() {
+    return {
+      coverage: readCoverage(expected, ledger),
+      toolCalls: ledger.toolCalls,
+      maxToolCalls,
+      readingTurns: ledger.readingTurns,
+      maxTurns,
+      evidenceBytes: ledger.evidenceBytes,
+      evidenceLimit: maxEvidenceBytes,
+      // Findings exist on the ledger only once the final answer lands.
+      findingsRecorded: 0,
+      // Lanes are fixed by code before the loop starts.
+      lanesAssigned: true,
+      strictness,
+    };
+  }
+
+  /**
    * One request, preceded by the compaction check. The transcript IS what
    * is sent; nothing is pending outside it.
    *
@@ -122,7 +153,10 @@ export async function runLoop({
    */
   async function ask(offeredTools, pending = []) {
     if (estimateTokens(transcript) > 0.8 * contextWindow && transcript.length > 2) {
-      transcript = [...transcript.slice(0, 2), { role: "user", content: renderState(ledger) }];
+      transcript = [
+        ...transcript.slice(0, 2),
+        { role: "user", content: renderState(ledger, phase) },
+      ];
       log.push(
         `compacted the transcript to ${String(estimateTokens(transcript))} estimated tokens`,
       );
@@ -136,7 +170,7 @@ export async function runLoop({
   }
 
   for (;;) {
-    const { response, transcript: currentTranscript } = await ask(TOOL_SPECS);
+    const { response, transcript: currentTranscript } = await ask(phaseTools(phase));
     transcript = currentTranscript;
 
     if (response.toolCalls.length === 0) {
@@ -146,6 +180,7 @@ export async function runLoop({
         naturalStopped: true,
         bound: undefined,
         coverage: readCoverage(expected, ledger),
+        phase,
         readingTurns: ledger.readingTurns,
         toolCalls: ledger.toolCalls,
         transcript,
@@ -196,6 +231,9 @@ export async function runLoop({
     }
 
     ledger.readingTurns++;
+    const previousPhase = phase;
+    phase = nextPhase(phase, phaseContext());
+    if (phase !== previousPhase) log.push(`phase: ${previousPhase} → ${phase}`);
     if (
       ledger.readingTurns >= maxTurns ||
       ledger.toolCalls >= maxToolCalls ||
@@ -208,7 +246,21 @@ export async function runLoop({
             ? "tool-calls"
             : "max-turns";
       log.push(`reading bound fired: ${bound}`);
-      return await conclude({ ask, ledger, log, bound, transcript, expectedPaths: expected });
+      if (phase !== "conclude") {
+        log.push(
+          `phase machine holds the review in ${phase}: strict policy with ` +
+            `${String(phaseContext().coverage.uncovered.length)} uncovered file(s)`,
+        );
+      }
+      return await conclude({
+        ask,
+        ledger,
+        log,
+        bound,
+        transcript,
+        expectedPaths: expected,
+        phase,
+      });
     }
   }
 }
@@ -241,9 +293,18 @@ function readCoverage(expectedPaths, ledger) {
  * @param {Bound} input.bound
  * @param {ChatMessage[]} input.transcript
  * @param {string[]} input.expectedPaths the diff-derived expected set
+ * @param {PhaseName} input.phase the machine's phase at the exit
  * @returns {Promise<LoopOutcome>}
  */
-async function conclude({ ask, ledger, log, bound, transcript: _transcript, expectedPaths }) {
+async function conclude({
+  ask,
+  ledger,
+  log,
+  bound,
+  transcript: _transcript,
+  expectedPaths,
+  phase,
+}) {
   const { response, transcript: finalTranscript } = await ask(undefined, [
     {
       role: "user",
@@ -257,6 +318,7 @@ async function conclude({ ask, ledger, log, bound, transcript: _transcript, expe
     naturalStopped: false,
     bound,
     coverage: readCoverage(expectedPaths, ledger),
+    phase,
     readingTurns: ledger.readingTurns,
     toolCalls: ledger.toolCalls,
     transcript: finalTranscript,
@@ -319,13 +381,15 @@ export function estimateTokens(messages) {
 
 /**
  * @param {Ledger} ledger
+ * @param {PhaseName} phase
  * @returns {string}
  */
-function renderState(ledger) {
+function renderState(ledger, phase) {
   /** @type {string[]} */
   const parts = [
     "[state inventory]",
     `reading turns used: ${String(ledger.readingTurns)}; tool calls made: ${String(ledger.toolCalls)}`,
+    `current phase: ${phase}`,
   ];
   if (ledger.filesRead.length > 0) parts.push(`files read:\n- ${ledger.filesRead.join("\n- ")}`);
   if (ledger.searchesRun.length > 0) {

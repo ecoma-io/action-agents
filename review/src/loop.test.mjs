@@ -385,3 +385,134 @@ describe("coverage accounting", () => {
     expect(outcome.coverage.total).toBe(2);
   });
 });
+
+describe("review phases", () => {
+  /**
+   * @param {{ tools: unknown } | undefined} request
+   * @returns {string[]}
+   */
+  function offered(request) {
+    const tools = /** @type {{ name: string }[] | undefined} */ (request?.tools);
+    return (tools ?? []).map((tool) => tool.name);
+  }
+
+  it("offers the orient tools first, the wider registry after the first turn", async () => {
+    const chat = scriptedChat([
+      {
+        content: "",
+        toolCalls: [readCall({ name: "list_files", argumentsJson: '{"path":"src"}' })],
+      },
+      { content: "", toolCalls: [readCall()] },
+      { content: '{"findings":[],"summary":"s"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 5,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs"],
+    });
+
+    expect(offered(chat.requests[0])).toEqual(["list_files", "search"]);
+    expect(offered(chat.requests[1])).toEqual(["read_file", "list_files", "search"]);
+    expect(offered(chat.requests[2])).toEqual(["read_file", "list_files", "search"]);
+    expect(outcome.log).toContain("phase: orient → investigate");
+    expect(outcome.log).toContain("phase: investigate → verify");
+    expect(outcome.phase).toBe("verify");
+  });
+
+  it("the offer is the gate: the registry itself never grows or guards", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: '{"findings":[],"summary":"s"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 5,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs"],
+    });
+
+    // read_file was not offered in orient — and a provider that called it
+    // anyway would find the registry unchanged. Narrowing binds the offer.
+    expect(offered(chat.requests[0])).toEqual(["list_files", "search"]);
+    expect(outcome.toolCalls).toBe(1);
+    expect(outcome.coverage.covered).toEqual(["src/a.mjs"]);
+  });
+
+  it("finalises with the machine in conclude when the bound fires at medium", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: '{"findings":[],"summary":"done"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs"],
+      strictness: "medium",
+      limits: { maxToolCalls: 1 },
+    });
+
+    expect(outcome.bound).toBe("tool-calls");
+    expect(outcome.phase).toBe("conclude");
+    expect(chat.requests.at(-1)?.tools).toBeUndefined();
+  });
+
+  it("holds the machine out of conclude under strict policy with uncovered files — the review still ends", async () => {
+    const chat = scriptedChat([
+      {
+        content: "",
+        toolCalls: [readCall({ name: "list_files", argumentsJson: '{"path":"src"}' })],
+      },
+      { content: '{"findings":[],"summary":"partial"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "src/b.mjs"],
+      strictness: "high",
+      limits: { maxToolCalls: 1 },
+    });
+
+    expect(outcome.bound).toBe("tool-calls");
+    expect(outcome.phase).not.toBe("conclude");
+    expect(outcome.log.some((line) => line.includes("holds the review in investigate"))).toBe(true);
+    // The code-owned exit still finalised, tools withheld — #69 semantics
+    // and the single finalisation are untouched.
+    expect(outcome.naturalStopped).toBe(false);
+    expect(chat.requests.at(-1)?.tools).toBeUndefined();
+  });
+
+  it("compaction renders the live phase into the state inventory", async () => {
+    writeFileSync(p.join(root, "src", "huge.mjs"), "y".repeat(4000) + "\n");
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall({ argumentsJson: '{"path":"src/huge.mjs"}' })] },
+      { content: '{"findings":[],"summary":"after compact"}' },
+    ]);
+    await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 4,
+      contextWindow: 1000,
+      expectedPaths: ["src/huge.mjs"],
+    });
+
+    const final = chat.requests.at(-1)?.messages ?? [];
+    expect(final[2]?.content).toContain("current phase: investigate");
+  });
+});
