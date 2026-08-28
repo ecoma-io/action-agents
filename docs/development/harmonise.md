@@ -16,16 +16,24 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
 
 ## Inputs
 
-| Input             | Meaning                                                                                                                                  |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `github-token`    | the token the action writes with — the workflow's `permissions:` block is the real bound                                                 |
-| `api-url`         | base URL of an OpenAI-compatible endpoint                                                                                                |
-| `api-key`         | key for that endpoint; empty is a supported keyless configuration                                                                        |
-| `model`           | model id to ask                                                                                                                          |
-| `config-path`     | overrides `.github/action-agents/harmonise/harmonise.json5` / `.json` — see the configuration page                                       |
-| `source-language` | overrides `sourceLanguage`; must name a language the config declares. Required in v1 — the config must exist and name a source language. |
-| `documents`       | glob filter over the source-document set; empty = all of them. Default is empty, because the map defines the space                       |
-| `dry-run`         | report drift and missing translations, propose nothing — the default, because the output of a real run is a pull request                 |
+| Input                | Meaning                                                                                                                                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `github-token`       | the token the action writes with — the workflow's `permissions:` block is the real bound                                                                                                                         |
+| `api-url`            | base URL of an OpenAI-compatible endpoint                                                                                                                                                                        |
+| `api-key`            | key for that endpoint; empty is a supported keyless configuration                                                                                                                                                |
+| `model`              | model id to ask                                                                                                                                                                                                  |
+| `request-timeout-ms` | per-attempt timeout in milliseconds for one provider call — the attempt must complete the whole completion; raise it for endpoints that legitimately take longer than 30 seconds; default 30000, floored at 1000 |
+| `config-path`        | overrides `.github/action-agents/harmonise/harmonise.json5` / `.json` — see the configuration page                                                                                                               |
+| `source-language`    | overrides `sourceLanguage`; must name a language the config declares. Required in v1 — the config must exist and name a source language.                                                                         |
+| `documents`          | glob filter over the source-document set; empty = all of them. Default is empty, because the map defines the space                                                                                               |
+| `dry-run`            | report drift and missing translations, propose nothing — the default, because the output of a real run is a pull request                                                                                         |
+
+Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
+backoff, `Retry-After` and the attempt limit are `core/src/http.mjs` policy, not inputs.
+The workflow's `timeout-minutes` (15 in this repository's own `harmonise.yml`) remains the
+outer safety boundary — the per-request value bounds one call, the job timeout bounds the
+run. A value below 1000 is a startup error, so the HTTP client's disabled-timeout path is
+unreachable from a workflow.
 
 ## The config file
 

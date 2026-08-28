@@ -7,7 +7,7 @@
 // error class named for them. A test that only proved "a GET returns a body"
 // would pin nothing worth keeping.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   BodyTooLargeError,
@@ -227,6 +227,121 @@ describe("retries", () => {
     const error = await http.request("/x").catch((cause) => cause);
     expect(error).toBeInstanceOf(TransportError);
     expect(error.message).toMatch(/timed out/);
+  });
+
+  it("retries a timed-out attempt and succeeds on the next one", async () => {
+    /** @type {AbortSignal[]} */
+    const signals = [];
+    /** @type {typeof globalThis.fetch} */
+    const timesOutOnce = (_url, init) => {
+      signals.push(/** @type {AbortSignal} */ (init?.signal));
+      if (signals.length === 1) {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "TimeoutError")),
+          );
+        });
+      }
+      return Promise.resolve(ok('"late but done"')());
+    };
+    const http = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: timesOutOnce,
+      timeoutMs: 10,
+      retryDelayMs: 1,
+    });
+
+    await expect(http.request("/x")).resolves.toMatchObject({
+      status: 200,
+      text: '"late but done"',
+    });
+    expect(signals).toHaveLength(2);
+  });
+
+  it("hands each attempt its own abort signal", async () => {
+    /** @type {{ signal: AbortSignal | undefined, abortedAtCall: boolean | undefined }[]} */
+    const seen = [];
+    /** @type {typeof globalThis.fetch} */
+    const timesOutOnce = (_url, init) => {
+      seen.push({
+        signal: init?.signal ?? undefined,
+        abortedAtCall: init?.signal?.aborted ?? undefined,
+      });
+      if (seen.length === 1) {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "TimeoutError")),
+          );
+        });
+      }
+      return Promise.resolve(ok()());
+    };
+    const http = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: timesOutOnce,
+      timeoutMs: 10,
+      retryDelayMs: 1,
+    });
+
+    await expect(http.request("/x")).resolves.toMatchObject({ status: 200 });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.signal).toBeDefined();
+    expect(seen[1]?.signal).toBeDefined();
+    expect(seen[0]?.signal).not.toBe(seen[1]?.signal);
+    // Attempt two's signal was not yet the one that timed out — the stale,
+    // already-aborted signal would fail the retry before fetch ran.
+    expect(seen[1]?.abortedAtCall).toBe(false);
+  });
+
+  it("surfaces TransportError when every attempt times out", async () => {
+    let calls = 0;
+    /** @type {typeof globalThis.fetch} */
+    const hanging = (_url, init) => {
+      calls++;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "TimeoutError")),
+        );
+      });
+    };
+    const http = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: hanging,
+      timeoutMs: 10,
+      maxAttempts: 2,
+      retryDelayMs: 1,
+    });
+
+    const error = await http.request("/x").catch((cause) => cause);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error.message).toMatch(/timed out/);
+    expect(calls).toBe(2);
+  });
+
+  it("delays a status retry by Retry-After, not by the plain backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      /** @type {{ calls?: RecordedCall[] }} */
+      const recorder = {};
+      const http = createHttpClient({
+        baseUrl: "https://api.example",
+        fetchImpl: scripted([status(429, "", { "retry-after": "2" }), ok('"after"')], recorder),
+        // The plain backoff for attempt 1 — deliberately half of Retry-After.
+        retryDelayMs: 1_000,
+        timeoutMs: 5_000,
+      });
+      const settled = http.request("/x").catch((cause) => cause);
+
+      // Backoff alone would have retried after one second; Retry-After says two.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(recorder.calls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(settled).resolves.toMatchObject({ status: 200, text: '"after"' });
+      expect(recorder.calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

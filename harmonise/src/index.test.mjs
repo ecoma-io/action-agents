@@ -256,6 +256,27 @@ describe("readInputs", () => {
   it("defaults to a dry run, because this action edits files rather than comments", () => {
     expect(readInputs(runner).dryRun).toBe(true);
   });
+
+  it("defaults request-timeout-ms to 30000 when the input is absent", () => {
+    expect(readInputs(runner).requestTimeoutMs).toBe(30_000);
+  });
+
+  it("refuses a request-timeout-ms that is not a number", () => {
+    expect(() => readInputs({ ...runner, "INPUT_REQUEST-TIMEOUT-MS": "soon" })).toThrow(
+      /must be a number/,
+    );
+  });
+
+  it("refuses a request-timeout-ms under the 1000 ms floor", () => {
+    // The floor is what keeps core's disabled-timeout path (timeoutMs <= 0)
+    // out of a workflow's reach: an unbounded request is a hung runner.
+    expect(() => readInputs({ ...runner, "INPUT_REQUEST-TIMEOUT-MS": "0" })).toThrow(
+      /at least 1000/,
+    );
+    expect(() => readInputs({ ...runner, "INPUT_REQUEST-TIMEOUT-MS": "999" })).toThrow(
+      /at least 1000/,
+    );
+  });
 });
 
 describe("run", () => {

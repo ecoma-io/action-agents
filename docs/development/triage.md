@@ -25,15 +25,23 @@ workflow's choice, and `dry-run` needs no write at all.
 
 ## Inputs
 
-| Input          | Meaning                                                                                                                                                                                                       |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `github-token` | the token the action writes with — the workflow's `permissions:` block is the real bound                                                                                                                      |
-| `api-url`      | base URL of an OpenAI-compatible endpoint                                                                                                                                                                     |
-| `api-key`      | key for that endpoint; empty is a supported keyless configuration                                                                                                                                             |
-| `model`        | model id to ask                                                                                                                                                                                               |
-| `config-path`  | overrides `.github/action-agents/triage/triage.json5` / `.json` — see the configuration page                                                                                                                  |
-| `labels`       | narrows the sheet the config file declares, for this call site only; a name the file does not declare is a startup error, and so is a `labels:` input with no file at all, because there is nothing to narrow |
-| `dry-run`      | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                            |
+| Input                | Meaning                                                                                                                                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `github-token`       | the token the action writes with — the workflow's `permissions:` block is the real bound                                                                                                                         |
+| `api-url`            | base URL of an OpenAI-compatible endpoint                                                                                                                                                                        |
+| `api-key`            | key for that endpoint; empty is a supported keyless configuration                                                                                                                                                |
+| `model`              | model id to ask                                                                                                                                                                                                  |
+| `request-timeout-ms` | per-attempt timeout in milliseconds for one provider call — the attempt must complete the whole completion; raise it for endpoints that legitimately take longer than 30 seconds; default 30000, floored at 1000 |
+| `config-path`        | overrides `.github/action-agents/triage/triage.json5` / `.json` — see the configuration page                                                                                                                     |
+| `labels`             | narrows the sheet the config file declares, for this call site only; a name the file does not declare is a startup error, and so is a `labels:` input with no file at all, because there is nothing to narrow    |
+| `dry-run`            | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                               |
+
+Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
+backoff, `Retry-After` and the attempt limit are `core/src/http.mjs` policy, not inputs.
+The workflow's `timeout-minutes` (5 in this repository's own `triage.yml`) remains the
+outer safety boundary — the per-request value bounds one call, the job timeout bounds the
+run. A value below 1000 is a startup error, so the HTTP client's disabled-timeout path is
+unreachable from a workflow.
 
 ## The config file
 

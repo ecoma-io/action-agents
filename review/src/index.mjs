@@ -32,7 +32,7 @@ import { reviewPullRequest } from "./run.mjs";
 export const ACTION = "review";
 
 /**
- * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, dryRun: boolean }} Inputs
+ * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean }} Inputs
  */
 
 /**
@@ -46,6 +46,7 @@ export function readInputs(env = process.env) {
     configPath: getInput("config-path", {}, env),
     maxTurns: getNumberInput("max-turns", { default: 30, min: 1 }, env),
     contextWindow: getNumberInput("context-window", { default: 128_000, min: 1_000 }, env),
+    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
     dryRun: getBooleanInput("dry-run", { default: false }, env),
   };
 }
@@ -138,7 +139,13 @@ export async function run(inputs, context, io = {}) {
           token: inputs.githubToken,
           apiUrl: context.apiUrl,
         }),
-      chat: io.chat ?? createChat({ apiUrl: inputs.apiUrl, apiKey: inputs.apiKey }),
+      chat:
+        io.chat ??
+        createChat({
+          apiUrl: inputs.apiUrl,
+          apiKey: inputs.apiKey,
+          timeoutMs: inputs.requestTimeoutMs,
+        }),
       now: io.now ?? (() => Date.now()),
       info: io.info ?? ((message) => info(message)),
     },
