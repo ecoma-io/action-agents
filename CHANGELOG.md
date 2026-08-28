@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.0](https://github.com/ecoma-io/action-agents/compare/v0.3.0...v0.4.0) (2026-08-28)
+
+
+### Features
+
+* **harmonise:** bounded-concurrent pair translation ([#85](https://github.com/ecoma-io/action-agents/issues/85)) ([d9e1f0b](https://github.com/ecoma-io/action-agents/commit/d9e1f0b9b2ab2bbe08300fe9790b9183580cc8b8))
+* **harmonise:** deterministic recovery policy (pure module) ([#83](https://github.com/ecoma-io/action-agents/issues/83)) ([5e3765b](https://github.com/ecoma-io/action-agents/commit/5e3765b56b30bdb42f8dbd0f39461be617f5d3af))
+* **harmonise:** incremental report model (pure module) ([#86](https://github.com/ecoma-io/action-agents/issues/86)) ([e78d6e1](https://github.com/ecoma-io/action-agents/commit/e78d6e13b600056d22200b7c83762ec9b5a42655))
+* **harmonise:** wire frontmatter protection, block planning and translation memory ([#80](https://github.com/ecoma-io/action-agents/issues/80)) ([3d47323](https://github.com/ecoma-io/action-agents/commit/3d47323d939958b479fd8c8f0d7fb4678343553b))
+* **harmonise:** wire manual-edit protection and three-way merge ([#91](https://github.com/ecoma-io/action-agents/issues/91)) ([425dc1c](https://github.com/ecoma-io/action-agents/commit/425dc1c72327ba6a6e6cbaacc2f272a4f5901ad8))
+* **review:** adversarial verification pass for findings ([#82](https://github.com/ecoma-io/action-agents/issues/82)) ([6420ff3](https://github.com/ecoma-io/action-agents/commit/6420ff30ecb93682df86f2e0956a797745d94e63))
+* **review:** declared run gates with result-vs-gate separation ([#89](https://github.com/ecoma-io/action-agents/issues/89)) ([49cffce](https://github.com/ecoma-io/action-agents/commit/49cffced3c299dbcb8fb9df9e4e0825fba590c9b))
+* **review:** evidence provenance for findings ([#84](https://github.com/ecoma-io/action-agents/issues/84)) ([39ed446](https://github.com/ecoma-io/action-agents/commit/39ed4465b90908b36b824f94c902225cf4f511a1))
+* **review:** machine-readable run artifact (pure module) ([#87](https://github.com/ecoma-io/action-agents/issues/87)) ([4e20416](https://github.com/ecoma-io/action-agents/commit/4e20416a2deed5986760a8e5360e4ad8d29b51cd))
+* **review:** structured review phases ([#77](https://github.com/ecoma-io/action-agents/issues/77)) ([d64adeb](https://github.com/ecoma-io/action-agents/commit/d64adebbb7d9a51770d746a1e03e0132d1360105))
+
+
+### Bug Fixes
+
+* **review:** refuse unlisted pull-request activity types in readEvent ([#79](https://github.com/ecoma-io/action-agents/issues/79)) ([bd7f3d9](https://github.com/ecoma-io/action-agents/commit/bd7f3d966d799d06701b499b29ae346d9bf576a8))
+
 ## [0.3.0](https://github.com/ecoma-io/action-agents/compare/v0.2.0...v0.3.0) (2026-08-28)
 
 
