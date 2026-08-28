@@ -8,7 +8,9 @@
  * that is neither issue nor pull request is in `triage`.
  */
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+
+import * as p from "node:path";
 
 import { createChat } from "#core/chat.mjs";
 import { createForge } from "#core/forge.mjs";
@@ -25,6 +27,7 @@ import {
 } from "#core/runtime.mjs";
 
 import { reviewPullRequest } from "./run.mjs";
+import { serialiseArtifact } from "./artifact.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -32,7 +35,7 @@ import { reviewPullRequest } from "./run.mjs";
 export const ACTION = "review";
 
 /**
- * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean }} Inputs
+ * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string }} Inputs
  */
 
 /**
@@ -48,6 +51,9 @@ export function readInputs(env = process.env) {
     contextWindow: getNumberInput("context-window", { default: 128_000, min: 1_000 }, env),
     requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
     dryRun: getBooleanInput("dry-run", { default: false }, env),
+    // Where inside the workspace the run artifact lands. The default agrees
+    // with the manifest; the write is confined below either way.
+    artifactPath: getInput("artifact-path", { default: ".review-artifact" }, env),
   };
 }
 
@@ -152,6 +158,52 @@ export async function run(inputs, context, io = {}) {
   });
   const log = io.info ?? ((message) => info(message));
   log(`review: ${result.reason}`);
+
+  if (result.artifact !== undefined) {
+    const file = writeRunArtifact({
+      workspace: context.workspace,
+      directory: inputs.artifactPath,
+      artifact: result.artifact,
+    });
+    log(`review: run artifact written to ${file}`);
+  }
+}
+
+/**
+ * Writes the serialised run artifact inside the workspace, under a
+ * deterministic name derived from the reviewed head. The ceiling is the
+ * same one every read honours, pointed the other way: the path resolves
+ * inside `GITHUB_WORKSPACE` or the run fails loudly — a symlinked branch of
+ * the tree cannot carry the write out, and `.git` is refused outright,
+ * because that is where the checkout's credential lives.
+ *
+ * @param {object} input
+ * @param {string} input.workspace the runner's workspace root
+ * @param {string} input.directory the artifact-path input, relative to the root
+ * @param {import("./artifact.mjs").RunArtifact} input.artifact the run's machine-readable record
+ * @returns {string} the file the artifact was written to
+ */
+export function writeRunArtifact({ workspace, directory, artifact }) {
+  const root = realpathSync(workspace);
+  const target = p.resolve(root, directory);
+  if (target !== root && !target.startsWith(root + p.sep)) {
+    throw new Error(`artifact-path '${directory}' resolves outside the workspace — refused`);
+  }
+  for (const segment of p.relative(root, target).split(p.sep)) {
+    if (segment === ".git") {
+      throw new Error(`artifact-path '${directory}' touches .git — refused`);
+    }
+  }
+  mkdirSync(target, { recursive: true });
+  // A directory on the way may be a symlink pointing out; resolve the real
+  // location and hold it to the same ceiling before a byte is written.
+  const real = realpathSync(target);
+  if (real !== root && !real.startsWith(root + p.sep)) {
+    throw new Error(`artifact-path '${directory}' resolves outside the workspace — refused`);
+  }
+  const file = p.join(real, `review-artifact-${artifact.headRef}.json`);
+  writeFileSync(file, serialiseArtifact(artifact), "utf8");
+  return file;
 }
 
 /**

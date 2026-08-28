@@ -19,6 +19,12 @@ name: Review
 # input, and a fork's pull request carries neither secrets nor a write token,
 # which is the arrangement SECURITY.md documents for this trigger.
 #
+# The one non-comment output is local to the runner: the run's
+# machine-readable record is written inside the workspace (`.review-artifact`,
+# the action refuses to resolve outside it) and the upload step publishes
+# it as a workflow artifact. That step notifies nobody and grants nothing —
+# the artifact is downloadable by whoever can already see the run.
+#
 # The action is referenced as `./review` from the checkout of the ref that
 # triggered the run, which under `pull_request` is the merge preview: a pull
 # request is reviewed by exactly the code it carries. The trade that shape
@@ -69,3 +75,16 @@ jobs:
           model: review
           # Live: the write surface below is one upserted marker comment.
           dry-run: "false"
+
+      # The run artifact — policy, risk table, findings with verification
+      # states, gate outcomes, coverage, phase log — as a downloadable file.
+      # `always()` keeps the record for runs whose comment step failed; a run
+      # that published nothing wrote no file, and `if-no-files-found: ignore`
+      # keeps those runs green.
+      - name: Upload the run artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: review-run-artifact
+          path: .review-artifact/review-artifact-*.json
+          if-no-files-found: ignore

@@ -35,6 +35,7 @@ import {
 } from "./verify.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
+import { assertFreshArtifact, buildArtifact } from "./artifact.mjs";
 
 /**
  * The forge operations one review run makes, listed so a test doubles only
@@ -79,7 +80,7 @@ export const ACTION = "review";
  * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
- */
+ * @property {import("./artifact.mjs").RunArtifact} [artifact] the machine-readable run record — present only when the run published, and only after the comment's own identity is known
 
 /**
  * @param {object} input
@@ -370,10 +371,46 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     head: headSha,
     startedAt,
   });
+  // The artifact is the run's machine-readable record, built from the same
+  // final facts the comment renders — after the comment's identity is known,
+  // so the two records name each other. `published` carries the provenance
+  // the anchoring pass put on every finding (the provenance gate re-derives
+  // the anchors itself, and buildArtifact refuses a finding without one).
+  const publishedAnchored =
+    /** @type {Array<import("./verify.mjs").VerifiedFinding & { provenance: import("./provenance.mjs").Provenance }>} */ (
+      published
+    );
+  const verificationGate = report.results.find((result) => result.gate === "verification");
+  if (verificationGate === undefined) {
+    throw new Error("the declared gates hold no verification entry — the gate table is broken");
+  }
+  const reason = `${status.label} review published (${published.length} findings)`;
+  const artifact = buildArtifact({
+    repository: `${context.owner}/${context.repo}`,
+    pullRequest: pullRequestNumber,
+    headRef: headSha,
+    outcome: { classification: "published", reason },
+    policy: { strictness: config.strictness, strategy: config.strategy },
+    risk: lanes,
+    findings: publishedAnchored,
+    verification: {
+      gate: verificationGate.passed
+        ? { passed: true }
+        : { passed: false, reason: verificationGate.reason ?? "" },
+    },
+    gates: report.results,
+    coverage: outcome.coverage,
+    phases: outcome.phaseLog,
+    provenance: { commentId: upsert.id },
+  });
+  // The comment's newer-head rule extends to the artifact: a snapshot that
+  // does not describe the head the forge reports is refused, never written.
+  assertFreshArtifact(artifact, fresh.head.sha);
   return {
     outcome: "published",
-    reason: `${status.label} review published (${published.length} findings)`,
+    reason,
     commentId: upsert.id,
+    artifact,
   };
 }
 

@@ -123,6 +123,7 @@ are honest no-ops: no work was claimed, so nothing is red.
 | `max-turns`          | ceiling on agent turns — reaching it ends the review and says so; the default is 30                                                                                                                              |
 | `context-window`     | the configured model's token budget — the agent compacts before reaching it; default 128000                                                                                                                      |
 | `dry-run`            | review and log, comment nothing — default false, because the comment is the action's only output                                                                                                                 |
+| `artifact-path`      | where inside the workspace the machine-readable run record lands — see [The run artifact](#the-run-artifact); default `.review-artifact`                                                                         |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
 backoff, `Retry-After` and the attempt limit are `core/src/http.mjs` policy, not inputs.
@@ -841,6 +842,63 @@ that simplicity is a full review each run. The key is additive when the
 carry-forward lands, and the marker's recorded head commit is what it will
 need.
 
+## The run artifact
+
+Every published run writes a machine-readable record of itself next to the
+comment — `buildArtifact` in `artifact.mjs`, called on the publication path
+in `run.mjs` right after the comment's identity is known, so the two records
+name each other. The artifact is the contract a machine can read where the
+comment is the contract a human reads; both are projections of the same
+final facts, and neither can drift from the other, because both are built
+from the same values in the same pass.
+
+The schema is versioned (`schemaVersion: 2`) and the builder is fail-closed:
+a fact outside the declared key sets, a vocabulary word the code does not
+declare (`severity`, `verdict`, lifecycle state, gate name, risk level,
+attention lane, phase name), a gate table that is not the declared gates in
+the declared order, or a verdict whose lifecycle does not follow from it is
+a typed `ArtifactError`, never a coerced field. The fields:
+
+| Field                                  | Carries                                                                                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repository`, `pullRequest`, `headRef` | what was reviewed, the head as a 40-character hex sha                                                                                       |
+| `outcome`                              | `published` and the same reason string the run logs                                                                                         |
+| `policy`                               | the strictness and strategy the run ran under                                                                                               |
+| `risk`                                 | the per-file risk table, byte-wise sorted, one row per changed file                                                                         |
+| `findings`                             | the published set — each with its identity, anchor line, and `provenance` naming the recorded read that covers it                           |
+| `verification`                         | the gate's outcome plus one entry per bound verdict, derived from the findings — a separate verdict list that could disagree does not exist |
+| `gates`                                | every declared gate's result, in the declared order, a reason iff it failed                                                                 |
+| `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                             |
+| `phases`                               | the loop's phase transitions, in order                                                                                                      |
+| `provenance`                           | the marker comment's id — nothing else, no timestamp, no run id                                                                             |
+
+Byte-determinism is a property, not a style: identical facts serialise to
+identical bytes (`serialiseArtifact`), so two runs of the same review differ
+in the artifact only where the reviews differ. There is no timestamp in the
+record for the same reason a dry run logs the exact body — the artifact
+describes the review, not the run's wall clock.
+
+The lifecycles ride the findings: `confirmed` and `refuted` carry their
+verdict and reason; `unresolved` carries its reason; a finding below the
+strategy's threshold was never a candidate and publishes without a
+lifecycle, byte for byte as it arrived. A skipped candidate is unresolved
+with no id — the one state a finding can hold without one.
+
+Publication-only, and stale-refusing. A run that publishes nothing —
+`nothing-to-review`, a skip, an abandonment, a dry run — writes no artifact,
+and the newer-head rule extends to the record: `assertFreshArtifact` compares
+the artifact's head against the forge's pre-publication re-read and refuses a
+stale snapshot loudly rather than writing it.
+
+The write is confined like every read. The `artifact-path` input (default
+`.review-artifact`) is resolved inside `GITHUB_WORKSPACE` or refused; `.git`
+is refused outright; a symlinked branch of the tree cannot carry the write
+out. The file is named `review-artifact-<head sha>.json`. The shipped
+workflow uploads it with `actions/upload-artifact` after the review step,
+`if: always()` so a failed comment step still leaves its record, and
+`if-no-files-found: ignore` because an unpublished run has no file — the
+upload notifies nobody and grants nothing.
+
 ## Dry run
 
 `dry-run: true` is absolute zero mutation: no comment created, updated or
@@ -903,9 +961,9 @@ from the run's read ledger over the final published set (`evaluateProvenance`
 in `gates.mjs`), verdicts in the verification pass assign a lifecycle and
 delete nothing (`runVerificationPass`), and the concluding posture — complete
 or partial — is the declared gates' verdict over code-ledgered results
-(`evaluateGates` in `run.mjs`). One module is **landed, wiring tracked**: the
-machine-readable run artifact (#87) — merged and tested, not yet imported by
-the production path, therefore not a byte any run writes.
+(`evaluateGates` in `run.mjs`). The machine-readable run artifact (#87) is on
+the production path too: every published run writes one, and
+[the section below](#the-run-artifact) is its contract.
 
 | Module          | Kind     | What `review` gets                                                                                                                                                                                                                           |
 | --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

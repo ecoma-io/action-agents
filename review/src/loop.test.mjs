@@ -95,6 +95,9 @@ describe("turn accounting", () => {
     expect(outcome.bound).toBeUndefined();
     expect(outcome.candidate).toContain('"summary":"done"');
     expect(outcome.readingTurns).toBe(0);
+    // No tool turn happened, so the machine never left orient and the log
+    // holds nothing — an answer at once is not a phase change.
+    expect(outcome.phaseLog).toEqual([]);
   });
 
   it("executes tool calls, feeds results back, and keeps the transcript well-formed", async () => {
@@ -421,6 +424,10 @@ describe("review phases", () => {
     expect(outcome.log).toContain("phase: orient → investigate");
     expect(outcome.log).toContain("phase: investigate → verify");
     expect(outcome.phase).toBe("verify");
+    expect(outcome.phaseLog).toEqual([
+      { from: "orient", to: "investigate" },
+      { from: "investigate", to: "verify" },
+    ]);
   });
 
   it("the offer is the gate: the registry itself never grows or guards", async () => {
@@ -465,6 +472,9 @@ describe("review phases", () => {
     expect(outcome.bound).toBe("tool-calls");
     expect(outcome.phase).toBe("conclude");
     expect(chat.requests.at(-1)?.tools).toBeUndefined();
+    // The cap fired before the wider registry was ever offered, so the
+    // machine finalised straight out of orient.
+    expect(outcome.phaseLog.at(-1)).toEqual({ from: "orient", to: "conclude" });
   });
 
   it("holds the machine out of conclude under strict policy with uncovered files — the review still ends", async () => {
