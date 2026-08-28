@@ -4,12 +4,13 @@
 // and publication goes through exactly one marker upsert guarded by the
 // pre-publication re-read.
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as p from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { reviewPullRequest } from "./run.mjs";
+import { VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -759,24 +760,73 @@ describe("adversarial verification pass", () => {
       toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
     });
 
+  beforeAll(() => {
+    // Investigation fixtures: a second file the verifier's tools can find,
+    // an ignored path, a symlink, a .git/config to exercise the .git refusal,
+    // and a file large enough that two capped reads exhaust the verifier's
+    // evidence ceiling.
+    writeFileSync(
+      p.join(wsRoot, "src", "helper.mjs"),
+      "export function guard() {\n  return true;\n}\n",
+    );
+    writeFileSync(p.join(wsRoot, "ignored.log"), "a log line\n");
+    symlinkSync(p.join(wsRoot, "src", "helper.mjs"), p.join(wsRoot, "src", "link.mjs"));
+    mkdirSync(p.join(wsRoot, ".git"));
+    writeFileSync(p.join(wsRoot, ".git", "config"), "[core]\n");
+    writeFileSync(p.join(wsRoot, "big.txt"), "x".repeat(80 * 2 ** 10) + "\n");
+  });
+
+  /**
+   * One verifier read_file call.
+   *
+   * @param {string} id
+   * @param {string} [path]
+   * @returns {{ id: string, name: string, arguments: string }}
+   */
+  function verifyRead(id, path = "src/a.mjs") {
+    return { id, name: "read_file", arguments: JSON.stringify({ path }) };
+  }
+
+  /**
+   * The reviewer's final answer carrying one concern.
+   *
+   * @param {string} message
+   * @param {string} [summary]
+   * @returns {{ content: string }}
+   */
+  function answerWith(message, summary = "one concern") {
+    return {
+      content:
+        `{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":` +
+        `"${message}"}],"summary":"${summary}"}`,
+    };
+  }
+
   /**
    * A chat stub scripted turn by turn that records every request's messages
-   * — the loop's reads and finals, then the pass's verdict calls.
+   * — the loop's reads and finals, then the pass's verdict calls — and the
+   * tools offered at each request.
    *
-   * @param {Array<{ content: string, toolCalls?: { id: string, name: string, arguments: string }[] }>} script
-   * @returns {import("#core/chat.mjs").Chat & { calls: import("#core/chat.mjs").ChatMessage[][] }}
+   * @param {Array<{ content?: string, toolCalls?: { id: string, name: string, arguments: string }[] }>} script
+   * @returns {import("#core/chat.mjs").Chat & { calls: import("#core/chat.mjs").ChatMessage[][], offeredTools: Array<import("#core/chat.mjs").ChatTool[] | undefined> }}
    */
-  function scriptedChat(script) {
+  function scriptedChat(
+    /** @type {Array<{ content?: string, toolCalls?: { id: string, name: string, arguments: string }[] }>} */ script,
+  ) {
     /** @type {import("#core/chat.mjs").ChatMessage[][]} */
     const calls = [];
+    /** @type {Array<import("#core/chat.mjs").ChatTool[] | undefined>} */
+    const offeredTools = [];
     return {
       calls,
+      offeredTools,
       async complete(request) {
         calls.push(request.messages);
+        offeredTools.push(request.tools);
         const next = script.shift();
         if (next === undefined) throw new Error("script exhausted");
         return {
-          content: next.content,
+          content: next.content ?? "",
           toolCalls: next.toolCalls ?? [],
           finishReason: next.toolCalls !== undefined ? "tool_calls" : "stop",
         };
@@ -924,6 +974,307 @@ describe("adversarial verification pass", () => {
     expect(readChat.calls).toHaveLength(2);
     expect(forge.calls.upserts[0]?.body).toContain("a nit");
     expect(logged.some((line) => line.includes("planned 0 of 1 finding(s)"))).toBe(true);
+  });
+
+  // ── The verifier investigates with the fixed tools, inside its own budget ──
+
+  it("confirms a true finding whose excerpt alone was ambiguous, by searching past it", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      answerWith("guard() is never called anywhere in the repository"),
+      { toolCalls: [{ id: "v1", name: "search", arguments: '{"query":"guard("}' }] },
+      { content: '{"verdict":"confirmed","reason":"search finds the definition and no call"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: () => {} },
+    });
+    expect(result.outcome).toBe("published");
+    // A confirmed finding publishes.
+    expect(forge.calls.upserts[0]?.body).toContain("guard() is never called");
+    // Read turn, final answer, investigation turn, verdict turn.
+    expect(chat.calls).toHaveLength(4);
+    // The investigation turn offered exactly the fixed registry.
+    expect(chat.offeredTools[2]?.map((tool) => tool.name)).toEqual([
+      "read_file",
+      "list_files",
+      "search",
+    ]);
+    // The search result rode back as a tool message the verdict turn saw.
+    const verdictTurn = chat.calls[3] ?? [];
+    expect(verdictTurn).toHaveLength(4);
+    expect(verdictTurn[2]?.toolCalls?.[0]?.name).toBe("search");
+    expect(verdictTurn[3]?.content).toContain("helper.mjs");
+  });
+
+  it("refutes a false positive by hunting counter-evidence with search and read_file", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      answerWith("there is no guard() definition anywhere in the workspace"),
+      { toolCalls: [{ id: "v1", name: "search", arguments: '{"query":"guard("}' }] },
+      { toolCalls: [verifyRead("v2", "src/helper.mjs")] },
+      { content: '{"verdict":"refuted","reason":"the definition exists in src/helper.mjs"}' },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(forge.calls.upserts[0]?.body).not.toContain("no guard() definition");
+    expect(logged.some((line) => line.includes("refuted") && line.includes("src/a.mjs:2"))).toBe(
+      true,
+    );
+    // Read, answer, search turn, read turn, verdict turn.
+    expect(chat.calls).toHaveLength(5);
+  });
+
+  it("returns uncertain when the evidence is insufficient", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      answerWith("off-by-one"),
+      { content: '{"verdict":"uncertain","reason":"the excerpt alone cannot decide"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: () => {} },
+    });
+    expect(result.outcome).toBe("published");
+    // Uncertain at the default strictness publishes unchanged.
+    expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+    expect(chat.calls).toHaveLength(3);
+  });
+
+  it("stops at the tool-call ceiling: every call answered, then one final no-tools ask decides", async () => {
+    const forge = forgeStub();
+    /** @type {Array<{ content?: string, toolCalls?: { id: string, name: string, arguments: string }[] }>} */
+    const script = [READ, answerWith("off-by-one")];
+    for (let n = 0; n < VERIFIER_MAX_TOOL_CALLS - 1; n++) {
+      script.push({ toolCalls: [verifyRead(`v${String(n)}`)] });
+    }
+    // The last turn asks twice: the first executes, the second is answered
+    // unexecuted — the conversation stays well-formed past the ceiling.
+    script.push({ toolCalls: [verifyRead("v-last-1"), verifyRead("v-last-2")] });
+    script.push({ content: '{"verdict":"uncertain","reason":"the budget was spent"}' });
+    const chat = scriptedChat(script);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    // Read turn, final answer, 40 investigation turns, one final ask.
+    expect(chat.calls).toHaveLength(VERIFIER_MAX_TOOL_CALLS + 3);
+    // Tools are withheld from the final ask.
+    expect(chat.offeredTools[VERIFIER_MAX_TOOL_CALLS + 2]).toBeUndefined();
+    const finalMessages = chat.calls[VERIFIER_MAX_TOOL_CALLS + 2] ?? [];
+    expect(finalMessages[finalMessages.length - 1]?.content).toContain(
+      "The verification budget for this finding is spent",
+    );
+    expect(JSON.stringify(finalMessages)).toContain(
+      "(not executed — the verification budget for this finding was spent)",
+    );
+    expect(logged.some((line) => line.includes("tool-call budget fired"))).toBe(true);
+  });
+
+  it("stops at the evidence ceiling: two capped reads exhaust it, then the final ask decides", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      answerWith("off-by-one"),
+      { toolCalls: [verifyRead("v1", "big.txt")] },
+      { toolCalls: [verifyRead("v2", "big.txt")] },
+      { content: '{"verdict":"confirmed","reason":"the evidence settled it before the cut"}' },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    // Read, answer, two investigation turns, one final ask.
+    expect(chat.calls).toHaveLength(5);
+    expect(chat.offeredTools[4]).toBeUndefined();
+    expect(logged.some((line) => line.includes("evidence budget fired"))).toBe(true);
+    expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+  });
+
+  it("verifier calls refuse git paths, escapes, symlinks and ignored paths — and the review survives", async () => {
+    const forge = forgeStub({ config: '{ ignore: ["ignored.log"] }' });
+    const chat = scriptedChat([
+      READ,
+      answerWith("off-by-one"),
+      {
+        toolCalls: [
+          verifyRead("d1", ".git/config"),
+          verifyRead("d2", "../outside.txt"),
+          verifyRead("d3", "src/link.mjs"),
+          verifyRead("d4", "ignored.log"),
+        ],
+      },
+      { content: '{"verdict":"confirmed","reason":"the refusals say the claim holds"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: () => {} },
+    });
+    expect(result.outcome).toBe("published");
+    const refusals = (chat.calls[3] ?? []).map((message) => message.content ?? "");
+    expect(refusals.some((content) => content.includes("it resolves inside .git"))).toBe(true);
+    expect(refusals.some((content) => content.includes("it resolves outside the workspace"))).toBe(
+      true,
+    );
+    expect(refusals.some((content) => content.includes("its last component is a symlink"))).toBe(
+      true,
+    );
+    expect(refusals.some((content) => content.includes("the config ignores this path"))).toBe(true);
+    expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+  });
+
+  it("keeps the verifier conversation fresh — no reviewer reasoning, summary or other findings leak in", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      {
+        content: "SECRET-CHAIN: my private reasoning about the whole change",
+        toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      answerWith("off-by-one", "SECRET-SUMMARY musings"),
+      { content: '{"verdict":"confirmed","reason":"the claim holds"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: () => {} },
+    });
+    expect(result.outcome).toBe("published");
+    const verdict = JSON.stringify(chat.calls[2] ?? []);
+    expect(verdict).not.toContain("SECRET-CHAIN");
+    expect(verdict).not.toContain("SECRET-SUMMARY");
+    // The finding under test and its captured evidence do appear.
+    expect(verdict).toContain("off-by-one");
+    expect(verdict).toContain("line2");
+    // The conversation opens with exactly the contract and the finding.
+    expect(chat.calls[2]).toHaveLength(2);
+  });
+
+  it("a protocol defect degrades the finding to uncertain — never crashes the review", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      answerWith("off-by-one"),
+      { toolCalls: [{ id: "x1", name: "read_file", arguments: "{not json" }] },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+    expect(logged.some((line) => line.includes("broke the wire contract"))).toBe(true);
+    // No further verifier ask follows the broken wire.
+    expect(chat.calls).toHaveLength(3);
+  });
+
+  it("oversized call arguments are a protocol defect, not an executed call", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      answerWith("off-by-one"),
+      {
+        toolCalls: [
+          {
+            id: "x1",
+            name: "read_file",
+            arguments: JSON.stringify({ path: "a".repeat(64 * 2 ** 10 + 1) }),
+          },
+        ],
+      },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(logged.some((line) => line.includes("broke the wire contract"))).toBe(true);
+    expect(chat.calls).toHaveLength(3);
+  });
+
+  it("manners defects come back as tool errors the verifier can correct — and other findings still verify", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      {
+        content:
+          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"first problem"},' +
+          '{"severity":"concern","file":"src/a.mjs","line":3,"message":"second problem"}],"summary":"two"}',
+      },
+      // Finding 1's verifier reaches outside the root: refused, corrected.
+      { toolCalls: [verifyRead("v1", "../outside.txt")] },
+      { content: '{"verdict":"uncertain","reason":"the refusal was the answer"}' },
+      // Finding 2's verifier reads and confirms.
+      { toolCalls: [verifyRead("v2", "src/helper.mjs")] },
+      { content: '{"verdict":"confirmed","reason":"the read settled it"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: () => {} },
+    });
+    expect(result.outcome).toBe("published");
+    // The refusal rode back as a tool error result the verifier saw.
+    expect(JSON.stringify(chat.calls[3] ?? [])).toContain("it resolves outside the workspace");
+    expect(chat.calls).toHaveLength(6);
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("first problem");
+    expect(body).toContain("second problem");
+  });
+
+  it("an unknown tool name is an error result, not a crash", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      answerWith("off-by-one"),
+      { toolCalls: [{ id: "v1", name: "delete_file", arguments: '{"path":"src/a.mjs"}' }] },
+      { content: '{"verdict":"refuted","reason":"corrected after the refused call"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: () => {} },
+    });
+    expect(result.outcome).toBe("published");
+    expect(JSON.stringify(chat.calls[3] ?? [])).toContain("unknown tool 'delete_file'");
+    expect(forge.calls.upserts[0]?.body).not.toContain("off-by-one");
+    expect(chat.calls).toHaveLength(4);
   });
 });
 

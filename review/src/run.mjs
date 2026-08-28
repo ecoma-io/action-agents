@@ -12,19 +12,27 @@
  */
 
 import { createWorkspace } from "#core/workspace.mjs";
+import { createEvidence } from "#core/untrusted.mjs";
 import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
 import { parseDiffPaths, unifiedDiff } from "./coverage.mjs";
-import { createTools } from "./tools.mjs";
+import { createTools, TOOL_SPECS } from "./tools.mjs";
 import { classifyRisk } from "./risk.mjs";
 import { assignLanes, laneBudget } from "./lanes.mjs";
 import { buildPrompt } from "./prompt.mjs";
-import { runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
+import { MAX_CALL_ARGUMENT_BYTES, runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
 import { evaluateGate, evaluateGates } from "./gates.mjs";
 import { parseAnswer, validateAnswer } from "./answer.mjs";
-import { applyVerdicts, parseVerdict, planVerification, verifierMessages } from "./verify.mjs";
+import {
+  applyVerdicts,
+  parseVerdict,
+  planVerification,
+  verifierMessages,
+  VERIFIER_MAX_EVIDENCE_BYTES,
+  VERIFIER_MAX_TOOL_CALLS,
+} from "./verify.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
 
@@ -260,7 +268,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   const findings = applyStrictness(anchored.published, config.strictness, (line) => io.info(line));
 
   // The verification pass sits between the nit-drop and rendering: planned
-  // findings are put to one bounded adversarial call each, and its verdicts
+  // findings each get their own bounded investigation, and verdicts
   // can only remove. What it publishes is what renders and what the count
   // names — never both sets.
   const verified = await runVerificationPass({
@@ -268,6 +276,8 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     policy: { strategy: config.strategy, strictness: config.strictness },
     lanes,
     recordedReads,
+    workspace,
+    ignore: config.ignore,
     chat: io.chat,
     model: inputs.model,
     info: (line) => io.info(`review: ${line}`),
@@ -375,24 +385,38 @@ function applyStrictness(findings, strictness, info) {
 
 /**
  * The adversarial verification pass, between the nit-drop and rendering.
- * Bounded by construction: exactly one call per planned finding, no retry —
- * a transport failure or a refused answer counts as `uncertain` and moves
- * on. Its verdicts can only remove; the plan is policy, and the ledger —
- * what was read, what the lanes assigned — is evidence. Every decision is
- * rendered into the run log: the plan, each drop with the finding's
- * identity, each refusal.
+ * Each planned finding gets its own bounded investigation — a fresh
+ * conversation with the fixed tools, a fresh evidence wrapper, and the
+ * verifier's own budget independent of the reviewer's. Manners defects
+ * become tool errors the verifier can correct; protocol defects degrade
+ * that finding to `uncertain` — a verifier misbehaving must never crash
+ * the whole review. Verdicts can only remove; the plan is policy, and the
+ * ledger — what was read, what the lanes assigned — is evidence. Every
+ * decision is rendered into the run log.
  *
  * @param {object} input
  * @param {import("./answer.mjs").Finding[]} input.findings the post-nit-drop set
  * @param {{ strategy: import("./config.mjs").Strategy, strictness: import("./config.mjs").Strictness }} input.policy
  * @param {import("./lanes.mjs").LaneAssignment[]} input.lanes the lanes code assigned before the loop
  * @param {ReadonlyMap<string, string>} input.recordedReads the loop's captured read bytes
+ * @param {import("#core/workspace.mjs").Workspace} input.workspace the confined resolver every verifier path goes through
+ * @param {string[]} input.ignore the config's universe filter, glob patterns
  * @param {import("#core/chat.mjs").Chat} input.chat
  * @param {string} input.model
  * @param {(line: string) => void} input.info the run's log sink, `review:`-prefixed
- * @returns {Promise<{ findings: import("./answer.mjs").Finding[], accounting: { planned: number, recorded: number } }>} the publication set plus the pass's own accounting — findings planned against verdicts recorded — as facts for the verification gate
+ * @returns {Promise<{ findings: import("./answer.mjs").Finding[], accounting: { planned: number, recorded: number } }>}
  */
-async function runVerificationPass({ findings, policy, lanes, recordedReads, chat, model, info }) {
+async function runVerificationPass({
+  findings,
+  policy,
+  lanes,
+  recordedReads,
+  workspace,
+  ignore,
+  chat,
+  model,
+  info,
+}) {
   const lanesByPath = new Map(lanes.map((lane) => [lane.path, lane.lane]));
   const plan = planVerification(findings, {
     strategy: policy.strategy,
@@ -410,7 +434,10 @@ async function runVerificationPass({ findings, policy, lanes, recordedReads, cha
   /** @type {import("./verify.mjs").VerdictEntry[]} */
   const verdicts = [];
   for (const item of plan.items) {
-    verdicts.push({ id: item.id, ...(await oneVerdict({ item, chat, model, info })) });
+    verdicts.push({
+      id: item.id,
+      ...(await oneVerdict({ item, chat, model, workspace, ignore, info })),
+    });
   }
   const applied = applyVerdicts(findings, verdicts, { strictness: policy.strictness, plan });
   for (const refusal of applied.refusals) {
@@ -429,24 +456,90 @@ async function runVerificationPass({ findings, policy, lanes, recordedReads, cha
 }
 
 /**
- * One bounded verification call: the prompt is code-composed from the plan
- * item alone, the answer is parsed against the strict two-key contract, and
- * any deviation or transport failure is `uncertain`. Never retried — the
- * pass spends exactly one call per planned finding.
+ * The instruction delivered when the verifier's budget fires — one
+ * final request, tools withheld, so the verifier judges from the evidence
+ * already gathered rather than going silent.
+ */
+const VERIFIER_BUDGET_INSTRUCTION =
+  "The verification budget for this finding is spent. Answer now with only " +
+  "the JSON verdict object — judged from the evidence already gathered.";
+
+/**
+ * One bounded verification investigation: a fresh conversation per finding
+ * with the fixed three tools, the verifier's own budget, and the reviewer's
+ * confinement. The loop mirrors the reviewer's dispatch rules:
  *
- * @param {{ item: import("./verify.mjs").VerificationItem, chat: import("#core/chat.mjs").Chat, model: string, info: (line: string) => void }} input
+ *  - manners defects (wrong arguments, unknown tool name, policy refusals)
+ *    become tool error results the verifier can correct;
+ *  - protocol defects (unparsable arguments, oversized call arguments,
+ *    a `fatal` result) degrade the finding to `uncertain` — a verifier
+ *    misbehaving must never crash the whole review;
+ *  - budget exhaustion (tool-call ceiling or evidence ceiling) triggers
+ *    one final no-tools request; a refusal there is `uncertain`;
+ *  - transport failure is `uncertain` (existing rule).
+ *
+ * @param {{ item: import("./verify.mjs").VerificationItem, chat: import("#core/chat.mjs").Chat, model: string, workspace: import("#core/workspace.mjs").Workspace, ignore: string[], info: (line: string) => void }} input
  * @returns {Promise<{ verdict: import("./verify.mjs").Verdict, reason: string }>}
  */
-async function oneVerdict({ item, chat, model, info }) {
+async function oneVerdict({ item, chat, model, workspace, ignore, info }) {
+  const evidence = createEvidence();
+  const tools = createTools({ workspace, evidence, ignore, recordedReads: new Map() });
+  /** @type {import("#core/chat.mjs").ChatMessage[]} */
+  const messages = verifierMessages(item, evidence);
+  let toolCalls = 0;
+  let evidenceBytes = 0;
   try {
-    const response = await chat.complete({ model, messages: verifierMessages(item) });
-    const parsed = parseVerdict(response.content);
-    if (parsed.ok) return { verdict: parsed.verdict, reason: parsed.reason };
-    info(
-      `verification pass — the answer to finding ${item.id} was refused (${parsed.defect}); ` +
-        `it counts as uncertain`,
-    );
-    return { verdict: "uncertain", reason: `the verifier's answer was refused: ${parsed.defect}` };
+    for (;;) {
+      const response = await chat.complete({ model, messages, tools: TOOL_SPECS });
+      if (response.toolCalls.length === 0) {
+        return settle(item, parseVerdict(response.content), info);
+      }
+      messages.push({
+        role: "assistant",
+        content: response.content === "" ? null : response.content,
+        toolCalls: response.toolCalls,
+      });
+      for (const call of response.toolCalls) {
+        if (toolCalls >= VERIFIER_MAX_TOOL_CALLS) {
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            content: "(not executed — the verification budget for this finding was spent)",
+          });
+          continue;
+        }
+        toolCalls++;
+        if (Buffer.byteLength(call.arguments, "utf8") > MAX_CALL_ARGUMENT_BYTES) {
+          return wireDefect(
+            item,
+            `'${call.id}' carried ${String(Buffer.byteLength(call.arguments, "utf8"))} bytes of arguments — beyond any legitimate call`,
+            info,
+          );
+        }
+        const result = tools.execute(call.name, call.arguments);
+        if (result.fatal === true) {
+          return wireDefect(
+            item,
+            `'${call.id}' carried unparsable arguments — the wire contract is broken`,
+            info,
+          );
+        }
+        if (result.ok) evidenceBytes += Buffer.byteLength(result.output, "utf8");
+        messages.push({ role: "tool", toolCallId: call.id, content: result.output });
+      }
+      if (toolCalls >= VERIFIER_MAX_TOOL_CALLS || evidenceBytes >= VERIFIER_MAX_EVIDENCE_BYTES) {
+        const bound = evidenceBytes >= VERIFIER_MAX_EVIDENCE_BYTES ? "evidence" : "tool-call";
+        info(
+          `verification pass — finding ${item.id}: the verifier's ${bound} budget fired; ` +
+            `one final answer is requested`,
+        );
+        const final = await chat.complete({
+          model,
+          messages: [...messages, { role: "user", content: VERIFIER_BUDGET_INSTRUCTION }],
+        });
+        return settle(item, parseVerdict(final.content), info);
+      }
+    }
   } catch (error) {
     // Transport errors are ours, not the model's: their text may reach the
     // log, and the finding stays — an infrastructure failure must never
@@ -457,6 +550,43 @@ async function oneVerdict({ item, chat, model, info }) {
     );
     return { verdict: "uncertain", reason: "the verification call failed" };
   }
+}
+
+/**
+ * @param {import("./verify.mjs").VerificationItem} item
+ * @param {import("./verify.mjs").ParsedVerdict | import("./verify.mjs").RefusedVerdict} parsed
+ * @param {(line: string) => void} info
+ * @returns {{ verdict: import("./verify.mjs").Verdict, reason: string }}
+ */
+function settle(item, parsed, info) {
+  if (parsed.ok) return { verdict: parsed.verdict, reason: parsed.reason };
+  info(
+    `verification pass — the answer to finding ${item.id} was refused (${parsed.defect}); ` +
+      `it counts as uncertain`,
+  );
+  return { verdict: "uncertain", reason: `the verifier's answer was refused: ${parsed.defect}` };
+}
+
+/**
+ * A protocol defect: the verifier broke the wire contract — degrade to
+ * `uncertain`, never crash the run. The reviewer's loop would throw for the
+ * same defect because the whole review is damaged; for the verifier it is
+ * one finding's side-check, and the review publishes.
+ *
+ * @param {import("./verify.mjs").VerificationItem} item
+ * @param {string} detail
+ * @param {(line: string) => void} info
+ * @returns {{ verdict: import("./verify.mjs").Verdict, reason: string }}
+ */
+function wireDefect(item, detail, info) {
+  info(
+    `verification pass — the verifier for finding ${item.id} broke the wire contract ` +
+      `(${detail}); it counts as uncertain`,
+  );
+  return {
+    verdict: "uncertain",
+    reason: "the verifier's tool call broke the conversation protocol",
+  };
 }
 
 /**

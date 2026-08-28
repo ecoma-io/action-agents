@@ -332,18 +332,20 @@ The user-facing knobs are `max-turns`, `context-window` and `maxDiffLines`.
 Underneath them sit universal ceilings, fixed in code, not exposed as inputs —
 a ceiling an input could raise is a preference, not a ceiling:
 
-| Ceiling                  | Value                   | Fires when                                         |
-| ------------------------ | ----------------------- | -------------------------------------------------- |
-| tool calls per review    | 200                     | the loop has executed 200 tool calls               |
-| cumulative tool evidence | 512 KiB                 | wrapped tool results have carried 512 KiB in total |
-| per-result size          | 64 KiB                  | one tool result exceeds it — cut, marked           |
-| search matches           | 200                     | one search — see above                             |
-| bytes scanned per search | 8 MiB                   | one search — see above                             |
-| listed entries           | 500                     | one `list_files` — see above                       |
-| findings per review      | 50                      | the answer declares more                           |
-| message length           | 1000 chars              | sanitiser truncation, visible                      |
-| summary length           | 300 chars               | sanitiser truncation, visible                      |
-| initial prompt budget    | half the context window | the assembled prompt would exceed it               |
+| Ceiling                         | Value                   | Fires when                                                           |
+| ------------------------------- | ----------------------- | -------------------------------------------------------------------- |
+| tool calls per review           | 200                     | the loop has executed 200 tool calls                                 |
+| cumulative tool evidence        | 512 KiB                 | wrapped tool results have carried 512 KiB in total                   |
+| per-result size                 | 64 KiB                  | one tool result exceeds it — cut, marked                             |
+| search matches                  | 200                     | one search — see above                                               |
+| bytes scanned per search        | 8 MiB                   | one search — see above                                               |
+| listed entries                  | 500                     | one `list_files` — see above                                         |
+| findings per review             | 50                      | the answer declares more                                             |
+| message length                  | 1000 chars              | sanitiser truncation, visible                                        |
+| summary length                  | 300 chars               | sanitiser truncation, visible                                        |
+| initial prompt budget           | half the context window | the assembled prompt would exceed it                                 |
+| verifier tool calls per finding | 40                      | the verifier's own loop has executed 40 calls for one finding        |
+| verifier evidence per finding   | 128 KiB                 | one finding's wrapped verifier results have carried 128 KiB in total |
 
 The last row closes the gap the others cannot see: the diff evidence enters
 the prompt before any tool runs, so the cumulative-evidence ceiling never
@@ -575,6 +577,75 @@ If the final answer is structurally invalid — unparsable, wrong shape, unknown
 keys — the loop follows the re-ask rule of [the loop](#the-loop-and-the-prompt):
 one corrective request, tools withheld, logged; failing it, red. A provider
 that keeps failing the contract is not something to hide behind a green check.
+
+## The verification pass
+
+The adversarial verification pass (#82) sits between the nit-drop and
+rendering. What the reviewer's answer calls a finding is, at this stage, only
+a claim; the pass tests each claim against evidence before it is allowed to
+publish. Its verdicts can only remove — confirmed findings publish unchanged,
+`refuted` drops (logged with the finding's identity so a wrong refute is
+visible), and `uncertain` follows the config's strictness.
+
+### What the verifier sees
+
+One fresh conversation per planned finding: a system message carrying the
+code-authored contract, and one user message holding the finding under test —
+its id, severity, location and claim — plus the captured content around its
+anchor line, wrapped as evidence. Nothing else from the run ever enters this
+prompt: no reviewer transcript, no chain of thought, no summary, no other
+findings. The claim is data under test, not instruction.
+
+The plan and its skips are unchanged: a finding is planned when the strategy
+is `adversarial`, or its severity is `concern`, or it sits on a deep lane —
+and planning still requires a recorded read that reaches the anchor, so the
+pass never verifies blind.
+
+### What the verifier does
+
+Since the pass is an investigation, not a sanity check: the verifier holds the
+reviewer's own fixed tools — the same `read_file`, `list_files`, `search`, the
+same registry, the same confinement. Nothing adds a tool, no input widens the
+reach. Its contract instructs active counter-evidence hunting: read around
+the anchor, search for what the claim says is missing, then verdict.
+
+The verifier's budget is its own, fixed in code, not an input — a ceiling an
+input could raise is a preference:
+
+| Budget              | Value   | Why this number                                                                                                        |
+| ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| tool calls          | 40      | a quarter of the reviewer's per-review ceiling — one finding needs a handful of reads and searches, not a whole review |
+| cumulative evidence | 128 KiB | a quarter of the reviewer's per-review evidence — enough to read around an anchor several files deep                   |
+
+The budget is per finding: a plan of five planned findings spends at most
+five budgets, each in its own fresh conversation, its own evidence wrapper,
+its own recorded-reads ledger (the verifier's reads never enter the
+reviewer's ledger, and the reviewer's captured bytes never enter the
+verifier's prompt beyond the excerpt the plan already showed).
+
+### When the verifier misbehaves
+
+The same dispatch rules as the reviewer's loop, with one deliberate
+divergence:
+
+- a manners defect — wrong arguments, an unknown tool name, a refused path —
+  comes back as a tool error result the verifier can correct;
+- reaching the tool-call or evidence budget fires one final no-tools request
+  (tools withheld, so no further call is even expressible) and the verifier
+  answers from the evidence already gathered;
+- a protocol defect — unparsable or oversized call arguments — degrades that
+  finding's verification to `uncertain` instead of ending the run. The
+  reviewer's loop would treat the same defect as provider failure and go red,
+  because the whole review's conversation is damaged. The verifier's
+  conversation is per finding: one broken investigation is one finding
+  judged uncertain, published or dropped by the strictness rule, and the
+  review continues. A misbehaving verifier must never delete a reviewer's
+  finding it could not judge, and must never crash the review that produced
+  the finding.
+
+The accounting the verification gate reads is unchanged: one verdict per
+planned finding, whatever the outcome — refused answers, transport failures,
+protocol defects and budget exhaustions all record `uncertain` and move on.
 
 ## Review states
 
