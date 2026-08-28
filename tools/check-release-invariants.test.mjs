@@ -139,6 +139,33 @@ test("root: rejects root action missing description field", () => {
   );
 });
 
+test("root: rejects a root description longer than 125 characters", () => {
+  const bad = ROOT_STUB.replace(
+    "  This repository contains three separate actions.",
+    `  ${"y".repeat(126)}`,
+  );
+  const { failures } = evaluate({
+    ...stubFs({ "action.yml": bad }),
+    discoveredDirs: [],
+  });
+  assert.ok(
+    failures.some((f) => f.includes("Root action.yml") && f.includes("125-character")),
+    `expected over-limit failure, got: ${failures.join(", ")}`,
+  );
+});
+
+test("root: passes with a root description of exactly 125 characters", () => {
+  const stub = ROOT_STUB.replace("description: >-", `description: ${"y".repeat(125)}`).replace(
+    "  This repository contains three separate actions.",
+    "",
+  );
+  const { failures } = evaluate({
+    ...stubFs({ ...FULL_TREE, "action.yml": stub }),
+    discoveredDirs: ["triage", "review", "harmonise"],
+  });
+  assert.equal(failures.length, 0, `unexpected failures: ${failures.join(", ")}`);
+});
+
 // ── Child action manifests ────────────────────────────────────────────────
 
 test("children: fails when a declared action has no manifest", () => {
