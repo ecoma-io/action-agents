@@ -568,25 +568,6 @@ describe("run", () => {
     );
   });
 
-  it("writes nothing on a real run whose pairs are all already in step", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const published = "# Dev\n\nProse.\n";
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": published,
-      "manual/vi/dev.md": published,
-    });
-    const ioDouble = /** @type {any} */ ({
-      forge: forgeDouble,
-      chat: echoingChat(),
-      evidence,
-    });
-
-    await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble);
-
-    expect(forgeDouble.writes).toEqual([]);
-  });
-
   it("reports translated proposals, missing translations and orphans on a dry run", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const config = `{
@@ -621,30 +602,6 @@ describe("run", () => {
     expect(out).toMatch(/orphan manual\/vi\/legacy\.md \[vi\]/);
   });
 
-  it("records an unchanged pair when the answer is byte-identical to the translation", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const current = "# Dev\n\nDéjà traduit.\n";
-    const ioDouble = io(
-      forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": "# Dev\n\nProse.\n",
-          "manual/vi/dev.md": current,
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/vi/dev.md", type: "blob" },
-        ],
-      ),
-      // drift=false carrying exactly the existing translation: a clean no-op.
-      [JSON.stringify({ drift: false, summary: "none", content: current })],
-    );
-
-    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
-    expect(logged(log)).toMatch(/unchanged/);
-    expect(logged(log)).not.toMatch(/proposed/);
-  });
-
   it("reports an honest no-op even when glossary tokens are in play", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const config = `{
@@ -653,25 +610,37 @@ describe("run", () => {
       glossary: ["repository"],
     }`;
     const published = "# Dev\n\nLe dépôt repository grandit.\n";
-    const ioDouble = io(
-      forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": config,
-          "manual/dev.md": "# Dev\n\nThe repository grows.\n",
-          "manual/vi/dev.md": published,
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/vi/dev.md", type: "blob" },
-        ],
-      ),
-      // The honest answer: drift=false carrying the published bytes verbatim.
-      // It holds no run tokens — and must not need any.
-      [JSON.stringify({ drift: false, summary: "none", content: published })],
-    );
+    // The record predates a policy change, so the deterministic gate cannot
+    // prove the pair unchanged and the model path runs; the target bytes
+    // themselves are canonical, so a byte-identical answer is a noop — and
+    // it holds no run tokens, and must not need any.
+    const staleRecord = {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      sourcePath: "manual/dev.md",
+      destinationPath: "manual/vi/dev.md",
+      language: "vi",
+      sourceFingerprint: contentFingerprint("# Dev\n\nProse.\n"),
+      translationFingerprint: contentFingerprint(published),
+      policyFingerprint: contentFingerprint("a policy harmonise no longer runs"),
+      transformationVersion: TRANSFORMATION_VERSION,
+    };
+    const chatDouble = chat([
+      JSON.stringify({ drift: false, summary: "none", content: published }),
+    ]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": config,
+      "manual/dev.md": "# Dev\n\nProse.\n",
+      "manual/vi/dev.md": published,
+      [STATE_PATH]: renderState([staleRecord]),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
-    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+    expect(chatDouble.calls()).toBe(1);
     expect(logged(log)).toMatch(/unchanged/);
+    expect(logged(log)).not.toMatch(/proposed/);
   });
 
   it("refuses a translation that deletes a code block adjacent to another", async () => {
@@ -1226,8 +1195,12 @@ describe("run with recorded state", () => {
     expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
   });
 
-  it("degrades a corrupt state file to the model path and completes", async () => {
+  it("degrades a corrupt state file to absent — the unrecorded pair refuses, loudly", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The state file is unparseable, so the read degrades to absent — the
+    // run never blocks on advisory state. The destination's existing bytes
+    // are then human work with no record: manual-edit protection refuses
+    // the pair before any model call instead of translating over them.
     const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
     const forgeDouble = forge({
       ".github/action-agents/harmonise/harmonise.json5": CONFIG,
@@ -1237,21 +1210,25 @@ describe("run with recorded state", () => {
     });
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
-    await expect(
-      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
-    ).resolves.toBeUndefined();
-
-    expect(chatDouble.calls()).toBe(1);
-    expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/manual-edit protection refused/);
+    expect(error.message).toMatch(/never recorded publishing/);
+    expect(chatDouble.calls()).toBe(0);
+    expect(forgeDouble.writes).toEqual([]);
   });
-
-  it("treats a foreign-schema state file as absent — the pair goes to the model", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+  it("treats a foreign-schema state file as absent — a missing target still translates", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The foreign schema refuses the whole state document, so the pair is
+    // unrecorded; the advisory read itself still never blocks the run. With
+    // no target on disk there is nothing to preserve — the pair is
+    // create-allowed and translates exactly as before.
     const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
     const forgeDouble = forge({
       ".github/action-agents/harmonise/harmonise.json5": CONFIG,
       "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": TRANSLATED,
       [STATE_PATH]: renderState([viRecord({ schemaVersion: 999 })]),
     });
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
@@ -1261,6 +1238,7 @@ describe("run with recorded state", () => {
     ).resolves.toBeUndefined();
 
     expect(chatDouble.calls()).toBe(1);
+    expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
     expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
   });
 
@@ -1494,11 +1472,12 @@ describe("run with recorded state", () => {
     expect(secondForge.writes).toEqual([]);
   });
 
-  it("writes nothing when a never-recorded pair's answer is a noop", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // No state file, so no record: the model endorses the existing bytes (a
-    // noop) but nothing was ever translated, so nothing is recorded and the
-    // all-in-step early return stands (#88).
+  it("refuses an unrecorded pair before any model call — adoption never overwrites", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // No state file: the destination predates harmonise, or the state was
+    // lost. Its bytes are treated as human-authored, and with no record
+    // there is never a merge base — the pair refuses before any model call
+    // instead of translating over the existing bytes.
     const chatDouble = chat([proposes(TRANSLATED)]);
     const forgeDouble = forge({
       ".github/action-agents/harmonise/harmonise.json5": CONFIG,
@@ -1507,17 +1486,14 @@ describe("run with recorded state", () => {
     });
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
-    await expect(
-      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
-    ).resolves.toBeUndefined();
-
-    expect(chatDouble.calls()).toBe(1);
-    expect(forgeDouble.writes).toEqual([]);
-    const out = logged(log);
-    expect(out).toMatch(
-      /^translated vi manual\/dev\.md → manual\/vi\/dev\.md \[existing\] unchanged\b/m,
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
     );
-    expect(out).toMatch(/nothing to propose/);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/manual-edit protection refused/);
+    expect(error.message).toMatch(/never recorded publishing/);
+    expect(chatDouble.calls()).toBe(0);
+    expect(forgeDouble.writes).toEqual([]);
   });
 });
 
@@ -1774,13 +1750,15 @@ describe("run with manual-edit protection and three-way merge", () => {
     expect(forgeDouble.writes.filter((w) => w.op === "upsertPullRequest")).toHaveLength(1);
   });
 
-  it("keeps record corruption advisory — a malformed fingerprint takes the model path", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const chatDouble = chat([proposes(FRESH)]);
+  it("refuses a pair with a corrupted fingerprint before any model call", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
     // The fingerprint is a string, so the strict parser accepts the record;
-    // drift cannot judge it and refuses to guess — the advisory verdict, not
-    // a protection refusal.
+    // drift cannot judge it and refuses to guess — and with no verifiable
+    // base there is no merge path, so manual-edit protection refuses the
+    // pair rather than publishing over bytes it cannot prove are not a
+    // human edit.
     const corrupted = { ...viPublication(), translationFingerprint: "corrupted" };
+    const chatDouble = chat([proposes(FRESH)]);
     const forgeDouble = forge({
       ".github/action-agents/harmonise/harmonise.json5": CONFIG,
       "manual/dev.md": NEW_SOURCE,
@@ -1789,17 +1767,38 @@ describe("run with manual-edit protection and three-way merge", () => {
     });
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
-    await expect(
-      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
-    ).resolves.toBeUndefined();
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/manual-edit protection refused/);
+    expect(error.message).toMatch(/cannot prove what harmonise last published/);
+    expect(chatDouble.calls()).toBe(0);
+    expect(forgeDouble.writes).toEqual([]);
+  });
 
-    expect(chatDouble.calls()).toBe(1);
-    const out = logged(log);
-    expect(out).toMatch(/translated vi manual\/dev\.md/);
-    expect(out).not.toMatch(/manual-edit protection refused/);
-    expect(out).not.toMatch(/three-way merge/);
-    const blobs = blobsOf(forgeDouble);
-    expect(blobs[0]).toBe(FRESH);
+  it("refuses a recorded pair whose target was deleted instead of recreating it", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The record survives but the destination's bytes are gone: drift cannot
+    // judge what is not on disk, the policy preserves, and there are no
+    // bytes to merge against — the deletion stands, loudly.
+    const chatDouble = chat([proposes(FRESH)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": OLD_SOURCE,
+      [STATE_PATH]: renderState([viPublication()]),
+      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/manual-edit protection refused/);
+    expect(error.message).toMatch(/the target is missing on disk/);
+    expect(chatDouble.calls()).toBe(0);
+    expect(forgeDouble.writes).toEqual([]);
   });
 
   it("converges a drift whose fresh side matches the base — the manual text is republished and the record catches up", async () => {
