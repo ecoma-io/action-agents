@@ -278,11 +278,21 @@ describe("the universe and the budget", () => {
 describe("publication", () => {
   it("publishes a complete review through one guarded upsert recording the head", async () => {
     const forge = forgeStub();
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content:
+          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
+      },
+    ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
-      io: io(forge),
+      io: io(forge, chat),
     });
 
     expect(result.outcome).toBe("published");
@@ -292,6 +302,7 @@ describe("publication", () => {
     expect(body).toContain(`head=${HEAD}`);
     expect(body).toContain("**Review** — Complete");
     expect(body).toContain("- `src/a.mjs:2` — off-by-one");
+    expect(body).toContain("evidence: `src/a.mjs:1-4`");
     // Two reads pin the snapshot; the second guards publication.
     expect(forge.calls.getPullRequests).toHaveLength(2);
   });
@@ -356,11 +367,18 @@ describe("strictness policy and strategy", () => {
     /** @type {string[]} */
     const logged = [];
     const forge = forgeStub({ config: '{ strictness: "low" }' });
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      { content: MIXED_ANSWER },
+    ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
-      io: { forge, chat: chatStub(MIXED_ANSWER), now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     const body = forge.calls.upserts[0]?.body ?? "";
@@ -373,17 +391,25 @@ describe("strictness policy and strategy", () => {
   it("at medium the same answer keeps its nit, and absent strategy equals explicit standard byte for byte", async () => {
     const forgeDefault = forgeStub();
     const forgeExplicit = forgeStub({ config: '{ strategy: "standard" }' });
+    const reading = () =>
+      readingChat([
+        {
+          content: "",
+          toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+        },
+        { content: MIXED_ANSWER },
+      ]);
     const defaultRun = await reviewPullRequest({
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
-      io: io(forgeDefault, chatStub(MIXED_ANSWER)),
+      io: io(forgeDefault, reading()),
     });
     const explicitRun = await reviewPullRequest({
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
-      io: io(forgeExplicit, chatStub(MIXED_ANSWER)),
+      io: io(forgeExplicit, reading()),
     });
     expect(defaultRun.outcome).toBe("published");
     expect(explicitRun.outcome).toBe("published");
@@ -876,5 +902,57 @@ describe("adversarial verification pass", () => {
     expect(readChat.calls).toHaveLength(2);
     expect(forge.calls.upserts[0]?.body).toContain("a nit");
     expect(logged.some((line) => line.includes("planned 0 of 1 finding(s)"))).toBe(true);
+  });
+});
+
+describe("evidence provenance", () => {
+  it("quarantines an unanchored finding — absent from the comment, present in the log with its identity", async () => {
+    const forge = forgeStub();
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat: chatStub(), now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).not.toContain("off-by-one");
+    expect(body).toContain("No findings.");
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("finding quarantined") &&
+          line.includes("unanchored") &&
+          line.includes("src/a.mjs:2"),
+      ),
+    ).toBe(true);
+  });
+
+  it("with an empty ledger, every finding is quarantined and the run still concludes through the normal path", async () => {
+    const forge = forgeStub();
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: {
+        forge,
+        chat: chatStub(
+          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+            '{"severity":"nit","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"two findings"}',
+        ),
+        now: () => 0,
+        info: (m) => logged.push(m),
+      },
+    });
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("No findings.");
+    expect(
+      logged.filter((line) => line.includes("finding quarantined") && line.includes("unanchored")),
+    ).toHaveLength(2);
   });
 });
