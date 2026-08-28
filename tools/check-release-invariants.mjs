@@ -32,6 +32,9 @@ export const CHILD_ACTIONS = ["triage", "review", "harmonise"];
 /** Manifest file names GitHub accepts. */
 export const MANIFEST_NAMES = ["action.yaml", "action.yml"];
 
+/** GitHub Marketplace caps the action description at this many characters. */
+export const MAX_DESCRIPTION_LENGTH = 125;
+
 /**
  * @param {object} input
  * @param {(path: string) => string} input.read  read a file relative to root
@@ -64,6 +67,14 @@ export function evaluate({ read, exists, discoveredDirs = [] }) {
     }
     if (!/^description:\s/m.test(rootManifest)) {
       failures.push("Root action.yml: missing 'description' field.");
+    } else {
+      const description = descriptionText(rootManifest);
+      if (description.length > MAX_DESCRIPTION_LENGTH) {
+        failures.push(
+          `Root action.yml: description is ${description.length} characters, over the ` +
+            `${MAX_DESCRIPTION_LENGTH}-character GitHub Marketplace limit.`,
+        );
+      }
     }
     if (!rootManifest.includes("runs:")) {
       failures.push("Root action.yml: missing 'runs' block.");
@@ -157,8 +168,36 @@ export function evaluate({ read, exists, discoveredDirs = [] }) {
       }
     }
   }
-
   return { failures, checks };
+}
+
+/**
+ * The rendered text of a manifest `description:` field, read off the raw
+ * manifest text the way every check here reads manifests — no YAML parser.
+ * Handles the single-line plain form (surrounding quotes stripped) and the
+ * `>` / `|` block forms, folding continuation lines the way GitHub renders
+ * them.  Trailing whitespace is clipped, which chomping clips anyway.
+ *
+ * @param {string} manifest  raw manifest text
+ * @returns {string} the rendered description, "" when absent
+ */
+function descriptionText(manifest) {
+  const lines = manifest.split("\n");
+  const key = lines.findIndex((line) => /^description:\s/.test(line));
+  if (key === -1) return "";
+  const head = lines[key].replace(/^description:\s*/, "");
+  if (!/^[>|][0-9]?[+-]?$/.test(head)) {
+    return head
+      .trim()
+      .replace(/^['"]|['"]$/g, "")
+      .trimEnd();
+  }
+  const parts = [];
+  for (let i = key + 1; i < lines.length; i += 1) {
+    if (!/^\s+\S/.test(lines[i])) break;
+    parts.push(lines[i].trim());
+  }
+  return parts.join(head.startsWith("|") ? "\n" : " ").trimEnd();
 }
 
 /**
