@@ -123,6 +123,21 @@ describe("internal image links", () => {
     });
   });
 
+  it("keeps the reference when a configured layout's candidates all miss", () => {
+    // An inventory-style double: configured layouts first, built-in
+    // convention last, answered only for files the branch holds. Nothing
+    // matches, so the reference stays exactly as authored.
+    const held = new Set(["manual/assets/vi/other.png"]);
+    const ctx = context({
+      resolveImage: (p) => (held.has(`manual/assets/vi/${p}`) ? `manual/assets/vi/${p}` : null),
+    });
+
+    expect(rewriteLinks("![d](imgs/diagram.png)", ctx)).toEqual({
+      text: "![d](imgs/diagram.png)",
+      count: 0,
+    });
+  });
+
   it("never rewrites external or data images", () => {
     const line = "![e](https://example.com/a.png) ![d](data:image/png;base64,AAA)";
 

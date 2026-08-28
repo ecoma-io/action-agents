@@ -82,6 +82,20 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
   pullRequest: {
     title: "docs(i18n): sync {n} documents from {sourceLanguage}",
   },
+
+  // Optional. Where a language's variant of an image lives, when this
+  // repository's own convention differs from the built-in one. Each layout
+  // is a template over `{dir}` (the image's directory relative to the
+  // document's, empty when they share one), `{base}`, `{ext}` (without the
+  // dot, empty when the name has none) and `{lang}`, producing a path
+  // relative to the document's own directory. Configured layouts are tried
+  // first, in this order, and the built-in convention
+  // (`{dir}/{base}.{lang}.{ext}`) stays last — absent, today's behavior is
+  // unchanged. `harmonise` never creates or uploads assets; a layout only
+  // ever points a reference at a file the branch already holds.
+  assets: {
+    layouts: ["assets/{lang}/{dir}/{base}.{ext}"],
+  },
 }
 ```
 
@@ -103,6 +117,14 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
   placeholder is refused; the template is non-empty, non-whitespace, and
   within the title length cap. The pull-request **body** is not customisable:
   it stays action-authored.
+- an `assets.layouts` entry, when present, must contain `{lang}` and `{base}`
+  exactly once, only `{dir}`, `{ext}` and those two placeholders, and only
+  literal parts that stay inside the document's directory — absolute paths,
+  drive letters, `..` and empty segments are refused; duplicates are refused
+  rather than deduplicated, and more than 8 layouts are refused. A layout is
+  a naming convention, not a promise: whether a rendered candidate exists is
+  decided against the branch's real tree, and a miss falls through to the
+  next candidate;
 - all instruction documents, if present, must be ≤ 8 KiB — prose past the cap
   is refused rather than silently truncated.
 
@@ -363,7 +385,16 @@ If `docs/images/dev.vi.png` exists in the tree, the translation references it:
 
 ### Rules
 
-- **Deterministic naming:** the localized candidate for language `<lang>` is the referenced path with `. <lang>` inserted before its final extension — `dev.png` → `dev.vi.png`, `logo.brand.svg` → `logo.brand.vi.svg`, an extensionless path gains the tag at its end (`diagram` → `diagram.vi`). Query strings and fragments keep their places: `img.png?v=2#fig` → `img.vi.png?v=2#fig`;
+- **Deterministic naming:** the localized candidates for language `<lang>`
+  are tried in order — the configured `assets.layouts` first, in config
+  order, each rendered relative to the referencing document's directory
+  (`{dir}` is the image's directory relative to that; a reference outside
+  the document's directory has no document-relative shape and skips the
+  configured layouts), then the built-in convention last: the referenced
+  path with `. <lang>` inserted before its final extension — `dev.png` →
+  `dev.vi.png`, `logo.brand.svg` → `logo.brand.vi.svg`, an extensionless
+  path gains the tag at its end (`diagram` → `diagram.vi`). Query strings
+  and fragments keep their places: `img.png?v=2#fig` → `img.vi.png?v=2#fig`;
 - **Existence-checked:** the rewrite happens only when the localized path exists in the default-branch tree. A missing localized image leaves the original reference untouched — never a broken link, never a generated file;
 - **Same resolution machinery as documents:** relative to the referencing document, resolved against the inventory, re-relativized for the translation's directory, URL encoding preserved;
 - **Never rewritten:** external images (`http://`, `https://`, protocol-relative), `data:` URIs, anchors;

@@ -34,7 +34,7 @@ import { localizedImagePath } from "./patterns.mjs";
  * @property {{ path: string, lang: string }[]} orphanTranslations sorted; reported, never touched
  * @property {Set<string>} blobPaths every file on the default branch
  * @property {(absPath: string, lang: string) => string | null} resolveDocument where one document lives in `lang` — existing or planned by this run — else null
- * @property {(absPath: string, lang: string) => string | null} resolveImage an image's existing localized variant in `lang`, else null
+ * @property {(absPath: string, lang: string, fromDocPath?: string) => string | null} resolveImage an image's existing localized variant in `lang` — the first candidate, configured layouts first and the built-in convention last, that the branch holds; `fromDocPath`, the document holding the reference, is what makes configured layouts resolvable, and without it only the built-in convention applies
  */
 
 /**
@@ -169,10 +169,21 @@ export function buildInventory({ entries, config, documents }) {
       return target.state === "existing" || target.planned ? target.path : null;
     },
 
-    /** An image's localized variant — only ever a file the branch already holds. */
-    resolveImage(absPath, lang) {
-      const candidate = localizedImagePath(absPath, lang);
-      return blobPaths.has(candidate) ? candidate : null;
+    /**
+     * An image's localized variant — only ever a file the branch already
+     * holds. Candidates are tried in order and the first one the tree
+     * contains wins; none existing means null and the reference stays as
+     * authored. Nothing is invented: a configured layout that misses for a
+     * reference just falls through to the next candidate.
+     */
+    resolveImage(absPath, lang, fromDocPath) {
+      for (const candidate of localizedImagePath(absPath, lang, {
+        layouts: config.assets?.layouts ?? [],
+        fromDocPath,
+      })) {
+        if (blobPaths.has(candidate)) return candidate;
+      }
+      return null;
     },
   };
 }

@@ -87,13 +87,21 @@ export function preparationRefusal(sourceText) {
 export function preparePair({ slug, lang, sourcePath, target, sourceText, inventory, config }) {
   const protection = protectDocument(sourceText, { glossary: config.glossary });
 
+  // The rewrite resolves references from the source document's directory;
+  // validation (the resolvers exposed below) judges the rewritten references
+  // from the translation's directory, where both sides of a pair anchor at
+  // validation time. `resolveDocument` is slug-based and
+  // directory-independent; `resolveImage`'s configured layouts are relative
+  // to the document's own directory, so each binding anchors where its
+  // references do.
+
   /** @type {import("./links.mjs").LinkContext} */
   const context = {
     sourceDocPath: sourcePath,
     translatedDocPath: target.path,
     languageTag: lang,
     resolveDocument: (absPath) => inventory.resolveDocument(absPath, lang),
-    resolveImage: (absPath) => inventory.resolveImage(absPath, lang),
+    resolveImage: (absPath) => inventory.resolveImage(absPath, lang, sourcePath),
   };
   const rewritten = rewriteLinks(protection.text, context);
 
@@ -108,7 +116,7 @@ export function preparePair({ slug, lang, sourcePath, target, sourceText, invent
     protection,
     linksRewritten: rewritten.count,
     resolveDocument: context.resolveDocument,
-    resolveImage: context.resolveImage,
+    resolveImage: (absPath) => inventory.resolveImage(absPath, lang, target.path),
   };
 }
 

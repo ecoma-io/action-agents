@@ -13,7 +13,12 @@
 
 import { json5Parse } from "#core/json5-parse.mjs";
 
-import { parseLanguagePattern, validateLanguagePattern } from "./patterns.mjs";
+import {
+  MAX_ASSET_LAYOUTS,
+  parseAssetLayout,
+  parseLanguagePattern,
+  validateLanguagePattern,
+} from "./patterns.mjs";
 
 /**
  * The operations the config loaders need — a slice of the forge client, so a
@@ -39,12 +44,16 @@ import { parseLanguagePattern, validateLanguagePattern } from "./patterns.mjs";
  * @property {string[]} glossary terms protected verbatim in every translation, exact-match
  * @property {HarmoniseInstructions} instructions
  * @property {{ title: string }} [pullRequest] the commit-subject/pull-request-title template, when the repository renames the convention
+ * @property {{ layouts: AssetLayout[] }} [assets] templates naming where a language's image variants live, relative to the document's directory
  */
 
 /**
  * @typedef {import("./patterns.mjs").LanguagePattern} LanguagePattern
  */
 
+/**
+ * @typedef {import("./patterns.mjs").AssetLayout} AssetLayout
+ */
 /** A config file larger than this is a red refusal, not a truncated policy. */
 export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
 
@@ -155,11 +164,12 @@ export function validateConfig(raw) {
         "glossary",
         "instructions",
         "pullRequest",
+        "assets",
       ].includes(key)
     ) {
       throw new Error(
         `unknown config key '${key}' — the file holds sourceLanguage, languages, ignore, ` +
-          `glossary, instructions and pullRequest`,
+          `glossary, instructions, pullRequest and assets`,
       );
     }
   }
@@ -245,7 +255,9 @@ export function validateConfig(raw) {
 
   const pullRequest = parsePullRequest(raw["pullRequest"]);
 
-  return { sourceLanguage, languages, ignore, glossary, instructions, ...pullRequest };
+  const assets = parseAssets(raw["assets"]);
+
+  return { sourceLanguage, languages, ignore, glossary, instructions, ...pullRequest, ...assets };
 }
 
 /**
@@ -309,6 +321,63 @@ function parsePullRequest(value) {
   }
 
   return { pullRequest: { title } };
+}
+
+/**
+ * The optional `assets` block: today only `layouts`, the templates naming
+ * where a repository keeps a language's variant of an image, relative to the
+ * document's own directory. Absent means the built-in convention stands —
+ * nothing about an existing consumer's run changes.
+ *
+ * A layout is deterministic string work over `{dir}`, `{base}`, `{ext}` and
+ * `{lang}`. Every brace that is not one of those placeholders is a refusal —
+ * a typo like `{locale}` must be a red config, never literal text in a path
+ * nobody meant — and so is a template that could only ever produce a path
+ * outside the document's directory: absolute, a drive, `..`, an empty
+ * segment. Whether a rendered candidate exists is decided later, against the
+ * branch's real tree; a layout that misses for one reference simply never
+ * wins for it. `harmonise` never creates, uploads, renames or rewrites asset
+ * files — it only points references at localized variants that already exist.
+ *
+ * @param {unknown} value
+ * @returns {{ assets?: { layouts: AssetLayout[] } }}
+ */
+function parseAssets(value) {
+  if (value === undefined) return {};
+  const block = expectObject(value, "assets");
+
+  for (const key of Object.keys(block)) {
+    if (key !== "layouts") {
+      throw new Error(`unknown assets key '${key}' — the block holds layouts`);
+    }
+  }
+
+  const rawLayouts = block["layouts"];
+  if (!Array.isArray(rawLayouts)) {
+    throw new Error("assets.layouts must be an array of layout template strings");
+  }
+  if (rawLayouts.length > MAX_ASSET_LAYOUTS) {
+    throw new Error(
+      `assets.layouts holds ${String(rawLayouts.length)} layouts — at most ` +
+        `${String(MAX_ASSET_LAYOUTS)} fit`,
+    );
+  }
+
+  /** @type {AssetLayout[]} */
+  const layouts = [];
+  const seen = new Set();
+  for (const entry of rawLayouts) {
+    if (typeof entry !== "string" || entry === "") {
+      throw new Error("assets.layouts entries must be non-empty template strings");
+    }
+    if (seen.has(entry)) {
+      throw new Error(`assets.layouts names '${entry}' twice — refused, not deduplicated`);
+    }
+    seen.add(entry);
+    layouts.push(parseAssetLayout(entry, `assets.layouts[${String(layouts.length)}]`));
+  }
+
+  return { assets: { layouts } };
 }
 
 /**
