@@ -63,3 +63,21 @@ One consumer today: `review`.
 seam: every request goes to the configured `api-url`, and a redirect that
 leaves the configured origin is refused rather than followed — the api-key never
 crosses to a second host. The key is masked from the moment it is read.
+
+## The retry ceiling
+
+Transport failures retry at two layers, and the ceilings compose. `http.mjs`
+retries one request up to `DEFAULT_MAX_ATTEMPTS` (3) attempts, honouring the
+provider's `retry-after` up to `maxRetryAfterMs` (30 s) and its own backoff
+otherwise; the request timeout bounds every try. The owners above the client
+retry whole units — `harmonise`'s pair loop takes the recovery policy's
+`transport.retries` (2), so one (document, language) pair gets three outer
+attempts — while `triage` and `review` own no outer retry of a failed unit.
+
+The client's per-request retry stays because a 429 or a dropped socket is
+absorbed without re-reading the diff or re-prompting the model — but it
+counts toward the composed ceiling, it does not stack on top of it. The
+worst case for one harmonise pair is therefore 3 × 3 = 9 provider calls,
+bounded in wall clock by 9 × request-timeout-ms plus the summed backoffs
+and pair delays. A change to either layer's retry count changes this
+ceiling: restate it here and in the pinning test in the same change.

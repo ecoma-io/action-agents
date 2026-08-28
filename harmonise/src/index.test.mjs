@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatError } from "#core/chat.mjs";
 import { BranchMovedError } from "#core/forge.mjs";
-import { HttpError, TransportError } from "#core/http.mjs";
+import { DEFAULT_MAX_ATTEMPTS, HttpError, TransportError } from "#core/http.mjs";
 
 import { ACTION, DELAY_MS, main, readInputs, run, TM_PATH } from "./index.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
@@ -29,7 +29,7 @@ import {
   serialize as serializeTm,
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
-import { DELAY_CLASSES } from "./recovery.mjs";
+import { DEFAULT_POLICY, DELAY_CLASSES } from "./recovery.mjs";
 import { MAX_SOURCE_BYTES } from "./plan.mjs";
 
 /**
@@ -890,6 +890,17 @@ describe("run", () => {
       expect(error.message).toMatch(/classified unknown, exhausted/);
       expect(chatDouble.calls()).toBe(2);
       expect(sleeps).toEqual([DELAY_MS.short]);
+    });
+
+    it("keeps the composed retry ceiling at nine provider calls per pair", () => {
+      // Two layers compose multiplicatively: the pair loop owns the outer
+      // attempts (DEFAULT_POLICY), http.mjs the inner ones
+      // (DEFAULT_MAX_ATTEMPTS). Move either constant and the composed
+      // ceiling moves with it — restate "The retry ceiling" in
+      // docs/development/ceilings.md in the same change or this pin fails.
+      expect(DEFAULT_POLICY.transport.retries + 1).toBe(3);
+      expect(DEFAULT_MAX_ATTEMPTS).toBe(3);
+      expect((DEFAULT_POLICY.transport.retries + 1) * DEFAULT_MAX_ATTEMPTS).toBe(9);
     });
   });
 

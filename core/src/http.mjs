@@ -107,7 +107,7 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_ATTEMPTS = 3;
+export const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 const DEFAULT_MAX_RETRY_AFTER_MS = 30_000;
 const DEFAULT_MAX_BODY_BYTES = 2 ** 20;
@@ -237,6 +237,10 @@ export function createHttpClient(config) {
           ...(signal !== undefined ? { signal } : {}),
         });
         if (RETRYABLE_STATUS.has(response.status) && number < limit) {
+          // The refused answer is never read: cancel its stream so the
+          // connection returns to the pool before the wait, instead of
+          // leaking one stream per retry.
+          await response.body?.cancel?.().catch(() => undefined);
           await sleep(delayFor(response, number));
           continue;
         }
