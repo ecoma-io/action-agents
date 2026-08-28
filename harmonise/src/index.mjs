@@ -3,10 +3,11 @@
  *
  * The full pipeline, in the specification's order: config map; complete
  * default-branch inventory; pairing with orphan detection; per-pair
- * preparation (glossary + skip protection, link/image localization);
- * translation through the model with contract validation; then — for real
- * runs only — one branch, one commit through the Git Data API, one pull
- * request updated in place.
+ * preparation (glossary + skip protection, manual-edit protection, link/image
+ * localization); translation through the model with contract validation, a
+ * drifted pair's proposal merged three-way against the last published
+ * translation; then — for real runs only — one branch, one commit through
+ * the Git Data API, one pull request updated in place.
  *
  * The shape is deliberate. `readInputs` is pure over an environment; `run`
  * takes its inputs plus one replaceable I/O record, so a test states the
@@ -49,8 +50,10 @@ import {
   preparePair,
   translatePair,
 } from "./plan.mjs";
+import { protectionDecision } from "./protection.mjs";
 import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
 import { buildTmKey, createTmStore, parse as parseTm, serialize as serializeTm } from "./tm.mjs";
+import { mergeThreeWay, summarizeMerge } from "./threeway.mjs";
 import { runPool } from "./pool.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
@@ -61,9 +64,12 @@ export const ACTION = "harmonise";
 
 /**
  * The path the translation memory occupies beside the sync state, written by
- * the same publication that writes the state file. Advisory both ways: a
- * file that is missing, corrupt or of a foreign schema version is an empty
- * memory — never an error, never a skip.
+ * the same publication that writes the state file. Advisory as a reference:
+ * a file that is missing, corrupt or of a foreign schema version is an empty
+ * memory — never an error, never a skip on its own. For a pair whose target
+ * drifted outside harmonise the memory is also the only source of the merge
+ * base, and there its absence is a manual-edit protection refusal — never a
+ * silent overwrite.
  */
 export const TM_PATH = ".github/action-agents/harmonise/tm.json";
 
@@ -133,7 +139,6 @@ function realIo(inputs, context) {
  *   and unchanged-skipped
  * @property {string} summary
  */
-
 /**
  * One translatable pair carried from the classification walk to the pool:
  * everything its model path needs, so the pooled worker never re-reads.
@@ -146,6 +151,9 @@ function realIo(inputs, context) {
  * @property {string} sourceFingerprint
  * @property {string} lang
  * @property {string} sourcePath
+ * @property {string | undefined} [mergeBase] the verified text of the last publication,
+ *   present exactly when manual-edit protection requires the pair's proposal
+ *   to be merged three-way instead of taken verbatim
  */
 
 /**
@@ -367,9 +375,9 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
         // The deterministic gate. Only the exact conjunction — the recorded
         // state proves source, policy and version all unchanged AND the
         // target's bytes are still the recorded publication — consumes zero
-        // model calls. Every other verdict (`content-stale`, `policy-stale`,
-        // `new-pair`, `unknown`, `target-drift`, `unrecorded`) runs the
-        // model path exactly as before. Nothing model-shaped can reach this
+        // model calls. Every other verdict continues below — manual-edit
+        // protection judges the drifted ones, and the rest run the model
+        // path exactly as before. Nothing model-shaped can reach this
         // decision: both sides are digests of repository bytes.
         const recorded =
           recordedRecords.find((record) => record.destinationPath === prepared.destinationPath) ??
@@ -380,10 +388,8 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           policyFingerprint: policyDigest,
           transformationVersion: TRANSFORMATION_VERSION,
         };
-        if (
-          classifyPair(recorded, current) === "unchanged" &&
-          detectDrift(recorded, existing) === "canonical"
-        ) {
+        const drift = detectDrift(recorded, existing);
+        if (classifyPair(recorded, current) === "unchanged" && drift === "canonical") {
           slots.push({
             lang: target.lang,
             sourcePath: pair.sourcePath,
@@ -401,6 +407,34 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           });
           continue;
         }
+        // Manual-edit protection. The policy turns the drift verdict plus the
+        // target's presence into exactly one action class, and this wiring
+        // respects it: `preserve-required` on a proven outside edit — a valid
+        // record whose publication no longer matches the disk — forbids the
+        // blind overwrite. Such a pair proceeds only into a three-way merge
+        // against the verified last publication, and with no verifiable base
+        // it is refused outright: no model call, no slot, no silent
+        // overwrite. `preserve-required` without a provable edit (`unknown` —
+        // a corrupt record; `unrecorded` — nothing recorded) keeps the
+        // advisory degradation the state read already chose: the model path,
+        // exactly as a repository without usable records always ran.
+        /** @type {string | undefined} */
+        let mergeBase;
+        if (
+          protectionDecision(drift, existing !== undefined) === "preserve-required" &&
+          drift === "target-drift"
+        ) {
+          mergeBase = recordedMergeBase(recorded, target.lang, memory);
+          if (mergeBase === undefined) {
+            failedLines.push(
+              `${target.lang} ${pair.sourcePath}: manual-edit protection refused: ` +
+                `the target changed outside harmonise since the last publication, and no ` +
+                `recorded base translation could be verified to merge against — resolve ` +
+                `the edit by hand or restore the translation memory`,
+            );
+            continue;
+          }
+        }
 
         // The model path: carried to the pool below, not translated inline.
         // The slot is reserved now and filled when the pooled worker settles,
@@ -413,6 +447,7 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           sourceFingerprint,
           lang: target.lang,
           sourcePath: pair.sourcePath,
+          mergeBase,
         });
         slots.push(undefined);
       } catch (cause) {
@@ -478,6 +513,44 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
     if (translated === undefined || lastFailure !== "") {
       return { ok: false, line: `${job.lang} ${job.sourcePath}: ${lastFailure}` };
     }
+
+    // The publication text is the verified three-way merge when manual-edit
+    // protection demanded one, the raw translation otherwise. A conflict is
+    // the merge refusing: the pair fails with the disagreement reported —
+    // the raw translation never slips in behind a refused merge. The merge
+    // is deterministic over repository bytes and one validated answer; the
+    // model decides nothing about the outcome. A no-op answer carries no
+    // fresh text, so there is nothing to merge and nothing to displace.
+    /** @type {string | undefined} */
+    let content = translated.text;
+    let summary = /** @type {string} */ (translated.summary);
+    if (job.mergeBase !== undefined && !translated.noop) {
+      // Protection attached a base only after proving the drifted target has
+      // bytes on disk, so the manual side is a string by construction.
+      const merged = mergeThreeWay(
+        job.mergeBase,
+        /** @type {string} */ (job.existing),
+        /** @type {string} */ (content),
+      );
+      const first = merged.conflicts[0];
+      if (first === undefined) {
+        const counts = summarizeMerge(merged);
+        content = merged.merged;
+        summary =
+          `${summary} (three-way merge: ${String(counts.preservedManual)} manual region(s) ` +
+          `preserved, ${String(counts.adoptedFresh)} fresh adopted)`;
+      } else {
+        return {
+          ok: false,
+          line:
+            `${job.lang} ${job.sourcePath}: three-way merge refused: ` +
+            `${String(merged.conflicts.length)} conflict region(s), first at merged line ` +
+            `${String(first.startLine)} — the manual edit and the fresh translation disagree ` +
+            `(manual: "${oneLine(first.manualExcerpt)}", fresh: "${oneLine(first.freshExcerpt)}"); ` +
+            `resolve by hand`,
+        };
+      }
+    }
     return {
       ok: true,
       sourceFingerprint: job.sourceFingerprint,
@@ -493,8 +566,8 @@ export async function run(inputs, context, io = realIo(inputs, context)) {
           linksRewritten: job.prepared.linksRewritten,
         },
         blocks: job.blocks,
-        content: translated.text,
-        summary: /** @type {string} */ (translated.summary),
+        content,
+        summary,
       },
     };
   };
@@ -711,6 +784,32 @@ function oneLine(summary) {
     flat += code <= 0x1f || code === 0x7f ? " " : char;
   }
   return flat.replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+/**
+ * The verified base text for a three-way merge: the translation memory's
+ * entry for the pair under its recorded (source, policy) fingerprints,
+ * accepted only when its bytes hash to exactly the translation fingerprint
+ * the state record pinned at publication. Anything else — a memory miss, a
+ * foreign or stale entry — returns undefined, and the caller refuses rather
+ * than merging against unproven bytes.
+ *
+ * @param {import("./state.mjs").SyncStateRecord | null} recorded the pair's record, or null
+ * @param {string} lang the target language
+ * @param {{ lookup: (key: string) => string | undefined }} memory the run's translation memory
+ * @returns {string | undefined} the verified base text, or undefined
+ */
+function recordedMergeBase(recorded, lang, memory) {
+  if (recorded === null) return undefined;
+  const candidate = memory.lookup(
+    buildTmKey({
+      sourceHash: recorded.sourceFingerprint,
+      targetLang: lang,
+      policyContext: recorded.policyFingerprint,
+    }),
+  );
+  if (candidate === undefined) return undefined;
+  return contentFingerprint(candidate) === recorded.translationFingerprint ? candidate : undefined;
 }
 
 /**

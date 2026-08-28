@@ -16,7 +16,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ACTION, main, readInputs, run, TM_PATH } from "./index.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
 import { renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
-import { buildTmKey, createTmStore, serialize as serializeTm, TM_SCHEMA_VERSION } from "./tm.mjs";
+import {
+  buildTmKey,
+  createTmStore,
+  parse as parseTm,
+  serialize as serializeTm,
+  TM_SCHEMA_VERSION,
+} from "./tm.mjs";
 
 /**
  * @type {import("#core/runtime.mjs").Env}
@@ -881,13 +887,15 @@ describe("run with recorded state", () => {
     expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
   });
 
-  it("runs the model on target drift with unchanged content — recorded as translated", async () => {
+  it("refuses a drifted pair with no verifiable base — zero model calls, nothing written", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const edited = "# Dev\n\nTraduit et mis à jour.\n";
     // The record pins a translation the target's current bytes do not match:
-    // someone edited it outside harmonise. Content is unchanged, so only
-    // drift forces the conservative path here.
-    const chatDouble = chat([proposes(edited)]);
+    // someone edited it outside harmonise. Manual-edit protection forbids
+    // the blind overwrite, and with no translation memory there is no
+    // verifiable base to merge against — the pair is refused before any
+    // model call, and the run goes red without writing a byte.
+    const chatDouble = chat([new Error("the model must not be called")]);
     const forgeDouble = forge({
       ".github/action-agents/harmonise/harmonise.json5": CONFIG,
       "manual/dev.md": SOURCE,
@@ -896,14 +904,18 @@ describe("run with recorded state", () => {
     });
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
-    await expect(
-      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
-    ).resolves.toBeUndefined();
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/manual-edit protection refused/);
 
-    expect(chatDouble.calls()).toBe(1);
+    expect(chatDouble.calls()).toBe(0);
+    expect(forgeDouble.writes).toEqual([]);
     const out = logged(log);
-    expect(out).toMatch(/translated vi manual\/dev\.md/);
-    expect(out).not.toMatch(/unchanged-skipped/);
+    // A fully-failed run exits before the report block: the refusal reaches
+    // the thrown message, never a report line.
+    expect(out).toBe("");
   });
 
   it("writes prior and proposed records into the same commit's state file", async () => {
@@ -991,6 +1003,337 @@ describe("run with recorded state", () => {
 
     expect(secondChat.calls()).toBe(0);
     expect(secondForge.writes).toEqual([]);
+  });
+});
+
+describe("run with manual-edit protection and three-way merge", () => {
+  // The policy digest this fixture's config hashes to: an empty glossary, no
+  // instruction prose, no per-language instructions, the current pipeline
+  // version — exactly what `run` folds into its own policy digest.
+  const POLICY = policyFingerprint({
+    glossary: [],
+    languageInstructions: {},
+    transformationVersion: TRANSFORMATION_VERSION,
+  });
+
+  const OLD_SOURCE = "# Dev\n\nProse.\n";
+  const NEW_SOURCE = "# Dev\n\nProse expanded.\n";
+  // A publication, a manual edit on top of it, a fresh proposal, and the
+  // diff3-disjoint merge of the latter two: the manual edit rewrites one
+  // line, the fresh proposal appends after it, so the merge keeps both.
+  const BASE = "# Dev\n\nBản dịch đã công bố.\n";
+  const EDITED = "# Dev\n\nBản dịch đã công bố — đã sửa tay.\n";
+  const FRESH = "# Dev\n\nBản dịch đã công bố.\n\nĐoạn mô hình vừa dịch.\n";
+  const MERGED = "# Dev\n\nBản dịch đã công bố — đã sửa tay.\n\nĐoạn mô hình vừa dịch.\n";
+
+  // The memory key the drifted pair's base lives under: the record's own
+  // (source, policy) fingerprints, not the current source's.
+  const VI_BASE_KEY = buildTmKey({
+    sourceHash: contentFingerprint(OLD_SOURCE),
+    targetLang: "vi",
+    policyContext: POLICY,
+  });
+
+  /**
+   * A sync-state record for the fixture's en→vi pair, pinning whatever
+   * source and translation bytes the caller states — by default the recorded
+   * publication of OLD_SOURCE whose bytes are BASE.
+   *
+   * @param {{ source?: string, translation?: string }} [overrides]
+   * @returns {import("./state.mjs").SyncStateRecord}
+   */
+  function viPublication({ source = OLD_SOURCE, translation = BASE } = {}) {
+    return {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      sourcePath: "manual/dev.md",
+      destinationPath: "manual/vi/dev.md",
+      language: "vi",
+      sourceFingerprint: contentFingerprint(source),
+      translationFingerprint: contentFingerprint(translation),
+      policyFingerprint: POLICY,
+      transformationVersion: TRANSFORMATION_VERSION,
+    };
+  }
+
+  /**
+   * A serialized translation memory carrying exactly one entry.
+   *
+   * @param {string} key a key as `buildTmKey` produces
+   * @param {string} value
+   * @returns {string}
+   */
+  function memoryWith(key, value) {
+    const store = createTmStore();
+    store.record(key, value);
+    return serializeTm(store);
+  }
+
+  /**
+   * The state blob among a forge double's writes, found by its shape — the
+   * one created blob carrying a `records` JSON document.
+   *
+   * @param {ReturnType<typeof forge>} forgeDouble
+   * @returns {{ records: import("./state.mjs").SyncStateRecord[] }}
+   */
+  function stateBlobOf(forgeDouble) {
+    const write = /** @type {unknown} */ (
+      forgeDouble.writes.find(
+        (w) =>
+          w.op === "createBlob" && typeof w.args[0] === "string" && w.args[0].includes('"records"'),
+      )
+    );
+    return JSON.parse(/** @type {{ args: [string] }} */ (write).args[0]);
+  }
+
+  /**
+   * The created-blob contents among a forge double's writes, in write order:
+   * proposals first, then the state file, then the translation memory.
+   *
+   * @param {ReturnType<typeof forge>} forgeDouble
+   * @returns {string[]}
+   */
+  function blobsOf(forgeDouble) {
+    return forgeDouble.writes
+      .filter((w) => w.op === "createBlob")
+      .map((w) => /** @type {{ args: [string] }} */ (/** @type {unknown} */ (w)).args[0]);
+  }
+
+  /**
+   * The parsed translation memory among a forge double's writes — the last
+   * blob, written after every proposal and the state file.
+   *
+   * @param {ReturnType<typeof forge>} forgeDouble
+   * @returns {import("./tm.mjs").TmStore}
+   */
+  function tmOf(forgeDouble) {
+    const blobs = blobsOf(forgeDouble);
+    return parseTm(/** @type {string} */ (blobs[blobs.length - 1])).store;
+  }
+
+  it("merges the fresh proposal with the manual edit against the verified base", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = chat([proposes(FRESH)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": NEW_SOURCE,
+      "manual/vi/dev.md": EDITED,
+      [STATE_PATH]: renderState([viPublication()]),
+      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    // The publication carries the merge — never the raw proposal, never the
+    // raw manual text.
+    const blobs = blobsOf(forgeDouble);
+    expect(blobs[0]).toBe(MERGED);
+    const out = logged(log);
+    expect(out).toMatch(/translated vi manual\/dev\.md/);
+    expect(out).toMatch(/three-way merge: 1 manual region\(s\) preserved, 1 fresh adopted/);
+    // Publication happens exactly once, after the drain: proposal, state,
+    // memory, tree, commit, branch, request.
+    expect(forgeDouble.writes.map((w) => w.op)).toEqual([
+      "createBlob",
+      "createBlob",
+      "createBlob",
+      "createTree",
+      "createCommit",
+      "upsertBranch",
+      "upsertPullRequest",
+    ]);
+    // State and memory pin the merged bytes, so the next run sees the
+    // published text as exactly what harmonise published.
+    const state = stateBlobOf(forgeDouble);
+    expect(state.records[0]?.translationFingerprint).toBe(contentFingerprint(MERGED));
+    expect(
+      tmOf(forgeDouble).lookup(
+        buildTmKey({
+          sourceHash: contentFingerprint(NEW_SOURCE),
+          targetLang: "vi",
+          policyContext: POLICY,
+        }),
+      ),
+    ).toBe(MERGED);
+  });
+
+  it("refuses a conflicted three-way merge fail-closed while siblings publish", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The fresh proposal rewrites the very line the manual edit changed:
+    // diff3 reports a conflict, and the merge refuses rather than picking a
+    // winner — the raw translation must not slip in behind the refusal.
+    const rewritten = "# Dev\n\nBản dịch mô hình viết đè.\n";
+    const chatDouble = chat([proposes(rewritten)]);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+    }`;
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": config,
+        "manual/dev.md": NEW_SOURCE,
+        "manual/api.md": "# Api\n\nEndpoints.\n",
+        "manual/vi/dev.md": EDITED,
+        [STATE_PATH]: renderState([viPublication()]),
+        [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/api.md", type: "blob" },
+        { path: "manual/vi/dev.md", type: "blob" },
+        { path: "manual/vi/api.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/1 pair\(s\) failed/);
+    expect(error.message).toMatch(/three-way merge refused/);
+    expect(error.message).toMatch(/1 conflict region\(s\)/);
+    // The conflicted pair still translated once; the refusal is post-merge.
+    expect(chatDouble.calls()).toBe(2);
+    // The healthy sibling published exactly once; the conflicted destination
+    // is nowhere in the tree.
+    const treeWrite = /** @type {{ args: [string, { path: string }[]] }} */ (
+      /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "createTree"))
+    );
+    expect(treeWrite.args[1].map((change) => change.path)).toEqual([
+      "manual/vi/api.md",
+      STATE_PATH,
+      TM_PATH,
+    ]);
+    expect(forgeDouble.writes.filter((w) => w.op === "upsertPullRequest")).toHaveLength(1);
+  });
+
+  it("refuses a drifted pair with no verifiable base before any model call while siblings translate", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = chat([proposes("# Api\n\nCác điểm cuối.\n")]);
+    const config = `{
+      sourceLanguage: "en",
+      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+    }`;
+    const forgeDouble = forge(
+      {
+        ".github/action-agents/harmonise/harmonise.json5": config,
+        "manual/dev.md": NEW_SOURCE,
+        "manual/api.md": "# Api\n\nEndpoints.\n",
+        "manual/vi/dev.md": EDITED,
+        [STATE_PATH]: renderState([viPublication()]),
+        // No TM_PATH: nothing to verify a merge base against.
+      },
+      [
+        { path: "manual/dev.md", type: "blob" },
+        { path: "manual/api.md", type: "blob" },
+        { path: "manual/vi/dev.md", type: "blob" },
+        { path: "manual/vi/api.md", type: "blob" },
+      ],
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/1 pair\(s\) failed/);
+    expect(error.message).toMatch(/manual-edit protection refused/);
+    // The refused pair consumed no pool slot and no model call.
+    expect(chatDouble.calls()).toBe(1);
+    const treeWrite = /** @type {{ args: [string, { path: string }[]] }} */ (
+      /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "createTree"))
+    );
+    expect(treeWrite.args[1].map((change) => change.path)).toEqual([
+      "manual/vi/api.md",
+      STATE_PATH,
+      TM_PATH,
+    ]);
+    expect(forgeDouble.writes.filter((w) => w.op === "upsertPullRequest")).toHaveLength(1);
+  });
+
+  it("keeps record corruption advisory — a malformed fingerprint takes the model path", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chatDouble = chat([proposes(FRESH)]);
+    // The fingerprint is a string, so the strict parser accepts the record;
+    // drift cannot judge it and refuses to guess — the advisory verdict, not
+    // a protection refusal.
+    const corrupted = { ...viPublication(), translationFingerprint: "corrupted" };
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": NEW_SOURCE,
+      "manual/vi/dev.md": EDITED,
+      [STATE_PATH]: renderState([corrupted]),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    const out = logged(log);
+    expect(out).toMatch(/translated vi manual\/dev\.md/);
+    expect(out).not.toMatch(/manual-edit protection refused/);
+    expect(out).not.toMatch(/three-way merge/);
+    const blobs = blobsOf(forgeDouble);
+    expect(blobs[0]).toBe(FRESH);
+  });
+
+  it("converges a drift whose fresh side matches the base — the manual text is republished and the record catches up", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The source is unchanged, so the fresh translation reproduces the
+    // recorded publication; the merge then carries the manual edit alone,
+    // and the record's fingerprint moves onto the merged bytes — the next
+    // run sees a canonical target and skips.
+    const chatDouble = chat([proposes(BASE)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": OLD_SOURCE,
+      "manual/vi/dev.md": EDITED,
+      [STATE_PATH]: renderState([viPublication()]),
+      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    const blobs = blobsOf(forgeDouble);
+    expect(blobs[0]).toBe(EDITED);
+    expect(logged(log)).toMatch(/three-way merge: 1 manual region\(s\) preserved, 0 fresh adopted/);
+    const state = stateBlobOf(forgeDouble);
+    expect(state.records[0]?.sourceFingerprint).toBe(contentFingerprint(OLD_SOURCE));
+    expect(state.records[0]?.translationFingerprint).toBe(contentFingerprint(EDITED));
+  });
+
+  it("keeps a no-op answer a no-op on a drifted pair — nothing merged, nothing written", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The answer is byte-identical to the drifted target, so the pair is a
+    // no-op before the merge is ever consulted — a no-op carries no fresh
+    // text, and protection does not turn it into a publication.
+    const chatDouble = chat([proposes(EDITED)]);
+    const forgeDouble = forge({
+      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
+      "manual/dev.md": NEW_SOURCE,
+      "manual/vi/dev.md": EDITED,
+      [STATE_PATH]: renderState([viPublication()]),
+      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
+    });
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    expect(forgeDouble.writes).toEqual([]);
+    const out = logged(log);
+    expect(out).toMatch(/\[existing\] unchanged/);
+    expect(out).not.toMatch(/three-way merge/);
   });
 });
 
