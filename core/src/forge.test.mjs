@@ -15,8 +15,10 @@ import {
   TruncatedTreeError,
   MAX_PULL_REQUEST_FILES,
   createForge,
+  isRefAbsentError,
   nextLink,
 } from "./forge.mjs";
+import { HttpError } from "./http.mjs";
 
 /** @typedef {{ url: string, method?: string | undefined, body?: unknown }} RecordedCall */
 
@@ -662,6 +664,50 @@ describe("write operations", () => {
         expect(error.message).toMatch(/creating the branch|HTTP 500/);
       },
     );
+  });
+
+  it("treats a provider failure for a branch named 'HTTP 404' as an error, never as absence", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        "GET /repos/o/r/git/ref/heads/HTTP%20404": () => new Response("boom", { status: 500 }),
+      },
+      recorder,
+    );
+
+    // The operation text embeds the branch name, so a message regex read
+    // this 500 as "absent" and answered with a create. The typed check
+    // refuses: the error names the read that failed, and no POST goes out.
+    await expect(client.upsertBranch("HTTP 404", "newsha", null)).rejects.toThrow(
+      /reading the ref of branch 'HTTP 404' failed/,
+    );
+    expect(recorder.calls?.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  it("isRefAbsentError matches the typed 404 status, never message text", () => {
+    const absent = new ForgeError(
+      "reading the ref of branch 'harmonise/en'",
+      new HttpError("the request was refused", {
+        status: 404,
+        url: "https://api.example/repos/o/r/git/ref/heads/harmonise%2Fen",
+      }),
+    );
+    // A 500 whose prose embeds "HTTP 404" — via a branch name or a provider
+    // body — is a failure, not an absence.
+    const moved = new ForgeError(
+      "reading the ref of branch 'HTTP 404'",
+      new HttpError("the request was refused", {
+        status: 500,
+        url: "https://api.example/repos/o/r/git/ref/heads/HTTP%20404",
+      }),
+    );
+    expect(isRefAbsentError(absent)).toBe(true);
+    expect(isRefAbsentError(moved)).toBe(false);
+    expect(isRefAbsentError(new Error("HTTP 404"))).toBe(false);
+    expect(isRefAbsentError(null)).toBe(false);
   });
 
   it("upsertPullRequest updates the open twin found by base and head", async () => {

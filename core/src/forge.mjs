@@ -159,6 +159,22 @@ export class ForgeError extends Error {
   }
 }
 
+/**
+ * Whether a forge failure is the ref endpoint's "not found" answer — the one
+ * failure a caller may read as "the branch is absent". Matched by the typed
+ * HTTP status, never by error-message text: the message is prose assembled
+ * from operation names, branch names and provider body text, so a branch or
+ * refusal whose text embeds "HTTP 404" must not read as absent.
+ *
+ * @param {unknown} cause anything a rejected forge call may throw
+ * @returns {boolean}
+ */
+export function isRefAbsentError(cause) {
+  return (
+    cause instanceof ForgeError && cause.cause instanceof HttpError && cause.cause.status === 404
+  );
+}
+
 const PER_PAGE = 100;
 
 /**
@@ -689,7 +705,7 @@ export function createForge(config) {
       // One read decides create vs update; a ref that appeared or moved under
       // the run is another writer's move and is refused, never overwritten.
       const current = await this.getRef(branch).catch((cause) => {
-        if (cause instanceof Error && /HTTP 404/.test(cause.message)) return null;
+        if (isRefAbsentError(cause)) return null;
         throw cause;
       });
 
