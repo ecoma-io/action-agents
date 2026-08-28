@@ -163,6 +163,136 @@ describe("structuralProfile", () => {
 
     expect(profile.brokenInlineCount).toBe(0);
   });
+
+  it("profiles list blocks: shape, item count and nesting depth", () => {
+    const profile = structuralProfile(
+      "- one\n- two\n  - nested\n- back\n\n1. alpha\n2. beta\n   1. deep\n",
+    );
+
+    expect(profile.listBlocks).toEqual([
+      { ordered: false, marker: "-", items: 4, maxDepth: 2 },
+      { ordered: true, marker: "1.", items: 3, maxDepth: 2 },
+    ]);
+  });
+
+  it("normalizes ordered markers to their shape, never their start digit", () => {
+    const profile = structuralProfile("3. a\n4. b\n");
+
+    expect(profile.listBlocks).toEqual([{ ordered: true, marker: "1.", items: 2, maxDepth: 1 }]);
+    expect(structuralProfile("1) a\n2) b\n").listBlocks[0]?.marker).toBe("1)");
+  });
+
+  it("reads thematic breaks and bare markers as breaks, not list items", () => {
+    const profile = structuralProfile("-\n- - -\n* * *\n---\n");
+
+    expect(profile.listBlocks).toEqual([]);
+  });
+
+  it("opens a new block on a marker shallower than every open level", () => {
+    const profile = structuralProfile("  - a\n- b\n");
+
+    expect(profile.listBlocks).toEqual([
+      { ordered: false, marker: "-", items: 1, maxDepth: 1 },
+      { ordered: false, marker: "-", items: 1, maxDepth: 1 },
+    ]);
+  });
+
+  it("profiles blockquote blocks and their nesting depth", () => {
+    const profile = structuralProfile("> one\n> two\n\nplain\n\n> > deep\n>shallow\n");
+
+    expect(profile.blockquoteBlocks).toEqual({ count: 2, maxDepths: [1, 2] });
+  });
+
+  it("profiles pipe tables: rows, columns and delimiter alignment", () => {
+    const profile = structuralProfile(
+      "| a | b | c |\n| :-- | --: | :-: |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n",
+    );
+
+    expect(profile.tables).toEqual([{ rows: 3, cols: 3, alignment: ["left", "right", "center"] }]);
+  });
+
+  it("does not split a cell on an escaped pipe", () => {
+    const profile = structuralProfile("| a \\| b |\n| --- |\n| 1 |\n");
+
+    expect(profile.tables).toEqual([{ rows: 2, cols: 1, alignment: ["none"] }]);
+  });
+
+  it("does not count a table whose delimiter row has a stray cell", () => {
+    const profile = structuralProfile("| a | b |\n| --- | x |\n");
+
+    expect(profile.tables).toEqual([]);
+  });
+
+  it("ends a table at its first following line without a pipe", () => {
+    const profile = structuralProfile("| a | b |\n| --- | --- |\n| 1 | 2 |\nprose tail\n");
+
+    expect(profile.tables).toEqual([{ rows: 2, cols: 2, alignment: ["none", "none"] }]);
+  });
+
+  it("counts reference definitions", () => {
+    const profile = structuralProfile('[one]: guide.md\n[two]: handbook/x.md "title"\n');
+
+    expect(profile.referenceDefinitionCount).toBe(2);
+  });
+
+  it("counts complete inline links, images and angle autolinks only", () => {
+    const profile = structuralProfile(
+      "see [guide](guide.md) and ![logo](logo.png), browse <https://example.com/x>, " +
+        "use [ref][one], bare https://example.com/y, broken [text](\n",
+    );
+
+    expect(profile.linkConstructs).toEqual({ inlineLinks: 1, images: 1, autolinks: 1 });
+  });
+
+  it("counts an escaped bang as a link, not an image", () => {
+    const profile = structuralProfile("\\![a](x.md)\n");
+
+    expect(profile.linkConstructs).toEqual({ inlineLinks: 1, images: 0, autolinks: 0 });
+  });
+
+  it("counts one construct when a balanced title itself contains ](", () => {
+    const profile = structuralProfile('[a](x.md "t]( )t")\n');
+
+    expect(profile.linkConstructs).toEqual({ inlineLinks: 1, images: 0, autolinks: 0 });
+  });
+
+  it("skips escaped characters while matching a destination's parens", () => {
+    const profile = structuralProfile("[a](x\\)y.md)\n");
+
+    expect(profile.linkConstructs.inlineLinks).toBe(1);
+  });
+
+  it("profiles a closed leading frontmatter block and ignores its interior", () => {
+    const profile = structuralProfile("---\ntitle: # not a heading\n---\n# Real\n");
+
+    expect(profile.frontmatter).toEqual({ present: true, lines: 3 });
+    expect(profile.headingLevels).toEqual([1]);
+  });
+
+  it("treats an unclosed leading --- block as no frontmatter", () => {
+    const profile = structuralProfile("---\ntitle: x\n# Real\n");
+
+    expect(profile.frontmatter).toEqual({ present: false, lines: 0 });
+  });
+
+  it("keeps list and table machinery out of fences, code spans and quote tails", () => {
+    const fenced = structuralProfile(
+      "```\n- not a list\n| not | a | table |\n| --- | --- |\n```\n",
+    );
+    const spanned = structuralProfile("`- not a list`\n");
+    const afterQuote = structuralProfile("> quoted\n- not a list\n");
+
+    expect(fenced.listBlocks).toEqual([]);
+    expect(fenced.tables).toEqual([]);
+    expect(spanned.listBlocks).toEqual([]);
+    expect(afterQuote.listBlocks).toEqual([]);
+  });
+
+  it("keeps a list block open across a fenced block inside an item", () => {
+    const profile = structuralProfile("- one\n\n  ```js\n  keep()\n  ```\n\n- two\n");
+
+    expect(profile.listBlocks).toEqual([{ ordered: false, marker: "-", items: 2, maxDepth: 1 }]);
+  });
 });
 
 describe("compareStructuralProfiles", () => {
@@ -200,4 +330,128 @@ describe("compareStructuralProfiles", () => {
     );
     expect(compareStructuralProfiles(source, better)).toEqual([]);
   });
+
+  it("names a changed list block count, marker, items and depth", () => {
+    const base = structuralProfile("- one\n- two\n- three\n");
+    expect(
+      compareStructuralProfiles(base, structuralProfile("- one\n- two\n\n1. x\n")),
+    ).toContainEqual("list block count changed: 1 → 2");
+    expect(
+      compareStructuralProfiles(base, structuralProfile("1. one\n1. two\n1. three\n")),
+    ).toContainEqual("list block 1 marker changed: - to 1.");
+    expect(compareStructuralProfiles(base, structuralProfile("- one\n- two\n"))).toContainEqual(
+      "list block 1 item count changed: 3 → 2",
+    );
+    expect(
+      compareStructuralProfiles(base, structuralProfile("- one\n- two\n  - three\n")),
+    ).toContainEqual("list block 1 max depth changed: 1 → 2");
+  });
+
+  it("names changed blockquote count and depth", () => {
+    const base = structuralProfile("> quoted\n");
+
+    expect(compareStructuralProfiles(base, structuralProfile(""))).toContainEqual(
+      "blockquote count changed: 1 → 0",
+    );
+    expect(compareStructuralProfiles(base, structuralProfile("> > quoted\n"))).toContainEqual(
+      "blockquote block 1 max depth changed: 1 → 2",
+    );
+  });
+
+  it("names changed table count, rows, columns and alignment", () => {
+    const base = structuralProfile("| a | b |\n| :-- | --: |\n| 1 | 2 |\n");
+
+    expect(
+      compareStructuralProfiles(base, structuralProfile("| a | b |\n| :-- | --: |\n")),
+    ).toContainEqual("table 1 row count changed: 2 → 1");
+    expect(
+      compareStructuralProfiles(
+        base,
+        structuralProfile("| a | b | c |\n| :-- | --: | --- |\n| 1 | 2 | 3 |\n"),
+      ),
+    ).toContainEqual("table 1 column count changed: 2 → 3");
+    expect(
+      compareStructuralProfiles(base, structuralProfile("| a | b |\n| --- | --- |\n| 1 | 2 |\n")),
+    ).toContainEqual("table 1 column alignment changed: left,right to none,none");
+    expect(compareStructuralProfiles(base, structuralProfile(""))).toContainEqual(
+      "table count changed: 1 → 0",
+    );
+  });
+
+  it("names a changed reference definition count", () => {
+    const base = structuralProfile("[one]: guide.md\n");
+
+    expect(
+      compareStructuralProfiles(base, structuralProfile("[one]: guide.md\n[two]: other.md\n")),
+    ).toContainEqual("reference definition count changed: 1 → 2");
+  });
+
+  it("names changed inline link, image and autolink counts", () => {
+    const base = structuralProfile("see [guide](guide.md) and ![logo](logo.png)\n");
+
+    expect(
+      compareStructuralProfiles(base, structuralProfile("see guide and ![logo](logo.png)\n")),
+    ).toContainEqual("inline link count changed: 1 → 0");
+    expect(
+      compareStructuralProfiles(base, structuralProfile("see [guide](guide.md)\n")),
+    ).toContainEqual("image count changed: 1 → 0");
+    expect(
+      compareStructuralProfiles(
+        structuralProfile("![logo](logo.png)\n"),
+        structuralProfile("[logo](logo.png)\n"),
+      ),
+    ).toContainEqual("image count changed: 1 → 0");
+    expect(
+      compareStructuralProfiles(
+        base,
+        structuralProfile("see [guide](guide.md) and ![logo](logo.png) at <https://example.com>\n"),
+      ),
+    ).toContainEqual("autolink count changed: 0 → 1");
+  });
+
+  it("names changed frontmatter presence and extent", () => {
+    const base = structuralProfile("---\ntitle: x\n---\nbody\n");
+
+    expect(compareStructuralProfiles(base, structuralProfile("body\n"))).toContainEqual(
+      "frontmatter presence changed: present to absent",
+    );
+    expect(
+      compareStructuralProfiles(base, structuralProfile("---\ntitle: x\nlang: fr\n---\nbody\n")),
+    ).toContainEqual("frontmatter line count changed: 3 → 4");
+  });
+
+  it("still flags reordered or re-charactered fenced blocks", () => {
+    const source = structuralProfile("```js\na()\n```\n\ntext\n\n~~~\nb()\n~~~\n");
+    const candidate = structuralProfile("~~~\nb()\n~~~\n\ntext\n\n```js\na()\n```\n");
+
+    expect(compareStructuralProfiles(source, candidate)).toContainEqual(
+      "fenced code blocks appear in a different order or kind",
+    );
+  });
+});
+
+describe("structural profile tolerance", () => {
+  /** @type {[string, string, string][]} */ const cases = [
+    ["paragraph split or merge", "one two\nthree\n", "one\n\ntwo\n\nthree\n"],
+    ["re-wrapped lines", "one two three four five six\n", "one two three\nfour five six\n"],
+    ["emphasis changes", "a **bold** and *light* word\n", "a *bold* and **light** word\n"],
+    ["lazy continuation items", "- one\n  cont\n", "- uno\n  cont\n"],
+    [
+      "indented code inside a list item",
+      "- one\n\n    code()\n\n- two\n",
+      "- uno\n\n    code()\n\n- dos\n",
+    ],
+    ["horizontal rules", "a\n\n---\n\nb\n", "a\n\n***\n\nb\n"],
+    ["setext headings", "Title\n=====\n\ntext\n", "Title\n=====\n\nprose\n"],
+    ["item reorder of the same shape", "- one\n- two\n", "- two\n- one\n"],
+    ["tight to loose lists", "- one\n- two\n", "- one\n\n- two\n"],
+  ];
+
+  for (const [name, source, candidate] of cases) {
+    it(`accepts ${name}`, () => {
+      expect(
+        compareStructuralProfiles(structuralProfile(source), structuralProfile(candidate)),
+      ).toEqual([]);
+    });
+  }
 });
