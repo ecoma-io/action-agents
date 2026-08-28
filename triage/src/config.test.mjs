@@ -9,7 +9,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { effectiveSheet, loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
+import {
+  MAX_CONFIG_BYTES,
+  effectiveSheet,
+  loadConfigFile,
+  loadInstructions,
+  validateConfig,
+} from "./config.mjs";
 
 /** @typedef {Record<string, { content: string } | null>} Files */
 
@@ -87,6 +93,28 @@ describe("loadConfigFile", () => {
   it("refuses a file past the 64 KiB cap rather than truncating it", async () => {
     const forge = fakeForge({ [JSON5_PATH]: { content: `// ${"x".repeat(70 * 2 ** 10)}` } });
     await expect(loadConfigFile({ forge, configPath: "" })).rejects.toThrow(/past the/);
+  });
+
+  it("accepts a file of exactly the 64 KiB cap — the boundary is inclusive", async () => {
+    expect(MAX_CONFIG_BYTES).toBe(65536);
+    const content = `{${" ".repeat(MAX_CONFIG_BYTES - 2)}}`;
+    expect(new TextEncoder().encode(content).byteLength).toBe(MAX_CONFIG_BYTES);
+    const forge = fakeForge({ [JSON5_PATH]: { content } });
+    const { raw, path } = await loadConfigFile({ forge, configPath: "" });
+    expect(path).toBe(JSON5_PATH);
+    expect(raw).toEqual({});
+  });
+
+  it("refuses a file of exactly one byte past the cap, naming the limit", async () => {
+    expect(MAX_CONFIG_BYTES).toBe(65536);
+    const content = `{${" ".repeat(MAX_CONFIG_BYTES - 1)}}`;
+    expect(new TextEncoder().encode(content).byteLength).toBe(MAX_CONFIG_BYTES + 1);
+    const forge = fakeForge({ [JSON5_PATH]: { content } });
+    await expect(loadConfigFile({ forge, configPath: "" })).rejects.toThrow(
+      new RegExp(
+        `is ${String(MAX_CONFIG_BYTES + 1)} bytes, past the ${String(MAX_CONFIG_BYTES)}-byte cap`,
+      ),
+    );
   });
 });
 
