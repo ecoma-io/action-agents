@@ -51,9 +51,26 @@ export function readInputs(env = process.env) {
 }
 
 /**
+ * The pull_request activity types this action answers to — the same set the
+ * shipped workflow's `types:` filter declares. The filter is a convenience,
+ * not the enforcement: a calling workflow with no `types:` filter, or a
+ * wrong one, cannot widen the set, because `readEvent` re-checks the
+ * payload's `action` field against this constant. No input adds a type
+ * to it.
+ *
+ * @type {readonly string[]}
+ */
+export const PULL_REQUEST_ACTIVITY_TYPES = Object.freeze([
+  "opened",
+  "synchronize",
+  "reopened",
+  "ready_for_review",
+]);
+
+/**
  * The event this action answers to, read once from the runner-provided
- * payload file. Any other event name reaching the action is a refusal, not
- * a silent success.
+ * payload file. Any other event name — or any payload activity type outside
+ * the declared set, or none at all — is a refusal, not a silent success.
  *
  * @param {string} eventName
  * @param {string} eventPath
@@ -73,6 +90,14 @@ export function readEvent(eventName, eventPath) {
     throw new Error(
       `the workflow event could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
       { cause },
+    );
+  }
+  const action = /** @type {Record<string, unknown>} */ (event)["action"];
+  if (typeof action !== "string" || !PULL_REQUEST_ACTIVITY_TYPES.includes(action)) {
+    const declared = PULL_REQUEST_ACTIVITY_TYPES.map((type) => `'${type}'`).join(", ");
+    const carries = typeof action === "string" ? `'${action}'` : "none";
+    throw new Error(
+      `review runs on pull_request activity types ${declared} only — this event carries ${carries}`,
     );
   }
   const number = /** @type {Record<string, unknown>} */ (event)["pull_request"];
