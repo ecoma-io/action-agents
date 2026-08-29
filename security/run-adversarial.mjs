@@ -14,6 +14,13 @@
  * weak and keyless paths — so a regression on any boundary turns red here
  * without needing anything but the runner's own Node.
  *
+ * One runner, two stages. The corpus is the first stage; the second is the
+ * ceiling-to-fixture manifest gate (`ceiling-manifest.mjs --strict`), which
+ * proves every ceiling SECURITY.md documents has an adversarial fixture and
+ * — strict — that every fixture is accounted for by one. A corpus that runs
+ * green while the doctrine it defends goes unproven is the false-green this
+ * gate exists to refuse, so the runner exits non-zero if either stage fails.
+ *
  * Run with:  pnpm security
  */
 import { spawnSync } from "node:child_process";
@@ -52,7 +59,16 @@ export function main() {
   const result = spawnSync(process.execPath, ["--test", ...FIXTURE_FILES], {
     stdio: "inherit",
   });
-  process.exit(result.status ?? 1);
+  if (result.status !== 0) process.exit(result.status ?? 1);
+
+  // Stage two: the ceiling-to-fixture manifest gate, strict. The corpus proved
+  // the fixtures hold; this proves they prove the doctrine — a ceiling with no
+  // adversarial proof fails the gate, and strict promotes "a fixture no ceiling
+  // references" from warning to failure so every fixture is accounted for.
+  const manifest = spawnSync(process.execPath, [join(here, "ceiling-manifest.mjs"), "--strict"], {
+    stdio: "inherit",
+  });
+  process.exit(manifest.status ?? 1);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();

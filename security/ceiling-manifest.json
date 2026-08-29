@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "base": "security/fixtures",
+  "description": "Maps every security ceiling that SECURITY.md states to the adversarial fixture(s) in security/fixtures/ that prove it. This is a hand-maintained registry, the single source of truth for the doctrine-to-proof pinning enforced by ceiling-manifest.mjs.",
+  "ceilings": [
+    {
+      "key": "model-output-never-compounds-calls",
+      "name": "Model output never composes an API call",
+      "source": "SECURITY.md — ceiling 1, “The ceilings everything else rests on”: a model answer not on the sheet is refused and logged, never a request.",
+      "fixtures": [
+        "prompt-injection/off-sheet-demand.test.mjs",
+        "github-mutation/off-sheet-refusal.test.mjs",
+        "github-mutation/two-size-label-invariant.test.mjs",
+        "policy-tampering/tampered-instruction.test.mjs",
+        "tool-protocol/unknown-tool-name.test.mjs"
+      ]
+    },
+    {
+      "key": "sheet-and-write-surface-bounded",
+      "name": "What may go on the sheet is bounded in turn and no input widens it",
+      "source": "SECURITY.md — ceiling 2: the offered operation set stays reversible/visible/notifies-nobody, and the code-pinned write surface is the one run-config ref, guarded before force-write.",
+      "fixtures": [
+        "github-mutation/off-sheet-refusal.test.mjs",
+        "github-mutation/two-size-label-invariant.test.mjs",
+        "github-mutation/mutation-ceiling.test.mjs",
+        "policy-tampering/deep-policy-parse.test.mjs",
+        "policy-tampering/schema-version.test.mjs",
+        "policy-tampering/stale-base-fork.test.mjs",
+        "policy-tampering/tampered-instruction.test.mjs"
+      ]
+    },
+    {
+      "key": "untrusted-is-not-instruction",
+      "name": "Everything read from a thread, diff or repo file is untrusted data, never instruction",
+      "source": "SECURITY.md — ceiling 3: an action that lets a pull-request body change what it does has a vulnerability.",
+      "fixtures": [
+        "prompt-injection/evidence-delimiter-forgery.test.mjs",
+        "prompt-injection/framing-duplication.test.mjs",
+        "prompt-injection/hostile-filename.test.mjs",
+        "prompt-injection/sanitise-rules.test.mjs",
+        "prompt-injection/off-sheet-demand.test.mjs",
+        "marker-forgery/marker-forgery.test.mjs",
+        "marker-forgery/mention-defang.test.mjs",
+        "marker-forgery/container-injection.test.mjs",
+        "marker-forgery/cross-action-marker.test.mjs",
+        "policy-tampering/tampered-instruction.test.mjs",
+        "provider-boundary/control-byte-content.test.mjs",
+        "harmonise-adversarial/translation-injection.test.mjs"
+      ]
+    },
+    {
+      "key": "path-confinement",
+      "name": "File access is confined to the checked-out workspace",
+      "source": "SECURITY.md — ceiling 4: every path resolves through realpath and is refused unless it lands inside GITHUB_WORKSPACE; .git is refused outright.",
+      "fixtures": [
+        "path-traversal/symlink-maze.test.mjs",
+        "path-traversal/dotgit-ladder.test.mjs",
+        "path-traversal/leakless-errors.test.mjs",
+        "path-traversal/collect-files-bounds.test.mjs"
+      ]
+    },
+    {
+      "key": "comment-write-surface",
+      "name": "Model output reaches a comment only through the sanitiser; a marker cannot be forged and no mention or container survives",
+      "source": "SECURITY.md — “Scope”, in-scope: marker forged from injected text, container closed early so injected Markdown escapes, a @mention that survives, model text that reaches a comment without passing the sanitiser.",
+      "fixtures": [
+        "prompt-injection/sanitise-rules.test.mjs",
+        "prompt-injection/hostile-filename.test.mjs",
+        "marker-forgery/marker-forgery.test.mjs",
+        "marker-forgery/mention-defang.test.mjs",
+        "marker-forgery/container-injection.test.mjs",
+        "marker-forgery/cross-action-marker.test.mjs",
+        "github-mutation/comment-scope.test.mjs",
+        "provider-boundary/control-byte-content.test.mjs"
+      ]
+    },
+    {
+      "key": "resource-ceilings",
+      "name": "Every surface that consumes untrusted bytes is capped; a run always finishes",
+      "source": "SECURITY.md — “Scope”, in-scope: a search, a tool result, a provider response with no bound on the work or the bytes it causes; a missing cap is a gap.",
+      "fixtures": [
+        "tool-protocol/search-and-read-ceilings.test.mjs",
+        "tool-protocol/tool-call-budget.test.mjs",
+        "tool-protocol/args-and-json5-bounds.test.mjs",
+        "tool-protocol/unknown-tool-name.test.mjs",
+        "github-mutation/mutation-ceiling.test.mjs",
+        "provider-boundary/body-cap.test.mjs",
+        "path-traversal/collect-files-bounds.test.mjs",
+        "harmonise-adversarial/answer-byte-cap.test.mjs"
+      ]
+    },
+    {
+      "key": "provider-boundary",
+      "name": "The provider is a hostile-but-bounded peer; junk, redirects and Retry-After stay bounded and typed",
+      "source": "SECURITY.md — “A note on which provider you point these at”: everything an action sends goes only to the configured endpoint; the API transport treats the peer’s response as hostile and binds redirects, Retry-After and body bytes.",
+      "fixtures": [
+        "provider-boundary/body-cap.test.mjs",
+        "provider-boundary/dns-hostile-provider.test.mjs",
+        "provider-boundary/hostile-redirect-location.test.mjs",
+        "provider-boundary/junk-completions.test.mjs",
+        "provider-boundary/retry-after-backoff.test.mjs",
+        "provider-boundary/control-byte-content.test.mjs"
+      ]
+    },
+    {
+      "key": "secret-hygiene",
+      "name": "The configured api-key never leaks to a host other than the configured api-url",
+      "source": "SECURITY.md — “Scope”, in-scope: anything that leaks the configured api-key into logs, a comment, or a request to a host other than the configured api-url.",
+      "fixtures": [
+        "secret-hygiene/token-hygiene.test.mjs",
+        "provider-boundary/hostile-redirect-location.test.mjs",
+        "provider-boundary/dns-hostile-provider.test.mjs"
+      ]
+    }
+  ]
+}
