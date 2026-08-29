@@ -23,6 +23,17 @@
 // `3 edges` after, and an illegal `triage → review` import was ruled allowed
 // before and is a violation after. If that field is ever dropped, this whole
 // file goes quiet without failing.
+//
+// The transport seam is its own project (`core/transport`, `scope:transport`)
+// and is deliberately NOT `scope:shared`: an action never opens, configures
+// or inspects the transport client — every network byte crosses `forge` or
+// `chat`, and transport failures reach actions as typed facts from
+// `core/src/transport-errors.mjs` (`HttpError` with its status,
+// `TransportError`, and the retry-policy constants recovery mirrors). The
+// action rows below enforce this without a row of their own:
+// `scope:transport` is simply absent from every `onlyDependOnLibsWithTags`
+// list, so an action reaching for the client directly is a violation the
+// gate names.
 
 /** @param {string} name @returns {object} */
 function actionRow(name) {

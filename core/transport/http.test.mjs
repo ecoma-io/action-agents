@@ -14,8 +14,8 @@ import {
   CrossOriginRedirectError,
   HttpError,
   TransportError,
-  createHttpClient,
-} from "./http.mjs";
+} from "./transport-errors.mjs";
+import { createHttpClient } from "./http.mjs";
 
 /**
  * @typedef {object} RecordedCall

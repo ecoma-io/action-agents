@@ -15,6 +15,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { RETRYABLE_STATUS } from "#core/transport-errors.mjs";
+
 import {
   AuthError,
   AUTH_STATUSES,
@@ -153,6 +155,10 @@ describe("classFromStatus", () => {
   it("the transport statuses mirror the transport layer's retryable set, frozen", () => {
     expect([...TRANSPORT_STATUSES]).toEqual([408, 425, 429, 500, 502, 503, 504]);
     expect(Object.isFrozen(TRANSPORT_STATUSES)).toBe(true);
+  });
+
+  it("the transport statuses are derived from the transport layer's own retryable set", () => {
+    expect([...TRANSPORT_STATUSES]).toEqual([...RETRYABLE_STATUS]);
   });
 
   it("a rejected or forbidden status names auth", () => {

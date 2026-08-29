@@ -1,8 +1,9 @@
 /**
  * `harmonise` deterministic failure/recovery policy — after a pair fails,
  * decide from a declared failure class and the attempt index whether to
- * retry, and which delay to name first. A pure module: no imports, no I/O,
- * no timers, nothing read from the run.
+ * retry, and which delay to name first. A pure module: no I/O, no timers,
+ * nothing read from the run — its one import is the transport layer's own
+ * retryable-status set, a compile-time fact mirrored by construction.
  *
  * Doctrine:
  *
@@ -36,6 +37,8 @@
  * - **No timers.** `delayClass` names a delay from the same declared table;
  *   sleeping, and honouring a provider's retry-after, is the caller's job.
  */
+
+import { RETRYABLE_STATUS } from "#core/transport-errors.mjs";
 
 /**
  * The declared failure classes, in the order the doctrine states them.
@@ -202,13 +205,15 @@ export const AUTH_STATUSES = Object.freeze([401, 403]);
 
 /**
  * The statuses whose failure is on the provider's side and may pass on a
- * later call — the same set the transport layer beneath this policy retries
- * at the request level. A status in this row names `transport` once that
- * layer has spent its own attempts and still failed.
+ * later call — derived from the transport layer's own `RETRYABLE_STATUS`,
+ * shared by import: a status the request-level retry loop retries is
+ * exactly a status this policy classifies `transport`, so the layers
+ * cannot disagree by construction. A status in this row names `transport`
+ * once that layer has spent its own attempts and still failed.
  *
  * @type {readonly number[]}
  */
-export const TRANSPORT_STATUSES = Object.freeze([408, 425, 429, 500, 502, 503, 504]);
+export const TRANSPORT_STATUSES = Object.freeze([...RETRYABLE_STATUS]);
 
 /**
  * Classifies one HTTP response status into a declared failure class, for a

@@ -21,7 +21,9 @@
  * rather than guessed at, as `triage`'s design page requires.
  */
 
-import { createHttpClient, HttpError } from "./http.mjs";
+import { createHttpClient } from "#core-transport/http.mjs";
+
+import { HttpError } from "./transport-errors.mjs";
 
 /**
  * @typedef {object} ForgeConfig
@@ -190,6 +192,7 @@ const PER_PAGE = 100;
  *   whoami: () => Promise<{ login: string }>,
  *   getRepository: () => Promise<{ defaultBranch: string, name: string, description: string }>,
  *   getRef: (branch: string) => Promise<{ sha: string }>,
+ *   readRef: (branch: string) => Promise<{ sha: string } | null>,
  *   listTree: (sha: string) => Promise<TreeEntry[]>,
  *   getContents: (path: string, options?: { ref?: string }) => Promise<{ content: string } | null>,
  *   listRepositoryLabels: () => Promise<string[]>,
@@ -276,6 +279,23 @@ export function createForge(config) {
         throw new ForgeError(operation, new Error("the response carries no commit sha"));
       }
       return { sha };
+    },
+    /**
+     * A branch's current commit SHA, or `null` when the branch does not
+     * exist. Absence is the typed 404 status — never message text — so a
+     * branch named `HTTP 404`, or a provider body quoting it, cannot read
+     * as absent; every other failure propagates unchanged. Callers that
+     * must distinguish absence from failure read through here instead of
+     * re-deriving the check.
+     *
+     * @param {string} branch
+     * @returns {Promise<{ sha: string } | null>}
+     */
+    async readRef(branch) {
+      return this.getRef(branch).catch((cause) => {
+        if (isRefAbsentError(cause)) return null;
+        throw cause;
+      });
     },
 
     /**
@@ -712,10 +732,7 @@ export function createForge(config) {
     async upsertBranch(branch, commitSha, expectedCurrentSha) {
       // One read decides create vs update; a ref that appeared or moved under
       // the run is another writer's move and is refused, never overwritten.
-      const current = await this.getRef(branch).catch((cause) => {
-        if (isRefAbsentError(cause)) return null;
-        throw cause;
-      });
+      const current = await this.readRef(branch);
 
       const found = current === null ? "(absent)" : current.sha;
       const expected = expectedCurrentSha ?? "(absent)";
@@ -820,7 +837,7 @@ export function createForge(config) {
    *
    * @template T
    * @param {string} operation
-   * @param {() => Promise<import("./http.mjs").HttpResponse>} run
+   * @param {() => Promise<import("#core-transport/http.mjs").HttpResponse>} run
    * @returns {Promise<T>}
    */
   async function call(operation, run) {

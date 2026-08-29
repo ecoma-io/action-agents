@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 
 import { createEvidence } from "#core/untrusted.mjs";
 import { PastFileCeilingError } from "#core/forge.mjs";
-import { TransportError } from "#core/http.mjs";
+import { TransportError } from "#core/transport-errors.mjs";
 import { readContext } from "#core/runtime.mjs";
 
 import { ACTION, main, readInputs, run } from "./index.mjs";
@@ -157,6 +157,10 @@ function fakeForge(options = {}) {
     },
     /** @param {string} _branch */
     async getRef(_branch) {
+      return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _branch */
+    async readRef(_branch) {
       return { sha: "0".repeat(40) };
     },
     /** @param {string} _sha */

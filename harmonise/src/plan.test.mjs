@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { HttpError } from "#core/http.mjs";
+import { HttpError } from "#core/transport-errors.mjs";
 
 import { buildInventory } from "./inventory.mjs";
 import { parseAssetLayout, parseLanguagePattern } from "./patterns.mjs";

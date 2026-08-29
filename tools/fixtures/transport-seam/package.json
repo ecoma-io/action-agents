@@ -1,0 +1,8 @@
+{
+  "name": "transport-seam",
+  "version": "0.0.0",
+  "type": "module",
+  "imports": {
+    "#seam-transport/*.mjs": "./seam-transport/src/*.mjs"
+  }
+}

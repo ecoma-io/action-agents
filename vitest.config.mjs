@@ -17,6 +17,7 @@ import { defineConfig } from "vitest/config";
  */
 const PROJECT_SOURCES = [
   "core/src/**/*.mjs",
+  "core/transport/**/*.mjs",
   "triage/src/**/*.mjs",
   "review/src/**/*.mjs",
   "harmonise/src/**/*.mjs",

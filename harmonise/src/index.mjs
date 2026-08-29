@@ -18,8 +18,12 @@
 import { readFileSync } from "node:fs";
 
 import { createChat } from "#core/chat.mjs";
-import { createForge, isRefAbsentError } from "#core/forge.mjs";
-import { HttpError, TransportError as HttpTransportError } from "#core/http.mjs";
+import { createForge } from "#core/forge.mjs";
+import {
+  DEFAULT_RETRY_DELAY_MS,
+  HttpError,
+  TransportError as HttpTransportError,
+} from "#core/transport-errors.mjs";
 import { readSharedInputs } from "#core/inputs.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
@@ -79,13 +83,18 @@ export { TM_PATH };
 
 /**
  * The caller's half of the recovery contract: `recovery.mjs` names a delay,
- * this file pays it in milliseconds. `short` mirrors one transport-layer
- * backoff step; `long` is the wait before the policy's second transport
- * retry. The pure policy module stays millisecond-free by design.
+ * this file pays it in milliseconds. `short` is the transport layer's own
+ * backoff step — `DEFAULT_RETRY_DELAY_MS`, shared by import rather than
+ * restated; `long` is the wait before the policy's second transport retry.
+ * The pure policy module stays millisecond-free by design.
  *
  * @type {Readonly<Record<import("./recovery.mjs").DelayName, number>>}
  */
-export const DELAY_MS = Object.freeze({ immediate: 0, short: 1_000, long: 5_000 });
+export const DELAY_MS = Object.freeze({
+  immediate: 0,
+  short: DEFAULT_RETRY_DELAY_MS,
+  long: 5_000,
+});
 
 /**
  * The run's clock: one awaited pause. Injectable as `io.sleep` so a test
@@ -271,10 +280,7 @@ export async function run(inputs, context, io) {
   /** @type {import("#core/forge.mjs").Forge} */
   const f = world.forge;
   const ownBranch = branchName(config.sourceLanguage);
-  const branchBefore = await f.getRef(ownBranch).catch((cause) => {
-    if (isRefAbsentError(cause)) return null;
-    throw cause;
-  });
+  const branchBefore = await f.readRef(ownBranch);
 
   // Every read below is pinned to this exact commit: inventory, sources,
   // config and instructions describe one instant of the repository, and the
