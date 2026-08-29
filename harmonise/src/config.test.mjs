@@ -175,8 +175,16 @@ describe("validateConfig", () => {
   });
 
   it("refuses a sourceLanguage that only inherits into languages", () => {
+    // `__proto__` is rejected by the language-tag check before the key check
+    // can even run — both doors refuse the polluted value.
     expect(() => validateConfig(config({ sourceLanguage: "__proto__" }))).toThrow(
-      /is not a key of languages/,
+      /is not a valid language tag/,
+    );
+  });
+
+  it("refuses a malformed source language tag", () => {
+    expect(() => validateConfig(config({ sourceLanguage: "not a lang" }))).toThrow(
+      /is not a valid language tag/,
     );
   });
 
