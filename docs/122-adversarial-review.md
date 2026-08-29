@@ -37,7 +37,7 @@ startedAt }` — no applicability parameter. The returned result lacks an
 specific subdirectory). The run skips silently: the log says "universe empty"
 but there is no record of the applicability decision that preceded the skip.
 
-**Canonical issue:** None filed yet.
+**Canonical issue:** #206 — fixed by #213 (`c00fd9c`).
 
 #### A2 — DEFECT: `lanesAssigned` is always `true`, masking a validation gap
 
@@ -55,7 +55,7 @@ not be detected by the phase machine — the orient phase would still advance to
 investigate after one turn, and the model would receive unrestricted tools
 without the lane budget constraints the code intended.
 
-**Canonical issue:** None filed yet.
+**Canonical issue:** #208 — fixed by #213 (`c00fd9c`).
 
 #### A3 — HYGIENE: `phases.mjs` mirrors (does not import) the coverage gate's conclusion logic
 
@@ -209,14 +209,22 @@ code:
 All 21 fix/refactor PRs land correctly at current HEAD. No first-order finding
 was re-exposed.
 
----
+## Disposition
 
-## Open-issue status
+All findings in this report shipped with their fixes in the same batch,
+issued and closed together in the tracker:
 
-All 2 second-order defects (A1, A2) are unfiled as of this report. They are
-genuine defects discovered by the adversarial review that have no canonical
-issue in the tracker. The 4 hygiene findings (A3, A4, A5, C1) are documented
-here for the maintainer's disposition.
+| Finding                                                              | Issue | Fix              |
+| -------------------------------------------------------------------- | ----- | ---------------- |
+| A1 — `nothingToReview` loses the applicability classification record | #206  | #213 (`c00fd9c`) |
+| A2 — `lanesAssigned` is always `true`, masking a validation gap      | #208  | #213 (`c00fd9c`) |
+| A3/A4/A5 — review-engine hygiene                                     | #210  | #213 (`c00fd9c`) |
+| C1 — stale `core/src/http.mjs` references in dev docs                | #211  | #213 (`c00fd9c`) |
+
+As of this page's current state on `main`, no finding here is unfiled and
+none is unfixed. The two DEFECT findings (A1, A2) and the C1 hygiene item
+were filed as canonical issues and closed by the fix PR; the remaining
+hygiene items (A3, A4, A5) were filed and fixed together with them.
 
 ---
 
