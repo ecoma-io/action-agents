@@ -166,6 +166,116 @@ test("root: passes with a root description of exactly 125 characters", () => {
   assert.equal(failures.length, 0, `unexpected failures: ${failures.join(", ")}`);
 });
 
+test("root: rejects a folded-join description over the limit (62 + space + 63 = 126)", () => {
+  const over = [
+    "name: Action Agents",
+    "description: >-",
+    `  ${"a".repeat(62)}`,
+    `  ${"b".repeat(63)}`,
+    "runs:",
+    "  using: composite",
+  ].join("\n");
+  const { failures } = evaluate({
+    ...stubFs({ "action.yml": over }),
+    discoveredDirs: [],
+  });
+  assert.ok(
+    failures.some(
+      (f) =>
+        f.includes("Root action.yml") &&
+        f.includes("126 characters") &&
+        f.includes("125-character"),
+    ),
+    `expected folded join to measure 126 and fail, got: ${failures.join(", ")}`,
+  );
+});
+
+test("root: passes with a folded-join description of exactly 125 characters", () => {
+  const atLimit = [
+    "name: Action Agents",
+    "description: >-",
+    `  ${"a".repeat(62)}`,
+    `  ${"b".repeat(62)}`,
+    "runs:",
+    "  using: composite",
+  ].join("\n");
+  const { failures } = evaluate({
+    ...stubFs({ ...FULL_TREE, "action.yml": atLimit }),
+    discoveredDirs: ["triage", "review", "harmonise"],
+  });
+  assert.equal(failures.length, 0, `unexpected failures: ${failures.join(", ")}`);
+});
+
+test("root: rejects a quoted single-line description over the limit (130)", () => {
+  const quoted = [
+    "name: Action Agents",
+    `description: ${JSON.stringify("w".repeat(130))}`,
+    "runs:",
+    "  using: composite",
+  ].join("\n");
+  const { failures } = evaluate({
+    ...stubFs({ "action.yml": quoted }),
+    discoveredDirs: [],
+  });
+  assert.ok(
+    failures.some(
+      (f) =>
+        f.includes("Root action.yml") &&
+        f.includes("130 characters") &&
+        f.includes("125-character"),
+    ),
+    `expected quoted scalar to measure 130 and fail, got: ${failures.join(", ")}`,
+  );
+});
+
+test("root: rejects a blank-line folded block whose rendered value exceeds the limit", () => {
+  const blankFolded = [
+    "name: Action Agents",
+    "description: >-",
+    `  ${"x".repeat(100)}`,
+    "",
+    `  ${"z".repeat(100)}`,
+    "runs:",
+    "  using: composite",
+  ].join("\n");
+  const { failures } = evaluate({
+    ...stubFs({ "action.yml": blankFolded }),
+    discoveredDirs: [],
+  });
+  assert.ok(
+    failures.some(
+      (f) =>
+        f.includes("Root action.yml") &&
+        f.includes("201 characters") &&
+        f.includes("125-character"),
+    ),
+    `expected blank-line folded block to measure 201 and fail, got: ${failures.join(", ")}`,
+  );
+});
+
+test("root: rejects a multi-line plain scalar whose rendered value exceeds the limit", () => {
+  const plainFolded = [
+    "name: Action Agents",
+    `description: ${"p".repeat(100)}`,
+    `  ${"q".repeat(100)}`,
+    "runs:",
+    "  using: composite",
+  ].join("\n");
+  const { failures } = evaluate({
+    ...stubFs({ "action.yml": plainFolded }),
+    discoveredDirs: [],
+  });
+  assert.ok(
+    failures.some(
+      (f) =>
+        f.includes("Root action.yml") &&
+        f.includes("201 characters") &&
+        f.includes("125-character"),
+    ),
+    `expected multi-line plain scalar to measure 201 and fail, got: ${failures.join(", ")}`,
+  );
+});
+
 // ── Child action manifests ────────────────────────────────────────────────
 
 test("children: fails when a declared action has no manifest", () => {

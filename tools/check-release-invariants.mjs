@@ -174,9 +174,19 @@ export function evaluate({ read, exists, discoveredDirs = [] }) {
 /**
  * The rendered text of a manifest `description:` field, read off the raw
  * manifest text the way every check here reads manifests — no YAML parser.
- * Handles the single-line plain form (surrounding quotes stripped) and the
- * `>` / `|` block forms, folding continuation lines the way GitHub renders
- * them.  Trailing whitespace is clipped, which chomping clips anyway.
+ *
+ * Handles every form a root `action.yml` description takes:
+ *   - single-line plain scalar (surrounding quotes stripped)
+ *   - multi-line plain scalar — continuation lines fold with single spaces,
+ *     blank lines fold to newlines, per YAML plain-scalar folding
+ *   - `>` / `|` block scalars with indent/chomping indicators — blank lines
+ *     inside the block belong to the block; folded joins adjacent non-blank
+ *     lines with single spaces and folds blank lines to newlines, literal
+ *     preserves line breaks
+ *
+ * Collection stops at the first non-indented, non-blank line (the next
+ * manifest key).  Trailing whitespace is clipped, which chomping clips
+ * anyway.
  *
  * @param {string} manifest  raw manifest text
  * @returns {string} the rendered description, "" when absent
@@ -186,18 +196,76 @@ function descriptionText(manifest) {
   const key = lines.findIndex((line) => /^description:\s/.test(line));
   if (key === -1) return "";
   const head = lines[key].replace(/^description:\s*/, "");
-  if (!/^[>|][0-9]?[+-]?$/.test(head)) {
-    return head
-      .trim()
-      .replace(/^['"]|['"]$/g, "")
-      .trimEnd();
+
+  // Block scalar: the head line is the `>` / `|` indicator; the value lives
+  // on the following lines, blanks included.
+  if (/^[>|][0-9]?[+-]?$/.test(head)) {
+    const parts = collectScalarLines(lines, key);
+    return (head.startsWith("|") ? parts.join("\n") : foldLines(parts)).trimEnd();
   }
+
+  // Plain or quoted scalar: the head line carries the first line's text.  A
+  // quoted value is single-line here; a plain value may continue on
+  // more-indented lines.
+  const headText = head.trim().replace(/^['"]|['"]$/g, "");
+  if (/^['"]/.test(head.trim())) return headText.trimEnd();
+  return foldLines([headText, ...collectScalarLines(lines, key)]).trimEnd();
+}
+
+/**
+ * The continuation lines of a `description:` value: every line from `key + 1`
+ * that is blank or indented, stopping at the first non-indented non-blank
+ * line.  Blank lines are kept as empty strings so the caller can fold them —
+ * a blank line inside a block scalar belongs to the block, not to the end of
+ * the value, which is exactly the under-measurement #139 fixed.
+ *
+ * @param {string[]} lines  manifest split on newlines
+ * @param {number} key      index of the `description:` line
+ * @returns {string[]} trimmed continuation lines, "" for blank lines
+ */
+function collectScalarLines(lines, key) {
   const parts = [];
   for (let i = key + 1; i < lines.length; i += 1) {
-    if (!/^\s+\S/.test(lines[i])) break;
-    parts.push(lines[i].trim());
+    const line = lines[i];
+    if (/^\s*$/.test(line)) {
+      parts.push("");
+      continue;
+    }
+    if (!/^\s+\S/.test(line)) break;
+    parts.push(line.trim());
   }
-  return parts.join(head.startsWith("|") ? "\n" : " ").trimEnd();
+  return parts;
+}
+
+/**
+ * Fold collected scalar lines the way GitHub renders them: adjacent non-blank
+ * lines join with a single space, and a run of blank lines between content
+ * folds to that many newlines.  Leading and trailing blank lines contribute
+ * nothing — chomping clips them.
+ *
+ * @param {string[]} parts  trimmed lines, "" for blank lines
+ * @returns {string} the folded text
+ */
+function foldLines(parts) {
+  let out = "";
+  let blanks = 0;
+  let started = false;
+  for (const part of parts) {
+    if (part === "") {
+      if (started) blanks += 1;
+      continue;
+    }
+    if (!started) {
+      out = part;
+      started = true;
+    } else if (blanks === 0) {
+      out += ` ${part}`;
+    } else {
+      out += "\n".repeat(blanks) + part;
+    }
+    blanks = 0;
+  }
+  return out;
 }
 
 /**
