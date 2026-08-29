@@ -324,14 +324,17 @@ function resolutionRefusal(requested, cause) {
  * @returns {ToolResult}
  */
 function readFile(workspace, evidence, ignore, recordedReads, requestedPath) {
-  if (matchGlob(ignore, p.posix.normalize(requestedPath))) {
-    // Ignore matching happens on the canonical spelling, so ./dist/x.js is
-    // refused exactly when dist/x.js is.
-    return fail(`refusing '${requestedPath}': the config ignores this path`);
-  }
   const resolved = resolveOrRefuse(workspace, requestedPath);
   if ("refusal" in resolved) return fail(resolved.refusal);
   const { entry } = resolved;
+  if (matchGlob(ignore, entry.relative)) {
+    // Ignore matching happens on the same canonical relative path the
+    // listing uses (entry.relative), never on the alias or spelling the
+    // model asked for — so a file the inventory hides because it is ignored
+    // is refused on a direct read too, and `sub/../x.js` cannot reach past
+    // the ignore set by renaming the path.
+    return fail(`refusing '${requestedPath}': the config ignores this path`);
+  }
   if (entry.kind !== "file") {
     return fail(`refusing '${requestedPath}': it names a directory`);
   }
