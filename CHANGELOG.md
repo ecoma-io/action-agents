@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.5.0](https://github.com/ecoma-io/action-agents/compare/v0.4.1...v0.5.0) (2026-08-29)
+
+
+### Features
+
+* **core:** add request-timeout-ms input for slow providers ([#99](https://github.com/ecoma-io/action-agents/issues/99)) ([#108](https://github.com/ecoma-io/action-agents/issues/108)) ([99047a8](https://github.com/ecoma-io/action-agents/commit/99047a809b598ae1fcf7e8edd384c707717e78b7))
+* **harmonise:** wire the recovery policy into the pair translation path ([#107](https://github.com/ecoma-io/action-agents/issues/107)) ([a4b33c3](https://github.com/ecoma-io/action-agents/commit/a4b33c3645baaff452fdd03ff07fbe926282f920))
+* **review:** finding lifecycle - refuted and unresolved become visible states ([#115](https://github.com/ecoma-io/action-agents/issues/115)) ([dfcdfcb](https://github.com/ecoma-io/action-agents/commit/dfcdfcbd23b9ffc242c4c084f74a5a219e2afc6e)), closes [#101](https://github.com/ecoma-io/action-agents/issues/101)
+* **review:** judge the provenance gate on the final published set ([#105](https://github.com/ecoma-io/action-agents/issues/105)) ([#116](https://github.com/ecoma-io/action-agents/issues/116)) ([722b8d3](https://github.com/ecoma-io/action-agents/commit/722b8d358c0164010fa9685f7ea42ea70723fd23))
+* **review:** publish the run artifact and make it the canonical contract ([#103](https://github.com/ecoma-io/action-agents/issues/103)) ([#129](https://github.com/ecoma-io/action-agents/issues/129)) ([b9a2c0c](https://github.com/ecoma-io/action-agents/commit/b9a2c0c17dad775974a2cd30857689044028b735))
+* **review:** the verification gate judges verification completeness ([#102](https://github.com/ecoma-io/action-agents/issues/102)) ([4b24742](https://github.com/ecoma-io/action-agents/commit/4b2474213c2cef4aa4518b7586ae70c54edd3f08))
+* **review:** verifier investigates findings with bounded tools ([#111](https://github.com/ecoma-io/action-agents/issues/111)) ([80cac7a](https://github.com/ecoma-io/action-agents/commit/80cac7aa853b4fb8b325f61bdd6b8b8a44bb0f42)), closes [#100](https://github.com/ecoma-io/action-agents/issues/100)
+
+
+### Bug Fixes
+
+* **core:** declare the composed retry ceiling; cancel retryable bodies ([#168](https://github.com/ecoma-io/action-agents/issues/168)) ([1b8caaa](https://github.com/ecoma-io/action-agents/commit/1b8caaa59e4af503e9dae4287300c618ce7d9782)), closes [#151](https://github.com/ecoma-io/action-agents/issues/151)
+* **core:** match ref-absent by typed 404 status, not message text ([#169](https://github.com/ecoma-io/action-agents/issues/169)) ([85b6782](https://github.com/ecoma-io/action-agents/commit/85b6782f2cad3773b1fc716bc5237b92ecef97b4)), closes [#152](https://github.com/ecoma-io/action-agents/issues/152)
+* **core:** re-read the branch tip before the force-PATCH ([#166](https://github.com/ecoma-io/action-agents/issues/166)) ([88e59d7](https://github.com/ecoma-io/action-agents/commit/88e59d798d3137e84e55b42194438bebd97377fd)), closes [#149](https://github.com/ecoma-io/action-agents/issues/149)
+* **harmonise:** read state and translation memory from one snapshot authority ([#106](https://github.com/ecoma-io/action-agents/issues/106)) ([8f9f72f](https://github.com/ecoma-io/action-agents/commit/8f9f72ffd717a033852d93d1a57a478c25d3ce82))
+* **harmonise:** resolve the branch tip once — one SHA feeds state and TM reads ([#165](https://github.com/ecoma-io/action-agents/issues/165)) ([e1b5d89](https://github.com/ecoma-io/action-agents/commit/e1b5d89b092dafacfee9b8e63086a35413d46751)), closes [#148](https://github.com/ecoma-io/action-agents/issues/148)
+* **harmonise:** route every reachable preserve-required row to merge or refusal ([#162](https://github.com/ecoma-io/action-agents/issues/162)) ([ed08f3e](https://github.com/ecoma-io/action-agents/commit/ed08f3e3261996aa93ec2087fc64b5147153eb77)), closes [#147](https://github.com/ecoma-io/action-agents/issues/147)
+* **harmonise:** unbounded state-memory join and converging no-op endorsements ([#167](https://github.com/ecoma-io/action-agents/issues/167)) ([2fd6e66](https://github.com/ecoma-io/action-agents/commit/2fd6e665e9e92077925dadfb4f6bae3b7ae846bc)), closes [#150](https://github.com/ecoma-io/action-agents/issues/150)
+* **review:** compaction keeps the model's own analysis; drop the dead findings-recorded edge ([#164](https://github.com/ecoma-io/action-agents/issues/164)) ([1f10028](https://github.com/ecoma-io/action-agents/commit/1f100289593a6a0b1eb44084836d92de78213b5f)), closes [#146](https://github.com/ecoma-io/action-agents/issues/146)
+* **review:** coverage counts captured reads, not attempts ([#161](https://github.com/ecoma-io/action-agents/issues/161)) ([29dec48](https://github.com/ecoma-io/action-agents/commit/29dec4889c04335429429ee601a878fc51d6d714)), closes [#144](https://github.com/ecoma-io/action-agents/issues/144)
+* **review:** distinguish an unrecorded verdict from an uncertain one ([#123](https://github.com/ecoma-io/action-agents/issues/123)) ([3ec2444](https://github.com/ecoma-io/action-agents/commit/3ec2444d3942e258022d546250e140b4af80c2b4))
+* **review:** make deleted files inspectable in the coverage universe ([#104](https://github.com/ecoma-io/action-agents/issues/104)) ([#110](https://github.com/ecoma-io/action-agents/issues/110)) ([19ac81a](https://github.com/ecoma-io/action-agents/commit/19ac81a910dc65fb03331c90ae410b47744f97e2))
+* **review:** state the evidence-ceiling contract and pin it ([#163](https://github.com/ecoma-io/action-agents/issues/163)) ([3f5c62f](https://github.com/ecoma-io/action-agents/commit/3f5c62f5308e699b905decc66eae2ef4c60ce50d)), closes [#145](https://github.com/ecoma-io/action-agents/issues/145)
+* **review:** validate the artifact against fresh reads around the comment ([#160](https://github.com/ecoma-io/action-agents/issues/160)) ([fd1393d](https://github.com/ecoma-io/action-agents/commit/fd1393df997a2680fc677a682eaad14655c654aa))
+
 ## [0.4.1](https://github.com/ecoma-io/action-agents/compare/v0.4.0...v0.4.1) (2026-08-28)
 
 
