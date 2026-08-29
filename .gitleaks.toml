@@ -1,0 +1,19 @@
+# The one tree this scan must not report: every string under
+# security/fixtures/secret-hygiene/ is a deliberately fake credential whose
+# entire job is to prove a run never leaks it. A real-shaped token is exactly
+# what gitleaks exists to flag, so the corpus is exempted here — the same
+# fixture-vs-analyser split that excludes .github/semgrep's own fixtures from
+# its scans — and the exemption is this path plus this comment, never a
+# literal shaped to dodge the rules.
+#
+# Everything else in the repository, on every commit, is scanned with the
+# default rule set: [extend] keeps the built-in rules on while this file only
+# adds the allowlist.
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+  "security/fixtures/secret-hygiene/",
+]

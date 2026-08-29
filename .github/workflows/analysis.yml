@@ -175,6 +175,14 @@ jobs:
       # pushed range, because a secret removed in a later commit is still a
       # leak while it sits in the tree.
       #
+      # The one exemption is the fake-credential corpus: every string under
+      # security/fixtures/secret-hygiene/ is a deliberately fake token whose
+      # entire job is to prove a run never leaks it, and a real-shaped
+      # credential is precisely what gitleaks reports. `.gitleaks.toml`
+      # allowlists that one tree — default rules stay on for everything else —
+      # the same fixture-vs-analyser split that excludes `.github/semgrep`'s
+      # own fixtures from its scans.
+      #
       # Exit contract, matching the binary's own: 0 clean · 2 leaks · anything
       # else a scan that did not complete, which fails loudly — never dressed
       # up as green.
@@ -198,11 +206,13 @@ jobs:
         env:
           GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
           REPORT_PATH: ${{ runner.temp }}/results.sarif
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
         run: |
           rc=0
           "$GITLEAKS_BIN" detect \
             --source="$GITHUB_WORKSPACE" \
             --redact --verbose \
+            --config="$GITLEAKS_CONFIG" \
             --exit-code=2 \
             --report-format=sarif \
             --report-path="$REPORT_PATH" || rc=$?

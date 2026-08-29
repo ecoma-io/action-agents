@@ -447,6 +447,10 @@ Only our rules block, because a registry pack can gain a rule overnight and turn
 
 **Gitleaks** scans the whole history rather than the diff, because a secret
 removed in a later commit is still a leak for as long as it sits in the tree.
+The one exemption is the fake-credential corpus: strings under
+`security/fixtures/secret-hygiene/` are deliberately fake tokens whose whole
+job is to prove a run never leaks them, allowlisted in `.gitleaks.toml` rather
+than shaped to dodge the rules.
 
 All three report through one required check, `analysis-gate`, for the same
 reason CI has `ci-gate`: the name a branch ruleset requires stays stable while
