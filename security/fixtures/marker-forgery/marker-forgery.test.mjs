@@ -184,7 +184,10 @@ describe("marker forgery in model text stays bounded", () => {
       "the forged marker id parsed out of the body",
     );
     assert.equal((body.match(/<!--/g) ?? []).length, 1, "a second comment opener survived");
-    assert.equal((body.match(/-->/g) ?? []).length, 1, "a second comment closer survived");
+    // A live HTML comment closer is `-->` (HTML5 also allows `--!>`); neither
+    // may survive a second time — the action's own marker closer is the only
+    // one that may appear.
+    assert.equal((body.match(/--!?>/g) ?? []).length, 1, "a second comment closer survived");
 
     // The forged words survive only as inert text, and no live HTML can open.
     assert.ok(
