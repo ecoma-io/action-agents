@@ -57,6 +57,25 @@ symlink that resolves outside is refused by the same test, and `.git` is
 refused outright because it holds the credential the checkout was performed with.
 One consumer today: `review`.
 
+## `core/policy.mjs` — the policy seam
+
+One module decides what counts as trusted configuration, so no action ever
+derives trust from the context itself: `resolvePolicySource` maps the
+execution context to a branch and an immutable 40-hex SHA, and refuses
+anything it cannot map — a payload without a usable ref, a SHA that is not 40
+hex, a branch deletion. The mapping's rows live on
+[the configuration page](configuration.md#which-branch-governs--the-resolved-policy-source);
+the ceiling here is structural: **exactly one resolution per run**, made
+before the first model call and logged, and every policy read afterwards goes
+through a reader pinned to that SHA. An action cannot read policy from the
+working tree, from the pull request's head, or from a live-moving ref without
+first removing the pin in `core/` — the same "restated in the same change"
+discipline as the other numbers below.
+
+`schemaVersion` rides the same seam: a policy file declaring a major the
+build does not understand is refused at startup, naming the branch, SHA and
+path it was found on, rather than parsed hopefully.
+
 ## The seam
 
 `chat.mjs` and `http.mjs` are protocols, but one ceiling is enforced at their

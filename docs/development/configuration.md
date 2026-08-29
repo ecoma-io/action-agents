@@ -23,21 +23,61 @@ A consumer's repository-level policy for an action is one file:
   green — `harmonise`, for the reason its page carries.
 - A `config-path` input on each action names a different file — location and
   name both. When it is set, only that path is read, and the default locations
-  are not consulted; a configured path that does not exist on the default
-  branch is a startup error rather than a silently empty policy.
+  are not consulted; a configured path that does not exist on the resolved
+  policy source is a startup error rather than a silently empty policy.
 
-## The default branch, not the working tree
+## Which branch governs — the resolved policy source
 
-The file is fetched once, via the API, from the repository's default branch —
-never read from the checked-out workspace. The working tree is evidence, never
-configuration: under `pull_request` a checkout contains the pull request's own
-content, and a configuration read from it would let a fork edit the policy that
-governs its own triage. Reading from the default branch also keeps actions
-that have no reason to check out a repository — `triage` is one — free of a
-checkout step.
+The file is fetched once, via the API, from a **policy source** the action
+resolves at startup from its execution context — a branch name and the
+immutable 40-hex commit SHA it pointed at when the run began. Never read from
+the checked-out workspace. The working tree is evidence, never configuration:
+under `pull_request` a checkout contains the pull request's own content, and a
+configuration read from it would let a fork edit the policy that governs its
+own triage. Reading policy from a repository ref also keeps actions that have
+no reason to check out a repository — `triage` is one — free of a checkout
+step.
+
+The resolver maps the context to the source and refuses anything it cannot map:
+
+| Event                                 | Policy source                                       |
+| ------------------------------------- | --------------------------------------------------- |
+| `pull_request`, `pull_request_target` | the pull request's **base branch**, at its live tip |
+| `push` to `refs/heads/*`              | that branch, at the pushed SHA                      |
+| `push` of a tag                       | the default branch                                  |
+| `workflow_dispatch` on `refs/heads/*` | that branch, at its live tip                        |
+| anything else                         | the default branch                                  |
+
+Three properties hold for every row, and the actions enforce them rather than
+asking for them:
+
+- **The branch is trusted and the content is pinned.** The source is resolved
+  once — branch plus SHA — and every policy read in the run, the config file
+  and every instruction document alike, is fetched at that exact SHA. A push
+  landing mid-run cannot change what the run reads halfway through, and there
+  is exactly one resolution per run to audit.
+- **Malformed payloads refuse.** A push or dispatch without a usable ref, a
+  pull request without a base branch, a SHA that is not 40 hex digits — each is
+  a startup error. The resolver fails closed; it never silently falls back to
+  the default branch on input it did not expect.
+- **Zero configuration is zero configuration.** With no `config-path` and the
+  default branch unresolved, the default branch is exactly what governs — the
+  mapping needs no workflow input, and none exists to override it.
 
 A path named inside a config file, an instruction document for instance, is
-read the same way: from the default branch, never the working tree.
+read the same way: from the resolved policy source, never the working tree.
+
+### `schemaVersion`
+
+A config file may declare `"schemaVersion": 1` — the major this generation of
+actions parses. An absent field is accepted, so files written before
+versioning keep working; a file declaring a **higher major** is refused at
+startup with a message naming the branch, the SHA, the path, the version found
+and the version supported. A string (`"1"`) or a fractional value (`1.5`) is
+refused the same way — a version is a number, and guessing what `"1"` meant is
+how a policy change ships silently. Minor and patch versions do not exist in
+the policy schema: a breaking policy change is a new major, and an action that
+does not understand it says so instead of improvising.
 
 ## Instruction documents
 
