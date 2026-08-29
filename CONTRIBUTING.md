@@ -165,6 +165,7 @@ them — not in anticipation that one might.
 | `pnpm check-anchors`            | Every `(file#fragment)` link resolves against a heading that is really there — duplicate headings included                        |
 | `pnpm check-uses-refs`          | Every documented `uses: ecoma-io/action-agents/<action>@<ref>` resolves against a tag that exists, and an action that ships at it |
 | `pnpm check-action-inputs`      | Every `action.yaml` and the code behind it declare and read the same inputs — in both directions                                  |
+| `pnpm check-workflow-inputs`    | Every workflow under `.github/workflows` passes only inputs the action manifest it runs declares, and passes every required one   |
 | `pnpm check-release-invariants` | Root stub contract, child manifests, entry points, surprise action detection, version consistency                                 |
 | `pnpm check-skills`             | The vendored `arch-*` skills are byte-identical in both agent directories and match the pinned `@ecoma-io/archkeep`               |
 | `pnpm sync-skills`              | Rewrites those vendored skills from an Archkeep source tree. Not a gate — the only sanctioned way they change                     |
