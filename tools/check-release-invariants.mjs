@@ -159,11 +159,34 @@ export function evaluate({ read, exists, discoveredDirs = [] }) {
         );
       }
     }
-
     if (manifest?.["."] && pkg?.version) {
       if (manifest["."] !== pkg.version) {
         failures.push(
           `Version mismatch: .release-please-manifest.json has '${manifest["."]}', package.json has '${pkg.version}'.`,
+        );
+      }
+    }
+
+    // The CHANGELOG head must say the same version the version files do.
+    // release-please writes .release-please-manifest.json, package.json and
+    // the CHANGELOG together in the one release pull request it opens, so
+    // divergence means a release's files were edited independently — a
+    // consumer reading the CHANGELOG is told one version while package.json
+    // and the manifest report another. Running at the tag SHA (release.yml's
+    // "Verify every action resolves at this tag") this is what proves the
+    // released tree's changelog and its version files describe the same tag.
+    if (hasFile("CHANGELOG.md") && manifest?.["."]) {
+      checks += 1;
+      const changelog = readFile("CHANGELOG.md");
+      const head = changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m);
+      if (head === null) {
+        failures.push(
+          "CHANGELOG.md has no `## [<version>]` release heading to compare against the version files.",
+        );
+      } else if (head[1] !== manifest["."]) {
+        failures.push(
+          `CHANGELOG head describes '${head[1]}' but .release-please-manifest.json has ` +
+            `'${manifest["."]}' — a release cut with its changelog and version files out of step.`,
         );
       }
     }
