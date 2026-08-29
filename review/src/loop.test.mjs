@@ -4,7 +4,7 @@
 // tools-withheld finalisation, every call answered even past the ceiling,
 // compaction firing on the estimate, and fatal wire defects ending the run.
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as p from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -747,6 +747,45 @@ describe("deletion coverage", () => {
       covered: ["lib/gone.mjs", "src/a.mjs"],
       uncovered: [],
       total: 2,
+    });
+  });
+});
+
+describe("alias read coverage — resolved path", () => {
+  it("counts a read through an intermediate symlink against the resolved inventory path", async () => {
+    const tree = mkdtempSync(p.join(tmpdir(), "loop-ledger-"));
+    mkdirSync(p.join(tree, "realdir"));
+    writeFileSync(p.join(tree, "realdir", "file.mjs"), "content\n");
+    symlinkSync(p.join(tree, "realdir"), p.join(tree, "link"), "dir");
+
+    const tools = createTools({
+      workspace: createWorkspace({ root: tree }),
+      evidence: createEvidence(() => "aaaabbbbccccdddd"),
+      ignore: [],
+    });
+    const chat = scriptedChat([
+      {
+        content: "",
+        toolCalls: [readCall({ argumentsJson: JSON.stringify({ path: "link/file.mjs" }) })],
+      },
+      { content: '{"findings":[],"summary":"read through the alias"}' },
+    ]);
+
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools,
+      messages: BASE_MESSAGES,
+      maxTurns: 5,
+      contextWindow: 128_000,
+      expectedPaths: ["realdir/file.mjs"],
+    });
+
+    expect(outcome.naturalStopped).toBe(true);
+    expect(outcome.coverage).toEqual({
+      covered: ["realdir/file.mjs"],
+      uncovered: [],
+      total: 1,
     });
   });
 });

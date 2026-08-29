@@ -82,6 +82,7 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @property {number} evidenceBytes
  * @property {string[]} filesRead the read_file paths whose bytes the loop captured —
  *   recorded only on the tool's success, never for a refused attempt; entries are JSON-encoded
+ *   resolved-relative paths (the identity confinement resolved, not the requested alias)
  * @property {string[]} diffInspected the paths the code itself recorded as inspected — a
  *   deletion's diff section rides in the initial prompt, so its removed content is on the
  *   record without a read_file (which could not open the removed path anyway). Seeded
@@ -94,7 +95,7 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @param {object} input
  * @param {Chat} input.chat
  * @param {string} input.model
- * @param {{ execute: (name: string, argumentsJson: string) => { ok: boolean, output: string, fatal?: true } }} input.tools
+ * @param {{ execute: (name: string, argumentsJson: string) => { ok: boolean, output: string, fatal?: true, path?: string } }} input.tools
  * @param {ChatMessage[]} input.messages the assembled system + task messages, evidence included
  * @param {number} input.maxTurns
  * @param {number} input.contextWindow
@@ -263,9 +264,12 @@ export async function runLoop({
         ledger.evidenceBytes += Buffer.byteLength(result.output, "utf8");
         // Coverage counts captures: the read joins the ledger only where its
         // bytes joined the evidence — a refused attempt is a tool error, not
-        // a read. Same success condition, same spelling, as the capture the
-        // tool recorded for the verification pass.
-        if (readPath !== undefined) ledger.filesRead.push(JSON.stringify(readPath));
+        // a read. The key is the resolved-relative path the tool returned
+        // (result.path), so an alias read counts for the inventory file it
+        // resolved to — the same identity the verification ledger uses.
+        if (readPath !== undefined) {
+          ledger.filesRead.push(JSON.stringify(/** @type {string} */ (result.path)));
+        }
       }
       transcript.push({ role: "tool", toolCallId: call.id, content: result.output });
     }

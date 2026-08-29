@@ -101,6 +101,9 @@ export const TOOL_SPECS = [
  * @property {boolean} ok
  * @property {string} output the evidence-wrapped result when ok, the error text when not
  * @property {true} [fatal] set only for wire-contract defects — the run fails red, the turn does not continue
+ * @property {string} [path] the resolved-relative path a successful read_file captured, so the
+ *   loop's coverage ledger keys the read by the identity confinement resolved, not the alias
+ *   the model asked for; set only by read_file, never by list_files or search
  */
 
 /**
@@ -110,8 +113,9 @@ export const TOOL_SPECS = [
  * @param {string[]} input.ignore the config's universe filter, glob patterns
  * @param {ToolLimits} [input.limits]
  * @param {Map<string, string>} [input.recordedReads] the verification ledger: every successful
- *   read_file's raw bytes, keyed by the normalised requested path. The pass
- *   verifies findings only against bytes the reviewer actually captured.
+ *   read_file's raw bytes, keyed by the resolved-relative path (the identity confinement
+ *   resolved, not the requested alias). The pass verifies findings only against bytes the
+ *   reviewer actually captured.
  */
 export function createTools({ workspace, evidence, ignore, limits = {}, recordedReads }) {
   const listEntries = limits.listEntries ?? MAX_LIST_ENTRIES;
@@ -356,15 +360,21 @@ function readFile(workspace, evidence, ignore, recordedReads, requestedPath) {
   }
   // The verification pass judges findings only against bytes this loop
   // actually captured, so the successful read is recorded before it is
-  // framed: raw UTF-8, keyed by the normalised requested path — the same
-  // spelling the coverage ledger matches findings against.
-  recordedReads?.set(p.posix.normalize(requestedPath), buffer.toString("utf8"));
+  // framed: raw UTF-8, keyed by the resolved-relative path — the identity
+  // confinement resolved, which is the spelling the inventory and findings
+  // use. An alias read thus counts for the file it resolved to, not the
+  // alias the model named.
+  recordedReads?.set(entry.relative, buffer.toString("utf8"));
   const header =
     `${entry.relative}\n` +
     (buffer.length < size
       ? `(showing the first ${String(buffer.length)} of ${String(size)} bytes)\n`
       : "");
-  return { ok: true, output: evidence.wrap("read-file", `${header}${buffer.toString("utf8")}`) };
+  return {
+    ok: true,
+    output: evidence.wrap("read-file", `${header}${buffer.toString("utf8")}`),
+    path: entry.relative,
+  };
 }
 
 /**

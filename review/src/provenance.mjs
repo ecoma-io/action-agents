@@ -110,7 +110,7 @@ export function attachProvenance(findings, ledger) {
 }
 
 /**
- * Adapts the loop's read ledger — normalised path → the raw bytes one
+ * Adapts the loop's read ledger — resolved-relative path → the raw bytes one
  * successful `read_file` captured — to this module's read list. A capture
  * starts at line 1 and reaches the line count of the captured content,
  * counted the same way the verification excerpt counts: splitting on
@@ -118,7 +118,7 @@ export function attachProvenance(findings, ledger) {
  * Insertion order is recording order, so the map's one-read-per-path shape
  * keeps the resolution deterministic.
  *
- * @param {ReadonlyMap<string, string>} recordedReads path → captured content
+ * @param {ReadonlyMap<string, string>} recordedReads resolved-relative path → captured content
  * @returns {LedgerRead[]}
  */
 export function readsFromRecordedReads(recordedReads) {

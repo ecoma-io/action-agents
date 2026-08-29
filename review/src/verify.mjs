@@ -70,7 +70,7 @@ const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertain"]);
  * @typedef {object} VerificationPolicy
  * @property {Strategy} strategy the config's strategy
  * @property {(path: string) => AttentionLane | undefined} laneOf the attention lane a path was assigned, if any
- * @property {ReadonlyMap<string, string>} recordedReads path → the raw bytes a loop read captured, normalised spelling
+ * @property {ReadonlyMap<string, string>} recordedReads path → the raw bytes a loop read captured, resolved-relative spelling
  */
 
 /**

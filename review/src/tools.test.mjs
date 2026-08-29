@@ -13,6 +13,8 @@ import { createEvidence } from "#core/untrusted.mjs";
 import { createWorkspace } from "#core/workspace.mjs";
 
 import { createTools, TOOL_SPECS } from "./tools.mjs";
+import { readsFromRecordedReads, attachProvenance } from "./provenance.mjs";
+import { planVerification } from "./verify.mjs";
 
 /** @type {string} */
 let root;
@@ -182,6 +184,69 @@ describe("read_file", () => {
     expect(recorded.get("big-file.mjs")?.length).toBe(97 * 800);
     expect(result.output).toMatch(/\[evidence truncated: \d+ of \d+ bytes shown\]/);
     expect(result.output.length).toBeLessThan(66 * 1024);
+  });
+
+  describe("read ledger identity — resolved path", () => {
+    it("records reads through an intermediate symlink under the resolved-relative path, and the seam — verification plan and provenance — agrees", () => {
+      const tree = mkdtempSync(p.join(tmpdir(), "tools-ledger-"));
+      mkdirSync(p.join(tree, "realdir"));
+      writeFileSync(p.join(tree, "realdir", "file.mjs"), "line one\ntwo\n");
+      symlinkSync(p.join(tree, "realdir"), p.join(tree, "link"), "dir");
+
+      const recorded = new Map();
+      const tools = createTools({
+        workspace: createWorkspace({ root: tree }),
+        evidence: createEvidence(() => "deadbeefdeadbeef"),
+        ignore: [],
+        recordedReads: recorded,
+      });
+
+      // Read through the alias — link/file.mjs -> realdir/file.mjs
+      const result = tools.execute("read_file", '{"path":"link/file.mjs"}');
+      expect(result.ok).toBe(true);
+
+      // recordedReads is keyed by resolved path, not alias
+      expect(recorded.has("realdir/file.mjs")).toBe(true);
+      expect(recorded.has("link/file.mjs")).toBe(false);
+      expect(recorded.get("realdir/file.mjs")).toBe("line one\ntwo\n");
+
+      // result.path carries the resolved-relative path
+      expect(result.path).toBe("realdir/file.mjs");
+
+      // Direct read of the resolved path lands on the same key
+      const direct = tools.execute("read_file", '{"path":"realdir/file.mjs"}');
+      expect(direct.ok).toBe(true);
+      expect(direct.path).toBe("realdir/file.mjs");
+      expect(recorded.has("realdir/file.mjs")).toBe(true);
+
+      // Final-component symlink still refused and never recorded
+      symlinkSync(p.join(tree, "realdir", "file.mjs"), p.join(tree, "link-to-file.mjs"));
+      const refused = tools.execute("read_file", '{"path":"link-to-file.mjs"}');
+      expect(refused.ok).toBe(false);
+      expect(refused.path).toBeUndefined();
+      expect(recorded.has("link-to-file.mjs")).toBe(false);
+
+      // Seam proof: planVerification plans a finding on the inventory path
+      /** @type {import("./answer.mjs").Finding[]} */
+      const findings = [
+        { file: "realdir/file.mjs", line: 2, severity: "concern", message: "off-by-one" },
+      ];
+      const plan = planVerification(findings, {
+        strategy: "adversarial",
+        laneOf: () => undefined,
+        recordedReads: recorded,
+      });
+      expect(plan.items).toHaveLength(1);
+      expect(plan.skipped).toHaveLength(0);
+      expect(plan.items[0]?.evidence.path).toBe("realdir/file.mjs");
+
+      // Seam proof: attachProvenance publishes with provenance.path = resolved path
+      const ledger = readsFromRecordedReads(recorded);
+      const proven = attachProvenance(findings, ledger);
+      expect(proven.published).toHaveLength(1);
+      expect(proven.quarantined).toHaveLength(0);
+      expect(proven.published[0]?.provenance.path).toBe("realdir/file.mjs");
+    });
   });
 });
 
