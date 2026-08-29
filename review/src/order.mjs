@@ -1,18 +1,14 @@
 /**
- * The one collation every deterministic ordering in `review` means: UTF-8
- * byte order. The spec says "sorted" and means this, so that two
- * implementations, two runs and two languages cannot disagree about which
- * finding comes first or which file lands past a budget break.
+ * `review`'s ordering surface. `utf8Compare` lives in `core/src/order.mjs`
+ * now that `harmonise` needs the same collation — the promotion the boundary
+ * law's remediation names — and this module re-exports it, so every `review`
+ * call site keeps the one import path it already reads. `sortByUtf8` is
+ * `review`'s own convenience and stays here: only this action calls it.
  */
 
-/**
- * @param {string} a
- * @param {string} b
- * @returns {number} negative when `a` sorts first
- */
-export function utf8Compare(a, b) {
-  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
-}
+import { utf8Compare } from "#core/order.mjs";
+
+export { utf8Compare };
 
 /**
  * Sorts strings into byte order, in place and returned, so call sites read
