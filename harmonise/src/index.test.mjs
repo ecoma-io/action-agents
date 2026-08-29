@@ -1439,16 +1439,17 @@ describe("run with recorded state", () => {
       const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
       const forgeDouble = forge(makeRepo());
       const originalGetContents = forgeDouble.getContents.bind(forgeDouble);
-      forgeDouble.getContents = /** @type {any} */ (
-        async (path, opts) => {
-          if (path === STATE_PATH)
-            throw new ForgeError(
-              "reading the state",
-              new Error("transactional outage reading state"),
-            );
-          return originalGetContents(path, opts);
-        }
-      );
+      forgeDouble.getContents = async (
+        /** @type {string} */ path,
+        /** @type {{ ref?: string } | undefined} */ opts,
+      ) => {
+        if (path === STATE_PATH)
+          throw new ForgeError(
+            "reading the state",
+            new Error("transactional outage reading state"),
+          );
+        return originalGetContents(path, opts);
+      };
       const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
       await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
@@ -1463,16 +1464,17 @@ describe("run with recorded state", () => {
       const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
       const forgeDouble = forge(makeRepo());
       const originalGetContents = forgeDouble.getContents.bind(forgeDouble);
-      forgeDouble.getContents = /** @type {any} */ (
-        async (path, opts) => {
-          if (path === TM_PATH)
-            throw new ForgeError(
-              "reading the memory",
-              new Error("transactional outage reading memory"),
-            );
-          return originalGetContents(path, opts);
-        }
-      );
+      forgeDouble.getContents = async (
+        /** @type {string} */ path,
+        /** @type {{ ref?: string } | undefined} */ opts,
+      ) => {
+        if (path === TM_PATH)
+          throw new ForgeError(
+            "reading the memory",
+            new Error("transactional outage reading memory"),
+          );
+        return originalGetContents(path, opts);
+      };
       const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
       await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
