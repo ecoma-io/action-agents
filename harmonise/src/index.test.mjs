@@ -13,6 +13,10 @@
 //      under the declared policy, an unknown failure once, and an auth
 //      failure never.
 
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatError } from "#core/chat.mjs";
@@ -33,6 +37,18 @@ import { DEFAULT_POLICY, DELAY_CLASSES } from "./recovery.mjs";
 import { MAX_SOURCE_BYTES } from "./plan.mjs";
 
 /**
+ * A real event payload file on disk: the default `readEvent` in the entry
+ * point parses this exact file, as it would in a runner. A workflow_dispatch
+ * against `refs/heads/main` — the payload the runner below names.
+ */
+const EVENT_PATH = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "harmonise-event-"));
+  const path = join(dir, "event.json");
+  writeFileSync(path, JSON.stringify({ ref: "refs/heads/main" }));
+  return path;
+})();
+
+/**
  * @type {import("#core/runtime.mjs").Env}
  */
 const runner = {
@@ -43,7 +59,7 @@ const runner = {
   GITHUB_REPOSITORY: "ecoma-io/action-agents",
   GITHUB_WORKSPACE: "/work",
   GITHUB_EVENT_NAME: "workflow_dispatch",
-  GITHUB_EVENT_PATH: "/work/event.json",
+  GITHUB_EVENT_PATH: EVENT_PATH,
   "INPUT_SOURCE-LANGUAGE": "en",
 };
 
@@ -315,7 +331,7 @@ function context() {
     owner: "ecoma-io",
     repo: "action-agents",
     eventName: "workflow_dispatch",
-    eventPath: "/work/event.json",
+    eventPath: EVENT_PATH,
     workspace: "/work",
     apiUrl: "https://api.github.com",
   };
@@ -1404,8 +1420,13 @@ describe("run with recorded state", () => {
     expect(forgeDouble.writes).toEqual([]);
     const out = logged(log);
     // A fully-failed run exits before the report block: the refusal reaches
-    // the thrown message, never a report line.
-    expect(out).toBe("");
+    // the thrown message, never a report line. The policy-source audit line
+    // is the one thing a refused run still logs — it fires before any model
+    // call, so the run's provenance is on record even when it goes red.
+    expect(out).toBe(
+      "policy source: event=workflow_dispatch basis=dispatched branch=main " +
+        `sha=${"a".repeat(40)} path=.github/action-agents/harmonise/harmonise.json5`,
+    );
   });
 
   it("writes prior and proposed records into the same commit's state file", async () => {

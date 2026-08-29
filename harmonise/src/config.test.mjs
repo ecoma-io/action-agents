@@ -24,11 +24,16 @@ const VALID = `{
   languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
 }`;
 
+/** The resolved policy source every loadConfigFile test resolves against. */
+/** @type {import("#core/policy.mjs").PolicySource} */
+const SOURCE = { basis: "default", branch: "main", sha: "5".repeat(40) };
+
 describe("loadConfigFile", () => {
   it("reads a default-location json5 file", async () => {
     const { raw, path } = await loadConfigFile({
       forge: reader({ ".github/action-agents/harmonise/harmonise.json5": VALID }),
       configPath: "",
+      source: SOURCE,
     });
 
     expect(path).toBe(".github/action-agents/harmonise/harmonise.json5");
@@ -39,6 +44,7 @@ describe("loadConfigFile", () => {
     const { path } = await loadConfigFile({
       forge: reader({ ".github/action-agents/harmonise/harmonise.json": VALID }),
       configPath: "",
+      source: SOURCE,
     });
 
     expect(path).toBe(".github/action-agents/harmonise/harmonise.json");
@@ -52,24 +58,25 @@ describe("loadConfigFile", () => {
           ".github/action-agents/harmonise/harmonise.json": VALID,
         }),
         configPath: "",
+        source: SOURCE,
       }),
     ).rejects.toThrow(/declared twice/);
   });
 
   it("refuses when no location exists — harmonise has no policy-empty mode", async () => {
-    await expect(loadConfigFile({ forge: reader({}), configPath: "" })).rejects.toThrow(
-      /no config file exists/,
-    );
+    await expect(
+      loadConfigFile({ forge: reader({}), configPath: "", source: SOURCE }),
+    ).rejects.toThrow(/no config file exists/);
   });
 
   it("reads exactly the configured path when config-path is set, and refuses if absent", async () => {
     const forge = reader({ "custom/map.json": VALID });
-    const loaded = await loadConfigFile({ forge, configPath: "custom/map.json" });
+    const loaded = await loadConfigFile({ forge, configPath: "custom/map.json", source: SOURCE });
     expect(loaded.path).toBe("custom/map.json");
 
     await expect(
-      loadConfigFile({ forge: reader({}), configPath: "custom/map.json" }),
-    ).rejects.toThrow(/does not exist on the default branch/);
+      loadConfigFile({ forge: reader({}), configPath: "custom/map.json", source: SOURCE }),
+    ).rejects.toThrow(/does not exist on branch/);
   });
 
   it("refuses a file that does not parse or holds a non-object", async () => {
@@ -77,6 +84,7 @@ describe("loadConfigFile", () => {
       loadConfigFile({
         forge: reader({ ".github/action-agents/harmonise/harmonise.json5": "{nope" }),
         configPath: "",
+        source: SOURCE,
       }),
     ).rejects.toThrow(/does not parse/);
 
@@ -84,6 +92,7 @@ describe("loadConfigFile", () => {
       loadConfigFile({
         forge: reader({ ".github/action-agents/harmonise/harmonise.json5": "[1,2]" }),
         configPath: "",
+        source: SOURCE,
       }),
     ).rejects.toThrow(/must hold an object/);
   });
