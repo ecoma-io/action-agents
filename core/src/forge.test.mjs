@@ -345,6 +345,51 @@ describe("label writes", () => {
     expect(error.cause.status).toBe(503);
     expect(recorder.calls).toHaveLength(1);
   });
+  it("treats a 404 as the label already absent — a replayed removal succeeds", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        "DELETE /repos/o/r/issues/7/labels/size%2Fxl": () =>
+          new Response("Not Found", { status: 404 }),
+      },
+      recorder,
+    );
+
+    await expect(client.removeLabel(7, "size/xl")).resolves.toBeUndefined();
+    expect(recorder.calls).toHaveLength(1);
+  });
+});
+describe("pagination cap", () => {
+  it("refuses a listing whose Link header never ends", async () => {
+    const self = '<https://api.github.com/repos/o/r/labels?per_page=100&page=2>; rel="next"';
+    const client = forge("o", "r", {
+      "GET /repos/o/r/labels?per_page=100": page([{ name: "bug" }], self),
+      "GET /repos/o/r/labels?per_page=100&page=2": page([{ name: "docs" }], self),
+    });
+
+    const error = await client.listRepositoryLabels().catch((c) => c);
+
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/after 100 pages/);
+  });
+
+  it("bounds a tree listing's pages the same way", async () => {
+    const sha = "abc123def4567890abcdef1234567890abcdef12";
+    const self = `<https://api.github.com/repos/o/r/git/trees/${sha}?recursive=1&page=2>; rel="next"`;
+    const tree = { truncated: false, tree: [{ path: "a.md", type: "blob" }] };
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/git/trees/${sha}?recursive=1`]: page(tree, self),
+      [`GET /repos/o/r/git/trees/${sha}?recursive=1&page=2`]: page(tree, self),
+    });
+
+    const error = await client.listTree(sha).catch((c) => c);
+
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/after 100 pages/);
+  });
 });
 
 describe("comments", () => {

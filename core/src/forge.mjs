@@ -177,6 +177,44 @@ export function isRefAbsentError(cause) {
   );
 }
 
+/** The most pages one listing follows before refusing: a hostile or broken
+ * `Link` header cannot walk the client forever, and every listing the
+ * actions read is a bounded surface. 100 pages at the 100-entry page size
+ * is 10 000 entries — far past any thread or tree these actions answer. */
+export const MAX_PAGES_PER_LISTING = 100;
+
+/**
+ * Refuses a listing that still offers a next page at the page cap — a
+ * self-looping or endless `Link` header, read as the broken answer it is.
+ *
+ * @param {string} operation the listing's name, for the refusal text
+ * @param {number} hops pages already fetched
+ */
+function assertPagesBounded(operation, hops) {
+  if (hops >= MAX_PAGES_PER_LISTING) {
+    throw new ForgeError(
+      operation,
+      new Error(
+        `the listing still offers a next page after ${String(MAX_PAGES_PER_LISTING)} pages — ` +
+          `refusing to keep following pages`,
+      ),
+    );
+  }
+}
+
+/**
+ * Whether a forge failure is GitHub's 404 — read as "already absent" by the
+ * label removal, and matched by the typed HTTP status, never by error text.
+ *
+ * @param {unknown} cause anything a rejected forge call may throw
+ * @returns {boolean}
+ */
+function isNotFound(cause) {
+  return (
+    cause instanceof ForgeError && cause.cause instanceof HttpError && cause.cause.status === 404
+  );
+}
+
 const PER_PAGE = 100;
 
 /**
@@ -316,7 +354,10 @@ export function createForge(config) {
       /** @type {unknown[]} */
       const pages = [];
       let url = `${root}/git/trees/${encodeURIComponent(sha)}?recursive=1`;
+      let hops = 0;
       for (;;) {
+        assertPagesBounded(operation, hops);
+        hops += 1;
         let response;
         try {
           response = await http.request(url, { maxBodyBytes: MAX_TREE_RESPONSE_BYTES });
@@ -535,12 +576,23 @@ export function createForge(config) {
     async removeLabel(number, name) {
       // The removal lands even when the response is lost; replaying a
       // timed-out delete would 404 on the now-absent label and fail the run.
-      await call(`removing '${name}' from #${String(number)}`, () =>
-        http.request(`${root}/issues/${String(number)}/labels/${encodeURIComponent(name)}`, {
-          method: "DELETE",
-          maxAttempts: 1,
-        }),
-      );
+      // A 404 is the end state already reached: a replayed event or a
+      // concurrent run can remove the label between the run's snapshot and
+      // this call, and GitHub answers that with 404. The thread existing is
+      // never in doubt here — every removal in these actions is preceded by
+      // an addLabels call on the same thread that would have failed first —
+      // so a 404 can only mean the label is already gone.
+      try {
+        await call(`removing '${name}' from #${String(number)}`, () =>
+          http.request(`${root}/issues/${String(number)}/labels/${encodeURIComponent(name)}`, {
+            method: "DELETE",
+            maxAttempts: 1,
+          }),
+        );
+      } catch (cause) {
+        if (isNotFound(cause)) return;
+        throw cause;
+      }
     },
 
     /**
@@ -863,7 +915,10 @@ export function createForge(config) {
     const pages = [];
     const joiner = first.includes("?") ? "&" : "?";
     let url = `${first}${joiner}per_page=${String(PER_PAGE)}`;
+    let hops = 0;
     for (;;) {
+      assertPagesBounded(operation, hops);
+      hops += 1;
       let response;
       try {
         response = await http.request(url);
