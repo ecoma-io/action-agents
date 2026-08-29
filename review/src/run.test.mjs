@@ -2834,6 +2834,39 @@ describe("the applicability axis", () => {
     expect(bytes).not.toContain("applicability");
   });
 
+  it("records the applicability fact on nothing-to-review when the policy is active", async () => {
+    const forge = forgeStub({
+      config: JSON.stringify({
+        schemaVersion: 1,
+        applicability: {
+          bots: [],
+          rules: [{ id: "catch-all", context: "maintainer", when: {} }],
+        },
+      }),
+      files: [],
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+    });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(result.applicability).toBeDefined();
+    expect(result.applicability).toEqual({
+      context: "maintainer",
+      applicable: true,
+      posture: "standard",
+      intensity: {},
+      matchedRule: "catch-all",
+      basis: "rule",
+      inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+    });
+  });
+
   it("suppresses every skip record under dry-run — nothing written means nothing", async () => {
     const draft = forgeStub({
       config: DOGFOOD_CONFIG,

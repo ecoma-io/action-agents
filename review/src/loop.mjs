@@ -104,7 +104,7 @@ export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
  * @param {string[]} [input.diffInspectedPaths] the code-recorded inspections — a deletion's own
  *   diff section is the inspection of that path; defaults to none
  * @param {import("./config.mjs").Strictness} [input.strictness] the review policy; the conclude edge tightens at "high" (defaults to "medium")
- * @returns {Promise<LoopOutcome>}
+ * @param {import("./lanes.mjs").LaneAssignment[]} [input.lanes] the lane assignments for this review; undefined preserves the hardcoded default
  */
 export async function runLoop({
   chat,
@@ -117,6 +117,7 @@ export async function runLoop({
   expectedPaths,
   diffInspectedPaths,
   strictness = "medium",
+  lanes,
 }) {
   const maxToolCalls = limits?.maxToolCalls ?? MAX_TOOL_CALLS;
   const maxEvidenceBytes = limits?.evidenceBytes ?? MAX_CUMULATIVE_EVIDENCE_BYTES;
@@ -162,7 +163,7 @@ export async function runLoop({
       evidenceBytes: ledger.evidenceBytes,
       evidenceLimit: maxEvidenceBytes,
       // Lanes are fixed by code before the loop starts.
-      lanesAssigned: true,
+      lanesAssigned: lanes === undefined ? true : lanes.length > 0,
       strictness,
     };
   }

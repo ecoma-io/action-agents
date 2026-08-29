@@ -37,7 +37,7 @@ workflow's choice, and `dry-run` needs no write at all.
 | `dry-run`            | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                               |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
-backoff, `Retry-After` and the attempt limit are `core/src/http.mjs` policy, not inputs.
+backoff, `Retry-After` and the attempt limit are `core/transport/http.mjs` policy, not inputs.
 The workflow's `timeout-minutes` (5 in this repository's own `triage.yml`) remains the
 outer safety boundary — the per-request value bounds one call, the job timeout bounds the
 run. A value below 1000 is a startup error, so the HTTP client's disabled-timeout path is

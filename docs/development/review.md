@@ -281,7 +281,7 @@ shapes never mix in one record.
 | `artifact-path`      | where inside the workspace the machine-readable run record lands — see [The run artifact](#the-run-artifact); default `.review-artifact`                                                                         |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
-backoff, `Retry-After` and the attempt limit are `core/src/http.mjs` policy, not inputs.
+backoff, `Retry-After` and the attempt limit are `core/transport/http.mjs` policy, not inputs.
 The workflow's `timeout-minutes` (15 in this repository's own `review.yml`) remains the
 outer safety boundary — the per-request value bounds one call, the job timeout bounds the
 run. A value below 1000 is a startup error, so the HTTP client's disabled-timeout path is
@@ -1024,8 +1024,8 @@ Changed files examined: 2/2.
 
 ### Nits (2)
 
-- `core/src/http.mjs:7` — message…
-  evidence: `core/src/http.mjs:1-88`
+- `core/transport/http.mjs:7` — message…
+  evidence: `core/transport/http.mjs:1-88`
 ```
 
 At `medium` strictness the nits section renders inside a collapsible
