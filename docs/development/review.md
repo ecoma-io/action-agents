@@ -130,6 +130,83 @@ guards and why the pre-publication check — which compares SHAs read seconds
 apart, no clocks involved — is the load-bearing one. A skip and an abandonment
 are honest no-ops: no work was claimed, so nothing is red.
 
+## The applicability axis
+
+Before the first model call — before diff accounting, before the inventory —
+the run classifies its execution context and decides whether a full review is
+the right response to this pull request at all. The axis is declared policy,
+not heuristics: absent an `applicability` key the classification never runs
+and behaviour is byte-for-byte the pre-axis behaviour. Design and landing
+sequence: [the applicability policy](applicability-policy.md).
+
+### The context
+
+Three contexts, derived in order, first match wins:
+
+| Context      | Derived from                                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `automation` | the author's account type is `Bot` and its login is on the policy's `bots` allowlist — exact, case-sensitive bytes |
+| `maintainer` | a write-class `author_association` (`OWNER`, `MEMBER`, `COLLABORATOR`) on a provably same-repo head                |
+| `external`   | everything else                                                                                                    |
+
+An unallowlisted bot falls through, not down: a wrong guess about a bot must
+cost more review, never less, so a `MEMBER` bot on a same-repo branch is a
+maintainer, exactly as a human with the same standing would be. The head's
+provenance is proven, not assumed: the event's head repository full name
+compared against the base repository's, an absent name a deleted fork. Beside
+the verdict, the derivation records what it actually read — the raw
+association, the head provenance (`same-repo`, `fork`, `deleted`) and the
+author provenance (`bot-allowlisted`, `bot-unlisted`, `human`, `unknown`) —
+so the audit record shows the classification's inputs, not just its output.
+
+### The rules
+
+The `applicability` key carries `bots` (the allowlist) and `rules`, evaluated
+in config order, first match wins — never reordered, scored or merged. A rule
+names itself (`id`, unique, the audit record's name), may pin a context
+(absent matches every context), carries conjunctive `when` conditions —
+`title` and `branch` as regular-expression sources, `paths` as globs in the
+one configuration dialect over the post-ignore inventory — and a `run`
+boolean (default true). Nothing matching is the defaults: review runs, and
+the record says so with basis `default`.
+
+Two laws the validator enforces rather than asks reviewers to remember:
+
+- `run: false` must declare a pinned context — a rule built from title,
+  branch or paths conventions never governs alone; and
+- that context is never `external` — the external context is frozen; full
+  review is what an untrusted contribution is for.
+
+An automation rule over an empty allowlist is refused too: it could classify
+nothing and would exist only to confuse the audit. A rule carrying `posture`
+or `intensity` — the later pull requests' surface — is refused as unknown,
+never silently ignored. Every one of these refusals is red at startup, before
+the first model call, the same refusal class as a bad `strictness`.
+
+### What a skip leaves behind
+
+A rule matching with `run: false` ends the run before the changed-file
+listing is even fetched (a `paths` rule fetches it once, exactly), before
+budget accounting, before the model: the run is green, writes no comment, and
+publishes a **skipped-run record** where a full run would write its artifact —
+the same repository/head/pull-request facts, `outcome: skipped` with the
+reason naming the rule (`#N matched applicability rule '<id>' — review
+intentionally not run`), and the applicability fact with `applicable: false`
+and the deciding rule's id. A pull request already skipped by its draft or
+closed state writes the same reduced record **when the policy is on**, with
+basis `state` — under a policy, a skip is recorded honestly rather than only
+logged; without one, today's log line alone, unchanged. The log carries one
+audit line whenever the policy is in play:
+
+```text
+policy source: event=pull_request basis=base branch=main sha=<sha> path=.github/action-agents/review/review.json5
+```
+
+Dry run suppresses every skip record: absolute zero mutation means zero.
+The artifact schema moves to `schemaVersion: 3` only when a run has an
+applicability fact to carry; a policy-less run still writes `2`, and the two
+shapes never mix in one record.
+
 ## Inputs
 
 | Input                | Meaning                                                                                                                                                                                                          |
@@ -205,6 +282,25 @@ file alone.
     },
   ],
 
+  // Whether review applies to a pull request at all — the applicability
+  // axis. Absent, the key is off entirely and nothing else changes. `bots`
+  // allowlists the logins that classify as automation (exact bytes);
+  // `rules` are first-match-wins: pin a context, declare conjunctive
+  // `when` conditions, and whether review runs. `run: false` must pin a
+  // context and that context is never `external`. See [the applicability
+  // axis](#the-applicability-axis).
+  applicability: {
+    bots: ["ecoma-io", "renovate[bot]"],
+    rules: [
+      {
+        id: "release-prs",
+        context: "automation",
+        when: { title: "^chore\\(release\\)", branch: "^release/" },
+        run: false,
+      },
+    ],
+  },
+
   // Prose, pointed at rather than embedded; this path is the default.
   instructions: {
     instruction: ".github/action-agents/review/instruction.md",
@@ -220,6 +316,9 @@ file alone.
 - instruction and rule documents carry the same 8 KiB cap as every action's
   documents on [the configuration page](configuration.md) — overflow is
   refused, never truncated;
+- the `applicability` key, when present, validates as its own policy — see
+  [the applicability axis](#the-applicability-axis) — in the same
+  red-at-startup refusal class as every other key;
 - a rule that matches no changed file in a given pull request is dormant, not
   an error — rules are declared for the repository, not for one diff.
 
@@ -905,25 +1004,28 @@ contract a human reads; both are projections of the same final facts, and
 neither can drift from the other, because both are built from the same
 values in the same pass.
 
-The schema is versioned (`schemaVersion: 2`) and the builder is fail-closed:
+The schema is versioned (`schemaVersion: 2`; `3` once a run carries an
+applicability fact, and the two never mix in one record) and the builder is
+fail-closed:
 a fact outside the declared key sets, a vocabulary word the code does not
 declare (`severity`, `verdict`, lifecycle state, gate name, risk level,
 attention lane, phase name), a gate table that is not the declared gates in
 the declared order, or a verdict whose lifecycle does not follow from it is
 a typed `ArtifactError`, never a coerced field. The fields:
 
-| Field                                  | Carries                                                                                                                                     |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `repository`, `pullRequest`, `headRef` | what was reviewed, the head as a 40-character hex sha                                                                                       |
-| `outcome`                              | `published` and the same reason string the run logs                                                                                         |
-| `policy`                               | the strictness and strategy the run ran under                                                                                               |
-| `risk`                                 | the per-file risk table, byte-wise sorted, one row per changed file                                                                         |
-| `findings`                             | the published set — each with its identity, anchor line, and `provenance` naming the recorded read that covers it                           |
-| `verification`                         | the gate's outcome plus one entry per bound verdict, derived from the findings — a separate verdict list that could disagree does not exist |
-| `gates`                                | every declared gate's result, in the declared order, a reason iff it failed                                                                 |
-| `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                             |
-| `phases`                               | the loop's phase transitions, in order                                                                                                      |
-| `provenance`                           | the marker comment's id — nothing else, no timestamp, no run id                                                                             |
+| Field                                  | Carries                                                                                                                                          |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `repository`, `pullRequest`, `headRef` | what was reviewed, the head as a 40-character hex sha                                                                                            |
+| `outcome`                              | `published` and the same reason string the run logs                                                                                              |
+| `policy`                               | the strictness and strategy the run ran under                                                                                                    |
+| `risk`                                 | the per-file risk table, byte-wise sorted, one row per changed file                                                                              |
+| `findings`                             | the published set — each with its identity, anchor line, and `provenance` naming the recorded read that covers it                                |
+| `verification`                         | the gate's outcome plus one entry per bound verdict, derived from the findings — a separate verdict list that could disagree does not exist      |
+| `gates`                                | every declared gate's result, in the declared order, a reason iff it failed                                                                      |
+| `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                                  |
+| `phases`                               | the loop's phase transitions, in order                                                                                                           |
+| `provenance`                           | the marker comment's id — nothing else, no timestamp, no run id                                                                                  |
+| `applicability`                        | schema version 3 only — the derived context, its inputs, the decision and what decided it; see [the applicability axis](#the-applicability-axis) |
 
 Byte-determinism is a property, not a style: identical facts serialise to
 identical bytes (`serialiseArtifact`), so two runs of the same review differ
@@ -938,8 +1040,11 @@ lifecycle, byte for byte as it arrived. A skipped candidate is unresolved
 with no id — the one state a finding can hold without one.
 
 Publication-only, and stale-refusing twice. A run that publishes nothing —
-`nothing-to-review`, a skip, an abandonment, a dry run — writes no artifact,
-and the newer-head rule extends to the record: `assertFreshArtifact` compares
+`nothing-to-review`, an abandonment, a dry run — writes no artifact; a skip
+writes nothing but its log line when no policy is present, and the reduced
+skipped-run record when one is (see [the applicability
+axis](#the-applicability-axis)), the newer-head rule extends to the record:
+`assertFreshArtifact` compares
 the artifact's head against a forge read taken before the comment exists, so
 a refusal there writes nothing at all, and again against a second read taken
 after the comment is published — the write-time guard. A head that moves in

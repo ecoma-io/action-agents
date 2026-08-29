@@ -10,6 +10,13 @@ import * as p from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { reviewPullRequest } from "./run.mjs";
+import { applicabilityArtifactSchemaVersion, serialiseArtifact } from "./artifact.mjs";
+import {
+  DOGFOOD_CONFIG,
+  FIRST_TIME_FORK,
+  MAINTAINER_DOCS,
+  RELEASE_AUTOMATION,
+} from "./applicability.fixtures.mjs";
 import { findingIdentity } from "./answer.mjs";
 import { VERIFIER_MAX_EVIDENCE_BYTES, VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
@@ -2088,7 +2095,7 @@ describe("the run artifact", () => {
     });
     expect(result.outcome).toBe("published");
     expect(result.commentId).toBe(101);
-    const artifact = result.artifact;
+    const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
     if (artifact === undefined) throw new Error("expected an artifact on publication");
     expect(artifact.schemaVersion).toBe(2);
     expect(artifact.repository).toBe("acme/widgets");
@@ -2155,7 +2162,7 @@ describe("the run artifact", () => {
       event: EVENT,
       io: io(forge, chat),
     });
-    const artifact = result.artifact;
+    const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
     if (artifact === undefined) throw new Error("expected an artifact on publication");
     expect(artifact.findings[0]?.lifecycle).toBe("refuted");
     expect(artifact.findings[0]?.verdict).toBe("refuted");
@@ -2182,7 +2189,7 @@ describe("the run artifact", () => {
       event: EVENT,
       io: io(forge, chat),
     });
-    const artifact = result.artifact;
+    const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
     if (artifact === undefined) throw new Error("expected an artifact on publication");
     expect(artifact.findings[0]?.lifecycle).toBe("unresolved");
     expect(artifact.findings[0]?.verdict).toBe("uncertain");
@@ -2318,7 +2325,9 @@ describe("artifact freshness around publication", () => {
       io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
     });
     expect(result.outcome).toBe("published");
-    expect(result.artifact?.provenance).toEqual({ commentId: 101 });
+    expect(
+      /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact)?.provenance,
+    ).toEqual({ commentId: 101 });
     const upsertAt = forge.timeline.indexOf("create-comment");
     expect(upsertAt).toBeGreaterThan(-1);
     const validatedAt = forge.timeline.findIndex(
@@ -2573,5 +2582,379 @@ describe("the untrusted-data ceiling (no steering)", () => {
     expect(
       logged.some((line) => line.includes("finding quarantined") && line.includes("lib/new.mjs:1")),
     ).toBe(true);
+  });
+});
+
+describe("the applicability axis", () => {
+  /** The dogfood context — the fixtures' head full names must match the base repo. */
+  const DOGFOOD_CONTEXT = { ...CONTEXT, owner: "ecoma-io", repo: "action-agents" };
+  /** @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture */
+  const dogfoodEvent = (fixture) => ({
+    action: "synchronize",
+    pull_request: { ...fixture, number: 7, base: { ref: "main", sha: "8".repeat(40) } },
+  });
+
+  /** The snapshot the stub serves for a fixture: its title and branch, the stub's head. */
+  /** @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture */
+  const snapshotFor = (fixture) =>
+    snapshot({ title: fixture.title, head: { ref: fixture.head.ref, sha: HEAD } });
+
+  /** A chat that counts requests — zero is the proof a skip never modeled. */
+  /** @param {number[]} sink @returns {import("#core/chat.mjs").Chat} */
+  const countingChat = (sink) => ({
+    async complete() {
+      sink.push(1);
+      return {
+        content: '{"findings":[],"summary":"nothing to report"}',
+        toolCalls: [],
+        finishReason: "stop",
+      };
+    },
+  });
+
+  /** A forge whose changed-file listing is counted. */
+  /** @param {ReturnType<typeof forgeStub>} forge @returns {number[]} */
+  const countedListings = (forge) => {
+    /** @type {number[]} */
+    const sink = [];
+    const inner = forge.listPullRequestFiles.bind(forge);
+    forge.listPullRequestFiles = async () => {
+      sink.push(1);
+      return inner(7);
+    };
+    return sink;
+  };
+
+  it("skips the #192-shaped release automation on the dogfood rule, recorded, before any model call", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_CONFIG,
+      snapshotOverride: snapshotFor(RELEASE_AUTOMATION),
+    });
+    const listings = countedListings(forge);
+    /** @type {number[]} */
+    const chatCalls = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(RELEASE_AUTOMATION),
+      io: io(forge, countingChat(chatCalls)),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(result.reason).toContain("release-prs");
+    expect(forge.calls.upserts).toHaveLength(0);
+    expect(listings).toHaveLength(0);
+    expect(chatCalls).toHaveLength(0);
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.schemaVersion).toBe(3);
+    expect(record.outcome).toEqual({
+      classification: "skipped",
+      reason: result.reason,
+    });
+    expect(record.repository).toBe("ecoma-io/action-agents");
+    expect(record.applicability).toEqual({
+      context: "automation",
+      applicable: false,
+      posture: "standard",
+      intensity: {},
+      matchedRule: "release-prs",
+      basis: "rule",
+      inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+    });
+  });
+
+  it("reviews the #193-shaped maintainer docs change fully and records the default", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_CONFIG,
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+    });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
+    expect(artifact.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(
+      /** @type {import("./artifact.mjs").RunArtifactWithApplicability} */ (artifact).applicability,
+    ).toEqual({
+      context: "maintainer",
+      applicable: true,
+      posture: "standard",
+      intensity: {},
+      matchedRule: null,
+      basis: "default",
+      inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+    });
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("reviews a first-time fork fully — external context, the defaults, no skip", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_CONFIG,
+      snapshotOverride: snapshotFor(FIRST_TIME_FORK),
+    });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(FIRST_TIME_FORK),
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
+    expect(artifact.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(
+      /** @type {import("./artifact.mjs").RunArtifactWithApplicability} */ (artifact).applicability,
+    ).toEqual({
+      context: "external",
+      applicable: true,
+      posture: "standard",
+      intensity: {},
+      matchedRule: null,
+      basis: "default",
+      inputs: { association: "FIRST_TIME_CONTRIBUTOR", head: "fork", authorType: "human" },
+    });
+  });
+
+  it("refuses an external-skipping policy red before any model call", async () => {
+    const forge = forgeStub({
+      config: JSON.stringify({
+        schemaVersion: 1,
+        applicability: {
+          bots: ["acme"],
+          rules: [{ id: "forks", context: "external", run: false }],
+        },
+      }),
+      snapshotOverride: snapshotFor(FIRST_TIME_FORK),
+    });
+    const listings = countedListings(forge);
+    /** @type {number[]} */
+    const chatCalls = [];
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: DOGFOOD_CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: dogfoodEvent(FIRST_TIME_FORK),
+        io: io(forge, countingChat(chatCalls)),
+      }),
+    ).rejects.toThrow(/external context is frozen/);
+    expect(chatCalls).toHaveLength(0);
+    expect(listings).toHaveLength(0);
+  });
+
+  it("records a draft state skip under the policy, and only a log line without one", async () => {
+    const underPolicy = forgeStub({
+      config: DOGFOOD_CONFIG,
+      snapshotOverride: snapshot({ draft: true }),
+    });
+    /** @type {number[]} */
+    const chatCalls = [];
+    const recorded = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(underPolicy, countingChat(chatCalls)),
+    });
+    expect(recorded.outcome).toBe("skip");
+    expect(chatCalls).toHaveLength(0);
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (recorded.artifact)));
+    expect(record.schemaVersion).toBe(3);
+    expect(record.outcome.classification).toBe("skipped");
+    expect(record.applicability).toEqual({
+      context: "maintainer",
+      applicable: false,
+      posture: "standard",
+      intensity: {},
+      matchedRule: null,
+      basis: "state",
+      inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+    });
+
+    const withoutPolicy = forgeStub({ snapshotOverride: snapshot({ draft: true }) });
+    const bare = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(withoutPolicy),
+    });
+    expect(bare.outcome).toBe("skip");
+    expect(bare.artifact).toBeUndefined();
+  });
+
+  it("keeps zero-config runs byte-for-byte on schema version 2, no applicability anywhere", async () => {
+    const forge = forgeStub({ snapshotOverride: snapshotFor(MAINTAINER_DOCS) });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const bytes = serialiseArtifact(/** @type {any} */ (result.artifact));
+    const record = JSON.parse(bytes);
+    expect(record.schemaVersion).toBe(2);
+    expect(Object.keys(record).sort()).toEqual(
+      [
+        "coverage",
+        "findings",
+        "gates",
+        "headRef",
+        "outcome",
+        "phases",
+        "policy",
+        "provenance",
+        "pullRequest",
+        "repository",
+        "risk",
+        "schemaVersion",
+        "verification",
+      ].sort(),
+    );
+    expect(bytes).not.toContain("applicability");
+  });
+
+  it("suppresses every skip record under dry-run — nothing written means nothing", async () => {
+    const draft = forgeStub({
+      config: DOGFOOD_CONFIG,
+      snapshotOverride: snapshot({ draft: true }),
+    });
+    const draftResult = await reviewPullRequest({
+      inputs: { ...INPUTS, dryRun: true },
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(draft),
+    });
+    expect(draftResult.outcome).toBe("skip");
+    expect(draftResult.artifact).toBeUndefined();
+
+    const ruled = forgeStub({
+      config: DOGFOOD_CONFIG,
+      snapshotOverride: snapshotFor(RELEASE_AUTOMATION),
+    });
+    const ruledResult = await reviewPullRequest({
+      inputs: { ...INPUTS, dryRun: true },
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(RELEASE_AUTOMATION),
+      io: io(ruled),
+    });
+    expect(ruledResult.outcome).toBe("dry-run");
+    expect(ruledResult.reason).toContain("release-prs");
+    expect(ruledResult.artifact).toBeUndefined();
+  });
+
+  it("skips on a paths rule before the budget refusal, fetching the listing exactly once", async () => {
+    const config = JSON.stringify({
+      schemaVersion: 1,
+      maxDiffLines: 100,
+      applicability: {
+        bots: ["acme"],
+        rules: [{ id: "docs", context: "maintainer", when: { paths: ["docs/**"] }, run: false }],
+      },
+    });
+    const skipping = forgeStub({
+      config,
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+      files: [{ filename: "docs/guide.md", status: "modified", additions: 6000, deletions: 0 }],
+    });
+    const listings = countedListings(skipping);
+    const skipped = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(skipping),
+    });
+    expect(skipped.outcome).toBe("skip");
+    expect(skipped.reason).toContain("'docs'");
+    expect(listings).toHaveLength(1);
+
+    // The counterpart: a listing that matches no rule keeps today's budget
+    // refusal, red, unchanged.
+    const refusing = forgeStub({
+      config,
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+      files: [{ filename: "src/giant.mjs", status: "modified", additions: 6000, deletions: 0 }],
+    });
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: DOGFOOD_CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: dogfoodEvent(MAINTAINER_DOCS),
+        io: io(refusing),
+      }),
+    ).rejects.toThrow(/past the break/);
+  });
+
+  it("replays identically — the same skip decides the same way, in the same bytes", async () => {
+    /** @returns {Promise<string>} */
+    const once = async () => {
+      const forge = forgeStub({
+        config: DOGFOOD_CONFIG,
+        snapshotOverride: snapshotFor(RELEASE_AUTOMATION),
+      });
+      const result = await reviewPullRequest({
+        inputs: INPUTS,
+        context: DOGFOOD_CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: dogfoodEvent(RELEASE_AUTOMATION),
+        io: io(forge),
+      });
+      return serialiseArtifact(/** @type {any} */ (result.artifact));
+    };
+    expect(await once()).toBe(await once());
+  });
+
+  it("audits the policy source on a state skip under the policy, and stays silent without one", async () => {
+    const underPolicy = forgeStub({
+      config: DOGFOOD_CONFIG,
+      snapshotOverride: snapshot({ draft: true }),
+    });
+    /** @type {string[]} */
+    const withPolicy = [];
+    await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: { ...io(underPolicy), info: (m) => withPolicy.push(m) },
+    });
+    expect(withPolicy.some((line) => line.startsWith("policy source:"))).toBe(true);
+
+    const withoutPolicy = forgeStub({ snapshotOverride: snapshot({ draft: true }) });
+    /** @type {string[]} */
+    const bare = [];
+    await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: { ...io(withoutPolicy), info: (m) => bare.push(m) },
+    });
+    expect(bare.some((line) => line.startsWith("policy source:"))).toBe(false);
   });
 });

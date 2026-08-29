@@ -19,6 +19,7 @@
 
 import { json5Parse } from "#core/json5-parse.mjs";
 import { assertPolicySchemaVersion } from "#core/policy.mjs";
+import { validateApplicabilityPolicy } from "./applicability.mjs";
 
 /**
  * The operations the config loaders need — a slice of the forge client, so
@@ -49,6 +50,7 @@ import { assertPolicySchemaVersion } from "#core/policy.mjs";
  * @property {string[]} ignore the universe filter, glob dialect
  * @property {number} maxDiffLines counted additions plus deletions, never asked of a model
  * @property {ReviewRule[]} rules
+ * @property {import("./applicability.mjs").ApplicabilityPolicy} [applicability] whether review applies at all — absent means it applies to everything
  * @property {string} instructionPath the custom rubric's configured-or-convention path
  */
 
@@ -191,11 +193,12 @@ export function validateConfig(raw) {
       key !== "maxDiffLines" &&
       key !== "rules" &&
       key !== "instructions" &&
+      key !== "applicability" &&
       key !== "schemaVersion"
     ) {
       throw new Error(
         `unknown config key '${key}' — the file holds strictness, strategy, language, ` +
-          `ignore, maxDiffLines, rules, instructions and schemaVersion`,
+          `ignore, maxDiffLines, rules, instructions, applicability and schemaVersion`,
       );
     }
   }
@@ -309,7 +312,10 @@ export function validateConfig(raw) {
       instructionPath = value;
     }
   }
-
+  const applicability =
+    raw["applicability"] === undefined
+      ? undefined
+      : validateApplicabilityPolicy(raw["applicability"]);
   return {
     strictness,
     strategy,
@@ -318,6 +324,7 @@ export function validateConfig(raw) {
     maxDiffLines: maxDiffLinesValue,
     rules,
     instructionPath,
+    ...(applicability !== undefined ? { applicability } : {}),
   };
 }
 
