@@ -90,6 +90,7 @@ export const ACTION = "review";
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
  * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact} [artifact] the machine-readable run record — present when the run published or when a policy recorded a skipped run (the record is the skip's whole outcome); absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
+ * @property {import("./artifact.mjs").ApplicabilitySection} [applicability] the applicability fact, present when the review policy is active
  */
 /**
  * @param {object} input
@@ -288,7 +289,14 @@ export async function reviewPullRequest({
   }
 
   if (inventory.reviewed.length === 0) {
-    return nothingToReview({ pullRequestNumber, headSha, io, dryRun: inputs.dryRun, startedAt });
+    return nothingToReview({
+      pullRequestNumber,
+      headSha,
+      io,
+      dryRun: inputs.dryRun,
+      startedAt,
+      ...(applicabilityFact !== undefined ? { applicabilityFact } : {}),
+    });
   }
 
   // ── Coverage: the expected set, derived in code from the diff ───────────
@@ -386,6 +394,7 @@ export async function reviewPullRequest({
     expectedPaths,
     diffInspectedPaths,
     strictness: runStrictness,
+    lanes,
   });
   for (const line of outcome.log) io.info(`review: ${line}`);
   io.info(
@@ -877,10 +886,17 @@ function wireDefect(item, detail, info) {
  * body so stale findings do not outlive their relevance; with no marker,
  * a green log line is the whole result.
  *
- * @param {{ pullRequestNumber: number, headSha: string, io: Io, dryRun: boolean, startedAt: number }} input
+ * @param {{ pullRequestNumber: number, headSha: string, io: Io, dryRun: boolean, startedAt: number, applicabilityFact?: import("./artifact.mjs").ApplicabilitySection }} input
  * @returns {Promise<RunResult>}
  */
-async function nothingToReview({ pullRequestNumber, headSha, io, dryRun, startedAt }) {
+async function nothingToReview({
+  pullRequestNumber,
+  headSha,
+  io,
+  dryRun,
+  startedAt,
+  applicabilityFact,
+}) {
   // Same publication guard as the main path: the clearing update is a
   // write, and writes re-check state and head first.
   const fresh = await io.forge.getPullRequest(pullRequestNumber);
@@ -906,7 +922,7 @@ async function nothingToReview({ pullRequestNumber, headSha, io, dryRun, started
         io.info(`review: dry run — the clearing update that would have been written:\n${body}`);
         return { outcome: "dry-run", reason: "dry run: universe empty, nothing written" };
       }
-      const upsert = await upsertComment({
+      await upsertComment({
         store: io.forge,
         action: ACTION,
         issueNumber: pullRequestNumber,
@@ -915,9 +931,16 @@ async function nothingToReview({ pullRequestNumber, headSha, io, dryRun, started
         head: headSha,
         startedAt,
       });
-      void upsert;
-      return { outcome: "nothing-to-review", reason: "universe empty — marker cleared" };
+      return /** @type {RunResult} */ ({
+        outcome: "nothing-to-review",
+        reason: "universe empty — marker cleared",
+        ...(applicabilityFact !== undefined ? { applicability: applicabilityFact } : {}),
+      });
     }
   }
-  return { outcome: "skip", reason: "universe empty and no prior review comment — nothing to do" };
+  return /** @type {RunResult} */ ({
+    outcome: "skip",
+    reason: "universe empty and no prior review comment — nothing to do",
+    ...(applicabilityFact !== undefined ? { applicability: applicabilityFact } : {}),
+  });
 }

@@ -98,7 +98,7 @@ const GATE_RESULT_KEYS = new Set(["gate", "passed", "reason"]);
 const GATE_RESULT_MANDATORY = new Set(["gate", "passed"]);
 const COVERAGE_KEYS = new Set(["total", "covered", "uncovered"]);
 const PHASE_KEYS = new Set(["from", "to"]);
-const PROVENANCE_KEYS = new Set(["commentId"]);
+const PROVENANCE_KEYS = new Set(["commentId", "context"]);
 const EMPTY_SET = new Set();
 const ARTIFACT_KEYS = new Set(["schemaVersion", ...FACTS_KEYS]);
 const FACTS_KEYS_WITH_APPLICABILITY = new Set([...FACTS_KEYS, "applicability"]);
@@ -250,9 +250,9 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * record, present when the run wrote one.
  *
  * @typedef {object} Provenance
- * @property {number} [commentId]
+ * @property {number} [commentId] the review comment's database id
+ * @property {string} [context] the execution context from the applicability fact, when present
  */
-
 /**
  * The declared, validated input — everything the run hands the builder from
  * its final state. Every field is a fact the run already computed; nothing
@@ -850,7 +850,13 @@ export function buildArtifact(runFacts) {
   if ("commentId" in provenanceRec) {
     provenance.commentId = asPositiveInt(provenanceRec.commentId, "run facts.provenance.commentId");
   }
-
+  if ("context" in provenanceRec) {
+    provenance.context = asEnum(
+      provenanceRec.context,
+      EXECUTION_CONTEXTS,
+      "run facts.provenance.context",
+    );
+  }
   const applicability = hasApplicability
     ? asApplicabilitySection(facts.applicability, FULL_SHAPE_BASES, false)
     : undefined;
@@ -926,8 +932,8 @@ export function applicabilitySection({
  * @param {string} skip.headRef the head the skip describes, full 40 hex chars
  * @param {string} skip.reason the code-composed sentence, uncapped
  * @param {ApplicabilitySection} skip.applicability the deciding applicability fact
- * @returns {SkippedRunArtifact}
  * @throws {ArtifactError} on any malformed field
+ * @returns {SkippedRunArtifact}
  */
 export function buildSkippedArtifact({ repository, pullRequest, headRef, reason, applicability }) {
   const repo = asNonEmptyString(repository, "skipped run.repository");
@@ -1073,7 +1079,6 @@ export function assertFreshArtifact(artifact, headRef) {
  *
  * @param {RunArtifact} artifact the artifact `buildArtifact` returned, provenance still empty
  * @param {number} commentId the id the comment's upsert returned
- * @returns {RunArtifact} a frozen artifact whose provenance names the comment
  * @throws {ArtifactError} when the artifact already names a comment, or the id is not a positive integer
  */
 export function withCommentId(artifact, commentId) {
@@ -1085,8 +1090,17 @@ export function withCommentId(artifact, commentId) {
     );
   }
   const id = asPositiveInt(commentId, "commentId");
+  const context = /** @type {{ applicability?: { context?: string } }} */ (artifact).applicability
+    ?.context;
   return /** @type {RunArtifact} */ (
-    deepFreeze({ ...record, provenance: { ...provenance, commentId: id } })
+    deepFreeze({
+      ...record,
+      provenance: {
+        ...provenance,
+        commentId: id,
+        ...(context !== undefined ? { context } : {}),
+      },
+    })
   );
 }
 

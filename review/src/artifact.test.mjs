@@ -1524,7 +1524,7 @@ describe("the applicability fact and the skipped-run record", () => {
       buildArtifact(facts({ applicability: ruleSection(), provenance: {} })),
       101,
     );
-    expect(artifact.provenance).toEqual({ commentId: 101 });
+    expect(artifact.provenance).toEqual({ commentId: 101, context: "automation" });
     expect(
       /** @type {import("./artifact.mjs").RunArtifactWithApplicability} */ (
         /** @type {unknown} */ (artifact)

@@ -29,7 +29,7 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
 | `dry-run`            | report drift and missing translations, propose nothing — the default, because the output of a real run is a pull request                                                                                         |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
-backoff, `Retry-After` and the attempt limit are `core/src/http.mjs` policy, not inputs.
+backoff, `Retry-After` and the attempt limit are `core/transport/http.mjs` policy, not inputs.
 The workflow's `timeout-minutes` (15 in this repository's own `harmonise.yml`) remains the
 outer safety boundary — the per-request value bounds one call, the job timeout bounds the
 run. A value below 1000 is a startup error, so the HTTP client's disabled-timeout path is
@@ -732,7 +732,7 @@ A pair that skips does not fail the run; it is recorded in the report. A run whe
 
 1. **Classification** — what kind of failure happened. An answer that breaks the answer contract is tagged `RefusalError` in `plan` (the contract class); an HTTP status maps through `classFromStatus` — 401/403 are auth, the transport statuses (408, 425, 429, 500, 502, 503, 504) are transport, anything else is unknown; a core transport error is transport; anything else is unknown.
 2. **Backoff** — how long to wait before the next attempt. `delayClass` names the wait per class and attempt; the entry point owns the clock — it maps names to milliseconds (`DELAY_MS`: immediate 0, short 1 000, long 5 000) and sleeps. The policy module never measures time, so it stays trivially testable.
-3. **Retry-After** — server-advertised waits are honoured inside `core/src/http.mjs`, below the action; they never reach the pair loop.
+3. **Retry-After** — server-advertised waits are honoured inside `core/transport/http.mjs`, below the action; they never reach the pair loop.
 4. **Attempt limit** — how many retries a class is granted. `nextAction` answers `retry` or `give-up` from the policy: transport twice, unknown once, auth and refusal never.
 
 The failure line records the verdict — `… (classified transport, exhausted)` — so the log says why a pair is red, not just that it is.

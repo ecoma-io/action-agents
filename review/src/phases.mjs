@@ -23,6 +23,7 @@
  */
 
 import { TOOL_SPECS } from "./tools.mjs";
+import { canConcludeReview } from "./coverage.mjs";
 
 /**
  * The declared phases, in the order the machine walks them. Frozen: the set
@@ -246,7 +247,7 @@ function concludeReachable(context) {
     context.toolCalls >= context.maxToolCalls ||
     context.readingTurns >= context.maxTurns ||
     context.evidenceBytes >= context.evidenceLimit;
-  return boundFired && (context.strictness !== "high" || context.coverage.uncovered.length === 0);
+  return boundFired && canConcludeReview(context.coverage, context.strictness);
 }
 
 /**
