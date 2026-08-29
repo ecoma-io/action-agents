@@ -45,6 +45,7 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "arch": "archkeep check",
+    "arch:canary": "node tools/check-arch-canary.mjs",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:tools": "node --test \"tools/**/*.test.mjs\" \"scripts/**/*.test.mjs\"",
