@@ -1,7 +1,7 @@
 /**
  * The inputs every action here takes, read and validated in one place.
  *
- * These four are infrastructure, not policy: they say which forge to write to
+ * These five are infrastructure, not policy: they say which forge to write to
  * and which model endpoint to ask, and nothing about what any action decides.
  * That is the line `pnpm arch` judges — a helper only one action could ever
  * want does not belong in `core/` even when the import direction is legal.

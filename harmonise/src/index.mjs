@@ -1008,6 +1008,7 @@ export async function main(env = process.env, execute = run) {
     const inputs = readInputs(env);
     // Before anything can print it, and before the first request is built.
     maskSecret(inputs.apiKey);
+    maskSecret(inputs.githubToken);
     const context = readContext(env);
     info(
       `harmonise: ${context.owner}/${context.repo} on ${context.eventName}` +
