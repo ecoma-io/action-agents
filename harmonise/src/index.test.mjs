@@ -205,7 +205,17 @@ function forge(
     },
     /** @param {string} branch @param {string} commitSha @param {string | null} expectedCurrentSha */
     async upsertBranch(branch, commitSha, expectedCurrentSha) {
+      // The optimistic lock, as core/forge runs it: "found" is the branch's
+      // current tip, or the default branch's tip when the branch does not
+      // exist yet — the same value getRef fabricates for a missing branch. A
+      // stale expectation is refused before the write is recorded; a match
+      // moves the tip this double serves to later reads.
+      const found = branches[branch]?.sha ?? baseSha;
+      if (expectedCurrentSha !== null && expectedCurrentSha !== found) {
+        throw new BranchMovedError(branch, expectedCurrentSha, found);
+      }
       writes.push({ op: "upsertBranch", args: [branch, commitSha, expectedCurrentSha] });
+      branches[branch] = { sha: commitSha, files: {} };
     },
     /** @param {{ base: string, head: string, title: string, body: string }} input */
     async upsertPullRequest(input) {
@@ -556,6 +566,89 @@ describe("run", () => {
     // Refused, never overwritten: the write log ends at the commit — the
     // branch never moved and no pull request was requested.
     expect(forgeDouble.writes.map((w) => w.op)).toEqual([
+      "createBlob",
+      "createBlob",
+      "createBlob",
+      "createTree",
+      "createCommit",
+    ]);
+  });
+
+  it("refuses the second of two interleaved runs through the optimistic lock", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    /** Yields the macro-task queue once, so pending run continuations advance. */
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+    /**
+     * A chat double that suspends its first call on a gate, then answers
+     * with an honest proposal — the run stays mid-flight until released.
+     */
+    function heldChat() {
+      /** @type {(value?: void) => void} */
+      let release = () => {};
+      const gate = new Promise((resolve) => {
+        release = resolve;
+      });
+      let calls = 0;
+      return {
+        calls: () => calls,
+        release,
+        async complete() {
+          calls++;
+          await gate;
+          return {
+            content: proposes("# Dev\n\nTraduit.\n"),
+            toolCalls: [],
+            finishReason: undefined,
+          };
+        },
+      };
+    }
+
+    // One shared forge, so both runs read and race over the same branch.
+    const forgeDouble = forge(makeRepo(), makeInventory(["manual/dev.md", "manual/vi/dev.md"]), {
+      branches: {},
+    });
+    const chatA = heldChat();
+    const chatB = heldChat();
+
+    const runA = run(
+      { ...readInputs(runner), dryRun: false },
+      context(),
+      /** @type {any} */ ({ forge: forgeDouble, chat: chatA, evidence }),
+    );
+    for (let i = 0; i < 100 && chatA.calls() === 0; i++) await settle();
+    expect(chatA.calls()).toBe(1);
+    // Run B starts while A is suspended on its model call, so B snapshots
+    // the same branch tip A did — the exact interleaving the lock exists
+    // for.
+    const runB = run(
+      { ...readInputs(runner), dryRun: false },
+      context(),
+      /** @type {any} */ ({ forge: forgeDouble, chat: chatB, evidence }),
+    );
+    for (let i = 0; i < 100 && chatB.calls() === 0; i++) await settle();
+    expect(chatB.calls()).toBe(1);
+
+    // A resumes first: its snapshot is still the tip, so the lock passes
+    // and the branch moves under B's feet.
+    chatA.release();
+    await expect(runA).resolves.toBeUndefined();
+    const aWrite = /** @type {{ args: [string, string, string | null] }} */ (
+      /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "upsertBranch"))
+    );
+    expect(aWrite.args[2]).toBe(forgeDouble.baseSha);
+
+    // B resumes with a stale snapshot: it walks the whole production path —
+    // blobs, tree, commit — and is refused at the branch write, which is
+    // never recorded and never followed by a pull request.
+    const beforeB = forgeDouble.writes.length;
+    chatB.release();
+    const error = await runB.catch((cause) => cause);
+    expect(error).toBeInstanceOf(BranchMovedError);
+    expect(error.message).toMatch(/moved while the run worked/);
+    expect(forgeDouble.writes.slice(beforeB).map((w) => w.op)).toEqual([
       "createBlob",
       "createBlob",
       "createBlob",

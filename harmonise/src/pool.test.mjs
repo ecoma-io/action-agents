@@ -333,4 +333,54 @@ describe("runPool", () => {
       expect(error).toHaveProperty("message", expect.stringContaining("positive integer"));
     });
   });
+
+  describe("stress", () => {
+    it("holds the cap and the slot mapping across 200 scrambled completions", async () => {
+      const COUNT = 200;
+      const FAIL = 123;
+      const g = gated();
+      const run = runPool(
+        Array.from({ length: COUNT }, (_, i) => i),
+        g.worker,
+        {
+          concurrency: 4,
+        },
+      );
+
+      // The cap binds from the synchronous start: four lanes, no more.
+      expect(g.started).toEqual([0, 1, 2, 3]);
+      // Completion order: a sliding-window scramble. Each step picks a
+      // gate among the started-but-pending items by a fixed stride — never
+      // the FIFO order a well-behaved queue would produce — and the freed
+      // lane is observed to pull its successor before the next step. A
+      // release may only target a gate that exists, so the scramble is
+      // honest: it runs against whatever the window actually holds.
+      /** @type {Set<number>} */
+      const settled = new Set();
+      for (let step = 0; settled.size < COUNT; step++) {
+        const pending = Object.keys(g.gates)
+          .map(Number)
+          .filter((index) => !settled.has(index));
+        // pending is never empty here: the loop only runs while unstarted
+        // or unreleased items remain, and every release was observed.
+        const target = /** @type {number} */ (pending[(step * 7) % pending.length]);
+        settled.add(target);
+        if (target === FAIL) g.fail(target, new Error("boom"));
+        else g.release(target);
+        await settle();
+      }
+
+      const outcome = await run;
+      // Every item started exactly once, in walk order — the pool neither
+      // dropped nor duplicated a slot across the whole scramble.
+      expect(g.started).toEqual(Array.from({ length: COUNT }, (_, i) => i));
+      expect(g.maxInFlight).toBe(4);
+      // Results sit at their input positions whatever the completion order,
+      // and the one rejection is collected without disturbing its siblings.
+      expect(outcome.results).toEqual(
+        Array.from({ length: COUNT }, (_, i) => (i === FAIL ? undefined : i * 10)),
+      );
+      expect(outcome.errors).toEqual([{ index: FAIL, message: "boom" }]);
+    });
+  });
 });
