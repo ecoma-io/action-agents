@@ -173,14 +173,21 @@ export async function upsertComment(options) {
     options.head !== undefined &&
     marker?.head !== undefined &&
     marker.head !== options.head &&
-    options.startedAt !== undefined &&
-    Date.parse(winner.updated_at) > options.startedAt
+    options.startedAt !== undefined
   ) {
-    log(
-      `abandoning the ${options.action} comment on #${String(options.issueNumber)} — ` +
-        `a concurrent run recorded head ${marker.head} after this one started`,
-    );
-    return { outcome: "abandoned", id: winner.id };
+    const updatedAt = Date.parse(winner.updated_at);
+    // Fail closed on an unreadable timestamp: a NaN `updated_at` cannot
+    // prove the comment is older than this run started, so this run must not
+    // assume it owns the thread. Abandoning over-writes nothing; clobbering
+    // a thread it cannot date would drop a concurrent run's write.
+    const newerThanStart = !Number.isFinite(updatedAt) || updatedAt > options.startedAt;
+    if (newerThanStart) {
+      log(
+        `abandoning the ${options.action} comment on #${String(options.issueNumber)} — ` +
+          `a concurrent run recorded head ${marker.head} after this one started`,
+      );
+      return { outcome: "abandoned", id: winner.id };
+    }
   }
 
   await options.store.updateComment(
