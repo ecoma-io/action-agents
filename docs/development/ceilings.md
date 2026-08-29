@@ -64,6 +64,9 @@ seam: every request goes to the configured `api-url`, and a redirect that
 leaves the configured origin is refused rather than followed — the api-key never
 crosses to a second host. The key is masked from the moment it is read.
 
+Same-origin redirects are followed, at most three hops — a loop past the
+third is refused (`MAX_REDIRECTS`).
+
 ## The retry ceiling
 
 Transport failures retry at two layers, and the ceilings compose. `http.mjs`
@@ -73,6 +76,15 @@ otherwise; the request timeout bounds every try. The owners above the client
 retry whole units — `harmonise`'s pair loop takes the recovery policy's
 `transport.retries` (2), so one (document, language) pair gets three outer
 attempts — while `triage` and `review` own no outer retry of a failed unit.
+
+The rest of the numbers are module-private constants — none is reachable
+from a workflow input: the retryable statuses are 408, 425, 429, 500, 502,
+503 and 504; the backoff is linear, one second (`DEFAULT_RETRY_DELAY_MS`)
+times the attempt that just failed, used when the provider sends no
+`Retry-After`; the header itself is read in seconds; a response body past
+`DEFAULT_MAX_BODY_BYTES` (1 MiB) is refused while streaming rather than
+buffered; and an error excerpt is cut at 200 characters — `chat.mjs`
+flattens its excerpt to one line before cutting.
 
 The client's per-request retry stays because a 429 or a dropped socket is
 absorbed without re-reading the diff or re-prompting the model — but it
