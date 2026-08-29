@@ -56,6 +56,10 @@
         "reason": "Repository gates that run on a maintainer's machine and in CI, never inside an action"
       },
       {
+        "path": "security/**",
+        "reason": "The security adversarial corpus, a repository gate that runs in CI and never inside an action"
+      },
+      {
         "path": ".opencode/plugins/**",
         "reason": "opencode's editor-gate plugin, loaded by the agent host and never by an action"
       }

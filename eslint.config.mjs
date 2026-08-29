@@ -119,7 +119,7 @@ export default tseslint.config(
   // The build script is invoked from a terminal, where what it writes to stdout
   // is its entire output.
   {
-    files: ["tools/**/*.mjs", "*.config.{ts,mts,mjs}", "eslint.config.mjs"],
+    files: ["tools/**/*.mjs", "security/**/*.mjs", "*.config.{ts,mts,mjs}", "eslint.config.mjs"],
     rules: { "no-console": "off" },
   },
 
