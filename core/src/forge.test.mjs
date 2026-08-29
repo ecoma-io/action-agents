@@ -698,12 +698,17 @@ describe("write operations", () => {
   it("upsertBranch force-updates when the branch sits where the run found it", async () => {
     /** @type {{ calls?: RecordedCall[] }} */
     const recorder = {};
+    let patched = false;
     const client = forge(
       "o",
       "r",
       {
-        [`GET /repos/o/r/git/ref/heads/harmonise%2Fen`]: json({ object: { sha: SHA } }),
-        "PATCH /repos/o/r/git/refs/heads/harmonise%2Fen": json({ object: { sha: "new" } }),
+        [`GET /repos/o/r/git/ref/heads/harmonise%2Fen`]: () =>
+          patched ? json({ object: { sha: "newsha" } })() : json({ object: { sha: SHA } })(),
+        "PATCH /repos/o/r/git/refs/heads/harmonise%2Fen": () => {
+          patched = true;
+          return json({ object: { sha: "new" } })();
+        },
       },
       recorder,
     );
@@ -712,8 +717,9 @@ describe("write operations", () => {
     const patch = recorder.calls?.find((call) => call.method === "PATCH");
     expect(patch).toBeDefined();
     expect(JSON.parse(String(patch?.body))).toEqual({ sha: "newsha", force: true });
-    // The lock is re-read immediately before the write: two reads, then the PATCH.
-    expect(recorder.calls?.map((call) => call.method)).toEqual(["GET", "GET", "PATCH"]);
+    // The lock is re-read immediately before the write and verified after it:
+    // read, re-read, PATCH, then the tip must be our commit.
+    expect(recorder.calls?.map((call) => call.method)).toEqual(["GET", "GET", "PATCH", "GET"]);
   });
 
   it("refuses with BranchMovedError when the branch moved under the run", async () => {

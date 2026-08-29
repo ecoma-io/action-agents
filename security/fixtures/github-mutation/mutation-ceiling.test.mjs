@@ -317,6 +317,7 @@ describe("forge — the real walker, scripted", () => {
     const EXPECTED = "a".repeat(40);
     const COMMIT = "c".repeat(40);
     let refReads = 0;
+    let wrote = false;
     /** @type {{ method: string, url: string, body: string }[]} */
     const writes = [];
     const forge = testForge(async (url, init) => {
@@ -324,8 +325,10 @@ describe("forge — the real walker, scripted", () => {
       const path = decodeURIComponent(target.pathname);
       if (path.endsWith("/git/ref/heads/harmonise/z") && (init?.method ?? "GET") === "GET") {
         refReads++;
-        return new Response(JSON.stringify({ object: { sha: EXPECTED } }), { status: 200 });
+        const sha = wrote ? COMMIT : EXPECTED;
+        return new Response(JSON.stringify({ object: { sha } }), { status: 200 });
       }
+      if (path.endsWith("/git/refs/heads/harmonise/z") && init?.method === "PATCH") wrote = true;
       writes.push({
         method: init?.method ?? "GET",
         url: target.pathname,
@@ -336,7 +339,7 @@ describe("forge — the real walker, scripted", () => {
 
     await forge.upsertBranch("harmonise/z", COMMIT, EXPECTED);
 
-    assert.equal(refReads, 2, "read once, re-read once, written once");
+    assert.equal(refReads, 3, "read, re-read before the write, verified after it");
     assert.equal(writes.length, 1, "exactly one write for a stable tip");
     const update = writes[0];
     assert.equal(update.method, "PATCH");

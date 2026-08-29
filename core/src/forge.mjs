@@ -773,9 +773,9 @@ export function createForge(config) {
      * branch found elsewhere moved under the run, which is refused rather
      * than overwritten. The ref API has no compare-and-swap, so the expected
      * tip cannot ride on the PATCH itself: the update path re-reads the tip
-     * immediately before the force-write, leaving a window one round trip
-     * wide in which another writer's move could still slip through — and a
-     * tip caught moving in it is refused all the same.
+     * immediately before the force-write and verifies the tip equals our
+     * commit immediately after it, so a concurrent writer's move is refused
+     * whether it lands in the round trip ahead of the write or behind it.
      *
      * @param {string} branch the action's own branch; every documented caller names exactly `harmonise/<language>`
      * @param {string} commitSha
@@ -820,6 +820,19 @@ export function createForge(config) {
           body: { sha: commitSha, force: true },
         }),
       );
+
+      // Post-write verification: the branch must sit exactly where this run
+      // put it. The PATCH is a force-write and the ref API has no
+      // compare-and-swap, so a concurrent writer can still have force-
+      // overwritten the tip between the pre-write re-read and the request
+      // landing. Re-read once more; a tip that is not our commit is another
+      // writer's move, refused loudly rather than silently believed to be
+      // ours. The run treats the refusal as a failure and reports it; the
+      // lost write is surfaced, never hidden.
+      const after = await this.getRef(branch);
+      if (after.sha !== commitSha) {
+        throw new BranchMovedError(branch, commitSha, after.sha);
+      }
     },
 
     /**
