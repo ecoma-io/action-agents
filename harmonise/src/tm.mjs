@@ -33,7 +33,7 @@
  * three-way merge base for a recorded pair, so "the store forgot an old
  * suggestion" is a record that can never merge again. The bound lives at
  * publication instead — `serialize`'s `keepKeys` option writes down exactly
- * the entries the sync state's records reference, so `tm.json` stays as
+ * the entries the sync state's records reference, so the memory stays as
  * large as the state it serves and nothing referenced is ever evicted.
  */
 
@@ -46,15 +46,32 @@
 export const TM_SCHEMA_VERSION = 1;
 
 /**
- * The path the translation memory occupies beside the sync state, written by
+ * The translation memory's advisory path for one publishing branch: the
+ * source language names the branch (`harmonise/<sourceLanguage>`) and the
+ * advisory files it owns alike, so concurrent runs for different languages
+ * write disjoint file sets (#156, Shape 1 — the suffix follows the branch
+ * key by construction). The memory lives beside the sync state, written by
  * the same publication that writes the state file. Advisory as a reference:
- * a file that is missing, corrupt or of a foreign schema version is an empty
- * memory — never an error, never a skip on its own. For a pair whose target
- * drifted outside harmonise the memory is also the only source of the merge
- * base, and there its absence is a manual-edit protection refusal — never a
- * silent overwrite.
+ * a file that is missing, corrupt or of a foreign schema version is an
+ * empty memory — never an error, never a skip on its own. For a pair whose
+ * target drifted outside harmonise the memory is also the only source of
+ * the merge base, and there its absence is a manual-edit protection
+ * refusal — never a silent overwrite.
+ *
+ * @param {string} sourceLanguage
+ * @returns {string}
  */
-export const TM_PATH = ".github/action-agents/harmonise/tm.json";
+export function tmPath(sourceLanguage) {
+  return `.github/action-agents/harmonise/tm.${sourceLanguage}.json`;
+}
+
+/**
+ * The un-suffixed path repositories created before #156 carry. Read-only
+ * since the suffix landed: a run falls back to it once — when the suffixed
+ * file is absent everywhere — and the first suffixed publication ends the
+ * fallback. Nothing writes here anymore.
+ */
+export const LEGACY_TM_PATH = ".github/action-agents/harmonise/tm.json";
 
 /**
  * The three caller-supplied strings an entry is keyed by. All three are
@@ -458,9 +475,14 @@ export function parse(text, options = {}) {
  * resolve the merge base it references on the next run while the proposal
  * pull request is still unmerged, and a push landing between the two reads
  * can never pair a state from one commit with a memory from another. A run
- * publishes `state.json` and `tm.json` in one commit on the
+ * publishes its language-suffixed advisory files in one commit on the
  * `harmonise/<lang>` branch; reading both at that resolved tip keeps the
  * state→memory join resolvable across the open PR.
+ *
+ * The file is looked up under {@link tmPath}`(sourceLanguage)` — the
+ * publishing branch's own suffixed name. Only when no ref carries it does
+ * the read fall back once to {@link LEGACY_TM_PATH}, the un-suffixed path
+ * a pre-#156 repository still carries.
  *
  * Mirrors `readState`:
  * - `getContents` is injected so tests can double the forge layer.
@@ -468,7 +490,9 @@ export function parse(text, options = {}) {
  *   propagate as thrown `ForgeError`s.
  * - The branch owns its TM file the way it owns its state file: when the
  *   branch carries the file, the default branch is never read, so a file
- *   the branch has is never silently substituted by a stale default.
+ *   the branch has is never silently substituted by a stale default. The
+ *   legacy fallback answers absence, not corruption — a found-but-corrupt
+ *   suffixed file is never replaced by the legacy copy.
  *
  * One deliberate difference, `parse`'s contract rather than a new policy:
  * `parseState` throws on a corrupt file, so `readState` degrades corruption
@@ -481,22 +505,38 @@ export function parse(text, options = {}) {
  * three-way merge base: there a memory without the recorded entry is a
  * manual-edit protection refusal — never a silent overwrite.
  *
- * @param {{ getContents: ContentsReader, branchRef: string | null, defaultRef: string }} args
+ * @param {{ getContents: ContentsReader, branchRef: string | null, defaultRef: string, sourceLanguage: string }} args
  *   `branchRef` is the resolved harmonise branch tip SHA, or `null` when the
- *   branch does not exist; `defaultRef` is the resolved default-branch SHA.
+ *   branch does not exist; `defaultRef` is the resolved default-branch SHA;
+ *   `sourceLanguage` is the branch key the advisory paths are suffixed by.
  * @returns {Promise<{ store: TmStore, origin: "branch" | "default" } | null>}
  */
-export async function readTm({ getContents, branchRef, defaultRef }) {
-  const fromBranch = branchRef === null ? null : await getContents(TM_PATH, { ref: branchRef });
+export async function readTm({ getContents, branchRef, defaultRef, sourceLanguage }) {
+  const path = tmPath(sourceLanguage);
+  const fromBranch = branchRef === null ? null : await getContents(path, { ref: branchRef });
   if (fromBranch !== null) {
     // The branch's file was found: no fall-through to the default branch,
     // whatever parse makes of the bytes.
     return { store: parse(fromBranch.content).store, origin: "branch" };
   }
 
-  const fromDefault = await getContents(TM_PATH, { ref: defaultRef });
+  const fromDefault = await getContents(path, { ref: defaultRef });
   if (fromDefault !== null) {
     return { store: parse(fromDefault.content).store, origin: "default" };
+  }
+
+  // One-cycle legacy fallback: no ref carries the suffixed file, so a
+  // repository not yet republished under the suffixed names is read from
+  // the paths it has — branch tip first, default second, same rules.
+  const legacyBranch =
+    branchRef === null ? null : await getContents(LEGACY_TM_PATH, { ref: branchRef });
+  if (legacyBranch !== null) {
+    return { store: parse(legacyBranch.content).store, origin: "branch" };
+  }
+
+  const legacyDefault = await getContents(LEGACY_TM_PATH, { ref: defaultRef });
+  if (legacyDefault !== null) {
+    return { store: parse(legacyDefault.content).store, origin: "default" };
   }
 
   return null;

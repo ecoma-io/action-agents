@@ -11,10 +11,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildTmKey,
   createTmStore,
+  LEGACY_TM_PATH,
   parse,
   readTm,
   serialize,
-  TM_PATH,
+  tmPath,
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
 
@@ -381,6 +382,8 @@ function contentsReader(byRef, hooks = {}) {
 describe("readTm", () => {
   const BRANCH = "harmonise/en";
   const DEFAULT = "main";
+  const LANG = "en";
+  const PATH = tmPath(LANG);
   /** One entry as valid serialized TM. */
   function tmText() {
     const store = createTmStore();
@@ -388,20 +391,22 @@ describe("readTm", () => {
     return serialize(store);
   }
 
-  it("pins the TM path", () => {
-    expect(TM_PATH).toBe(".github/action-agents/harmonise/tm.json");
+  it("pins the TM paths", () => {
+    expect(tmPath("vi")).toBe(".github/action-agents/harmonise/tm.vi.json");
+    expect(LEGACY_TM_PATH).toBe(".github/action-agents/harmonise/tm.json");
   });
 
   it("reads the branch tip first and reports origin 'branch'", async () => {
     const refs = /** @type {string[]} */ ([]);
     const reader = contentsReader(
-      { [BRANCH]: { [TM_PATH]: tmText() }, [DEFAULT]: { [TM_PATH]: "stale" } },
+      { [BRANCH]: { [PATH]: tmText() }, [DEFAULT]: { [PATH]: "stale" } },
       { onCall: (_path, ref) => refs.push(ref ?? "") },
     );
     const result = await readTm({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("branch");
@@ -414,13 +419,14 @@ describe("readTm", () => {
   it("falls back to the default branch when the branch has no TM file", async () => {
     const refs = /** @type {string[]} */ ([]);
     const reader = contentsReader(
-      { [DEFAULT]: { [TM_PATH]: tmText() } },
+      { [DEFAULT]: { [PATH]: tmText() } },
       { onCall: (_path, ref) => refs.push(ref ?? "") },
     );
     const result = await readTm({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("default");
@@ -430,12 +436,58 @@ describe("readTm", () => {
     expect(refs).toEqual([BRANCH, DEFAULT]);
   });
 
+  it("falls back to the legacy path once when no ref carries the suffixed file", async () => {
+    /** @type {string[]} */
+    const reads = [];
+    const reader = contentsReader(
+      { [BRANCH]: { [LEGACY_TM_PATH]: tmText() } },
+      { onCall: (path, ref) => reads.push(`${path}@${ref ?? ""}`) },
+    );
+    const result = await readTm({
+      getContents: reader,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
+      sourceLanguage: LANG,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.origin).toBe("branch");
+    expect(
+      result?.store.lookup(buildTmKey({ sourceHash: "abc", targetLang: "vi", policyContext: "p" })),
+    ).toBe("base");
+    // The ladder is exactly: suffixed branch, suffixed default, legacy
+    // branch. The first suffixed publication ends the walk.
+    expect(reads).toEqual([
+      `${PATH}@${BRANCH}`,
+      `${PATH}@${DEFAULT}`,
+      `${LEGACY_TM_PATH}@${BRANCH}`,
+    ]);
+  });
+
+  it("never consults the legacy copy when the branch carries a corrupt suffixed file", async () => {
+    const refs = /** @type {string[]} */ ([]);
+    const reader = contentsReader(
+      { [BRANCH]: { [PATH]: "{not json" }, [DEFAULT]: { [LEGACY_TM_PATH]: tmText() } },
+      { onCall: (_path, ref) => refs.push(ref ?? "") },
+    );
+    const result = await readTm({
+      getContents: reader,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
+      sourceLanguage: LANG,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.origin).toBe("branch");
+    expect(result?.store.size()).toBe(0);
+    expect(refs).toEqual([BRANCH]);
+  });
+
   it("returns null when no branch carries the file", async () => {
     const reader = contentsReader({});
     const result = await readTm({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).toBeNull();
   });
@@ -451,20 +503,26 @@ describe("readTm", () => {
       }
     );
     await expect(
-      readTm({ getContents: failing, branchRef: BRANCH, defaultRef: DEFAULT }),
+      readTm({
+        getContents: failing,
+        branchRef: BRANCH,
+        defaultRef: DEFAULT,
+        sourceLanguage: LANG,
+      }),
     ).rejects.toThrow(/HTTP 500/);
   });
 
   it("degrades corrupt TM on the branch to an empty store — no default substitution", async () => {
     const refs = /** @type {string[]} */ ([]);
     const reader = contentsReader(
-      { [BRANCH]: { [TM_PATH]: "{not json" }, [DEFAULT]: { [TM_PATH]: tmText() } },
+      { [BRANCH]: { [PATH]: "{not json" }, [DEFAULT]: { [PATH]: tmText() } },
       { onCall: (_path, ref) => refs.push(ref ?? "") },
     );
     const result = await readTm({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("branch");
@@ -474,12 +532,13 @@ describe("readTm", () => {
 
   it("degrades corrupt TM on the default branch to an empty store", async () => {
     const reader = contentsReader({
-      [DEFAULT]: { [TM_PATH]: "[]" },
+      [DEFAULT]: { [PATH]: "[]" },
     });
     const result = await readTm({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).not.toBeNull();
     expect(result?.origin).toBe("default");

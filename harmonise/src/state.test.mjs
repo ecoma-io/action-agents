@@ -5,13 +5,21 @@
 // keys, 2-space indent, trailing newline); parse is strict about schema
 // (unknown keys, wrong types, duplicates, wrong schemaVersion, malformed JSON
 // all refused) and normalizes record order on read; readState tries the
-// branch tip, falls back to the default branch, treats absence as null,
-// propagates non-404 errors, and degrades corrupt state to absent — advisory
-// state never blocks a run.
+// suffixed path on the branch tip, then the default branch, and — only when
+// no ref carries the suffixed file — the pre-#156 legacy path once. It
+// treats absence as null, propagates non-404 errors, and degrades corrupt
+// state to absent — advisory state never blocks a run.
 
 import { describe, expect, it } from "vitest";
 
-import { STATE_PATH, STATE_SCHEMA_VERSION, parseState, readState, renderState } from "./state.mjs";
+import {
+  LEGACY_STATE_PATH,
+  STATE_SCHEMA_VERSION,
+  parseState,
+  readState,
+  renderState,
+  statePath,
+} from "./state.mjs";
 
 /**
  * @param {Partial<import("./state.mjs").SyncStateRecord>} overrides
@@ -59,9 +67,10 @@ function contentsReader(byRef, hooks = {}) {
 }
 
 describe("constants", () => {
-  it("pins the schema version and the file path", () => {
+  it("pins the schema version and the advisory paths", () => {
     expect(STATE_SCHEMA_VERSION).toBe(1);
-    expect(STATE_PATH).toBe(".github/action-agents/harmonise/state.json");
+    expect(statePath("vi")).toBe(".github/action-agents/harmonise/state.vi.json");
+    expect(LEGACY_STATE_PATH).toBe(".github/action-agents/harmonise/state.json");
   });
 });
 
@@ -197,19 +206,22 @@ describe("parseState", () => {
 describe("readState", () => {
   const BRANCH = "harmonise/en";
   const DEFAULT = "main";
+  const LANG = "en";
+  const PATH = statePath(LANG);
   const VALID = JSON.stringify({ records: [record()] });
 
   it("reads the branch tip first and reports origin 'branch'", async () => {
     /** @type {string[]} */
     const refs = [];
     const reader = contentsReader(
-      { [BRANCH]: { [STATE_PATH]: VALID }, [DEFAULT]: { [STATE_PATH]: "stale" } },
+      { [BRANCH]: { [PATH]: VALID }, [DEFAULT]: { [PATH]: "stale" } },
       { onCall: (_path, ref) => refs.push(ref ?? "") },
     );
     const result = await readState({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).toEqual({ records: [record()], origin: "branch" });
     expect(refs).toEqual([BRANCH]);
@@ -219,16 +231,62 @@ describe("readState", () => {
     /** @type {string[]} */
     const refs = [];
     const reader = contentsReader(
-      { [DEFAULT]: { [STATE_PATH]: VALID } },
+      { [DEFAULT]: { [PATH]: VALID } },
       { onCall: (_path, ref) => refs.push(ref ?? "") },
     );
     const result = await readState({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).toEqual({ records: [record()], origin: "default" });
     expect(refs).toEqual([BRANCH, DEFAULT]);
+  });
+
+  it("falls back to the legacy path once when no ref carries the suffixed file", async () => {
+    /** @type {string[]} */
+    const reads = [];
+    const reader = contentsReader(
+      { [BRANCH]: { [LEGACY_STATE_PATH]: VALID } },
+      { onCall: (path, ref) => reads.push(`${path}@${ref ?? ""}`) },
+    );
+    const result = await readState({
+      getContents: reader,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
+      sourceLanguage: LANG,
+    });
+    expect(result).toEqual({ records: [record()], origin: "branch" });
+    // The ladder is exactly: suffixed branch, suffixed default, legacy
+    // branch. The first suffixed publication ends the walk.
+    expect(reads).toEqual([
+      `${PATH}@${BRANCH}`,
+      `${PATH}@${DEFAULT}`,
+      `${LEGACY_STATE_PATH}@${BRANCH}`,
+    ]);
+  });
+
+  it("prefers the suffixed file on the default branch over the legacy file on the branch", async () => {
+    /** @type {string[]} */
+    const reads = [];
+    const reader = contentsReader(
+      {
+        [BRANCH]: { [LEGACY_STATE_PATH]: "stale" },
+        [DEFAULT]: { [PATH]: VALID },
+      },
+      { onCall: (path, ref) => reads.push(`${path}@${ref ?? ""}`) },
+    );
+    const result = await readState({
+      getContents: reader,
+      branchRef: BRANCH,
+      defaultRef: DEFAULT,
+      sourceLanguage: LANG,
+    });
+    expect(result).toEqual({ records: [record()], origin: "default" });
+    // A suffixed file anywhere ends the fallback — the legacy copy of a
+    // pre-#156 publication is never read again.
+    expect(reads).toEqual([`${PATH}@${BRANCH}`, `${PATH}@${DEFAULT}`]);
   });
 
   it("returns null when no branch carries the file", async () => {
@@ -237,6 +295,7 @@ describe("readState", () => {
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).toBeNull();
   });
@@ -255,31 +314,46 @@ describe("readState", () => {
       return base(path, options);
     };
     await expect(
-      readState({ getContents: failing, branchRef: BRANCH, defaultRef: DEFAULT }),
+      readState({
+        getContents: failing,
+        branchRef: BRANCH,
+        defaultRef: DEFAULT,
+        sourceLanguage: LANG,
+      }),
     ).rejects.toThrow(/HTTP 500/);
   });
 
   it("degrades corrupt state on the branch to null — advisory state never blocks a run", async () => {
-    const reader = contentsReader({
-      [BRANCH]: { [STATE_PATH]: "{not json" },
-      [DEFAULT]: { [STATE_PATH]: VALID },
-    });
+    /** @type {string[]} */
+    const reads = [];
+    const reader = contentsReader(
+      {
+        [BRANCH]: { [PATH]: "{not json" },
+        [DEFAULT]: { [LEGACY_STATE_PATH]: VALID },
+      },
+      { onCall: (path, ref) => reads.push(`${path}@${ref ?? ""}`) },
+    );
     const result = await readState({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).toBeNull();
+    // Corruption is final for the ref that owns the file: the legacy copy
+    // is never consulted to replace it.
+    expect(reads).toEqual([`${PATH}@${BRANCH}`]);
   });
 
   it("degrades corrupt state on the default branch to null", async () => {
     const reader = contentsReader({
-      [DEFAULT]: { [STATE_PATH]: "[]" },
+      [DEFAULT]: { [PATH]: "[]" },
     });
     const result = await readState({
       getContents: reader,
       branchRef: BRANCH,
       defaultRef: DEFAULT,
+      sourceLanguage: LANG,
     });
     expect(result).toBeNull();
   });
