@@ -73,9 +73,14 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    What the table judges is the operation a **model's answer selects**. An
    operation an action performs unconditionally — `harmonise` opening a pull
    request whether the model found one drift or thirty — is not a model choice
-   at all, and the thing that bounds it is the `permissions:` block of the
-   workflow that called it. Confusing the two is how a table like this gets
-   read as forbidding the very shape that makes a change reviewable.
+   at all, and what bounds it depends on the credential: when the run carries
+   `GITHUB_TOKEN`, the workflow's `permissions:` block bounds it; when the
+   workflow supplies a different identity — a GitHub App token, for instance —
+   the block does not bind that identity, and the identity's grant is the
+   operative bound. What holds under either credential is the code-pinned
+   write surface: one ref named by the run's config, files drawn from the
+   language map, nothing else. Confusing the two is how a table like this
+   gets read as forbidding the very shape that makes a change reviewable.
 
    The third column is the one that surprises people, and it is the reason the
    line falls where it does: an operation that mails a human turns a wrong
@@ -94,9 +99,14 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    wide, closed in our workflows by a `concurrency` group and inherited by
    any consumer workflow that ships without one. No other branch or ref is
    ever touched. GitHub's audit log records that ref write as a
-   push, but it is not a model choice: the workflow's `permissions:` block
-   bounds it, exactly as the paragraph above says an unconditional operation
-   is bounded.
+   push, but it is not a model choice. What bounds it depends on the
+   credential: when the run carries `GITHUB_TOKEN`, the workflow's
+   `permissions:` block bounds it; when the workflow supplies a different
+   identity — a GitHub App token, for instance — the block does not bind
+   that identity, and the identity's grant is the operative bound. The
+   guarantee that holds under either credential is the write surface just
+   described: the one ref the run's config names, guarded before its
+   force-write.
 
    The table records what may be _offered_, not what is — `triage`'s size is
    never on any sheet, because it is measured from the diff; that row is
