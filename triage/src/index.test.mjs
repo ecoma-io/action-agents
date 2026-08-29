@@ -412,6 +412,14 @@ describe("run — the sheet half", () => {
 
     expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
   });
+  it("applies a model answer that names a label twice once, not twice", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ answer: '{"labels":["bug","bug"],"rationale":"twice"}' });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+  });
 
   it("adds nothing when the chosen labels are already present", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -983,6 +991,18 @@ describe("run — failure posture", () => {
 
     await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
       /'issue' has no number and title/,
+    );
+    expect(world.forge.reads).toEqual([]);
+    expect(world.request()).toBeNull();
+  });
+  it("refuses a label entry that is not a string-named object", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: { issue: { number: 7, title: "t", labels: [{ name: "ok" }, { nope: 1 }] } },
+    });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /labels' carries an entry without a string name/,
     );
     expect(world.forge.reads).toEqual([]);
     expect(world.request()).toBeNull();

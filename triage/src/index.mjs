@@ -272,9 +272,14 @@ export async function run(inputs, context, io) {
   const clearMarker =
     marker !== undefined && classifiedCategory && thread.labels.includes(marker) ? [marker] : [];
 
+  // Dedupe the add list: a model answer (or a size rung colliding with an
+  // accepted category) must not send the same label twice, in the dry-run
+  // log or in the write. GitHub would absorb the duplicate, but the dry-run
+  // promise is a faithful preview.
+  const toAdd = [...new Set([...add, ...sizeAdd])];
   if (inputs.dryRun) {
     info(
-      `dry run — would add [${[...add, ...sizeAdd].join(", ")}]` +
+      `dry run — would add [${toAdd.join(", ")}]` +
         (replace.length > 0
           ? ` and remove [${replace.join(", ")}] (size is replaced, not added to)`
           : "") +
@@ -284,8 +289,8 @@ export async function run(inputs, context, io) {
     );
     return;
   }
-  if (add.length + sizeAdd.length > 0) {
-    await world.forge.addLabels(thread.number, [...add, ...sizeAdd]);
+  if (toAdd.length > 0) {
+    await world.forge.addLabels(thread.number, toAdd);
   }
   for (const name of replace) {
     await world.forge.removeLabel(thread.number, name);
@@ -327,10 +332,15 @@ function threadFromEvent(eventName, event) {
   const labels = [];
   if (Array.isArray(thread["labels"])) {
     for (const label of thread["labels"]) {
-      if (typeof label === "object" && label !== null) {
-        const name = /** @type {Record<string, unknown>} */ (label)["name"];
-        if (typeof name === "string") labels.push(name);
+      // A label entry that is not `{ name: string }` is a payload this action
+      // was not built for. Refuse it by name, the way a missing number or
+      // title is refused, rather than silently classifying a thread with no
+      // labels: a label list silently dropped is the one failure that hides.
+      const name = (typeof label === "object" && label !== null ? label["name"] : null) ?? null;
+      if (typeof name !== "string") {
+        throw new Error("the event payload's 'labels' carries an entry without a string name");
       }
+      labels.push(name);
     }
   }
   return {
@@ -368,7 +378,12 @@ function repositoryFromEvent(event, context) {
  * @returns {Promise<void>}
  */
 async function assertLabelsExist(forge, config) {
-  const declared = [...config.universal.keys(), ...config.issues.keys(), ...config.pr.keys()];
+  const declared = [
+    ...config.universal.keys(),
+    ...config.issues.keys(),
+    ...config.pr.keys(),
+    ...(config.triageMarker !== undefined ? [config.triageMarker] : []),
+  ];
   if (declared.length === 0) return;
   const existing = new Set(await forge.listRepositoryLabels());
   for (const name of declared) {
