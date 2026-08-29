@@ -194,6 +194,17 @@ describe("getContents", () => {
       "https://api.github.com/repos/o/r/contents/docs%2F50%2525.md",
     ]);
   });
+  it("refuses content that is not valid UTF-8 instead of slurping replacement characters", async () => {
+    const invalid = Buffer.from([0xff, 0xfe, 0xfd]).toString("base64");
+    const client = forge("o", "r", {
+      "GET /repos/o/r/contents/blob.bin": json({ content: invalid, encoding: "base64" }),
+    });
+
+    const error = await client.getContents("blob.bin").catch((c) => c);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("NonUtf8ContentError");
+    expect(error.message).toMatch(/not valid UTF-8/);
+  });
 });
 
 describe("listRepositoryLabels", () => {

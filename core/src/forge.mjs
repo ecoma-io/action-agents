@@ -973,10 +973,22 @@ function asRecord(value) {
 /**
  * The contents API's `content` is base64 with the newlines GitHub inserts —
  * `atob` tolerates them in Node, but stripping first is cheaper than hoping.
+ * The decode is strict: bytes that are not valid UTF-8 are refused rather
+ * than replaced with U+FFFD, so a binary or mis-encoded file never reaches a
+ * model prompt wearing replacement characters. This surface reads the
+ * repository's own default-branch files; a file that is not text is refused,
+ * and the run that asked for it fails loudly.
  *
  * @param {string} encoded
  * @returns {string}
  */
 function decodeBase64(encoded) {
-  return Buffer.from(encoded.replace(/\n/g, ""), "base64").toString("utf8");
+  const bytes = Buffer.from(encoded.replace(/\n/g, ""), "base64");
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    const error = new Error("file content is not valid UTF-8 text");
+    error.name = "NonUtf8ContentError";
+    throw error;
+  }
 }
