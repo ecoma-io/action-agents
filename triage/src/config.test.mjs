@@ -280,6 +280,11 @@ describe("validateConfig", () => {
       /triageMarker/,
     );
   });
+  it("refuses a triageMarker that is also a classification label", () => {
+    expect(() =>
+      validateConfig({ labels: { universal: { bug: "a" } }, triageMarker: "bug" }),
+    ).toThrow(/also a classification label/);
+  });
 });
 
 describe("effectiveSheet", () => {

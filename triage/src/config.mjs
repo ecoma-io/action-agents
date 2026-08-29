@@ -142,7 +142,9 @@ export function validateConfig(raw) {
   if (raw["instructions"] !== undefined) {
     const instructions = expectObject(raw["instructions"], "instructions");
     for (const key of Object.keys(instructions)) {
-      if (!(key in DEFAULT_INSTRUCTION_PATHS)) {
+      // own-property, not `in`: a key like "constructor" is a path to refuse,
+      // never a prototype member to let through.
+      if (!Object.hasOwn(DEFAULT_INSTRUCTION_PATHS, key)) {
         throw new Error(`unknown instructions key '${key}'`);
       }
       const value = instructions[key];
@@ -161,6 +163,15 @@ export function validateConfig(raw) {
     if (typeof marker !== "string" || marker === "") {
       throw new Error(
         "triageMarker must be a non-empty label name — the queue label triage clears once it classifies a category",
+      );
+    }
+    // The marker is cleared once a universal category is classified. If it
+    // is itself a classification label, clearing it would un-classify the
+    // thread it just marked — refused rather than silently self-defeating.
+    if (config.universal.has(marker) || config.issues.has(marker) || config.pr.has(marker)) {
+      throw new Error(
+        `triageMarker '${marker}' is also a classification label — the queue label ` +
+          `must not collide with a category the run assigns`,
       );
     }
     triageMarker = marker;
