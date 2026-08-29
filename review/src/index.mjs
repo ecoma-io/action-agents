@@ -81,7 +81,7 @@ export const PULL_REQUEST_ACTIVITY_TYPES = Object.freeze([
  *
  * @param {string} eventName
  * @param {string} eventPath
- * @returns {{ eventName: string, pullRequestNumber: number }}
+ * @returns {{ eventName: string, pullRequestNumber: number, event: Record<string, unknown> }}
  */
 export function readEvent(eventName, eventPath) {
   if (eventName !== "pull_request") {
@@ -115,7 +115,7 @@ export function readEvent(eventName, eventPath) {
   if (typeof pullNumber !== "number") {
     throw new Error("the event carries no pull_request.number — nothing to review");
   }
-  return { eventName, pullRequestNumber: pullNumber };
+  return { eventName, pullRequestNumber: pullNumber, event };
 }
 
 /**
@@ -136,6 +136,8 @@ export async function run(inputs, context, io = {}) {
     },
     context: { owner: context.owner, repo: context.repo, workspace: context.workspace },
     pullRequestNumber: event.pullRequestNumber,
+    eventName: event.eventName,
+    event: event.event,
     io: {
       forge:
         io.forge ??

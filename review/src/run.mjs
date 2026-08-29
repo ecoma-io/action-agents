@@ -14,8 +14,9 @@
 import { createWorkspace } from "#core/workspace.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/comment.mjs";
-
+import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
+
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
 import { normaliseReadPath, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
 import { createTools, TOOL_SPECS } from "./tools.mjs";
@@ -43,13 +44,14 @@ import { assertFreshArtifact, buildArtifact, withCommentId } from "./artifact.mj
  * structurally satisfied by it.
  *
  * @typedef {object} ReviewForge
- * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestSnapshot>} getPullRequest
  * @property {() => Promise<{ defaultBranch: string, name: string, description: string }>} getRepository
+ * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestSnapshot>} getPullRequest
+ * @property {(branch: string) => Promise<{ sha: string }>} getRef resolves a branch tip, for the policy source
  * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestFile[]>} listPullRequestFiles
  * @property {(number: number) => Promise<import("#core/forge.mjs").CommentEntry[]>} listComments
  * @property {(number: number, body: string) => Promise<{ id: number }>} createComment
  * @property {(id: number, body: string) => Promise<void>} updateComment
- * @property {(path: string) => Promise<{ content: string } | null>} getContents reads the default branch
+ * @property {(path: string) => Promise<{ content: string } | null>} getContents reads the resolved policy source
  * @property {(id: number) => Promise<void>} deleteComment
  * @property {() => Promise<{ login: string }>} whoami the token's writing identity
  */
@@ -84,13 +86,22 @@ export const ACTION = "review";
  */
 /**
  * @param {object} input
- * @param {RunInputs} input.inputs
+ * @param {RunInputs} input.inputs the action's knobs, already read by readInputs
  * @param {{ owner: string, repo: string, workspace: string }} input.context
- * @param {number} input.pullRequestNumber
+ * @param {string} input.eventName GITHUB_EVENT_NAME, as readContext reports it
+ * @param {Record<string, unknown>} input.event the parsed event payload
  * @param {Io} input.io
+ * @param {number} input.pullRequestNumber
  * @returns {Promise<RunResult>}
  */
-export async function reviewPullRequest({ inputs, context, pullRequestNumber, io }) {
+export async function reviewPullRequest({
+  inputs,
+  context,
+  pullRequestNumber,
+  eventName,
+  event,
+  io,
+}) {
   // Sampled once at the very start: core's newer-head guard compares the
   // comment's server-side update time against THIS moment, not write time.
   const startedAt = io.now();
@@ -110,10 +121,16 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
   }
   const headSha = snapshot.head.sha;
 
-  // ── Policy: config, documents, all before the first model call ─────────
-  const loaded = await loadConfigFile({ forge: io.forge, configPath: inputs.configPath });
+  // ── Policy: resolve the source, then config + documents, all before the
+  // first model call. The base branch's tip governs; every read pins to one
+  // immutable commit, so a pull request cannot edit its own policy and a
+  // branch moving mid-run changes nothing this run reads.
+  const source = await resolvePolicySource({ eventName, event, forge: io.forge });
+  const policy = { getContents: policyReader(io.forge, source) };
+  const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
+  io.info(policySourceAuditLine({ eventName, source, path: loaded.path }));
   const config = validateConfig(loaded.raw);
-  const documents = await loadDocuments({ forge: io.forge, config });
+  const documents = await loadDocuments({ forge: policy, config, source });
 
   // ── Universe: inventory, budget, rules ──────────────────────────────────
   const files = await io.forge.listPullRequestFiles(pullRequestNumber);
@@ -339,6 +356,7 @@ export async function reviewPullRequest({ inputs, context, pullRequestNumber, io
     coverage: outcome.coverage,
     summary: validated.summary,
     findings: published,
+    policySource: source,
     strictness: config.strictness,
     quarantinedCount: anchored.quarantined.length,
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),

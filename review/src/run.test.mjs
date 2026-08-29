@@ -72,6 +72,11 @@ function forgeStub(options = {}) {
     async getRepository() {
       return { defaultBranch: "main", name: "widgets", description: options.repoDescription ?? "" };
     },
+    /** @param {string} branch */
+    async getRef(branch) {
+      if (branch !== "main") throw new Error(`unexpected ref lookup '${branch}'`);
+      return { sha: "7".repeat(40) };
+    },
     /** @param {string} path */
     /** @param {string} path @returns {Promise<{ content: string } | null>} */
     async getContents(path) {
@@ -206,6 +211,12 @@ const INPUTS = {
 };
 const CONTEXT = { owner: "acme", repo: "widgets", workspace: "" }; // set in beforeAll
 
+/** The parsed pull_request payload every test run resolves its policy from. */
+const EVENT = {
+  action: "synchronize",
+  pull_request: { number: 7, base: { ref: "main", sha: "8".repeat(40) } },
+};
+
 describe("start-of-run state", () => {
   it("skips drafts without touching anything else", async () => {
     const forge = forgeStub({ snapshotOverride: snapshot({ draft: true }) });
@@ -213,6 +224,8 @@ describe("start-of-run state", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("skip");
@@ -226,6 +239,8 @@ describe("start-of-run state", () => {
         inputs: INPUTS,
         context: CONTEXT,
         pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
         io: io(forge),
       });
       expect(result.outcome).toBe("skip");
@@ -249,6 +264,8 @@ describe("the universe and the budget", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(withMarker),
     });
     expect(cleared.outcome).toBe("nothing-to-review");
@@ -260,6 +277,8 @@ describe("the universe and the budget", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(bare),
     });
     expect(skipped.outcome).toBe("skip");
@@ -278,6 +297,8 @@ describe("the universe and the budget", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("abandoned");
@@ -294,7 +315,14 @@ describe("the universe and the budget", () => {
       config: `{ maxDiffLines: 100 }`,
     });
     await expect(
-      reviewPullRequest({ inputs: INPUTS, context: CONTEXT, pullRequestNumber: 7, io: io(forge) }),
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: io(forge),
+      }),
     ).rejects.toThrow(/past the break/);
   });
 });
@@ -316,6 +344,8 @@ describe("publication", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
 
@@ -343,6 +373,8 @@ describe("publication", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("abandoned");
@@ -360,6 +392,8 @@ describe("publication", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("abandoned");
@@ -375,6 +409,8 @@ describe("dry run", () => {
       inputs: { ...INPUTS, dryRun: true },
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat: chatStub(), now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("dry-run");
@@ -403,6 +439,8 @@ describe("strictness policy and strategy", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -431,12 +469,16 @@ describe("strictness policy and strategy", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forgeDefault, reading()),
     });
     const explicitRun = await reviewPullRequest({
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forgeExplicit, reading()),
     });
     expect(defaultRun.outcome).toBe("published");
@@ -469,6 +511,8 @@ describe("strictness policy and strategy", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forgeStub({ config: '{ strictness: "high", strategy: "adversarial" }' }), chat),
     });
     expect(result.outcome).toBe("published");
@@ -489,6 +533,8 @@ describe("failure posture", () => {
         inputs: INPUTS,
         context: CONTEXT,
         pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
         io: io(forge, bad),
       }),
     ).rejects.toThrow(/failed the output contract twice/);
@@ -510,6 +556,8 @@ describe("failure posture", () => {
         inputs: { ...INPUTS, contextWindow: 2000 },
         context: CONTEXT,
         pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
         io: io(forge),
       }),
     ).rejects.toThrow(/past half the .*window/);
@@ -533,6 +581,8 @@ describe("failure posture", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat: /** @type {any} */ (chatty), now: () => 0, info: () => undefined },
     });
     expect(asks).toBe(2);
@@ -557,6 +607,8 @@ describe("comment identity", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
 
@@ -582,6 +634,8 @@ describe("comment identity", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat: chatStub(), now: () => 1_000, info: (m) => logged.push(m) },
     });
 
@@ -617,6 +671,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("published");
@@ -632,6 +688,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("published");
@@ -676,6 +734,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -694,6 +754,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("published");
@@ -721,6 +783,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -736,6 +800,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -775,6 +841,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -807,6 +875,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("published");
@@ -847,6 +917,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -879,6 +951,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("published");
@@ -904,6 +978,8 @@ describe("coverage accounting and strict partial reviews", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("published");
@@ -925,7 +1001,14 @@ describe("coverage accounting and strict partial reviews", () => {
       ],
     });
     await expect(
-      reviewPullRequest({ inputs: INPUTS, context: CONTEXT, pullRequestNumber: 7, io: io(forge) }),
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: io(forge),
+      }),
     ).rejects.toThrow(/cannot account for the whole universe/);
   });
 });
@@ -955,6 +1038,8 @@ describe("risk lanes", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     const [system, user] = chat.captured[0] ?? [];
@@ -979,6 +1064,8 @@ describe("risk lanes", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -1084,6 +1171,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1120,6 +1209,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -1136,6 +1227,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1157,6 +1250,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1181,6 +1276,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1215,6 +1312,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat: readChat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1238,6 +1337,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
@@ -1273,6 +1374,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1297,6 +1400,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
@@ -1324,6 +1429,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1356,6 +1463,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1445,6 +1554,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1476,6 +1587,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1514,6 +1627,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
@@ -1543,6 +1658,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
@@ -1569,6 +1686,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1599,6 +1718,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1626,6 +1747,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
@@ -1649,6 +1772,8 @@ describe("adversarial verification pass", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
@@ -1668,6 +1793,8 @@ describe("evidence provenance", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat: chatStub(), now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
@@ -1692,6 +1819,8 @@ describe("evidence provenance", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: {
         forge,
         chat: chatStub(
@@ -1746,6 +1875,8 @@ describe("run gates", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: loggingIo(forge, chatStub(), (line) => logged.push(line)),
     });
     expect(result.outcome).toBe("published");
@@ -1788,6 +1919,8 @@ describe("run gates", () => {
       inputs: INPUTS, // maxTurns: 5 — the script's fifth reading turn fires the bound
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: loggingIo(forge, chat, (line) => logged.push(line)),
     });
     expect(result.outcome).toBe("published");
@@ -1819,6 +1952,8 @@ describe("run gates", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: loggingIo(forge, chat, (line) => logged.push(line)),
     });
     expect(result.outcome).toBe("published");
@@ -1843,6 +1978,8 @@ describe("run gates", () => {
         inputs: INPUTS,
         context: CONTEXT,
         pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
         io: loggingIo(forge, /** @type {any} */ (chat), (line) => logged.push(line)),
       }),
     ).rejects.toThrow(/failed the output contract twice/);
@@ -1876,6 +2013,8 @@ describe("run gates", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: loggingIo(forge, chat, (line) => logged.push(line)),
     });
     expect(result.outcome).toBe("published");
@@ -1905,6 +2044,8 @@ describe("run gates", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: loggingIo(forge, chat, (line) => logged.push(line)),
     });
     expect(result.outcome).toBe("published");
@@ -1941,6 +2082,8 @@ describe("the run artifact", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     expect(result.outcome).toBe("published");
@@ -2008,6 +2151,8 @@ describe("the run artifact", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     const artifact = result.artifact;
@@ -2033,6 +2178,8 @@ describe("the run artifact", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, chat),
     });
     const artifact = result.artifact;
@@ -2053,6 +2200,8 @@ describe("the run artifact", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("skip");
@@ -2065,6 +2214,8 @@ describe("the run artifact", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("skip");
@@ -2082,6 +2233,8 @@ describe("the run artifact", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("abandoned");
@@ -2094,6 +2247,8 @@ describe("the run artifact", () => {
       inputs: { ...INPUTS, dryRun: true },
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge),
     });
     expect(result.outcome).toBe("dry-run");
@@ -2158,6 +2313,8 @@ describe("artifact freshness around publication", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
     });
     expect(result.outcome).toBe("published");
@@ -2182,6 +2339,8 @@ describe("artifact freshness around publication", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
     });
     expect(result.outcome).toBe("abandoned");
@@ -2198,6 +2357,8 @@ describe("artifact freshness around publication", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
     });
     expect(result.outcome).toBe("abandoned");
@@ -2309,12 +2470,16 @@ describe("the untrusted-data ceiling (no steering)", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge: hostileForge, chat: hostileChat, now: () => 0, info: () => undefined },
     });
     const honest = await reviewPullRequest({
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge: honestForge, chat: honestChat, now: () => 0, info: () => undefined },
     });
 
@@ -2352,6 +2517,8 @@ describe("the untrusted-data ceiling (no steering)", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: () => undefined },
     });
 
@@ -2392,6 +2559,8 @@ describe("the untrusted-data ceiling (no steering)", () => {
       inputs: INPUTS,
       context: CONTEXT,
       pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
       io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
     });
 

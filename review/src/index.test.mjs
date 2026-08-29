@@ -48,7 +48,12 @@ function runnerEnv(options = {}) {
   const eventPath = p.join(eventDir, "event.json");
   writeFileSync(
     eventPath,
-    JSON.stringify(options.event ?? { action: "opened", pull_request: { number: 41 } }),
+    JSON.stringify(
+      options.event ?? {
+        action: "opened",
+        pull_request: { number: 41, base: { ref: "main" } },
+      },
+    ),
   );
   return {
     "INPUT_GITHUB-TOKEN": "ghs_x",
@@ -102,10 +107,10 @@ describe("readInputs", () => {
 describe("readEvent", () => {
   it("extracts the pull request number from a pull_request event", () => {
     const env = runnerEnv({ event: { action: "opened", pull_request: { number: 41 } } });
-    expect(readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toEqual({
-      eventName: "pull_request",
-      pullRequestNumber: 41,
-    });
+    const read = readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH));
+    expect(read.eventName).toBe("pull_request");
+    expect(read.pullRequestNumber).toBe(41);
+    expect(read.event).toEqual({ action: "opened", pull_request: { number: 41 } });
   });
 
   it("declares exactly the activity types the workflow filter does", () => {
@@ -120,10 +125,9 @@ describe("readEvent", () => {
   it("accepts every declared activity type", () => {
     for (const action of PULL_REQUEST_ACTIVITY_TYPES) {
       const env = runnerEnv({ event: { action, pull_request: { number: 41 } } });
-      expect(readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toEqual({
-        eventName: "pull_request",
-        pullRequestNumber: 41,
-      });
+      const read = readEvent("pull_request", /** @type {string} */ (env.GITHUB_EVENT_PATH));
+      expect(read.pullRequestNumber).toBe(41);
+      expect(read.event["action"]).toBe(action);
     }
   });
 
@@ -219,6 +223,9 @@ describe("run over injected io", () => {
           }),
           async getRepository() {
             return { defaultBranch: "main", name: "", description: "" };
+          },
+          async getRef() {
+            return { sha: "c".repeat(40) };
           },
           async listPullRequestFiles() {
             return [];
@@ -333,6 +340,9 @@ describe("run — request-timeout-ms wiring", () => {
     return /** @type {any} */ ({
       async getRepository() {
         return { defaultBranch: "main", name: "widgets", description: "" };
+      },
+      async getRef() {
+        return { sha: "c".repeat(40) };
       },
       async getPullRequest() {
         return {
@@ -573,6 +583,9 @@ describe("run writes the artifact only after publication", () => {
           }),
           async getRepository() {
             return { defaultBranch: "main", name: "", description: "" };
+          },
+          async getRef() {
+            return { sha: "c".repeat(40) };
           },
           async listPullRequestFiles() {
             return [];
