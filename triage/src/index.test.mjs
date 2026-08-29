@@ -79,6 +79,7 @@ function prEvent(thread = {}) {
       title: "Fix the import",
       body: "What changed.",
       labels: (thread.labels ?? []).map((name) => ({ name })),
+      base: { ref: "main" },
     },
     repository: { name: "action-agents", description: "AI GitHub Actions" },
   };
