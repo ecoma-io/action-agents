@@ -742,15 +742,6 @@ An answer that violates the answer contract is a **refusal**: raised where the a
 
 What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. On `main` today the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `prompt`, `answer` and `pull-request` — and, wired on `main` since `v0.3.0` through `plan` and `src/index.mjs`, `frontmatter`, `blocks`, `tm`, `pool`, `protection`, `threeway` and `recovery`: the translation memory (#64) is read once per run, consulted per pair as advisory reference, and recorded on publication — then pruned at that publication to exactly the entries the sync state's records reference, so the memory has no eviction cap of its own: a state record can always reach the merge base it references, whatever the repository's age or size (#150), and a no-op endorsement is recorded the same way so an endorsed pair converges instead of costing one model call per run forever (#95, #150); pairs translate under the bounded-concurrent pool (#85), outcomes returned in input order so completion order never reaches the record; a target that drifted outside harmonise is merged three-way against the base the memory proves (#91), a merge that cannot be proven failing the pair closed; and every pair's failure is classified and retried under the deterministic recovery policy (#107) — refusals and auth failures never, transport faults twice, unknown once, the policy's mapped backoff between attempts. Plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
 
-Two pure modules are **landed, wiring tracked** — merged and tested, not yet imported by the production path, therefore not behaviour a run exhibits:
-
-| Module       | Landed as                              |
-| ------------ | -------------------------------------- |
-| `terms.mjs`  | deterministic terminology system (#71) |
-| `report.mjs` | incremental report model (#86)         |
-
-Do not read them as active behaviour: no run consults the terminology system, and a run's report today is the action log and the pull-request body, not `report.mjs`'s model.
-
 What `harmonise` uses from `core/`, module by module: +
 
 | Module          | Kind     | What `harmonise` needs of it                                                                                                                                                                                         |
