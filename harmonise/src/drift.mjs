@@ -52,6 +52,7 @@
  * @module harmonise/src/drift
  */
 
+import { utf8Compare } from "#core/order.mjs";
 import { contentFingerprint } from "./fingerprint.mjs";
 import { STATE_SCHEMA_VERSION } from "./state.mjs";
 
@@ -152,17 +153,17 @@ const VERDICTS = Object.freeze(["canonical", "target-drift", "unrecorded", "unkn
 
 /**
  * Byte-wise comparator over the UTF-8 encoding of two strings, matching the
- * record order `state.mjs` renders. A duplicated few lines by design: the
- * comparator is not exported from `state.mjs`, and promoting a shared sort
- * into `core/` for one consumer is exactly the drift the boundary law exists
- * to stop.
+ * record order `state.mjs` renders. It delegates to the one definition in
+ * `core/src/order.mjs`: `review` needed the same collation, and with a second
+ * action calling for it the comparator is promoted into `core/` — the
+ * remediation the boundary law names — where this was a deliberate local copy.
  *
  * @param {string} a
  * @param {string} b
  * @returns {number}
  */
 function byUtf8Bytes(a, b) {
-  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+  return utf8Compare(a, b);
 }
 
 /**

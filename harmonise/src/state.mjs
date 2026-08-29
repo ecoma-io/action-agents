@@ -40,6 +40,8 @@
  * @module harmonise/src/state
  */
 
+import { utf8Compare } from "#core/order.mjs";
+
 /**
  * Bumped when the shape of a sync-state record changes — a field renamed,
  * added, removed, or a type tightened. Records carrying a different version
@@ -94,7 +96,7 @@ export const STATE_PATH = ".github/action-agents/harmonise/state.json";
  * @returns {number}
  */
 function byDestinationPath(a, b) {
-  return Buffer.from(a.destinationPath, "utf8").compare(Buffer.from(b.destinationPath, "utf8"));
+  return utf8Compare(a.destinationPath, b.destinationPath);
 }
 
 // ── deterministic render ────────────────────────────────────────────────────

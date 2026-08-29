@@ -128,6 +128,18 @@ jobs:
       - name: Check the architecture boundary
         run: pnpm arch
 
+      # The step above proves the boundary law holds on the real tree; it
+      # cannot prove the law still bites. `tools/check-arch-canary.mjs` runs
+      # the same `archkeep check` against `tools/fixtures/boundary-canary/` —
+      # a miniature workspace whose `canary-triage` imports across into
+      # `canary-review` by design — and fails this run the day the gate
+      # reports that illegal tree as clean. The root `module-boundaries.config.mjs`
+      # header records the fail-open that makes this worth a step of its own:
+      # an import the resolver cannot see is reported `allowed`, so a broken
+      # gate looks exactly like a green one.
+      - name: Check the boundary gate stays loud
+        run: pnpm arch:canary
+
       - run: pnpm test
 
       # `pnpm test` runs the vitest suite, which discovers only `*/src/**`. The
