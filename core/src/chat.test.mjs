@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { HttpError } from "./http.mjs";
+import { HttpError } from "./transport-errors.mjs";
 import { ChatError, createChat } from "./chat.mjs";
 
 /** @typedef {import("./chat.mjs").ChatMessage} ChatMessage */

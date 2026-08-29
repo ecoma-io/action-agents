@@ -140,6 +140,21 @@ jobs:
       - name: Check the boundary gate stays loud
         run: pnpm arch:canary
 
+      # The boundary canary above proves the gate still bites on a relative
+      # cross-action import. The transport seam — an action never imports the
+      # transport project; transport failures reach actions as typed facts
+      # through `core/src/transport-errors.mjs` — is a different rule, and
+      # its violation shape is different too: a SUBPATH import
+      # (`#core-transport/http.mjs`), judged by the depConstraints table, not
+      # by the relative-import check. `tools/check-transport-seam.mjs` keeps
+      # that rule loud the same way: it runs `archkeep check` against
+      # `tools/fixtures/transport-seam/`, a miniature workspace whose action
+      # imports the transport client by its public subpath — the exact
+      # violation shape — and fails this run the day the gate reports that
+      # tree as clean.
+      - name: Check the transport seam stays closed
+        run: pnpm arch:transport-seam
+
       - run: pnpm test
 
       # `pnpm test` runs the vitest suite, which discovers only `*/src/**`. The

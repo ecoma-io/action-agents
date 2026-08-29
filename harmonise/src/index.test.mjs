@@ -20,8 +20,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatError } from "#core/chat.mjs";
-import { BranchMovedError, ForgeError } from "#core/forge.mjs";
-import { DEFAULT_MAX_ATTEMPTS, HttpError, TransportError } from "#core/http.mjs";
+import { BranchMovedError, ForgeError, isRefAbsentError } from "#core/forge.mjs";
+import {
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_RETRY_DELAY_MS,
+  HttpError,
+  TransportError,
+} from "#core/transport-errors.mjs";
 
 import { ACTION, DELAY_MS, main, readInputs, run, TM_PATH } from "./index.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
@@ -198,6 +203,23 @@ function forge(
       refLookups.push(name);
       const branch = branches[name];
       return branch !== undefined ? { sha: branch.sha } : { sha: baseSha };
+    },
+    /**
+     * The Forge contract's absence read, as the real client implements it:
+     * delegate to `getRef` and convert the typed 404 to `null`. Declared on
+     * the double itself, so a test that swaps `getRef` underneath is
+     * observed through `readRef` exactly as the real client would observe
+     * it — prose failures rethrown, only the typed 404 read as absent.
+     *
+     * @param {string} name
+     */
+    async readRef(name) {
+      try {
+        return await this.getRef(name);
+      } catch (cause) {
+        if (isRefAbsentError(cause)) return null;
+        throw cause;
+      }
     },
     /** @param {string} _sha */
     async listTree(_sha) {
@@ -1095,6 +1117,13 @@ describe("run", () => {
       for (const name of DELAY_CLASSES) {
         expect(Number.isSafeInteger(DELAY_MS[name])).toBe(true);
       }
+    });
+
+    it("pays the transport layer's own backoff step as the short delay", () => {
+      // Shared by import from core/src/transport-errors.mjs: a change to the
+      // transport's backoff moves the pair loop's short delay with it —
+      // mirroring by construction, not by a restated literal.
+      expect(DELAY_MS.short).toBe(DEFAULT_RETRY_DELAY_MS);
     });
   });
 

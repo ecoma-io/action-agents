@@ -1,0 +1,25 @@
+{
+  "tsConfig": "tsconfig.base.json",
+  "projects": {
+    "declared": [
+      {
+        "name": "seam-action",
+        "root": "seam-action",
+        "tags": ["layer:action", "scope:seam-action"]
+      },
+      {
+        "name": "seam-transport",
+        "root": "seam-transport",
+        "tags": ["layer:core", "scope:transport"]
+      }
+    ]
+  },
+  "coverage": {
+    "exempt": [
+      {
+        "path": "module-boundaries.config.mjs",
+        "reason": "The boundary law itself, which no project owns — the same exemption the repository's own archkeep.json gives its law"
+      }
+    ]
+  }
+}

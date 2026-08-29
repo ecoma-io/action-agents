@@ -43,7 +43,7 @@
  * @typedef {ReturnType<typeof createChat>} Chat
  */
 
-import { createHttpClient } from "./http.mjs";
+import { createHttpClient } from "#core-transport/http.mjs";
 
 /**
  * One tool call the model asks for, verbatim off the wire. `arguments` stays

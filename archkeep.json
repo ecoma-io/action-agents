@@ -8,6 +8,11 @@
         "tags": ["layer:core", "scope:shared"]
       },
       {
+        "name": "core-transport",
+        "root": "core/transport",
+        "tags": ["layer:core", "scope:transport"]
+      },
+      {
         "name": "triage",
         "root": "triage",
         "tags": ["layer:action", "scope:triage"]

@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import * as p from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { TransportError } from "#core/http.mjs";
+import { TransportError } from "#core/transport-errors.mjs";
 import { readContext } from "#core/runtime.mjs";
 import {
   ACTION,

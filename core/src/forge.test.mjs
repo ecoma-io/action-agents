@@ -18,7 +18,7 @@ import {
   isRefAbsentError,
   nextLink,
 } from "./forge.mjs";
-import { HttpError, TransportError } from "./http.mjs";
+import { HttpError, TransportError } from "./transport-errors.mjs";
 
 /** @typedef {{ url: string, method?: string | undefined, body?: unknown }} RecordedCall */
 
@@ -791,6 +791,30 @@ describe("write operations", () => {
     expect(isRefAbsentError(moved)).toBe(false);
     expect(isRefAbsentError(new Error("HTTP 404"))).toBe(false);
     expect(isRefAbsentError(null)).toBe(false);
+  });
+
+  it("readRef answers the typed 404 with null, whatever the prose says", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/git/ref/heads/harmonise%2Fen": () =>
+        new Response("not found", { status: 404 }),
+    });
+    await expect(client.readRef("harmonise/en")).resolves.toBe(null);
+  });
+
+  it("readRef returns the branch tip when the ref exists", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/git/ref/heads/harmonise%2Fen": json({ object: { sha: SHA } }),
+    });
+    await expect(client.readRef("harmonise/en")).resolves.toEqual({ sha: SHA });
+  });
+
+  it("readRef rethrows every failure that is not a typed 404", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/git/ref/heads/HTTP%20404": () => new Response("boom", { status: 500 }),
+    });
+    await expect(client.readRef("HTTP 404")).rejects.toThrow(
+      /reading the ref of branch 'HTTP 404' failed/,
+    );
   });
 
   it("upsertPullRequest updates the open twin found by base and head", async () => {
