@@ -240,6 +240,28 @@ describe("validateConfig", () => {
     const config = validateConfig({ instructions: { instruction: "docs/triage.md" } });
     expect(config?.instructions["instruction"]).toBe("docs/triage.md");
   });
+
+  it("carries a declared triageMarker through", () => {
+    const config = validateConfig({
+      labels: { universal: { bug: "Incorrect behaviour." } },
+      triageMarker: "needs triage",
+    });
+    expect(config?.triageMarker).toBe("needs triage");
+  });
+
+  it("leaves triageMarker undefined when the config declares none", () => {
+    const config = validateConfig({ labels: { universal: { bug: "Incorrect behaviour." } } });
+    expect(config?.triageMarker).toBeUndefined();
+  });
+
+  it("refuses a triageMarker that is not a non-empty label name", () => {
+    expect(() => validateConfig({ labels: { universal: { bug: "a" } }, triageMarker: "" })).toThrow(
+      /triageMarker/,
+    );
+    expect(() => validateConfig({ labels: { universal: { bug: "a" } }, triageMarker: 7 })).toThrow(
+      /triageMarker/,
+    );
+  });
 });
 
 describe("effectiveSheet", () => {

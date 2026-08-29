@@ -10,6 +10,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { readFileSync } from "node:fs";
+
 import { createEvidence } from "#core/untrusted.mjs";
 import { PastFileCeilingError } from "#core/forge.mjs";
 import { TransportError } from "#core/http.mjs";
@@ -507,6 +509,106 @@ describe("run — the sheet half", () => {
       /no config file to narrow/,
     );
   });
+});
+
+describe("run — the triage marker", () => {
+  // `needs triage` is this repository's queue label: the issue forms apply it
+  // and nothing else, and triage clears it once a universal category is
+  // classified — code-deterministically, never a model choice. The model is
+  // never told the marker's name, because it is on no sheet offered to it.
+  const CONFIG_WITH_MARKER = JSON.stringify({
+    ...JSON.parse(CONFIG),
+    triageMarker: "needs triage",
+  });
+  const REPO_LABELS_WITH_MARKER = [...REPO_LABELS, "needs triage"];
+
+  it("clears the triage marker once a universal category is classified", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: { ".github/action-agents/triage/triage.json5": CONFIG_WITH_MARKER },
+      repoLabels: REPO_LABELS_WITH_MARKER,
+      event: issueEvent({ labels: ["needs triage"] }),
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([
+      { op: "addLabels", args: [7, ["bug"]] },
+      { op: "removeLabel", args: [7, "needs triage"] },
+    ]);
+  });
+
+  it("keeps the marker when the classification is not a universal category", async () => {
+    // `question` sits on the issues sheet in this fixture, not in `universal`:
+    // an issues-only label is not a category, so the queue marker stays.
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: { ".github/action-agents/triage/triage.json5": CONFIG_WITH_MARKER },
+      repoLabels: REPO_LABELS_WITH_MARKER,
+      event: issueEvent({ labels: ["needs triage"] }),
+      answer: '{"labels":["question"],"rationale":"Asking, not reporting."}',
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["question"]] }]);
+  });
+
+  it("leaves every label alone when the config declares no marker", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: issueEvent({ labels: ["needs triage"] }) });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+  });
+
+  it("does not clear the marker a thread does not carry", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: { ".github/action-agents/triage/triage.json5": CONFIG_WITH_MARKER },
+      repoLabels: REPO_LABELS_WITH_MARKER,
+      event: issueEvent({ labels: [] }),
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+  });
+
+  it("names the marker it would clear in a dry run, and writes nothing", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: { ".github/action-agents/triage/triage.json5": CONFIG_WITH_MARKER },
+      repoLabels: REPO_LABELS_WITH_MARKER,
+      event: issueEvent({ labels: ["needs triage"] }),
+    });
+
+    await run(inputs({ dryRun: true }), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toMatch(/would add \[bug\]/);
+    expect(lines).toMatch(/remove \[needs triage\]/);
+  });
+});
+
+describe("issue forms apply only the triage marker", () => {
+  // The forms and the action share one lifecycle: a form files an issue as
+  // `needs triage` and nothing else — no pre-chosen category, which triage's
+  // add-only reconciliation could never correct — and the action clears the
+  // marker once it classifies a category. These pins are the "nothing else".
+  const TEMPLATES = ["bug_report.yml", "feature_request.yml", "question.yml"];
+
+  for (const template of TEMPLATES) {
+    it(`labels ${template} with needs triage alone`, () => {
+      const form = readFileSync(
+        new URL(`../../.github/ISSUE_TEMPLATE/${template}`, import.meta.url),
+        "utf8",
+      );
+      expect(form).toContain('labels: ["needs triage"]');
+    });
+  }
 });
 
 describe("run — the size half", () => {

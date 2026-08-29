@@ -28,6 +28,16 @@
     },
   },
 
+  // `needs triage` is this repository's queue marker: every issue form applies
+  // it (and nothing else), so a freshly filed issue sits in exactly one queue.
+  // `triage` clears it — code-deterministically, never a model choice — once a
+  // universal category is classified, because a thread carrying a category no
+  // longer awaits triage. The model is never told the marker's name: it is on
+  // no sheet, so a classification can only ever cause its removal. Omit the
+  // key and triage applies no marker at all. docs/development/triage.md
+  // carries the full lifecycle.
+  triageMarker: "needs triage",
+
   // Review effort, not raw magnitude: a lockfile nobody reads line by line
   // does not make a pull request large to review.
   size: {
