@@ -13,9 +13,11 @@ a link that goes nowhere.
 | [Development: `review`](development/review.md)                           | `review`'s full design — config, tool surface, agent loop                                    |
 | [Development: review applicability](development/applicability-policy.md) | Design record (issue #179) — all three axes are shipped in [`review`](development/review.md) |
 | [Development: the core ceilings](development/ceilings.md)                | The ceiling modules' contracts — evidence, sanitiser, marker comment, workspace, seam        |
-| Getting started                                                          | Adding one action to a workflow, and the permissions it needs                                |
+| [Guide: getting started](guides/getting-started.md)                      | Adding one action to a workflow, and the permissions it needs                                |
+| [Guide: `triage`](guides/triage.md)                                      | The label sheet, size from the diff, the marker comment, failure modes and recipes           |
+| [Guide: `review`](guides/review.md)                                      | The agent loop, the tool surface, the applicability policy, the run artifact, failure modes  |
+| [Guide: `harmonise`](guides/harmonise.md)                                | The language map, the glossary, skip directives, the pull request, failure modes             |
 | Configuration                                                            | `.github/action-agents/<action>.json5`, and the inputs each action takes                     |
-| `triage`, `review`, `harmonise`                                          | One page per action: what it decides, and what it is not allowed to decide                   |
 | Providers                                                                | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless                      |
 
 Doctrine comes first deliberately. The rows below it describe behaviour that
