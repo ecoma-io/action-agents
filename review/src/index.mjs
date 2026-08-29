@@ -207,16 +207,24 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
     throw new Error(`artifact-path '${directory}' resolves outside the workspace — refused`);
   }
   for (const segment of p.relative(root, target).split(p.sep)) {
-    if (segment === ".git") {
+    // Case-insensitive: the hosting filesystem may capitalise the directory
+    // (.Git, .GIT), and the checkout's credential still lives there.
+    if (segment.toLowerCase() === ".git") {
       throw new Error(`artifact-path '${directory}' touches .git — refused`);
     }
   }
   mkdirSync(target, { recursive: true });
-  // A directory on the way may be a symlink pointing out; resolve the real
-  // location and hold it to the same ceiling before a byte is written.
+  // A directory on the way may be a symlink pointing outside the workspace
+  // or into the git metadata; resolve the real location and hold it to the
+  // same ceiling and the same .git rule before a single byte is written.
   const real = realpathSync(target);
   if (real !== root && !real.startsWith(root + p.sep)) {
     throw new Error(`artifact-path '${directory}' resolves outside the workspace — refused`);
+  }
+  for (const segment of p.relative(root, real).split(p.sep)) {
+    if (segment.toLowerCase() === ".git") {
+      throw new Error(`artifact-path '${directory}' resolves inside .git — refused`);
+    }
   }
   const file = p.join(real, `review-artifact-${artifact.headRef}.json`);
   writeFileSync(file, serialiseArtifact(artifact), "utf8");
