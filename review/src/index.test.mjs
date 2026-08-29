@@ -603,6 +603,87 @@ describe("run writes the artifact only after publication", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it("a post-publication artifact write failure stays green with the comment standing", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-fail-"));
+    mkdirSync(p.join(root, "src"));
+    writeFileSync(p.join(root, "src", "a.mjs"), "line1\n");
+    const env = runnerEnv({
+      extra: { GITHUB_WORKSPACE: root, "INPUT_ARTIFACT-PATH": "../outside" },
+    });
+    /** @type {string[]} */
+    const log = [];
+    /** @type {Array<{ id?: number, body?: string }>} */
+    const upserts = [];
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge: {
+          async getPullRequest() {
+            return {
+              number: 41,
+              state: "open",
+              draft: false,
+              merged: false,
+              title: "Test PR",
+              body: "",
+              head: { ref: "x", sha: "a".repeat(40) },
+              base: { ref: "main", sha: "b".repeat(40) },
+            };
+          },
+          async getRepository() {
+            return { defaultBranch: "main", name: "widgets", description: "" };
+          },
+          async listPullRequestFiles() {
+            return [
+              /** @type {any} */ ({
+                filename: "src/a.mjs",
+                status: "modified",
+                additions: 1,
+                deletions: 0,
+                patch: "@@ -1 +1,2 @@\n+x",
+              }),
+            ];
+          },
+          async listComments() {
+            return [];
+          },
+          /** @param {number} _number @param {string} body */
+          async createComment(_number, body) {
+            upserts.push({ body });
+            return { id: 101 };
+          },
+          async updateComment() {},
+          async deleteComment() {},
+          async getContents() {
+            return null;
+          },
+          async whoami() {
+            return { login: "github-actions[bot]" };
+          },
+        },
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: (message) => log.push(message),
+      });
+      // The comment was published — the upsert happened.
+      expect(upserts).toHaveLength(1);
+      // The run stayed green — the outcome records the publication without
+      // its artifact, not a failure that would contradict the comment.
+      expect(result.outcome).toBe("published-without-artifact");
+      expect(result.reason).toContain("not written");
+      // The failure is logged.
+      expect(log.some((line) => line.includes("not written"))).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe("the action constant", () => {

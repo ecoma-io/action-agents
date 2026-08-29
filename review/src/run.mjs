@@ -77,10 +77,10 @@ export const ACTION = "review";
 
 /**
  * @typedef {object} RunResult
- * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "dry-run"} outcome
+ * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "published-without-artifact" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
- * @property {import("./artifact.mjs").RunArtifact} [artifact] the machine-readable run record — present only when the run published, when the comment's own identity is known, and when the fresh read at write time still names the reviewed head
+ * @property {import("./artifact.mjs").RunArtifact} [artifact] the machine-readable run record — present only when the run published, the comment's own identity is known, and the fresh read at write time still names the reviewed head; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
  */
 /**
  * @param {object} input

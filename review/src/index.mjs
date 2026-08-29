@@ -122,7 +122,7 @@ export function readEvent(eventName, eventPath) {
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
  * @param {Partial<import("./run.mjs").Io> & { fetchImpl?: typeof globalThis.fetch }} [io] injectable for tests; real clients otherwise
- * @returns {Promise<void>}
+ * @returns {Promise<import("./run.mjs").RunResult>}
  */
 export async function run(inputs, context, io = {}) {
   const event = readEvent(context.eventName, /** @type {string} */ (context.eventPath));
@@ -161,13 +161,22 @@ export async function run(inputs, context, io = {}) {
   log(`review: ${result.reason}`);
 
   if (result.artifact !== undefined) {
-    const file = writeRunArtifact({
-      workspace: context.workspace,
-      directory: inputs.artifactPath,
-      artifact: result.artifact,
-    });
-    log(`review: run artifact written to ${file}`);
+    try {
+      const file = writeRunArtifact({
+        workspace: context.workspace,
+        directory: inputs.artifactPath,
+        artifact: result.artifact,
+      });
+      log(`review: run artifact written to ${file}`);
+    } catch (cause) {
+      result.outcome = "published-without-artifact";
+      result.reason = `the comment is published but the run artifact was not written: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`;
+      log(`review: ${result.reason}`);
+    }
   }
+  return result;
 }
 
 /**
@@ -209,7 +218,7 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
 
 /**
  * @param {Env} [env]
- * @param {typeof run} [execute]
+ * @param {(inputs: Inputs, context: ReturnType<typeof readContext>) => Promise<import("./run.mjs").RunResult | void>} [execute]
  * @returns {Promise<{ ok: boolean, message?: string }>}
  */
 export async function main(env = process.env, execute = run) {
