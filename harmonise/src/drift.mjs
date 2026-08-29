@@ -52,7 +52,6 @@
  * @module harmonise/src/drift
  */
 
-import { utf8Compare } from "#core/order.mjs";
 import { contentFingerprint } from "./fingerprint.mjs";
 import { STATE_SCHEMA_VERSION } from "./state.mjs";
 
@@ -126,98 +125,11 @@ export function detectDrift(recorded, currentTarget) {
 }
 
 /**
- * One pair's verdict, as `applyDrift` consumes it. `pair` is the caller's
- * stable identifier for the destination — typically the record's
- * `destinationPath`.
+ * The declared drift verdicts, frozen — the one home of the four facts
+ * `detectDrift` returns. Exported so a consumer validates against this same
+ * list instead of copying it: `protection.mjs`'s refusal is only as total as
+ * the set it refuses on, and one declaration cannot disagree with itself.
  *
- * @typedef {object} DriftVerdictItem
- * @property {string} pair non-empty identity of the destination pair
- * @property {DriftVerdict} verdict the verdict `detectDrift` returned
- */
-
-/**
- * The deterministic summary `applyDrift` renders: a count and a pair list
- * per verdict. Every key is present even when empty, and the pair lists are
- * sorted byte-wise over UTF-8 — the same order `state.mjs` sorts records by,
- * so the summary renders identically regardless of detection order.
- *
- * @typedef {object} DriftSummary
- * @property {{ canonical: number, "target-drift": number, unrecorded: number, unknown: number }} counts
- * @property {{ canonical: string[], "target-drift": string[], unrecorded: string[], unknown: string[] }} pairs
- */
-
-/**
  * @type {readonly DriftVerdict[]}
  */
-const VERDICTS = Object.freeze(["canonical", "target-drift", "unrecorded", "unknown"]);
-
-/**
- * Byte-wise comparator over the UTF-8 encoding of two strings, matching the
- * record order `state.mjs` renders. It delegates to the one definition in
- * `core/src/order.mjs`: `review` needed the same collation, and with a second
- * action calling for it the comparator is promoted into `core/` — the
- * remediation the boundary law names — where this was a deliberate local copy.
- *
- * @param {string} a
- * @param {string} b
- * @returns {number}
- */
-function byUtf8Bytes(a, b) {
-  return utf8Compare(a, b);
-}
-
-/**
- * Folds per-pair verdicts into a small deterministic summary for a later
- * reporting task: counts per verdict and the pair lists behind them.
- *
- * The input is untrusted: an item that is not a plain object, a missing or
- * non-string or empty `pair`, a pair named twice, or a verdict outside the
- * four declared values throws `TypeError`. Verdicts only ever come from
- * `detectDrift`, so anything else arriving here is a caller bug — and a
- * summary that invents a bucket for it would quietly report nonsense. The
- * input array is never mutated.
- *
- * @param {unknown} verdicts an array of per-pair verdicts; valid items are shaped like {@link DriftVerdictItem}, and every item is validated
- * @returns {DriftSummary}
- */
-export function applyDrift(verdicts) {
-  if (!Array.isArray(verdicts)) {
-    throw new TypeError("applyDrift expects an array of verdict items");
-  }
-  const items = /** @type {readonly unknown[]} */ (verdicts);
-  /** @type {DriftSummary["counts"]} */
-  const counts = { canonical: 0, "target-drift": 0, unrecorded: 0, unknown: 0 };
-  /** @type {DriftSummary["pairs"]} */
-  const pairs = { canonical: [], "target-drift": [], unrecorded: [], unknown: [] };
-
-  /** @type {Set<string>} */
-  const seen = new Set();
-  for (const item of items) {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) {
-      throw new TypeError("each verdict item must be an object");
-    }
-    const rec = /** @type {Record<string, unknown>} */ (item);
-    const pair = rec["pair"];
-    const verdict = rec["verdict"];
-    if (typeof pair !== "string" || pair === "") {
-      throw new TypeError("each verdict item needs a non-empty string 'pair'");
-    }
-    if (typeof verdict !== "string" || !VERDICTS.includes(/** @type {DriftVerdict} */ (verdict))) {
-      throw new TypeError(`unknown verdict for pair '${pair}'`);
-    }
-    if (seen.has(pair)) {
-      throw new TypeError(`duplicate pair '${pair}'`);
-    }
-    seen.add(pair);
-
-    const known = /** @type {DriftVerdict} */ (verdict);
-    counts[known] += 1;
-    pairs[known].push(pair);
-  }
-
-  for (const verdict of VERDICTS) {
-    pairs[verdict].sort(byUtf8Bytes);
-  }
-
-  return { counts, pairs };
-}
+export const VERDICTS = Object.freeze(["canonical", "target-drift", "unrecorded", "unknown"]);

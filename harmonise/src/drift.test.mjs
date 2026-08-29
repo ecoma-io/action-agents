@@ -5,13 +5,11 @@
 // What is pinned: exactly one verdict per call; `canonical` is reachable
 // only by exact digest equality; an absent record reads `unrecorded`
 // regardless of the current input; every malformed recorded state and every
-// malformed current input refuses to `unknown` (fail-closed); and the
-// summary is deterministic — counts per verdict, pair lists sorted
-// byte-wise over UTF-8, nothing else.
+// malformed current input refuses to `unknown` (fail-closed) — nothing else.
 
 import { describe, expect, it } from "vitest";
 
-import { applyDrift, detectDrift } from "./drift.mjs";
+import { detectDrift } from "./drift.mjs";
 import { TRANSFORMATION_VERSION, contentFingerprint } from "./fingerprint.mjs";
 import { STATE_SCHEMA_VERSION } from "./state.mjs";
 
@@ -193,115 +191,5 @@ describe("detectDrift", () => {
       ].map((verdict) => typeof verdict),
     );
     expect(verdicts).toEqual(new Set(["string"]));
-  });
-});
-
-describe("applyDrift", () => {
-  it("returns an all-empty summary for no verdicts", () => {
-    expect(applyDrift([])).toEqual({
-      counts: { canonical: 0, "target-drift": 0, unrecorded: 0, unknown: 0 },
-      pairs: { canonical: [], "target-drift": [], unrecorded: [], unknown: [] },
-    });
-  });
-
-  it("counts each verdict and lists its pairs sorted", () => {
-    const summary = applyDrift([
-      { pair: "manuel/traductions/guide.md", verdict: "target-drift" },
-      { pair: "manuel/traductions/a-propos.md", verdict: "canonical" },
-      { pair: "manuel/traductions/contact.md", verdict: "unrecorded" },
-      { pair: "manuel/traductions/essai.md", verdict: "unknown" },
-      { pair: "manuel/traductions/b.md", verdict: "canonical" },
-      { pair: "manuel/traductions/accueil.md", verdict: "target-drift" },
-    ]);
-    expect(summary.counts).toEqual({
-      canonical: 2,
-      "target-drift": 2,
-      unrecorded: 1,
-      unknown: 1,
-    });
-    expect(summary.pairs["canonical"]).toEqual([
-      "manuel/traductions/a-propos.md",
-      "manuel/traductions/b.md",
-    ]);
-    expect(summary.pairs["target-drift"]).toEqual([
-      "manuel/traductions/accueil.md",
-      "manuel/traductions/guide.md",
-    ]);
-    expect(summary.pairs["unrecorded"]).toEqual(["manuel/traductions/contact.md"]);
-    expect(summary.pairs["unknown"]).toEqual(["manuel/traductions/essai.md"]);
-  });
-
-  it("sorts pair lists byte-wise over UTF-8, not by UTF-16 code unit", () => {
-    // U+E000 encodes to EE… and sorts before U+1F600 (F0…) byte-wise, while
-    // a UTF-16 default sort would put the astral emoji first (0xD83D <
-    // 0xE000). The byte-wise order matches how `state.mjs` sorts records.
-    const summary = applyDrift([
-      { pair: "manuel/\u{1F600}.md", verdict: "target-drift" },
-      { pair: "manuel/\uE000.md", verdict: "target-drift" },
-    ]);
-    expect(summary.pairs["target-drift"]).toEqual(["manuel/\uE000.md", "manuel/\u{1F600}.md"]);
-  });
-
-  it("is deterministic — the same verdicts summarize identically in any order", () => {
-    const verdicts = [
-      { pair: "manuel/a.md", verdict: "canonical" },
-      { pair: "manuel/b.md", verdict: "target-drift" },
-      { pair: "manuel/c.md", verdict: "unknown" },
-    ];
-    const reversed = applyDrift([...verdicts].reverse());
-    expect(reversed).toEqual(applyDrift(verdicts));
-  });
-
-  it("does not mutate its input", () => {
-    const verdicts = [
-      { pair: "manuel/b.md", verdict: "target-drift" },
-      { pair: "manuel/a.md", verdict: "canonical" },
-    ];
-    const snapshot = structuredClone(verdicts);
-    applyDrift(verdicts);
-    expect(verdicts).toEqual(snapshot);
-  });
-
-  it("throws when the input is not an array", () => {
-    expect(() => applyDrift("canonical")).toThrow(TypeError);
-  });
-
-  it("throws on a null item", () => {
-    expect(() => applyDrift([null])).toThrow(TypeError);
-  });
-
-  it("throws on an array item", () => {
-    expect(() => applyDrift([["manuel/a.md", "canonical"]])).toThrow(TypeError);
-  });
-
-  it("throws on a missing pair", () => {
-    expect(() => applyDrift([{ verdict: "canonical" }])).toThrow(TypeError);
-  });
-
-  it("throws on a non-string pair", () => {
-    expect(() => applyDrift([{ pair: 42, verdict: "canonical" }])).toThrow(TypeError);
-  });
-
-  it("throws on an empty pair", () => {
-    expect(() => applyDrift([{ pair: "", verdict: "canonical" }])).toThrow(TypeError);
-  });
-
-  it("throws on a missing verdict", () => {
-    expect(() => applyDrift([{ pair: "manuel/a.md" }])).toThrow(TypeError);
-  });
-
-  it("throws on a verdict outside the four declared values", () => {
-    // "drift" is not a verdict — only `detectDrift`'s four outputs are
-    // summarizable, and inventing a bucket would quietly report nonsense.
-    expect(() => applyDrift([{ pair: "manuel/a.md", verdict: "drift" }])).toThrow(TypeError);
-  });
-
-  it("throws on a duplicate pair", () => {
-    expect(() =>
-      applyDrift([
-        { pair: "manuel/a.md", verdict: "canonical" },
-        { pair: "manuel/a.md", verdict: "canonical" },
-      ]),
-    ).toThrow(TypeError);
   });
 });

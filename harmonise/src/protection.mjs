@@ -29,10 +29,11 @@
  *
  * The doctrine is enforced by refusal as well as by mapping: a verdict
  * outside the declared set or a non-boolean existence throws a `TypeError`
- * rather than guessing, in the same way `applyDrift` refuses an unknown
- * verdict.
+ * rather than guessing — the same posture `drift.mjs` takes toward a value
+ * outside its declared vocabulary.
  *
- * The policy is a pure mapping: it imports nothing at runtime, reads no
+ * The policy is a pure mapping: its one runtime import is `drift.mjs`'s
+ * frozen verdict vocabulary — a side-effect-free constant; it reads no
  * files, calls no model, consults no configuration, and wires into nothing.
  * A later task decides what an action class is allowed to cause —
  * `preserve-required` is what routes manual edits through the three-way
@@ -40,6 +41,8 @@
  *
  * @module harmonise/src/protection
  */
+
+import { VERDICTS } from "./drift.mjs";
 
 /**
  * A drift verdict, as `drift.mjs` declares it. Referenced rather than
@@ -78,15 +81,14 @@ export const PROTECTION_ACTIONS = Object.freeze([
 ]);
 
 /**
- * The drift verdicts this policy accepts, frozen — the same four facts
- * `drift.mjs` names. Drift keeps its own list private and this module
- * imports nothing from it at runtime, so the set is declared here; the
- * annotation ties every entry to drift's union, making a divergence a
- * typecheck failure rather than a silent change of meaning.
+ * The drift verdicts this policy accepts — `drift.mjs`'s own declared set,
+ * imported rather than copied. One declaration means a verdict the detector
+ * renames cannot leave this policy refusing on a stale list: the import is
+ * the whole mechanism, where an annotation was the mitigation.
  *
  * @type {readonly DriftVerdict[]}
  */
-const DRIFT_VERDICTS = Object.freeze(["canonical", "target-drift", "unrecorded", "unknown"]);
+const DRIFT_VERDICTS = VERDICTS;
 
 /**
  * The policy itself: every accepted (verdict, existence) combination with
