@@ -15,6 +15,8 @@ import {
 import {
   BASE_REPO_FULL_NAME,
   DOGFOOD_POLICY,
+  DOGFOOD_POSTURE_DOCUMENT_PATH,
+  DOGFOOD_POSTURE_POLICY,
   FIRST_TIME_FORK,
   MAINTAINER_DOCS,
   RELEASE_AUTOMATION,
@@ -169,7 +171,12 @@ describe("rule evaluation", () => {
       branch: RELEASE_AUTOMATION.head.ref,
       paths: null,
     });
-    expect(evaluated).toEqual({ applicable: false, matchedRule: "release-prs", basis: "rule" });
+    expect(evaluated).toEqual({
+      applicable: false,
+      matchedRule: "release-prs",
+      basis: "rule",
+      posture: "standard",
+    });
   });
 
   it("defaults a maintainer docs change to full review — the rule's context does not apply", () => {
@@ -184,7 +191,12 @@ describe("rule evaluation", () => {
       branch: MAINTAINER_DOCS.head.ref,
       paths: ["docs/development/review.md"],
     });
-    expect(evaluated).toEqual({ applicable: true, matchedRule: null, basis: "default" });
+    expect(evaluated).toEqual({
+      applicable: true,
+      matchedRule: null,
+      basis: "default",
+      posture: "standard",
+    });
   });
 
   it("matches in config order, first match wins", () => {
@@ -217,7 +229,12 @@ describe("rule evaluation", () => {
       branch: "dependabot/npm_and_yarn/foo",
       paths: null,
     });
-    expect(evaluated).toEqual({ applicable: true, matchedRule: "own-bots", basis: "rule" });
+    expect(evaluated).toEqual({
+      applicable: true,
+      matchedRule: "own-bots",
+      basis: "rule",
+      posture: "standard",
+    });
   });
 
   it("matches a contextless rule against any context", () => {
@@ -232,7 +249,12 @@ describe("rule evaluation", () => {
         branch: "wip",
         paths: null,
       });
-      expect(evaluated).toEqual({ applicable: true, matchedRule: "wip", basis: "rule" });
+      expect(evaluated).toEqual({
+        applicable: true,
+        matchedRule: "wip",
+        basis: "rule",
+        posture: "standard",
+      });
     }
   });
 
@@ -247,7 +269,12 @@ describe("rule evaluation", () => {
       branch: "docs/x",
       paths: null,
     });
-    expect(evaluated).toEqual({ applicable: true, matchedRule: null, basis: "default" });
+    expect(evaluated).toEqual({
+      applicable: true,
+      matchedRule: null,
+      basis: "default",
+      posture: "standard",
+    });
   });
 
   it("speaks the one glob dialect — negations exclude paths from the match", () => {
@@ -402,5 +429,147 @@ describe("policy validation refusals", () => {
   it("accepts an empty policy — declared but inert", () => {
     const policy = validateApplicabilityPolicy({ rules: [] });
     expect(policy).toEqual({ bots: [], rules: [] });
+  });
+});
+
+describe("the posture axis", () => {
+  /**
+   * @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture
+   * @param {{ bots: string[], rules: import("./applicability.mjs").ApplicabilityRule[] }} policy
+   * @param {string[] | null} paths
+   */
+  const evaluate = (fixture, policy, paths) => {
+    const derived = classifyContext(
+      classificationInputs(fixture, BASE_REPO_FULL_NAME, policy.bots),
+    );
+    return {
+      derived,
+      evaluated: evaluateApplicability({
+        policy,
+        context: derived.context,
+        title: fixture.title,
+        branch: fixture.head.ref,
+        paths,
+      }),
+    };
+  };
+
+  it("evaluates the #193-shaped docs change into the maintainer posture with its document", () => {
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    const { evaluated } = evaluate(MAINTAINER_DOCS, policy, ["docs/development/review.md"]);
+    expect(evaluated).toEqual({
+      applicable: true,
+      matchedRule: "docs-maintainer",
+      basis: "rule",
+      posture: "maintainer",
+      instruction: DOGFOOD_POSTURE_DOCUMENT_PATH,
+    });
+  });
+
+  it("classifies the #192 fixture identically under the posture policy — no cross-PR drift", () => {
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    const { evaluated } = evaluate(RELEASE_AUTOMATION, policy, null);
+    expect(evaluated).toEqual({
+      applicable: false,
+      matchedRule: "release-prs",
+      basis: "rule",
+      posture: "standard",
+      instruction: undefined,
+    });
+  });
+
+  it("leaves the external fixture on the default — a maintainer rule never reaches a fork", () => {
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    const { evaluated } = evaluate(FIRST_TIME_FORK, policy, ["docs/guide.md"]);
+    expect(evaluated).toEqual({
+      applicable: true,
+      matchedRule: null,
+      basis: "default",
+      posture: "standard",
+      instruction: undefined,
+    });
+  });
+
+  /**
+   * A rule refused-at-validation candidate: id and an immune maintainer
+   * context pre-set, the disputed keys spread in.
+   *
+   * @param {Record<string, unknown>} rule
+   * @returns {() => void}
+   */
+  const refused = (rule) => () =>
+    validateApplicabilityPolicy({
+      bots: ["acme"],
+      rules: [/** @type {any} */ ({ id: "x", context: "maintainer", run: true, ...rule })],
+    });
+
+  it("refuses an unknown posture value — the set is fixed in code", () => {
+    expect(refused({ posture: "relaxed", instruction: ".github/postures/x.md" })).toThrow(
+      /must be one of standard, maintainer, automation/,
+    );
+  });
+
+  it("refuses the default restated as a posture", () => {
+    expect(refused({ posture: "standard" })).toThrow(/the default restated is dead weight/);
+  });
+
+  it("refuses a non-standard posture without an immune context", () => {
+    expect(
+      refused({
+        context: undefined,
+        posture: "maintainer",
+        instruction: ".github/postures/docs.md",
+      }),
+    ).toThrow(/a convention never governs alone/);
+  });
+
+  it("refuses reframing the frozen external context off the standard posture", () => {
+    expect(() =>
+      validateApplicabilityPolicy({
+        bots: ["acme"],
+        rules: [
+          /** @type {any} */ ({
+            id: "x",
+            context: "external",
+            run: true,
+            posture: "automation",
+            instruction: ".github/postures/auto.md",
+          }),
+        ],
+      }),
+    ).toThrow(/external context is frozen/);
+  });
+
+  it("refuses a posture on a skipped run — dead weight", () => {
+    expect(
+      refused({ run: false, posture: "maintainer", instruction: ".github/postures/docs.md" }),
+    ).toThrow(/run: false ends the run before a posture could apply/);
+  });
+  it("refuses an instruction without a non-standard posture", () => {
+    expect(refused({ instruction: ".github/postures/docs.md" })).toThrow(
+      /nothing to be the document of/,
+    );
+  });
+  it("refuses a posture without its document — a non-standard posture is never a second engine", () => {
+    expect(refused({ posture: "maintainer" })).toThrow(/without an instruction/);
+  });
+  it("refuses a malformed instruction path", () => {
+    expect(refused({ posture: "maintainer", instruction: "" })).toThrow(/must be a document path/);
+    expect(refused({ posture: "maintainer", instruction: 42 })).toThrow(/must be a document path/);
+  });
+  it("still refuses intensity — later-PR surface, unchanged by this PR", () => {
+    expect(refused({ intensity: "high" })).toThrow(/unknown key 'intensity'/);
+  });
+
+  it("keeps a validated posture rule's shape exact — posture and instruction ride together", () => {
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    expect(policy.rules[1]).toEqual({
+      id: "docs-maintainer",
+      context: "maintainer",
+      when: { paths: ["docs/**"] },
+      run: true,
+      posture: "maintainer",
+      instruction: ".github/action-agents/review/postures/docs.md",
+    });
   });
 });

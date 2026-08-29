@@ -331,14 +331,15 @@ export function validateConfig(raw) {
 /**
  * Reads every document the config names, from the resolved policy source.
  * Rule documents are required — a declared rule with no file is a startup
- * error, whatever this pull request changes — and the custom rubric is
- * optional at its configured-or-convention path.
+ * error, whatever this pull request changes — and so is every posture
+ * document an applicability rule declares. The custom rubric is optional at
+ * its configured-or-convention path.
  *
  * @param {object} input
  * @param {ContentsReader} input.forge
  * @param {ReviewConfig} input.config
  * @param {import("#core/policy.mjs").PolicySource} input.source the resolved policy source, named in refusals
- * @returns {Promise<{ instruction?: string, ruleDocuments: Map<string, string> }>}
+ * @returns {Promise<{ instruction?: string, ruleDocuments: Map<string, string>, postureDocuments: Map<string, string> }>}
  */
 export async function loadDocuments({ forge, config, source }) {
   /** @type {Map<string, string>} */
@@ -352,12 +353,23 @@ export async function loadDocuments({ forge, config, source }) {
     ruleDocuments.set(rule.instruction, text);
   }
 
+  /** @type {Map<string, string>} */
+  const postureDocuments = new Map();
+  for (const rule of config.applicability?.rules ?? []) {
+    if (rule.instruction === undefined || postureDocuments.has(rule.instruction)) continue;
+    const text = await readDocument(forge, rule.instruction, true, source, "posture document");
+    if (text === undefined) {
+      throw new Error("a required posture document was read and then lost");
+    }
+    postureDocuments.set(rule.instruction, text);
+  }
+
   /** @type {{ instruction?: string }} */
   const loaded = {};
   const custom = await readDocument(forge, config.instructionPath, false, source);
   if (custom !== undefined) loaded.instruction = custom;
 
-  return { ...loaded, ruleDocuments };
+  return { ...loaded, ruleDocuments, postureDocuments };
 }
 
 /**
@@ -365,15 +377,19 @@ export async function loadDocuments({ forge, config, source }) {
  * @param {string} path
  * @param {boolean} required
  * @param {import("#core/policy.mjs").PolicySource} source
+ * @param {string} [kind] what the document is, named in the missing-file refusal
  * @returns {Promise<string | undefined>}
  */
-async function readDocument(forge, path, required, source) {
+async function readDocument(forge, path, required, source, kind = "rule document") {
   const file = await forge.getContents(path);
   if (file === null) {
     if (required) {
       throw new Error(
-        `the rule document '${path}' does not exist on branch '${source.branch}' at ${source.sha} ` +
-          `rule and leaving its file absent is a startup error`,
+        kind === "posture document"
+          ? `the posture document '${path}' does not exist on branch '${source.branch}' at ${source.sha} — ` +
+              `declaring the posture and leaving its document absent is a startup error`
+          : `the rule document '${path}' does not exist on branch '${source.branch}' at ${source.sha} ` +
+              `rule and leaving its file absent is a startup error`,
       );
     }
     return undefined;

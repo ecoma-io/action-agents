@@ -217,14 +217,61 @@ describe("loadDocuments", () => {
     const without = await loadDocuments({ forge: reader({}), config, source: SOURCE });
     expect(without.instruction).toBeUndefined();
   });
-
-  it("refuses any document past its byte cap", async () => {
+  it("requires every declared posture document, whatever this pull request matches", async () => {
     const config = validateConfig({
-      rules: [{ include: ["a/**"], instruction: ".github/rules/big.md" }],
+      applicability: {
+        bots: ["acme"],
+        rules: [
+          {
+            id: "docs-maintainer",
+            context: "maintainer",
+            posture: "maintainer",
+            instruction: ".github/postures/docs.md",
+          },
+        ],
+      },
+    });
+    const forge = reader({ ".github/postures/docs.md": "# Maintainer posture" });
+    const documents = await loadDocuments({ forge, config, source: SOURCE });
+    expect(documents.postureDocuments.get(".github/postures/docs.md")).toBe("# Maintainer posture");
+  });
+
+  it("refuses a missing posture document — a startup error, not dormancy", async () => {
+    const config = validateConfig({
+      applicability: {
+        bots: ["acme"],
+        rules: [
+          {
+            id: "docs-maintainer",
+            context: "maintainer",
+            posture: "maintainer",
+            instruction: ".github/postures/gone.md",
+          },
+        ],
+      },
+    });
+    await expect(loadDocuments({ forge: reader({}), config, source: SOURCE })).rejects.toThrow(
+      /posture document .* does not exist on branch/,
+    );
+  });
+
+  it("refuses a posture document past its byte cap", async () => {
+    const config = validateConfig({
+      applicability: {
+        bots: ["acme"],
+        rules: [
+          {
+            id: "docs-maintainer",
+            context: "maintainer",
+            posture: "maintainer",
+            instruction: ".github/postures/big.md",
+          },
+        ],
+      },
     });
     await expect(
       loadDocuments({
-        forge: reader({ ".github/rules/big.md": "x".repeat(9 * 1024) }),
+        forge: reader({ ".github/postures/big.md": "x".repeat(9 * 1024) }),
         config,
         source: SOURCE,
       }),
@@ -244,12 +291,27 @@ describe("validateConfig — the applicability axis", () => {
             when: { title: "^chore(\\([\\w-]+\\))?: release", branch: "^release-please--" },
             run: false,
           },
+          {
+            id: "docs-maintainer",
+            context: "maintainer",
+            when: { paths: ["docs/**"] },
+            posture: "maintainer",
+            instruction: ".github/action-agents/review/postures/docs.md",
+          },
         ],
       },
     });
     expect(config.applicability?.bots).toEqual(["ecoma-io", "dependabot[bot]"]);
     expect(config.applicability?.rules[0]?.id).toBe("release-prs");
     expect(config.applicability?.rules[0]?.when.title).toBeInstanceOf(RegExp);
+    expect(config.applicability?.rules[1]).toEqual({
+      id: "docs-maintainer",
+      context: "maintainer",
+      when: { paths: ["docs/**"] },
+      run: true,
+      posture: "maintainer",
+      instruction: ".github/action-agents/review/postures/docs.md",
+    });
   });
 
   it("refuses a policy the applicability law rejects, before any model call", () => {

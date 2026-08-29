@@ -74,3 +74,49 @@ export const DOGFOOD_POLICY = {
 
 /** The dogfood policy as a review.json5 body — JSON is valid JSON5. */
 export const DOGFOOD_CONFIG = JSON.stringify({ schemaVersion: 1, ...DOGFOOD_POLICY });
+
+/**
+ * The dogfood policy with the posture axis in effect: the same release skip,
+ * plus the maintainer posture for docs changes under a docs-scoped rule —
+ * the #193 shape. The instruction is a policy-source-relative document path;
+ * its content is {@link DOGFOOD_POSTURE_DOCUMENT} at
+ * {@link DOGFOOD_POSTURE_DOCUMENT_PATH}.
+ */
+export const DOGFOOD_POSTURE_POLICY = {
+  applicability: {
+    bots: ["ecoma-io", "dependabot[bot]"],
+    rules: [
+      DOGFOOD_POLICY.applicability.rules[0],
+      {
+        id: "docs-maintainer",
+        context: "maintainer",
+        when: { paths: ["docs/**"] },
+        posture: "maintainer",
+        instruction: ".github/action-agents/review/postures/docs.md",
+      },
+    ],
+  },
+};
+
+/** The posture dogfood policy as a review.json5 body. */
+export const DOGFOOD_POSTURE_CONFIG = JSON.stringify({
+  schemaVersion: 1,
+  ...DOGFOOD_POSTURE_POLICY,
+});
+
+/** Where the maintainer posture's document lives on the policy source. */
+export const DOGFOOD_POSTURE_DOCUMENT_PATH = ".github/action-agents/review/postures/docs.md";
+
+/** A mode-scoped maintainer instruction, well under the byte cap. */
+export const DOGFOOD_POSTURE_DOCUMENT = [
+  "# Maintainer posture",
+  "",
+  "The author maintains this repository. Narrow the rubric to what a",
+  "maintainer's own branch still needs:",
+  "",
+  "- A docs change is judged on accuracy against the code it describes, not",
+  "  on prose style.",
+  "- Do not report conventions the repository's own history contradicts.",
+  "- Nits that a maintainer would not block on are still welcome, clearly",
+  "  marked as nits.",
+].join("\n");

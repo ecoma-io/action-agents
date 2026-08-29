@@ -168,6 +168,7 @@ export async function reviewPullRequest({
         applicability: applicabilitySection({
           context: derived.context,
           applicable: false,
+          posture: "standard",
           matchedRule: null,
           basis: "state",
           inputs: derived.inputs,
@@ -185,6 +186,9 @@ export async function reviewPullRequest({
   let applicabilityFact;
   /** @type {import("#core/forge.mjs").PullRequestFile[] | undefined} */
   let earlyFiles;
+  /** The run's posture value and its document path, set only by a matched rule. */
+  let runPosture = /** @type {import("./applicability.mjs").Posture} */ ("standard");
+  let postureInstruction;
   if (applicability !== undefined) {
     let classifiedPaths = null;
     if (applicability.rules.some((rule) => rule.when.paths !== undefined)) {
@@ -212,9 +216,12 @@ export async function reviewPullRequest({
       branch: snapshot.head.ref,
       paths: classifiedPaths,
     });
+    runPosture = evaluated.posture;
+    postureInstruction = evaluated.instruction;
     applicabilityFact = applicabilitySection({
       context: derived.context,
       applicable: evaluated.applicable,
+      posture: runPosture,
       matchedRule: evaluated.matchedRule,
       basis: evaluated.basis,
       inputs: derived.inputs,
@@ -243,6 +250,16 @@ export async function reviewPullRequest({
     }
   }
   const documents = await loadDocuments({ forge: policy, config, source });
+  let postureDocument;
+  if (postureInstruction !== undefined) {
+    postureDocument = documents.postureDocuments.get(postureInstruction);
+    if (postureDocument === undefined) {
+      throw new Error(
+        `the posture document '${postureInstruction}' did not survive loading — refusing ` +
+          `rather than reviewing without the policy's mode-scoped instructions`,
+      );
+    }
+  }
 
   // ── Universe: inventory, budget, rules ──────────────────────────────────
   const files = earlyFiles ?? (await io.forge.listPullRequestFiles(pullRequestNumber));
@@ -324,6 +341,10 @@ export async function reviewPullRequest({
     laneBudgets,
     reviewed: inventory.reviewed,
     instruction: documents.instruction,
+    posture:
+      postureInstruction === undefined || postureDocument === undefined
+        ? undefined
+        : { name: runPosture, document: postureDocument },
     activeRules,
     ruleDocuments,
   });

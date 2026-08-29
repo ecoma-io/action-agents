@@ -26,6 +26,7 @@ function parts(over = {}) {
     laneBudgets: { deep: 0, standard: 0, skim: 0 },
     reviewed: [],
     instruction: undefined,
+    posture: undefined,
     activeRules: [],
     ruleDocuments: new Map(),
     ...over,
@@ -228,5 +229,47 @@ describe("review phase paragraphs", () => {
     const { messages } = buildPrompt(parts({}));
     const user = /** @type {string} */ (messages[1]?.content);
     expect(user).not.toContain("Review phase");
+  });
+});
+
+describe("the posture tier", () => {
+  it("carries the mode-scoped document below the strategy paragraphs", () => {
+    const system = systemOf(
+      parts({
+        posture: { name: "maintainer", document: "Narrow the rubric to what still matters." },
+      }),
+    );
+    expect(system).toContain('Review posture "maintainer"');
+    expect(system).toContain("They narrow judgement; they grant nothing:");
+    expect(system).toContain("Narrow the rubric to what still matters.");
+  });
+
+  it("sits below the adversarial paragraph and above the custom rubric", () => {
+    const system = systemOf(
+      parts({
+        strategy: "adversarial",
+        posture: { name: "automation", document: "Release metadata is the surface." },
+        instruction: "Be exact about lockfiles.",
+      }),
+    );
+    expect(system.indexOf('Review strategy — "adversarial"')).toBeLessThan(
+      system.indexOf('Review posture "automation"'),
+    );
+    expect(system.indexOf('Review posture "automation"')).toBeLessThan(
+      system.indexOf("Be exact about lockfiles."),
+    );
+  });
+
+  it("never rides the evidence message", () => {
+    const { messages } = buildPrompt(
+      parts({ posture: { name: "maintainer", document: "posture prose" } }),
+    );
+    const user = /** @type {string} */ (messages[1]?.content);
+    expect(user).not.toContain("Review posture");
+    expect(user).not.toContain("posture prose");
+  });
+
+  it("absent under the standard posture, nothing rendered", () => {
+    expect(systemOf(parts())).not.toContain("Review posture");
   });
 });
