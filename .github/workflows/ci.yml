@@ -163,6 +163,15 @@ jobs:
       # themselves honest would run nowhere — and a broken guard is invisible
       # precisely because a broken guard reports success.
       - run: pnpm test:tools
+      # The security adversarial corpus — the same `node --test` shape as the
+      # tools runner above, but pointed at `security/fixtures/`. Each fixture
+      # is a concrete adversarial input and a deterministic assertion that the
+      # ceiling it targets stays bounded; the corpus imports the real modules
+      # and never needs a live model or network, so it re-proves the ceiling
+      # claims in SECURITY.md on every run. A regression on any security
+      # boundary turns the build red here rather than waiting for a report.
+      - name: Run the security adversarial corpus
+        run: pnpm security
       # Resolves every `uses: ecoma-io/action-agents/<action>@<ref>` in
       # README/docs against tags that actually exist, so a pin like `@v0.1` for
       # an action that only shipped at `v0.2` fails here rather than reaching a

@@ -51,6 +51,7 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:tools": "node --test \"tools/**/*.test.mjs\" \"scripts/**/*.test.mjs\"",
+    "security": "node security/run-adversarial.mjs",
     "check-docs-links": "node scripts/check-docs-links.mjs",
     "check-anchors": "node tools/check-anchors.mjs",
     "check-uses-refs": "node tools/check-uses-refs.mjs",
