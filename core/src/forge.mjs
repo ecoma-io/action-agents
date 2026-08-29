@@ -513,9 +513,12 @@ export function createForge(config) {
      * @param {string} name
      */
     async removeLabel(number, name) {
+      // The removal lands even when the response is lost; replaying a
+      // timed-out delete would 404 on the now-absent label and fail the run.
       await call(`removing '${name}' from #${String(number)}`, () =>
         http.request(`${root}/issues/${String(number)}/labels/${encodeURIComponent(name)}`, {
           method: "DELETE",
+          maxAttempts: 1,
         }),
       );
     },
@@ -611,8 +614,13 @@ export function createForge(config) {
      * @param {number} id
      */
     async deleteComment(id) {
+      // Same single attempt as label removal: a replayed timed-out delete
+      // would 404 on the comment it already removed.
       await call(`deleting comment ${String(id)}`, () =>
-        http.request(`${root}/issues/comments/${String(id)}`, { method: "DELETE" }),
+        http.request(`${root}/issues/comments/${String(id)}`, {
+          method: "DELETE",
+          maxAttempts: 1,
+        }),
       );
     },
 

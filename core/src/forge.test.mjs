@@ -18,7 +18,7 @@ import {
   isRefAbsentError,
   nextLink,
 } from "./forge.mjs";
-import { HttpError } from "./http.mjs";
+import { HttpError, TransportError } from "./http.mjs";
 
 /** @typedef {{ url: string, method?: string | undefined, body?: unknown }} RecordedCall */
 
@@ -293,6 +293,58 @@ describe("label writes", () => {
       method: "DELETE",
     });
   });
+
+  it("never replays a timed-out removal — the delete already landed", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    let attempts = 0;
+    const client = forge(
+      "o",
+      "r",
+      {
+        "DELETE /repos/o/r/issues/7/labels/size%2Fxl": () => {
+          attempts += 1;
+          // First attempt: GitHub removed the label, the response was lost.
+          if (attempts === 1) {
+            throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+          }
+          // A replay would find the label already gone and answer 404.
+          return new Response("Not Found", { status: 404 });
+        },
+      },
+      recorder,
+    );
+
+    const error = await client.removeLabel(7, "size/xl").catch((c) => c);
+
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/removing 'size\/xl' from #7/);
+    expect(error.cause).toBeInstanceOf(TransportError);
+    expect(error.cause.message).toMatch(/timed out/);
+    expect(attempts).toBe(1);
+    expect(recorder.calls).toHaveLength(1);
+  });
+
+  it("fails loudly on a genuine refusal, after a single attempt", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        "DELETE /repos/o/r/issues/7/labels/size%2Fxl": () =>
+          new Response("unavailable", { status: 503 }),
+      },
+      recorder,
+    );
+
+    const error = await client.removeLabel(7, "size/xl").catch((c) => c);
+
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.cause).toBeInstanceOf(HttpError);
+    expect(error.cause.status).toBe(503);
+    expect(recorder.calls).toHaveLength(1);
+  });
 });
 
 describe("comments", () => {
@@ -350,6 +402,37 @@ describe("comments", () => {
 
     await expect(client.updateComment(42, "new")).resolves.toBeUndefined();
     await expect(client.deleteComment(42)).resolves.toBeUndefined();
+  });
+
+  it("never replays a timed-out delete — the comment is already gone", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    let attempts = 0;
+    const client = forge(
+      "o",
+      "r",
+      {
+        "DELETE /repos/o/r/issues/comments/42": () => {
+          attempts += 1;
+          // First attempt: GitHub deleted the comment, the response was lost.
+          if (attempts === 1) {
+            throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+          }
+          // A replay would find the comment already gone and answer 404.
+          return new Response("Not Found", { status: 404 });
+        },
+      },
+      recorder,
+    );
+
+    const error = await client.deleteComment(42).catch((c) => c);
+
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/deleting comment 42/);
+    expect(error.cause).toBeInstanceOf(TransportError);
+    expect(error.cause.message).toMatch(/timed out/);
+    expect(attempts).toBe(1);
+    expect(recorder.calls).toHaveLength(1);
   });
 
   it("names the operation when the token cannot write", async () => {
