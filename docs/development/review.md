@@ -789,6 +789,14 @@ Every run ends in exactly one of three states:
   exists, stays exactly as it is — a failed re-review must never destroy the
   last known-good record.
 
+One window exists where a published review can end without its artifact: the
+artifact file is written after the comment is upserted, and a write that
+refuses there — a path-confinement error, an unwritable directory — is
+caught and logged rather than failed. The comment stands and the run stays
+green: the review was published, and the outcome is recorded as
+`published-without-artifact` rather than as a failure that would contradict
+the comment it just wrote.
+
 Skips and abandonments are none of these: nothing was reviewed, so nothing is
 written and the run goes green with its log line.
 
