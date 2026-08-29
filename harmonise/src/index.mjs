@@ -48,7 +48,7 @@ import {
 import { buildInventory } from "./inventory.mjs";
 import { detectDrift } from "./drift.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
-import { readState, renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
+import { readState, renderState, statePath, STATE_SCHEMA_VERSION } from "./state.mjs";
 import { classifyPair } from "./stale.mjs";
 import { matchGlob } from "#core/glob.mjs";
 import {
@@ -61,7 +61,7 @@ import {
 } from "./plan.mjs";
 import { protectionDecision } from "./protection.mjs";
 import { buildPullRequestBody, renderPullRequestTitle } from "./pull-request.mjs";
-import { buildTmKey, createTmStore, readTm, serialize as serializeTm, TM_PATH } from "./tm.mjs";
+import { buildTmKey, createTmStore, readTm, serialize as serializeTm, tmPath } from "./tm.mjs";
 import { mergeThreeWay, summarizeMerge } from "./threeway.mjs";
 import { runPool } from "./pool.mjs";
 import {
@@ -77,9 +77,6 @@ import {
 /** @typedef {import("#core/forge.mjs").Forge} Forge */
 
 export const ACTION = "harmonise";
-
-/** The TM file path lives with the document format it names, in tm.mjs. */
-export { TM_PATH };
 
 /**
  * The caller's half of the recovery contract: `recovery.mjs` names a delay,
@@ -302,6 +299,7 @@ export async function run(inputs, context, io) {
       getContents: (path, options) => f.getContents(path, options),
       branchRef: branchBefore === null ? null : branchBefore.sha,
       defaultRef: source.sha,
+      sourceLanguage: config.sourceLanguage,
     });
     if (state !== null) recordedRecords = state.records;
   } catch {
@@ -312,9 +310,9 @@ export async function run(inputs, context, io) {
   // sync state above: ONE resolution of the harmonise branch tip — the
   // snapshot taken before any work — feeds both advisory reads, so a run
   // can never pair a state from one commit with a memory from another. A
-  // run publishes state.json and tm.json in one commit on the proposal
-  // branch, so reading both at that resolved tip keeps the state→memory
-  // join resolvable while the pull request is still unmerged —
+  // run publishes the language-suffixed advisory files in one commit on
+  // the proposal branch, so reading both at that resolved tip keeps the
+  // state→memory join resolvable while the pull request is still unmerged —
   // a record can always reach the merge base it references. The memory is
   // advisory both ways: a file that is missing, unreadable, corrupt or of a
   // foreign schema version leaves an empty store — no prior translations are
@@ -331,6 +329,7 @@ export async function run(inputs, context, io) {
       getContents: (path, options) => f.getContents(path, options),
       branchRef: branchBefore === null ? null : branchBefore.sha,
       defaultRef: source.sha,
+      sourceLanguage: config.sourceLanguage,
     });
     if (stored !== null) memory = stored.store;
   } catch {
@@ -871,9 +870,9 @@ export async function run(inputs, context, io) {
     ),
   );
   const stateBlob = await world.forge.createBlob(renderState(records));
-  changes.push({ path: STATE_PATH, blobSha: stateBlob.sha });
+  changes.push({ path: statePath(config.sourceLanguage), blobSha: stateBlob.sha });
   const tmBlob = await world.forge.createBlob(serializeTm(memory, { keepKeys: liveKeys }));
-  changes.push({ path: TM_PATH, blobSha: tmBlob.sha });
+  changes.push({ path: tmPath(config.sourceLanguage), blobSha: tmBlob.sha });
   const tree = await world.forge.createTree(source.sha, changes);
   const commit = await world.forge.createCommit(
     `${title}\n\nAuthored by harmonise from ${source.sha}.`,

@@ -28,14 +28,16 @@ import {
   TransportError,
 } from "#core/transport-errors.mjs";
 
-import { ACTION, DELAY_MS, main, readInputs, run, TM_PATH } from "./index.mjs";
+import { ACTION, DELAY_MS, main, readInputs, run } from "./index.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
-import { renderState, STATE_PATH, STATE_SCHEMA_VERSION } from "./state.mjs";
+import { LEGACY_STATE_PATH, renderState, statePath, STATE_SCHEMA_VERSION } from "./state.mjs";
 import {
   buildTmKey,
   createTmStore,
+  LEGACY_TM_PATH,
   parse as parseTm,
   serialize as serializeTm,
+  tmPath,
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
 import { DEFAULT_POLICY, DELAY_CLASSES } from "./recovery.mjs";
@@ -69,6 +71,11 @@ const runner = {
 };
 
 const CONFIG_PATH = ".github/action-agents/harmonise/harmonise.json5";
+
+// The advisory paths this suite's fixtures use: the runner's source language
+// is `en`, so the publishing branch `harmonise/en` owns the suffixed names.
+const STATE_PATH = statePath("en");
+const TM_PATH = tmPath("en");
 
 /**
  * The policy digest every default-fixture config hashes to: an empty
@@ -2157,6 +2164,128 @@ describe("run with manual-edit protection and three-way merge", () => {
       expect(readsOf(forgeDouble, STATE_PATH)).toEqual([BRANCH_SHA]);
       expect(readsOf(forgeDouble, TM_PATH)).toEqual([BRANCH_SHA]);
     });
+    it("migrates a pre-#156 repository in one cycle — legacy names read once, suffixed names published", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const chatDouble = chat([proposes(FRESH)]);
+      // The branch carries only the un-suffixed names: a proposal opened
+      // before the suffix landed — exactly what a mid-migration repository
+      // holds while the first suffixed publication is still unmerged.
+      const forgeDouble = forge(
+        makeRepo({
+          documents: {
+            "manual/dev.md": NEW_SOURCE,
+            "manual/vi/dev.md": EDITED,
+          },
+        }),
+        undefined,
+        {
+          branches: {
+            [BRANCH]: {
+              sha: BRANCH_SHA,
+              files: {
+                [LEGACY_STATE_PATH]: renderState([viPublication()]),
+                [LEGACY_TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
+              },
+            },
+          },
+        },
+      );
+      const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+      await expect(
+        run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+      ).resolves.toBeUndefined();
+
+      expect(chatDouble.calls()).toBe(1);
+      // The join resolved through the legacy names — the merge went through.
+      expect(blobsOf(forgeDouble)[0]).toBe(MERGED);
+      // The legacy files were read at the branch tip, and the publication
+      // wrote ONLY the suffixed names: this commit ends the fallback for
+      // every later run.
+      expect(readsOf(forgeDouble, LEGACY_STATE_PATH)).toEqual([BRANCH_SHA]);
+      expect(readsOf(forgeDouble, LEGACY_TM_PATH)).toEqual([BRANCH_SHA]);
+      const treeWrite = /** @type {{ args: [string, { path: string }[]] }} */ (
+        /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "createTree"))
+      );
+      expect(treeWrite.args[1].map((change) => change.path)).toEqual([
+        "manual/vi/dev.md",
+        STATE_PATH,
+        TM_PATH,
+      ]);
+    });
+  });
+});
+
+describe("run with language-suffixed advisory files (#156)", () => {
+  // Shape 1 of the #156 design note: the source language names the
+  // publishing branch and the advisory files it owns alike. Concurrent runs
+  // for different languages write disjoint file sets, and a repository with
+  // no advisory files anywhere behaves exactly as it always has.
+
+  it("publishes only the language-suffixed advisory files on a fresh repository", async () => {
+    // Zero-config parity: no advisory file, no branch, no legacy paths —
+    // the run behaves exactly as before and publishes the suffixed names.
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: echoingChat(), evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    const treeWrite = /** @type {{ args: [string, { path: string }[]] }} */ (
+      /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "createTree"))
+    );
+    expect(treeWrite.args[1].map((change) => change.path)).toEqual([
+      "manual/vi/dev.md",
+      statePath("en"),
+      tmPath("en"),
+    ]);
+  });
+
+  it("keeps a second source language's run out of the first language's advisory files", async () => {
+    // The en run's proposal already landed — its suffixed advisory files
+    // sit on the default branch. The fr run must neither read nor write
+    // them: disjoint file sets are what removes the merge collision (#156).
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(
+      makeRepo({
+        config: makeConfig({
+          sourceLanguage: "fr",
+          languages: { fr: "manual-fr/{document}.md", vi: "manual/vi/{document}.md" },
+        }),
+        documents: {
+          "manual-fr/dev.md": "# Dev\n\nProse.\n",
+          [statePath("en")]: renderState([]),
+          [tmPath("en")]: serializeTm(createTmStore()),
+        },
+      }),
+      makeInventory(["manual-fr/dev.md", "manual/vi/dev.md"]),
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: echoingChat(), evidence });
+    const env = { ...runner, "INPUT_SOURCE-LANGUAGE": "fr" };
+
+    await expect(
+      run({ ...readInputs(env), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    const branchWrite = /** @type {{ args: [string, string, string | null] }} */ (
+      /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "upsertBranch"))
+    );
+    // The branch key follows the source language, the same key the advisory
+    // file names are suffixed by.
+    expect(branchWrite.args[0]).toBe("harmonise/fr");
+    const treeWrite = /** @type {{ args: [string, { path: string }[]] }} */ (
+      /** @type {unknown} */ (forgeDouble.writes.find((w) => w.op === "createTree"))
+    );
+    expect(treeWrite.args[1].map((change) => change.path)).toEqual([
+      "manual/vi/dev.md",
+      statePath("fr"),
+      tmPath("fr"),
+    ]);
+    // The en files were never read — not for state, not for memory.
+    const enPaths = [statePath("en"), tmPath("en")];
+    expect(forgeDouble.reads.filter((r) => enPaths.includes(r.path))).toEqual([]);
   });
 });
 

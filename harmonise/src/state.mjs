@@ -19,7 +19,8 @@
  *
  * ## Layout
  *
- * The file lives at `{@link STATE_PATH}`. Its shape is
+ * The file lives at the path {@link statePath} derives from the run's source
+ * language. Its shape is
  * `{ "records": [ … ] }` where each record carries exactly these keys:
  *
  * | Field                    | Type   | Purpose                                              |
@@ -52,12 +53,26 @@ import { utf8Compare } from "#core/order.mjs";
 export const STATE_SCHEMA_VERSION = 1;
 
 /**
- * The path a sync-state file occupies in every repository that runs
- * harmonise. On the default branch this is the snapshot of the most recent
- * harmonise run; on the `harmonise/<language>` branch it is the in-progress
- * state a scheduled run reads first.
+ * The advisory sync-state path for one publishing branch: the source
+ * language names the branch (`harmonise/<sourceLanguage>`) and the advisory
+ * files it owns alike, so concurrent runs for different languages write
+ * disjoint file sets and never collide at merge time (#156, Shape 1 — the
+ * suffix follows the branch key by construction).
+ *
+ * @param {string} sourceLanguage
+ * @returns {string}
  */
-export const STATE_PATH = ".github/action-agents/harmonise/state.json";
+export function statePath(sourceLanguage) {
+  return `.github/action-agents/harmonise/state.${sourceLanguage}.json`;
+}
+
+/**
+ * The un-suffixed path repositories created before #156 carry. Read-only
+ * since the suffix landed: a run falls back to it once — when the suffixed
+ * file is absent everywhere — and the first suffixed publication ends the
+ * fallback. Nothing writes here anymore.
+ */
+export const LEGACY_STATE_PATH = ".github/action-agents/harmonise/state.json";
 
 /**
  * One destination's sync record — the snapshot of what harmonise produced for
@@ -315,6 +330,12 @@ export function parseState(text) {
  * advisory read, so state and memory can never come from two different
  * commits of the same branch.
  *
+ * The file is looked up under {@link statePath}`(sourceLanguage)` — the
+ * publishing branch's own suffixed name. Only when no ref carries it does
+ * the read fall back once to {@link LEGACY_STATE_PATH}, the un-suffixed
+ * path a pre-#156 repository still carries; the suffixed file this or any
+ * later run publishes ends the fallback.
+ *
  * - `getContents` is injected so tests can double the forge layer.
  * - `404` (absent) is `null` from the injected reader — forge already
  *   converts that. `getContents` may return `null` for absent; other
@@ -326,37 +347,56 @@ export function parseState(text) {
  *   state" so the run recomputes everything. What recomputation means for a
  *   pair with existing bytes is the protection policy's call: with no record
  *   there is no verified base, so the pair is preserved — never overwritten.
+ *   The verdict is final for the ref that owns the file: a corrupt branch
+ *   file is never replaced by a stale default, and a found-but-corrupt
+ *   suffixed file is never replaced by the legacy copy — the fallback read
+ *   answers absence, not corruption.
  *
- * @param {{ getContents: ContentsReader, branchRef: string | null, defaultRef: string }} args
+ * @param {{ getContents: ContentsReader, branchRef: string | null, defaultRef: string, sourceLanguage: string }} args
  *   `branchRef` is the resolved harmonise branch tip SHA, or `null` when the
- *   branch does not exist; `defaultRef` is the resolved default-branch SHA.
+ *   branch does not exist; `defaultRef` is the resolved default-branch SHA;
+ *   `sourceLanguage` is the branch key the advisory paths are suffixed by.
  * @returns {Promise<{ records: SyncStateRecord[], origin: "branch" | "default" } | null>}
  */
-export async function readState({ getContents, branchRef, defaultRef }) {
-  const fromBranch = branchRef === null ? null : await getContents(STATE_PATH, { ref: branchRef });
-  if (fromBranch !== null) {
-    try {
-      const parsed = parseState(fromBranch.content);
-      return { records: parsed.records, origin: "branch" };
-    } catch {
-      // Advisory: unparseable state degrades to absent so the run
-      // recomputes from real bytes. Do not fall through to default —
-      // the branch owns its state file and a corrupt one is the
-      // branch's signal, not a reason to silently substitute a stale
-      // default.
-      return null;
-    }
-  }
+export async function readState({ getContents, branchRef, defaultRef, sourceLanguage }) {
+  const path = statePath(sourceLanguage);
+  const fromBranch = branchRef === null ? null : await getContents(path, { ref: branchRef });
+  if (fromBranch !== null) return parseRecords(fromBranch.content, "branch");
 
-  const fromDefault = await getContents(STATE_PATH, { ref: defaultRef });
-  if (fromDefault !== null) {
-    try {
-      const parsed = parseState(fromDefault.content);
-      return { records: parsed.records, origin: "default" };
-    } catch {
-      return null;
-    }
-  }
+  const fromDefault = await getContents(path, { ref: defaultRef });
+  if (fromDefault !== null) return parseRecords(fromDefault.content, "default");
+
+  // One-cycle legacy fallback: no ref carries the suffixed file, so a
+  // repository not yet republished under the suffixed names is read from
+  // the paths it has — branch tip first, default second, same rules.
+  const legacyBranch =
+    branchRef === null ? null : await getContents(LEGACY_STATE_PATH, { ref: branchRef });
+  if (legacyBranch !== null) return parseRecords(legacyBranch.content, "branch");
+
+  const legacyDefault = await getContents(LEGACY_STATE_PATH, { ref: defaultRef });
+  if (legacyDefault !== null) return parseRecords(legacyDefault.content, "default");
 
   return null;
+}
+
+/**
+ * Parses one fetched sync-state file under the advisory doctrine: a file
+ * that exists but fails to parse degrades to absent, and the degradation is
+ * final — no fall-through to another ref and no substitution from another
+ * path.
+ *
+ * @param {string} content
+ * @param {"branch" | "default"} origin
+ * @returns {{ records: SyncStateRecord[], origin: "branch" | "default" } | null}
+ */
+function parseRecords(content, origin) {
+  try {
+    return { records: parseState(content).records, origin };
+  } catch {
+    // Advisory: unparseable state degrades to absent so the run
+    // recomputes from real bytes. The branch owns its state file and a
+    // corrupt one is the branch's signal, not a reason to silently
+    // substitute a stale default.
+    return null;
+  }
 }

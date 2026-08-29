@@ -585,7 +585,7 @@ body     action-authored, per-language sections:
 One run shape changes no translation file at all. When every pair came back in
 step but a recorded state record was re-pinned — a noop endorsement, proved
 against this run's source, policy and transformation version — the run still
-publishes: the commit carries only `state.json` and `tm.json` (paths in
+publishes: the commit carries only the language-suffixed advisory files (paths in
 [Snapshot authority](#snapshot-authority)), the re-pinned record made current
 and the endorsed wording entered into the memory, so the next run skips the
 pair at zero model calls. The pull request is created if absent, updated in
@@ -634,23 +634,33 @@ place if already open — exactly as with translation changes.
 
 #### Snapshot authority
 
-State (`state.json`, at `.github/action-agents/harmonise/state.json`) and the translation memory (`tm.json`, at `.github/action-agents/harmonise/tm.json`) resolve from the
-same snapshot of repository history, literally: the `harmonise/<lang>` branch
-tip is resolved **once** per run, and that one SHA feeds both advisory reads.
+The advisory files are language-suffixed: sync state at
+`.github/action-agents/harmonise/state.<lang>.json`, translation memory at
+`.github/action-agents/harmonise/tm.<lang>.json` — suffixed by the same
+source language that names the publishing branch. Both resolve from the same
+snapshot of repository history, literally: the `harmonise/<lang>` branch tip
+is resolved **once** per run, and that one SHA feeds both advisory reads.
 A push landing between the two reads can never pair a state from one commit
 with a memory from another.
 
-- **Branch-first, both files, one resolution:** A run publishes `state.json`,
-  `tm.json` and every translation in one commit on the proposal branch. The
-  next run resolves the branch tip a single time and reads both advisory
-  files at that SHA, so a state record can always resolve the merge base it
-  references — even while the pull request is still unmerged.
+- **Branch-first, both files, one resolution:** A run publishes its
+  language-suffixed state and memory files and every translation in one
+  commit on the proposal branch. The next run resolves the branch tip a
+  single time and reads both advisory files at that SHA, so a state record
+  can always resolve the merge base it references — even while the pull
+  request is still unmerged.
 - **Default fallback, per file:** When the branch has no state file or no TM
   file, the default branch's copy is used — read at the audited default-branch
   SHA the run already pinned, never a second live lookup. The two files still
   fall back independently: state on the branch with the memory on the default
   is valid, and a record can still join against a default-branch memory entry
   it matches.
+- **One-cycle legacy fallback:** Repositories created before #156 carry the
+  un-suffixed `state.json` and `tm.json`. A run consults them once — only
+  when no ref carries its suffixed file — reading the branch tip first, then
+  the default snapshot, under the same finality rules as above. The first
+  suffixed publication ends the fallback; nothing writes the legacy paths
+  again.
 - **The branch's file is final:** When the branch carries a file, the default
   branch is never read for it — a corrupt or foreign-schema branch file
   degrades to an empty memory (or absent state), the same fail-closed rule
@@ -679,11 +689,11 @@ All pairs in step with no recorded state to re-pin → no commit, no branch, no 
 
 ## Design note — advisory-file shape for concurrent runs
 
-> **Status: open design question, not shipped behaviour.** This section records the decision called for by #156. It compares three shapes for the advisory files; none is implemented yet, and nothing here is behaviour a run exhibits today.
+> **Status: adopted — shipped behaviour (#156).** This section records the decision #156 called for; the language-suffixed names it recommends are what a run reads and publishes today.
 
 ### The collision
 
-Both advisory files publish at fixed paths — `STATE_PATH` and `TM_PATH` are constants, not derived from a run's language — and each holds records for **every** target language: state records are keyed by `destinationPath` across all languages, translation-memory entries by `{sourceHash, targetLang, policyContext}`. A run publishes one commit on `harmonise/<sourceLanguage>` carrying both files in full. Whenever two publishing branches exist — a repository keeping more than one source language, or any workflow topology landing harmonise work on separate branches — both rewrite the same two files, so merging them sequentially conflicts on the advisory files even when their translations touch disjoint paths. The merge queue serializes landings, so this is friction, not data loss: the second branch rebases. The failure mode the queue cannot catch is human — a rebase resolved by dropping records leaves pairs unrecorded or without a verified merge base, which the [manual-edit protection](#manual-edit-protection) doctrine turns into refusals and re-work: fail-closed, surfaced as red runs and cost, never as silent data loss.
+Before the suffix shipped, both advisory files published at fixed paths shared by every publishing branch — the same two names for every run — and each held records for **every** target language: state records are keyed by `destinationPath` across all languages, translation-memory entries by `{sourceHash, targetLang, policyContext}`. A run published one commit on `harmonise/<sourceLanguage>` carrying both files in full. Whenever two publishing branches existed — a repository keeping more than one source language, or any workflow topology landing harmonise work on separate branches — both rewrote the same two files, so merging them sequentially conflicted on the advisory files even when their translations touched disjoint paths. The merge queue serialized landings, so this was friction, not data loss: the second branch rebased, and a rebase resolved by dropping records left pairs unrecorded or without a verified merge base, which the [manual-edit protection](#manual-edit-protection) doctrine turned into refusals and re-work — fail-closed, surfaced as red runs and cost, never as silent data loss. The language-suffixed names above remove the collision by construction; the paragraphs below are kept as the record of why.
 
 ### The three shapes
 
