@@ -1,11 +1,11 @@
 <p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — AI-powered GitHub Actions cho việc bảo trì kho lưu trữ: triage, review và harmonise, mỗi một là một hành động độc lập đối với bất kỳ mô hình OpenAI-compatible nào" width="100%" />
+  <img src=".github/assets/banner.png" alt="Action Agents — GitHub Actions đáng tin cậy, có giới hạn và có thể kiểm toán cho việc bảo trì kho lưu trữ: triage, review và harmonise, mỗi một là một hành động độc lập đối với bất kỳ mô hình OpenAI-compatible nào" width="100%" />
 </p>
 
 <h1 align="center">Action Agents</h1>
 
 <p align="center">
-  <strong>AI-powered GitHub Actions cho việc bảo trì kho lưu trữ.</strong><br />
+  <strong>GitHub Actions đáng tin cậy, có giới hạn và có thể kiểm toán cho việc bảo trì kho lưu trữ.</strong><br />
   Ba hành động, mỗi hành động một trách nhiệm — triage, review, harmonise — chạy bên trong GitHub Actions đối với bất kỳ mô hình OpenAI-compatible nào, bao gồm cả một mô hình bạn tự host. Không có gói nào để tin cậy, không có phụ thuộc nào để kiểm toán, không cần cài đặt trước khi chúng khởi chạy.<br />
   <em>Những gì runner thực thi là mã nguồn bạn có thể đọc tại thẻ (tag) bạn đã ghim.</em>
 </p>

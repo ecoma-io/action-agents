@@ -1,11 +1,11 @@
 <p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — AI-powered GitHub Actions for repository maintenance: triage, review and harmonise, each one a self-contained action against any OpenAI-compatible model" width="100%" />
+  <img src=".github/assets/banner.png" alt="Action Agents — trusted, bounded, auditable GitHub Actions for repository maintenance: triage, review and harmonise, each one a self-contained action against any OpenAI-compatible model" width="100%" />
 </p>
 
 <h1 align="center">Action Agents</h1>
 
 <p align="center">
-  <strong>AI-powered GitHub Actions for repository maintenance.</strong><br />
+  <strong>Trusted, bounded, auditable GitHub Actions for repository maintenance.</strong><br />
   Three actions, one responsibility each — triage, review, harmonise — running
   inside GitHub Actions against any OpenAI-compatible model, including one you host
   yourself. No bundle to trust, no dependency to audit, no install before they start.<br />

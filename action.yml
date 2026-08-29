@@ -1,4 +1,4 @@
-name: Action Agents - AI-powered repository maintenance actions.
+name: Action Agents - trusted, bounded, auditable repository-maintenance actions.
 description: >-
   Root guard: not a runnable action. Use ecoma-io/action-agents/triage, review or
   harmonise at a pinned ref.
