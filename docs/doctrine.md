@@ -63,7 +63,7 @@ Read as a table, with what is already written and what the end state needs:
 | `core/`           | Kind     | What it is for                                                                           |
 | ----------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `runtime.mjs`     | protocol | Reading inputs, writing workflow commands, masking secrets, reading the runner's context |
-| `inputs.mjs`      | protocol | The four inputs every action takes, validated once                                       |
+| `inputs.mjs`      | protocol | The five inputs every action takes, validated once                                       |
 | `json5-parse.mjs` | protocol | JSON5 — config files and model answers, parsed by one implementation                     |
 | `http.mjs`        | protocol | Timeouts, retries, and the failure shapes a provider really returns                      |
 | `chat.mjs`        | protocol | The chat-completions request — the whole of what crosses the seam to a model             |

@@ -37,7 +37,7 @@ Bảo trì kho lưu trữ là công việc mà không ai lên lịch: gán nhãn
 - **Agentic khi nó xứng đáng** — `review` quyết định đọc gì, xác minh trước khi yêu cầu, và gói gọn bản ghi của mình thay vì cắt ngắn diff của bạn.
 - **Giới hạn bởi workflow của bạn, không phải bởi prompt của chúng tôi** — cấu hình mô tả hành vi; khối `permissions:` là ranh giới bảo mật.
 
-> **Trạng thái: đã phát hành.** v0.1.0 đã ra mắt — cả `v0.1` (thẻ nổi) lẫn `v0.1.0` (thẻ chính xác) đều có thể ghim, và ví dụ dưới đây phân giải được.
+> **Trạng thái: đã phát hành.** v0.5.0 đã ra mắt — cả `v0.5` (thẻ nổi) lẫn `v0.5.0` (thẻ chính xác) đều có thể ghim, và ví dụ dưới đây phân giải được.
 
 ## Get started
 
@@ -56,7 +56,7 @@ jobs:
       # review reads the working tree, so it needs a checkout
       - uses: actions/checkout@v5
 
-      - uses: ecoma-io/action-agents/review@v0.1
+      - uses: ecoma-io/action-agents/review@v0.5
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}

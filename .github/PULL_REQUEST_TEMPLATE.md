@@ -101,7 +101,7 @@ edited later and no clone carries it — the commit trailer travels with the cod
 
 ## Checklist
 
-- [ ] Every gate passes locally: `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm arch`, `pnpm test`, `pnpm test:tools`, `pnpm check-docs-links`, `pnpm check-anchors`, `pnpm check-uses-refs`, `pnpm check-skills`
+- [ ] Every gate passes locally: `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm arch`, `pnpm arch:canary`, `pnpm arch:transport-seam`, `pnpm test`, `pnpm test:tools`, `pnpm security`, `pnpm check-docs-links`, `pnpm check-anchors`, `pnpm check-uses-refs`, `pnpm check-action-inputs`, `pnpm check-workflow-inputs`, `pnpm check-release-invariants`, `pnpm check-skills`
 - [ ] I have self-reviewed this diff
 - [ ] Documentation is updated in the same pass as the behaviour it describes
 - [ ] No unrelated changes are included

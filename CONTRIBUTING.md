@@ -154,23 +154,26 @@ them — not in anticipation that one might.
 
 ## The commands
 
-| Command                         | What it does                                                                                                                      |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm lint`                     | ESLint, zero warnings tolerated                                                                                                   |
-| `pnpm typecheck`                | `tsc --noEmit` over the JSDoc types — the only place a type error is caught                                                       |
-| `pnpm arch`                     | `archkeep check` — the core/action boundary, judged mechanically                                                                  |
-| `pnpm test`                     | Vitest, with coverage thresholds                                                                                                  |
-| `pnpm test:tools`               | `node --test` over `tools/**` and `scripts/**` — the gates that check the gates                                                   |
-| `pnpm check-docs-links`         | Every markdown link, prose `docs/…` citation, and path named in a `.yml`/`.yaml` resolves                                         |
-| `pnpm check-anchors`            | Every `(file#fragment)` link resolves against a heading that is really there — duplicate headings included                        |
-| `pnpm check-uses-refs`          | Every documented `uses: ecoma-io/action-agents/<action>@<ref>` resolves against a tag that exists, and an action that ships at it |
-| `pnpm check-action-inputs`      | Every `action.yaml` and the code behind it declare and read the same inputs — in both directions                                  |
-| `pnpm check-workflow-inputs`    | Every workflow under `.github/workflows` passes only inputs the action manifest it runs declares, and passes every required one   |
-| `pnpm check-release-invariants` | Root stub contract, child manifests, entry points, surprise action detection, version consistency                                 |
-| `pnpm check-skills`             | The vendored `arch-*` skills are byte-identical in both agent directories and match the pinned `@ecoma-io/archkeep`               |
-| `pnpm sync-skills`              | Rewrites those vendored skills from an Archkeep source tree. Not a gate — the only sanctioned way they change                     |
-| `pnpm format`                   | Prettier, in place                                                                                                                |
-| `pnpm format:check`             | Prettier, read-only — what CI runs                                                                                                |
+| Command                         | What it does                                                                                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm lint`                     | ESLint, zero warnings tolerated                                                                                                                         |
+| `pnpm typecheck`                | `tsc --noEmit` over the JSDoc types — the only place a type error is caught                                                                             |
+| `pnpm arch`                     | `archkeep check` — the core/action boundary, judged mechanically                                                                                        |
+| `pnpm arch:canary`              | A boundary-rule canary — proves the Archkeep verdict engine fires and fails on a planted violation as red                                               |
+| `pnpm arch:transport-seam`      | The module-boundary transport seam — proves one module cannot import another at runtime over the seam Archkeep guarantees                               |
+| `pnpm test`                     | Vitest, with coverage thresholds                                                                                                                        |
+| `pnpm test:tools`               | `node --test` over `tools/**` and `scripts/**` — the gates that check the gates                                                                         |
+| `pnpm check-docs-links`         | Every markdown link, prose `docs/…` citation, and path named in a `.yml`/`.yaml` resolves                                                               |
+| `pnpm check-anchors`            | Every `(file#fragment)` link resolves against a heading that is really there — duplicate headings included                                              |
+| `pnpm check-uses-refs`          | Every documented `uses: ecoma-io/action-agents/<action>@<ref>` resolves against a tag that exists, and an action that ships at it                       |
+| `pnpm check-action-inputs`      | Every `action.yaml` and the code behind it declare and read the same inputs — in both directions                                                        |
+| `pnpm check-workflow-inputs`    | Every workflow under `.github/workflows` passes only inputs the action manifest it runs declares, and passes every required one                         |
+| `pnpm check-release-invariants` | Root stub contract, child manifests, entry points, surprise action detection, version consistency, and the CHANGELOG head matching the version files    |
+| `pnpm check-skills`             | The vendored `arch-*` skills are byte-identical in both agent directories and match the pinned `@ecoma-io/archkeep`                                     |
+| `pnpm security`                 | The adversarial corpus under `security/fixtures` — every ceiling in `SECURITY.md` proven to hold against a hostile input, deterministically and offline |
+| `pnpm sync-skills`              | Rewrites those vendored skills from an Archkeep source tree. Not a gate — the only sanctioned way they change                                           |
+| `pnpm format`                   | Prettier, in place                                                                                                                                      |
+| `pnpm format:check`             | Prettier, read-only — what CI runs                                                                                                                      |
 
 Everything above except `pnpm format` and `pnpm sync-skills` is a gate. Run them
 before you push; a shorter local run just moves the red to the pull request.
