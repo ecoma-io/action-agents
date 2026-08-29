@@ -1,7 +1,7 @@
 name: Question
 description: You want to do something with one of these actions and are not sure how.
 title: "question: "
-labels: ["question"]
+labels: ["needs triage"]
 body:
   - type: markdown
     attributes:
@@ -10,9 +10,11 @@ body:
         version of this form — _Đặt câu hỏi_ — is in the chooser.
 
         **How this form is handled**, so nothing about it is a surprise: it is
-        labelled `question`, and it is closed once it has been answered. An open
-        question means one nobody has answered yet — that is the whole reason
-        questions get their own form rather than sharing the queue with defects.
+        filed as `needs triage`, then `triage` classifies it — commonly into
+        `question`, which clears the marker — and it is closed once it has been
+        answered. An open question means one nobody has answered yet — that is
+        the whole reason questions get their own form rather than sharing the
+        queue with defects.
         There is no response-time commitment; this project is maintained by one
         person.
 
