@@ -1446,13 +1446,45 @@ describe("the applicability fact and the skipped-run record", () => {
     ).toThrow(/must record applicable: false/);
   });
 
-  it("refuses a non-empty intensity — later-PR surface, never silently accepted", () => {
+  it("refuses an unknown intensity key — the section's shape stays exact", () => {
     const tampered = /** @type {import("./artifact.mjs").ApplicabilitySection} */ (
       /** @type {unknown} */ ({ ...ruleSection(), intensity: { file: {} } })
     );
     expect(() => buildArtifact(facts({ applicability: tampered }))).toThrow(
       /intensity has an unknown key 'file'/,
     );
+  });
+
+  it("records a declared intensity as the resolved value and refuses an unknown arm", () => {
+    /** @param {{} | { strictness: "low" | "stricter" }} intensity */
+    const declared = (intensity) =>
+      applicabilitySection({
+        context: "maintainer",
+        applicable: true,
+        posture: "maintainer",
+        intensity,
+        matchedRule: "docs-maintainer",
+        basis: "rule",
+        inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+      });
+    expect(declared({ strictness: "low" }).intensity).toEqual({ strictness: "low" });
+    expect(() => declared(/** @type {any} */ ({ strictness: "stricter" }))).toThrow(
+      /intensity.strictness 'stricter' is outside the vocabulary/,
+    );
+  });
+
+  it("refuses a declared intensity on a skipped run's fact — a skipped run took none", () => {
+    expect(() =>
+      applicabilitySection({
+        context: "automation",
+        applicable: false,
+        posture: "standard",
+        intensity: { strictness: "low" },
+        matchedRule: "release-prs",
+        basis: "rule",
+        inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+      }),
+    ).toThrow(/a skipped run took none/);
   });
 
   it("enforces the matched-rule law in both directions", () => {

@@ -2,9 +2,9 @@
  * The applicability engine — execution-context derivation and the rule
  * evaluator, one pure module over injected inputs. It decides, before diff
  * accounting and before any model call, whether review applies to a pull
- * request at all (`run`) and which posture it takes, naming the rule or
- * default that decided each. Intensity remains later-PR surface, refused
- * at validation until its own PR lands.
+ * request at all (`run`), which posture it takes, and how deep it goes —
+ * the `strictness` delta the intensity axis resolves for the run — naming
+ * the rule or default that decided each.
  *
  * The doctrine, restated where it bites: classification reads event
  * metadata and consumer-declared conventions, never review content; title,
@@ -23,6 +23,13 @@ export const APPLICABILITY_BASES = /** @type {const} */ (["rule", "default", "st
 
 /** The three review postures, fixed in code — a policy file selects, never defines. */
 export const POSTURES = /** @type {const} */ (["standard", "maintainer", "automation"]);
+
+/**
+ * The strictness arms the intensity axis's one delta speaks, mirrored from
+ * the config schema — same reason as every mirror here: an unknown policy is
+ * a refusal, never a guess.
+ */
+export const STRICTNESS_ARMS = /** @type {const} */ (["low", "medium", "high"]);
 
 /** The bases a skipped run can carry — the defaults never skip. */
 export const SKIPPED_BASES = /** @type {const} */ (["rule", "state"]);
@@ -47,6 +54,11 @@ const WRITE_CLASS_ASSOCIATIONS = /** @type {const} */ (["OWNER", "MEMBER", "COLL
 /** @typedef {(typeof HEAD_PROVENANCES)[number]} HeadProvenance */
 /** @typedef {(typeof AUTHOR_PROVENANCES)[number]} AuthorProvenance */
 /** @typedef {(typeof POSTURES)[number]} Posture */
+/**
+ * @typedef {object} RuleIntensity the intensity axis's one delta: the
+ * `strictness` dial, stated as the absolute value the run runs under.
+ * @property {import("./config.mjs").Strictness} strictness
+ */
 
 /**
  * @typedef {object} ApplicabilityRule a validated rule: `context` plus
@@ -59,6 +71,7 @@ const WRITE_CLASS_ASSOCIATIONS = /** @type {const} */ (["OWNER", "MEMBER", "COLL
  * @property {boolean} run the applicability axis value
  * @property {Exclude<Posture, "standard">} [posture] the posture axis value, present only when a deviation is declared
  * @property {string} [instruction] the posture document's path on the policy source, alongside a non-standard posture
+ * @property {RuleIntensity} [intensity] the intensity axis value, present only when the rule declares it
  */
 
 /**
@@ -159,7 +172,8 @@ export function classifyContext(inputs) {
  * means: run, standard posture, file intensity — the defaults, literally.
  * The matched rule's posture rides the verdict with its document path, so
  * the caller never re-finds the rule; `instruction` is set exactly when the
- * posture is not standard. `title`, `branch` and the changed paths are
+ * posture is not standard, and `intensity` exactly when the rule declares
+ * the strictness override. `title`, `branch` and the changed paths are
  * match values, never instruction; the paths globs speak the one
  * configuration dialect and run over the post-ignore inventory.
  *
@@ -169,7 +183,7 @@ export function classifyContext(inputs) {
  * @param {string} input.title the pull request's title
  * @param {string} input.branch the head ref name
  * @param {string[] | null} input.paths the post-ignore changed paths, or null when no rule carries a paths condition and no listing was fetched
- * @returns {{ applicable: boolean, matchedRule: string | null, basis: "rule" | "default", posture: Posture, instruction: string | undefined }}
+ * @returns {{ applicable: boolean, matchedRule: string | null, basis: "rule" | "default", posture: Posture, instruction: string | undefined, intensity: RuleIntensity | undefined }}
  */
 export function evaluateApplicability({ policy, context, title, branch, paths }) {
   for (const rule of policy.rules) {
@@ -181,6 +195,7 @@ export function evaluateApplicability({ policy, context, title, branch, paths })
       basis: "rule",
       posture: rule.posture ?? "standard",
       instruction: rule.instruction,
+      intensity: rule.intensity,
     };
   }
   return {
@@ -189,6 +204,7 @@ export function evaluateApplicability({ policy, context, title, branch, paths })
     basis: "default",
     posture: "standard",
     instruction: undefined,
+    intensity: undefined,
   };
 }
 
@@ -213,13 +229,15 @@ function conditionsHold(when, title, branch, paths) {
  * Absent means the policy is off entirely — no classification, no axes,
  * byte-for-byte today's behaviour. Every refusal below is red at startup,
  * before the first model call, the same refusal class as a bad
- * `strictness`. Intensity is later-PR surface: a policy carrying it is
- * refused as unknown, never silently ignored.
+ * `strictness`. A rule's `intensity` carries the one delta v1 ships — the
+ * `strictness` dial — and the lower-gates judge its direction against
+ * `fileStrictness`, the config file's own value the run would inherit.
  *
  * @param {unknown} value the raw key value
+ * @param {import("./config.mjs").Strictness} fileStrictness the config file's own strictness, the baseline an intensity delta is judged against
  * @returns {ApplicabilityPolicy}
  */
-export function validateApplicabilityPolicy(value) {
+export function validateApplicabilityPolicy(value, fileStrictness) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("applicability must be an object with bots and rules");
   }
@@ -227,8 +245,8 @@ export function validateApplicabilityPolicy(value) {
   for (const key of Object.keys(raw)) {
     if (key !== "bots" && key !== "rules") {
       throw new Error(
-        `applicability holds unknown key '${key}' — applicability carries bots and rules ` +
-          `(intensity arrives with a later pull request)`,
+        `applicability holds unknown key '${key}' — applicability carries bots and rules; ` +
+          `a rule carries its axes, intensity included`,
       );
     }
   }
@@ -256,7 +274,7 @@ export function validateApplicabilityPolicy(value) {
     /** @type {ApplicabilityRule[]} */
     const validated = [];
     for (const [index, entry] of declared.entries()) {
-      validated.push(validateRule(entry, index, ids));
+      validated.push(validateRule(entry, index, ids, fileStrictness));
     }
     rules = validated;
   }
@@ -276,9 +294,10 @@ export function validateApplicabilityPolicy(value) {
  * @param {unknown} entry
  * @param {number} index
  * @param {Set<string>} ids rule ids seen so far
+ * @param {import("./config.mjs").Strictness} fileStrictness the config file's own strictness, the baseline an intensity delta is judged against
  * @returns {ApplicabilityRule}
  */
-function validateRule(entry, index, ids) {
+function validateRule(entry, index, ids, fileStrictness) {
   const label = `applicability.rules[${String(index)}]`;
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     throw new Error(`${label} must be an object with id, context, when and run`);
@@ -291,7 +310,8 @@ function validateRule(entry, index, ids) {
       key !== "when" &&
       key !== "run" &&
       key !== "posture" &&
-      key !== "instruction"
+      key !== "instruction" &&
+      key !== "intensity"
     ) {
       throw new Error(`${label} holds unknown key '${key}'`);
     }
@@ -405,6 +425,18 @@ function validateRule(entry, index, ids) {
     );
   }
 
+  // The intensity axis: one delta in v1, the `strictness` dial, stated as
+  // the absolute value the run runs under. The eligibility doctrine reads
+  // the direction against the config file's own strictness — lowering
+  // requires an immune pinned context and is never available to the frozen
+  // external one, deepening is free everywhere (the only contextless key
+  // that survives validation), and a skipped run takes no intensity, as it
+  // takes no posture.
+  /** @type {RuleIntensity | undefined} */
+  let intensity;
+  if (raw["intensity"] !== undefined) {
+    intensity = validateIntensity(raw["intensity"], label, fileStrictness, context, run);
+  }
   let when = {};
   if (raw["when"] !== undefined) {
     when = validateWhen(raw["when"], label);
@@ -415,7 +447,67 @@ function validateRule(entry, index, ids) {
     rule.posture = posture;
     rule.instruction = instruction;
   }
+  if (intensity !== undefined) {
+    rule.intensity = intensity;
+  }
   return rule;
+}
+
+/**
+ * Validates a rule's `intensity` declaration. The shape is exact — one key,
+ * `strictness`, holding one of the three arms — and the doctrine gates read
+ * the declared value against the baseline: lower demands an immune anchor,
+ * the external context never lowers, and `run: false` leaves no run for an
+ * intensity to apply to.
+ *
+ * @param {unknown} value the raw `intensity` value
+ * @param {string} label the rule's label in refusal messages
+ * @param {import("./config.mjs").Strictness} fileStrictness the config file's own strictness, the baseline a delta is judged against
+ * @param {ExecutionContext | undefined} context the rule's pinned context, if any
+ * @param {boolean} run whether the rule runs review
+ * @returns {RuleIntensity}
+ */
+function validateIntensity(value, label, fileStrictness, context, run) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label}.intensity must be an object holding strictness`);
+  }
+  const raw = /** @type {Record<string, unknown>} */ (value);
+  for (const key of Object.keys(raw)) {
+    if (key !== "strictness") {
+      throw new Error(
+        `${label}.intensity holds unknown key '${key}' — intensity carries strictness ` +
+          `alone in v1`,
+      );
+    }
+  }
+  const declared = raw["strictness"];
+  if (typeof declared !== "string" || !STRICTNESS_ARMS.includes(/** @type {never} */ (declared))) {
+    throw new Error(
+      `${label}.intensity.strictness must be one of low, medium, high — got '${String(declared)}'`,
+    );
+  }
+  if (!run) {
+    throw new Error(
+      `${label} sets an intensity on a skipped run — run: false ends the run before an ` +
+        `intensity could apply, so the declaration is dead weight`,
+    );
+  }
+  const lowers =
+    STRICTNESS_ARMS.indexOf(/** @type {import("./config.mjs").Strictness} */ (declared)) <
+    STRICTNESS_ARMS.indexOf(fileStrictness);
+  if (lowers && context === undefined) {
+    throw new Error(
+      `${label} lowers intensity without a context — a convention never governs alone; ` +
+        `it must declare an immune context`,
+    );
+  }
+  if (lowers && context === "external") {
+    throw new Error(
+      `${label} lowers an external pull request's intensity — the external context is ` +
+        `frozen; full review is what an untrusted contribution is for`,
+    );
+  }
+  return { strictness: /** @type {import("./config.mjs").Strictness} */ (declared) };
 }
 
 /**

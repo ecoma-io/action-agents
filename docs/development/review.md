@@ -166,27 +166,30 @@ in config order, first match wins — never reordered, scored or merged. A rule
 names itself (`id`, unique, the audit record's name), may pin a context
 (absent matches every context), carries conjunctive `when` conditions —
 `title` and `branch` as regular-expression sources, `paths` as globs in the
-one configuration dialect over the post-ignore inventory — a `run`
-boolean (default true), and, on a rule that pins a non-`external` context and
-runs, a [`posture`](#the-posture-axis) with its instruction document. Nothing
-matching is the defaults: review runs, and the record says so with basis
-`default`.
+one configuration dialect over the post-ignore inventory — and a `run`
+boolean (default true). On a rule that pins a non-`external` context and
+runs, a [`posture`](#the-posture-axis) with its instruction document; on any
+running rule, an [`intensity`](#the-intensity-axis) strictness override,
+under the lower-gates. Nothing matching is the defaults: review runs, and
+the record says so with basis `default`.
 
-Three laws the validator enforces rather than asks reviewers to remember:
+Four laws the validator enforces rather than asks reviewers to remember:
 
 - `run: false` must declare a pinned context — a rule built from title,
   branch or paths conventions never governs alone;
 - that context is never `external` — the external context is frozen; full
-  review is what an untrusted contribution is for; and
+  review is what an untrusted contribution is for;
 - a non-standard posture declares its mode-scoped instruction document, and
   neither it nor its document rides a `run: false` skip — a skipped run took
-  no posture ([the posture axis](#the-posture-axis)).
+  no posture ([the posture axis](#the-posture-axis)); and
+- an `intensity` that lowers the run's strictness anchors to a pinned,
+  non-`external` context — deepening is free everywhere ([the intensity
+  axis](#the-intensity-axis)).
 
 An automation rule over an empty allowlist is refused too: it could classify
-nothing and would exist only to confuse the audit. A rule carrying
-`intensity` — a later pull request's surface — is refused as unknown, never
-silently ignored. Every one of these refusals is red at startup, before
-the first model call, the same refusal class as a bad `strictness`.
+nothing and would exist only to confuse the audit. Every one of these
+refusals is red at startup, before the first model call, the same refusal
+class as a bad `strictness`.
 
 ### The posture axis
 
@@ -209,8 +212,34 @@ document. Restating the default (`posture: "standard"`) is refused too — the
 axis exists for the runs that deviate, and a default restated is dead weight.
 
 The applicability fact records the posture next to the deciding rule; a
-skipped run's record always says `standard`. `intensity` remains a later
-pull request's surface.
+skipped run's record always says `standard`.
+
+### The intensity axis
+
+Intensity is the applicability axis's third dial: not whether review runs,
+nor how it reads, but how deep it goes. It carries one delta in v1 — the
+`strictness` dial, declared as the absolute value the run runs under
+(`low`, `medium`, `high`) — and it is an override, not a preference: a
+matched rule's declaration replaces the config file's own strictness for
+that run, and every downstream reader of the dial sees the one resolved
+value — the prompt's mode paragraph, the lanes floor, the nit-drop at
+`low`, the gates, the run facts and the audit record.
+
+The direction is read against the config file's own strictness, and the
+eligibility doctrine that guards `run` and posture guards the dangerous
+direction: lowering — pulling the dial below the file's own value —
+requires a pinned non-`external` context, a convention never governs alone,
+and never applies to the frozen external one; deepening is free everywhere,
+the only contextless axis key that survives validation. An equal
+restatement is allowed and means nothing. An `intensity` on a `run: false`
+rule is refused as dead weight — a skipped run took none, as it took no
+posture.
+
+The applicability fact records the declaration as the resolved value —
+`{ strictness: "low" }` under an override, `{}` under the defaults — and
+the run facts' `policy.strictness` is the value the run actually ran
+under, so an audit reads both the decision and its authority without
+re-deriving either.
 
 ### What a skip leaves behind
 
@@ -316,10 +345,12 @@ file alone.
   // allowlists the logins that classify as automation (exact bytes);
   // `rules` are first-match-wins: pin a context, declare conjunctive
   // `when` conditions, and whether review runs. `run: false` must pin a
-  // context and that context is never `external`. A rule may also declare a
-  // non-standard `posture` with its instruction document — a non-`external`
-  // context only. See [the applicability axis](#the-applicability-axis) and
-  // [the posture axis](#the-posture-axis).
+  // context and that context is never `external`. A rule may also declare
+  // a non-standard `posture` with its instruction document — a
+  // non-`external` context only — and an `intensity` strictness override:
+  // lowering anchors to a non-`external` context, deepening is free. See
+  // [the applicability axis](#the-applicability-axis), [the posture
+  // axis](#the-posture-axis) and [the intensity axis](#the-intensity-axis).
   applicability: {
     bots: ["ecoma-io", "renovate[bot]"],
     rules: [
@@ -335,7 +366,7 @@ file alone.
         when: { paths: ["docs/**"] },
         posture: "maintainer",
         instruction: ".github/action-agents/review/postures/docs.md",
-      },
+        intensity: { strictness: "low" },
     ],
   },
 
@@ -1052,19 +1083,19 @@ attention lane, phase name), a gate table that is not the declared gates in
 the declared order, or a verdict whose lifecycle does not follow from it is
 a typed `ArtifactError`, never a coerced field. The fields:
 
-| Field                                  | Carries                                                                                                                                          |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `repository`, `pullRequest`, `headRef` | what was reviewed, the head as a 40-character hex sha                                                                                            |
-| `outcome`                              | `published` and the same reason string the run logs                                                                                              |
-| `policy`                               | the strictness and strategy the run ran under                                                                                                    |
-| `risk`                                 | the per-file risk table, byte-wise sorted, one row per changed file                                                                              |
-| `findings`                             | the published set — each with its identity, anchor line, and `provenance` naming the recorded read that covers it                                |
-| `verification`                         | the gate's outcome plus one entry per bound verdict, derived from the findings — a separate verdict list that could disagree does not exist      |
-| `gates`                                | every declared gate's result, in the declared order, a reason iff it failed                                                                      |
-| `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                                  |
-| `phases`                               | the loop's phase transitions, in order                                                                                                           |
-| `provenance`                           | the marker comment's id — nothing else, no timestamp, no run id                                                                                  |
-| `applicability`                        | schema version 3 only — the derived context, its inputs, the decision and what decided it; see [the applicability axis](#the-applicability-axis) |
+| Field                                  | Carries                                                                                                                                                                                  |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repository`, `pullRequest`, `headRef` | what was reviewed, the head as a 40-character hex sha                                                                                                                                    |
+| `outcome`                              | `published` and the same reason string the run logs                                                                                                                                      |
+| `policy`                               | the strictness and strategy the run ran under                                                                                                                                            |
+| `risk`                                 | the per-file risk table, byte-wise sorted, one row per changed file                                                                                                                      |
+| `findings`                             | the published set — each with its identity, anchor line, and `provenance` naming the recorded read that covers it                                                                        |
+| `verification`                         | the gate's outcome plus one entry per bound verdict, derived from the findings — a separate verdict list that could disagree does not exist                                              |
+| `gates`                                | every declared gate's result, in the declared order, a reason iff it failed                                                                                                              |
+| `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                                                                          |
+| `phases`                               | the loop's phase transitions, in order                                                                                                                                                   |
+| `provenance`                           | the marker comment's id — nothing else, no timestamp, no run id                                                                                                                          |
+| `applicability`                        | schema version 3 only — the derived context, its inputs, the decision and what decided it, the posture and the resolved intensity; see [the applicability axis](#the-applicability-axis) |
 
 Byte-determinism is a property, not a style: identical facts serialise to
 identical bytes (`serialiseArtifact`), so two runs of the same review differ
