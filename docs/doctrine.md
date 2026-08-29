@@ -162,8 +162,10 @@ been the model's is the code's, and the answer is data the code rules on:
 - **Provenance quarantine** — `review` attaches provenance from the reads the
   loop actually recorded; a finding without recorded evidence is quarantined,
   never published.
-- **Adversarial verification** — the verification pass's verdicts can only
-  remove a finding, never add or reword one.
+- **Adversarial verification** — the verification pass's verdicts assign a
+  finding a lifecycle state — confirmed, refuted or unresolved — and never
+  remove, add or reword one; a refuted or unresolved finding still publishes,
+  in its own section or marked unverified, rather than disappearing.
 - **Declared run gates** — the concluding posture is a set of gates evaluated
   over code-ledgered results, the result and the gate kept apart, so a green
   answer cannot declare itself complete.
