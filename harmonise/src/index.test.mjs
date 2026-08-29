@@ -47,19 +47,92 @@ const runner = {
   "INPUT_SOURCE-LANGUAGE": "en",
 };
 
-const CONFIG = `{
-  sourceLanguage: "en",
-  languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-}`;
+const CONFIG_PATH = ".github/action-agents/harmonise/harmonise.json5";
 
-/** Files a happy-path inventory needs. @returns {Record<string, string>} */
-function files() {
-  return {
-    ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-    "manual/dev.md": "# Dev\n\nProse.\n",
+/**
+ * The policy digest every default-fixture config hashes to: an empty
+ * glossary, no instruction prose, no per-language instructions, the current
+ * pipeline version — exactly what `run` folds into its own policy digest.
+ */
+const POLICY = policyFingerprint({
+  glossary: [],
+  languageInstructions: {},
+  transformationVersion: TRANSFORMATION_VERSION,
+});
+
+/**
+ * The harmonise config document as text: the en→vi map every test works
+ * against, narrowed or extended only by what the caller states.
+ *
+ * @param {{
+ *   sourceLanguage?: string,
+ *   languages?: Record<string, string>,
+ *   glossary?: string[],
+ *   pullRequest?: { title: string },
+ *   concurrency?: number,
+ * }} [overrides]
+ * @returns {string} the document, parsed by the real config reader like any other
+ */
+function makeConfig(overrides = {}) {
+  const config = {
+    sourceLanguage: "en",
+    languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+    ...overrides,
   };
+  return JSON.stringify(config, null, 2);
 }
 
+/**
+ * The repository content a forge double serves: the config at its one real
+ * path plus one source document, with whatever the caller adds or replaces.
+ *
+ * @param {{
+ *   config?: string,
+ *   documents?: Record<string, string>,
+ *   state?: string,
+ *   memory?: string,
+ * }} [overrides]
+ * @returns {Record<string, string>} path → bytes
+ */
+function makeRepo(overrides = {}) {
+  /** @type {Record<string, string>} */
+  const repo = {
+    [CONFIG_PATH]: overrides.config ?? makeConfig(),
+    "manual/dev.md": "# Dev\n\nProse.\n",
+    ...overrides.documents,
+  };
+  if (overrides.state !== undefined) repo[STATE_PATH] = overrides.state;
+  if (overrides.memory !== undefined) repo[TM_PATH] = overrides.memory;
+  return repo;
+}
+
+/**
+ * The branch tree a forge double reports: every named path as a blob, in the
+ * order given.
+ *
+ * @param {string[]} paths
+ * @returns {{ path: string, type: string }[]}
+ */
+function makeInventory(paths) {
+  return paths.map((path) => ({ path, type: "blob" }));
+}
+
+/**
+ * The state blob among a forge double's writes, found by its shape — the
+ * one created blob carrying a `records` JSON document.
+ *
+ * @param {ReturnType<typeof forge>} forgeDouble
+ * @returns {{ records: import("./state.mjs").SyncStateRecord[] }}
+ */
+function stateBlobOf(forgeDouble) {
+  const write = /** @type {unknown} */ (
+    forgeDouble.writes.find(
+      (w) =>
+        w.op === "createBlob" && typeof w.args[0] === "string" && w.args[0].includes('"records"'),
+    )
+  );
+  return JSON.parse(/** @type {{ args: [string] }} */ (write).args[0]);
+}
 /**
  * A forge double carrying only the reads this build makes; the write surface
  * lands with the Git integration and stays unexercised here.
@@ -70,10 +143,7 @@ function files() {
  */
 function forge(
   files,
-  tree = [
-    { path: "manual/dev.md", type: "blob" },
-    { path: "manual/vi/dev.md", type: "blob" },
-  ],
+  tree = makeInventory(["manual/dev.md", "manual/vi/dev.md"]),
   /** @type {{ branches?: Record<string, { sha: string, files: Record<string, string> }> }} */ options = {},
 ) {
   const branches = /** @type {Record<string, { sha: string, files: Record<string, string> }>} */ (
@@ -385,7 +455,7 @@ describe("run — request-timeout-ms wiring", () => {
     await run(
       { ...readInputs(runner), requestTimeoutMs: 2500 },
       context(),
-      /** @type {any} */ ({ forge: forge(files()), fetchImpl: echoingFetch(signals) }),
+      /** @type {any} */ ({ forge: forge(makeRepo()), fetchImpl: echoingFetch(signals) }),
     );
 
     expect(signals).toHaveLength(1);
@@ -402,7 +472,7 @@ describe("run — request-timeout-ms wiring", () => {
         { ...readInputs(runner), requestTimeoutMs: 1000 },
         context(),
         /** @type {any} */ ({
-          forge: forge(files()),
+          forge: forge(makeRepo()),
           fetchImpl: hangingFetch(signals),
           sleep: async () => {},
         }),
@@ -417,7 +487,7 @@ describe("run — request-timeout-ms wiring", () => {
 describe("run", () => {
   it("publishes one branch, one commit and one pull request on a real run", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const forgeDouble = forge(files());
+    const forgeDouble = forge(makeRepo());
     const ioDouble = /** @type {any} */ ({
       forge: forgeDouble,
       chat: echoingChat(),
@@ -462,7 +532,7 @@ describe("run", () => {
     // branch write is refused before it is recorded, exactly as the real
     // forge refuses before the ref update.
     const movedTo = "d".repeat(40);
-    const forgeDouble = forge(files(), undefined, {
+    const forgeDouble = forge(makeRepo(), undefined, {
       branches: { "harmonise/en": { sha: "b".repeat(40), files: {} } },
     });
     forgeDouble.upsertBranch = /** @type {any} */ (
@@ -496,7 +566,7 @@ describe("run", () => {
 
   it("fails the run when the branch read's error text embeds 'HTTP 404' but the status is 500", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const forgeDouble = forge(files());
+    const forgeDouble = forge(makeRepo());
     const inner = forgeDouble.getRef.bind(forgeDouble);
     forgeDouble.getRef = /** @type {any} */ (
       /** @param {string} name */
@@ -529,7 +599,7 @@ describe("run", () => {
 
   it("updates an existing pull request in place instead of opening a twin", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const forgeDouble = forge(files());
+    const forgeDouble = forge(makeRepo());
     forgeDouble.upsertPullRequest = /** @type {any} */ (
       async () => ({
         number: 7,
@@ -549,15 +619,13 @@ describe("run", () => {
 
   it("renders a configured pullRequest.title template into commit subject and PR title", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-      pullRequest: { title: "docs(i18n): sync {n} documents from {sourceLanguage}" },
-    }`;
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": config,
-      "manual/dev.md": "# Dev\n\nProse.\n",
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        config: makeConfig({
+          pullRequest: { title: "docs(i18n): sync {n} documents from {sourceLanguage}" },
+        }),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({
       forge: forgeDouble,
       chat: echoingChat(),
@@ -579,19 +647,9 @@ describe("run", () => {
 
   it("publishes successful proposals first, then exits red on failed pairs", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-    }`;
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": "# Dev\n\nFine.\n",
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/lost.md", type: "blob" },
-      ],
+      makeRepo({ documents: { "manual/dev.md": "# Dev\n\nFine.\n" } }),
+      makeInventory(["manual/dev.md", "manual/lost.md"]),
     );
     const ioDouble = /** @type {any} */ ({
       forge: forgeDouble,
@@ -610,23 +668,21 @@ describe("run", () => {
 
   it("reports translated proposals, missing translations and orphans on a dry run", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-      glossary: ["repository"],
-    }`;
     const ioDouble = io(
       forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": config,
-          "manual/dev.md": "# Dev\n\nThe repository holds guides.\n\n![diagram](images/dev.png)\n",
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/vi/dev.md", type: "blob" },
-          { path: "manual/images/dev.vi.png", type: "blob" },
-          { path: "manual/vi/legacy.md", type: "blob" },
-        ],
+        makeRepo({
+          config: makeConfig({ glossary: ["repository"] }),
+          documents: {
+            "manual/dev.md":
+              "# Dev\n\nThe repository holds guides.\n\n![diagram](images/dev.png)\n",
+          },
+        }),
+        makeInventory([
+          "manual/dev.md",
+          "manual/vi/dev.md",
+          "manual/images/dev.vi.png",
+          "manual/vi/legacy.md",
+        ]),
       ),
     );
 
@@ -644,11 +700,6 @@ describe("run", () => {
 
   it("reports an honest no-op even when glossary tokens are in play", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-      glossary: ["repository"],
-    }`;
     const published = "# Dev\n\nLe dépôt repository grandit.\n";
     // The record predates a policy change, so the deterministic gate cannot
     // prove the pair unchanged and the model path runs; the target bytes
@@ -667,12 +718,13 @@ describe("run", () => {
     const chatDouble = chat([
       JSON.stringify({ drift: false, summary: "none", content: published }),
     ]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": config,
-      "manual/dev.md": "# Dev\n\nProse.\n",
-      "manual/vi/dev.md": published,
-      [STATE_PATH]: renderState([staleRecord]),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        config: makeConfig({ glossary: ["repository"] }),
+        documents: { "manual/vi/dev.md": published },
+        state: renderState([staleRecord]),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -686,10 +738,7 @@ describe("run", () => {
   it("refuses a translation that deletes a code block adjacent to another", async () => {
     const source = "# Dev\n\n```js\nfirst()\n```\n```py\nsecond()\n```\n";
     const ioDouble = io(
-      forge({
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-        "manual/dev.md": source,
-      }),
+      forge(makeRepo({ documents: { "manual/dev.md": source } })),
       // Two adjacent blocks in, one out: the count walk must see both.
       [proposes("# Dev\n\n```js\nfirst()\n```\n"), proposes("# Dev\n\n```js\nfirst()\n```\n")],
     );
@@ -703,15 +752,12 @@ describe("run", () => {
   it("skips a pair whose existing translation is past the cap", async () => {
     const ioDouble = io(
       forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": "# Dev\n\nFine.\n",
-          "manual/vi/dev.md": "x".repeat(33 * 1024),
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/vi/dev.md", type: "blob" },
-        ],
+        makeRepo({
+          documents: {
+            "manual/dev.md": "# Dev\n\nFine.\n",
+            "manual/vi/dev.md": "x".repeat(33 * 1024),
+          },
+        }),
       ),
     );
 
@@ -723,7 +769,7 @@ describe("run", () => {
   it("refuses a malformed answer without spending a retry", async () => {
     const chatDouble = chat(["this is not json at all", "still not json"]);
     const ioDouble = /** @type {any} */ ({
-      forge: forge(files()),
+      forge: forge(makeRepo()),
       chat: chatDouble,
       evidence,
     });
@@ -736,7 +782,7 @@ describe("run", () => {
   });
 
   it("refuses an answer whose content is whitespace only", async () => {
-    const ioDouble = io(forge(files()), [proposes("\n\n"), proposes("   \n ")]);
+    const ioDouble = io(forge(makeRepo()), [proposes("\n\n"), proposes("   \n ")]);
 
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error.message).toMatch(/no content beyond whitespace/);
@@ -744,16 +790,13 @@ describe("run", () => {
   });
 
   it("fails a pair whose answer lost a protected token, however fluent the prose", async () => {
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-      glossary: ["repository"],
-    }`;
     const ioDouble = io(
-      forge({
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": "# Dev\n\nThe repository grows.\n",
-      }),
+      forge(
+        makeRepo({
+          config: makeConfig({ glossary: ["repository"] }),
+          documents: { "manual/dev.md": "# Dev\n\nThe repository grows.\n" },
+        }),
+      ),
       // No token in the answer: restoration refuses it.
       [proposes("# Dev\n\nLe dépôt grandit.\n"), proposes("# Dev\n\nLe dépôt grandit.\n")],
     );
@@ -766,10 +809,7 @@ describe("run", () => {
 
   it("fails a pair whose answer corrupts Markdown structure", async () => {
     const ioDouble = io(
-      forge({
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-        "manual/dev.md": "# Dev\n\n```js\nkeep()\n```\n",
-      }),
+      forge(makeRepo({ documents: { "manual/dev.md": "# Dev\n\n```js\nkeep()\n```\n" } })),
       // The code fence vanished from the translation.
       [proposes("# Dev\n\nkeep()\n"), proposes("# Dev\n\nkeep()\n")],
     );
@@ -786,11 +826,14 @@ describe("run", () => {
       proposes("# Dev\n\nSee [api](https://evil.example).\n"),
     ]);
     const ioDouble = /** @type {any} */ ({
-      forge: forge({
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-        "manual/dev.md": "# Dev\n\nSee [api](api.md).\n",
-        "manual/api.md": "# API\n",
-      }),
+      forge: forge(
+        makeRepo({
+          documents: {
+            "manual/dev.md": "# Dev\n\nSee [api](api.md).\n",
+            "manual/api.md": "# API\n",
+          },
+        }),
+      ),
       chat: chatDouble,
       evidence,
     });
@@ -838,7 +881,7 @@ describe("run", () => {
     it("retries a retryable status once with the mapped delay, then succeeds", async () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const chatDouble = chat([overloaded(), proposes("# Dev\n\nTraduit.\n")]);
-      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+      const { ioDouble, sleeps } = sleeping(makeRepo(), chatDouble);
 
       await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
 
@@ -853,7 +896,7 @@ describe("run", () => {
         new TransportError("https://api.example/v1/chat/completions", "timed out"),
         proposes("# Dev\n\nTraduit.\n"),
       ]);
-      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+      const { ioDouble, sleeps } = sleeping(makeRepo(), chatDouble);
 
       await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
 
@@ -869,7 +912,7 @@ describe("run", () => {
           excerpt: "bad credentials",
         }),
       ]);
-      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+      const { ioDouble, sleeps } = sleeping(makeRepo(), chatDouble);
 
       const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
 
@@ -882,10 +925,7 @@ describe("run", () => {
     it("gives up on a contract refusal: one call, no wait", async () => {
       const chatDouble = chat([proposes("# Dev\n\nkeep()\n")]);
       const { ioDouble, sleeps } = sleeping(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": "# Dev\n\n```js\nkeep()\n```\n",
-        },
+        makeRepo({ documents: { "manual/dev.md": "# Dev\n\n```js\nkeep()\n```\n" } }),
         chatDouble,
       );
 
@@ -900,7 +940,7 @@ describe("run", () => {
 
     it("exhausts the transport retries with the mapped delays", async () => {
       const chatDouble = chat([overloaded()]);
-      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+      const { ioDouble, sleeps } = sleeping(makeRepo(), chatDouble);
 
       const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
 
@@ -914,7 +954,7 @@ describe("run", () => {
       const chatDouble = chat([
         new ChatError("the provider answered with an error object", { excerpt: "quota" }),
       ]);
-      const { ioDouble, sleeps } = sleeping(files(), chatDouble);
+      const { ioDouble, sleeps } = sleeping(makeRepo(), chatDouble);
 
       const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
 
@@ -953,19 +993,16 @@ describe("run", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const ioDouble = io(
       forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          // api's vi twin does not exist yet, but this run plans to create it:
-          // the internal link must already point at its future home while the
-          // external one stays exactly as authored.
-          "manual/dev.md": "See [the api](api.md) and [the site](https://example.com/).\n",
-          "manual/api.md": "# API\n\nEndpoints.\n",
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/vi/dev.md", type: "blob" },
-          { path: "manual/api.md", type: "blob" },
-        ],
+        makeRepo({
+          documents: {
+            // api's vi twin does not exist yet, but this run plans to create it:
+            // the internal link must already point at its future home while the
+            // external one stays exactly as authored.
+            "manual/dev.md": "See [the api](api.md) and [the site](https://example.com/).\n",
+            "manual/api.md": "# API\n\nEndpoints.\n",
+          },
+        }),
+        makeInventory(["manual/dev.md", "manual/vi/dev.md", "manual/api.md"]),
       ),
     );
 
@@ -975,11 +1012,7 @@ describe("run", () => {
   });
 
   it("refuses when no source document matches the map", async () => {
-    const ioDouble = io(
-      forge({ ".github/action-agents/harmonise/harmonise.json5": CONFIG }, [
-        { path: "README.md", type: "blob" },
-      ]),
-    );
+    const ioDouble = io(forge(makeRepo(), makeInventory(["README.md"])));
 
     await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
       /no document matches the source language 'en'/,
@@ -987,7 +1020,7 @@ describe("run", () => {
   });
 
   it("refuses a documents filter that narrows everything away", async () => {
-    const ioDouble = io(forge(files()));
+    const ioDouble = io(forge(makeRepo()));
     const inputs = { ...readInputs(runner), documents: ["nope/**/*.md"] };
 
     await expect(run(inputs, context(), ioDouble)).rejects.toThrow(
@@ -997,11 +1030,14 @@ describe("run", () => {
 
   it("goes red when every pair fails preparation, naming the defect", async () => {
     const ioDouble = io(
-      forge({
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-        // An unclosed region is malformed: preparation must refuse it.
-        "manual/dev.md": "<!-- harmonise:skip-start -->\nnever closed\n",
-      }),
+      forge(
+        makeRepo({
+          documents: {
+            // An unclosed region is malformed: preparation must refuse it.
+            "manual/dev.md": "<!-- harmonise:skip-start -->\nnever closed\n",
+          },
+        }),
+      ),
     );
 
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
@@ -1013,16 +1049,14 @@ describe("run", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const ioDouble = io(
       forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": "# Dev\n\nFine.\n",
-          // 33 KiB: past the deterministic cap.
-          "manual/big.md": "x".repeat(33 * 1024),
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/big.md", type: "blob" },
-        ],
+        makeRepo({
+          documents: {
+            "manual/dev.md": "# Dev\n\nFine.\n",
+            // 33 KiB: past the deterministic cap.
+            "manual/big.md": "x".repeat(33 * 1024),
+          },
+        }),
+        makeInventory(["manual/dev.md", "manual/big.md"]),
       ),
     );
 
@@ -1038,13 +1072,7 @@ describe("run", () => {
     const source = "x".repeat(MAX_SOURCE_BYTES);
     expect(new TextEncoder().encode(source).byteLength).toBe(MAX_SOURCE_BYTES);
     const ioDouble = io(
-      forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/big.md": source,
-        },
-        [{ path: "manual/big.md", type: "blob" }],
-      ),
+      forge(makeRepo({ documents: { "manual/big.md": source } }), makeInventory(["manual/big.md"])),
     );
 
     await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
@@ -1058,15 +1086,10 @@ describe("run", () => {
     expect(new TextEncoder().encode(source).byteLength).toBe(MAX_SOURCE_BYTES + 1);
     const ioDouble = io(
       forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": "# Dev\n\nFine.\n",
-          "manual/big.md": source,
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/big.md", type: "blob" },
-        ],
+        makeRepo({
+          documents: { "manual/dev.md": "# Dev\n\nFine.\n", "manual/big.md": source },
+        }),
+        makeInventory(["manual/dev.md", "manual/big.md"]),
       ),
     );
 
@@ -1083,13 +1106,7 @@ describe("run", () => {
 
   it("goes red when every pair skips — work existed and none was attempted", async () => {
     const ioDouble = io(
-      forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": "",
-        },
-        [{ path: "manual/dev.md", type: "blob" }],
-      ),
+      forge(makeRepo({ documents: { "manual/dev.md": "" } }), makeInventory(["manual/dev.md"])),
     );
 
     await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
@@ -1099,22 +1116,21 @@ describe("run", () => {
 
   it("carries on when one pair fails and another prepares", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
-    }`;
     // Two sources on the branch, but only one still readable: the second
     // pair's preparation fails and must not take the healthy pair down.
     const ioDouble = io(
       forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": config,
-          "manual/dev.md": "# Dev\n\nFine prose.\n",
-        },
-        [
-          { path: "manual/dev.md", type: "blob" },
-          { path: "manual/lost.md", type: "blob" },
-        ],
+        makeRepo({
+          config: makeConfig({
+            languages: {
+              en: "manual/{document}.md",
+              vi: "manual/vi/{document}.md",
+              fr: "manual/fr/{document}.md",
+            },
+          }),
+          documents: { "manual/dev.md": "# Dev\n\nFine prose.\n" },
+        }),
+        makeInventory(["manual/dev.md", "manual/lost.md"]),
       ),
     );
 
@@ -1127,7 +1143,7 @@ describe("run", () => {
   });
 
   it("refuses a source-language input the config does not declare", async () => {
-    const ioDouble = io(forge(files()));
+    const ioDouble = io(forge(makeRepo()));
     const env = { ...runner, "INPUT_SOURCE-LANGUAGE": "de" };
     await expect(run(readInputs(env), context(), ioDouble)).rejects.toThrow(
       /'de' is not a language the config declares/,
@@ -1137,7 +1153,7 @@ describe("run", () => {
   it("surfaces a truncated tree as the refusal it is", async () => {
     class TruncatedTreeError extends Error {}
     const forgeDouble = /** @type {any} */ ({
-      ...forge(files()),
+      ...forge(makeRepo()),
       /** @param {string} _sha */
       async listTree(_sha) {
         throw new TruncatedTreeError("truncated");
@@ -1150,15 +1166,6 @@ describe("run", () => {
 });
 
 describe("run with recorded state", () => {
-  // The policy digest this fixture's config hashes to: an empty glossary, no
-  // instruction prose, no per-language instructions, the current pipeline
-  // version — exactly what `run` folds into its own policy digest.
-  const POLICY = policyFingerprint({
-    glossary: [],
-    languageInstructions: {},
-    transformationVersion: TRANSFORMATION_VERSION,
-  });
-
   const SOURCE = "# Dev\n\nProse.\n";
   const TRANSLATED = "# Dev\n\nTraduit.\n";
 
@@ -1186,33 +1193,16 @@ describe("run with recorded state", () => {
     };
   }
 
-  /**
-   * The state blob among a forge double's writes, found by its shape — the
-   * one created blob carrying a `records` JSON document.
-   *
-   * @param {ReturnType<typeof forge>} forgeDouble
-   * @returns {{ records: import("./state.mjs").SyncStateRecord[] }}
-   */
-  function stateBlobOf(forgeDouble) {
-    const write = /** @type {unknown} */ (
-      forgeDouble.writes.find(
-        (w) =>
-          w.op === "createBlob" && typeof w.args[0] === "string" && w.args[0].includes('"records"'),
-      )
-    );
-    return JSON.parse(/** @type {{ args: [string] }} */ (write).args[0]);
-  }
-
   it("skips a pair whose recorded state and target bytes both prove unchanged", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     // The transport is a tripwire: a single call fails the run and the test.
     const chatDouble = chat([new Error("the model must not be called")]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": TRANSLATED,
-      [STATE_PATH]: renderState([viRecord()]),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: renderState([viRecord()]),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -1229,12 +1219,12 @@ describe("run with recorded state", () => {
   it("runs the model exactly as before when the source changed since the record", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const chatDouble = chat([proposes("# Dev\n\nNouvelle prose.\n")]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": TRANSLATED,
-      [STATE_PATH]: renderState([viRecord({ source: "# Dev\n\nOld text.\n" })]),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: renderState([viRecord({ source: "# Dev\n\nOld text.\n" })]),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -1253,12 +1243,12 @@ describe("run with recorded state", () => {
     // are then human work with no record: manual-edit protection refuses
     // the pair before any model call instead of translating over them.
     const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": TRANSLATED,
-      [STATE_PATH]: "{ this is not json",
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: "{ this is not json",
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
@@ -1277,11 +1267,12 @@ describe("run with recorded state", () => {
     // no target on disk there is nothing to preserve — the pair is
     // create-allowed and translates exactly as before.
     const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      [STATE_PATH]: renderState([viRecord({ schemaVersion: 999 })]),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE },
+        state: renderState([viRecord({ schemaVersion: 999 })]),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -1302,12 +1293,12 @@ describe("run with recorded state", () => {
     // verifiable base to merge against — the pair is refused before any
     // model call, and the run goes red without writing a byte.
     const chatDouble = chat([new Error("the model must not be called")]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": edited,
-      [STATE_PATH]: renderState([viRecord({ translation: "# Dev\n\nAutre version.\n" })]),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": edited },
+        state: renderState([viRecord({ translation: "# Dev\n\nAutre version.\n" })]),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
@@ -1326,24 +1317,21 @@ describe("run with recorded state", () => {
 
   it("writes prior and proposed records into the same commit's state file", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
-    }`;
     const french = "# Dev\n\nTraduit en français.\n";
     const chatDouble = chat([proposes(french)]);
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": SOURCE,
-        "manual/vi/dev.md": TRANSLATED,
-        [STATE_PATH]: renderState([viRecord()]),
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/vi/dev.md", type: "blob" },
-        { path: "manual/fr/dev.md", type: "blob" },
-      ],
+      makeRepo({
+        config: makeConfig({
+          languages: {
+            en: "manual/{document}.md",
+            vi: "manual/vi/{document}.md",
+            fr: "manual/fr/{document}.md",
+          },
+        }),
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: renderState([viRecord()]),
+      }),
+      makeInventory(["manual/dev.md", "manual/vi/dev.md", "manual/fr/dev.md"]),
     );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
@@ -1379,11 +1367,7 @@ describe("run with recorded state", () => {
 
   it("round-trips: the state file one run publishes makes the next run skip", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    /** @type {Record<string, string>} */
-    const files = {
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-    };
+    const files = makeRepo({ documents: { "manual/dev.md": SOURCE } });
 
     // Run one: no state file, no existing translation — the model proposes.
     const chatDouble = chat([proposes(TRANSLATED)]);
@@ -1412,10 +1396,6 @@ describe("run with recorded state", () => {
   });
   it("reports a policy-stale pair the model endorses as unchanged (noop)", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
-    }`;
     const french = "# Dev\n\nTraduit en français.\n";
     // The vi record is policy-stale — its policy digest no longer matches
     // this run's — so the pair goes to the model, which returns the exact
@@ -1425,17 +1405,18 @@ describe("run with recorded state", () => {
     const staleVi = { ...viRecord(), policyFingerprint: contentFingerprint("an older policy") };
     const chatDouble = chat([proposes(french), proposes(TRANSLATED)]);
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": SOURCE,
-        "manual/vi/dev.md": TRANSLATED,
-        [STATE_PATH]: renderState([staleVi]),
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/vi/dev.md", type: "blob" },
-        { path: "manual/fr/dev.md", type: "blob" },
-      ],
+      makeRepo({
+        config: makeConfig({
+          languages: {
+            en: "manual/{document}.md",
+            vi: "manual/vi/{document}.md",
+            fr: "manual/fr/{document}.md",
+          },
+        }),
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: renderState([staleVi]),
+      }),
+      makeInventory(["manual/dev.md", "manual/vi/dev.md", "manual/fr/dev.md"]),
     );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
@@ -1480,12 +1461,12 @@ describe("run with recorded state", () => {
     // forever (#88).
     const staleVi = { ...viRecord(), policyFingerprint: contentFingerprint("an older policy") };
     const chatDouble = chat([proposes(TRANSLATED)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": TRANSLATED,
-      [STATE_PATH]: renderState([staleVi]),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: renderState([staleVi]),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -1505,13 +1486,10 @@ describe("run with recorded state", () => {
     // The merge this PR's commit models: the re-pinned state reaches the
     // files the next run reads, and that run proves every verdict without
     // a single model call.
-    /** @type {Record<string, string>} */
-    const nextFiles = {
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": TRANSLATED,
-      [STATE_PATH]: JSON.stringify(stateBlobOf(forgeDouble)),
-    };
+    const nextFiles = makeRepo({
+      documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+      state: JSON.stringify(stateBlobOf(forgeDouble)),
+    });
     const secondChat = chat([new Error("the model must not be called")]);
     const secondForge = forge(nextFiles);
     const secondIo = /** @type {any} */ ({ forge: secondForge, chat: secondChat, evidence });
@@ -1530,11 +1508,9 @@ describe("run with recorded state", () => {
     // there is never a merge base — the pair refuses before any model call
     // instead of translating over the existing bytes.
     const chatDouble = chat([proposes(TRANSLATED)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      "manual/vi/dev.md": TRANSLATED,
-    });
+    const forgeDouble = forge(
+      makeRepo({ documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED } }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
@@ -1549,15 +1525,6 @@ describe("run with recorded state", () => {
 });
 
 describe("run with manual-edit protection and three-way merge", () => {
-  // The policy digest this fixture's config hashes to: an empty glossary, no
-  // instruction prose, no per-language instructions, the current pipeline
-  // version — exactly what `run` folds into its own policy digest.
-  const POLICY = policyFingerprint({
-    glossary: [],
-    languageInstructions: {},
-    transformationVersion: TRANSFORMATION_VERSION,
-  });
-
   const OLD_SOURCE = "# Dev\n\nProse.\n";
   const NEW_SOURCE = "# Dev\n\nProse expanded.\n";
   // A publication, a manual edit on top of it, a fresh proposal, and the
@@ -1611,23 +1578,6 @@ describe("run with manual-edit protection and three-way merge", () => {
   }
 
   /**
-   * The state blob among a forge double's writes, found by its shape — the
-   * one created blob carrying a `records` JSON document.
-   *
-   * @param {ReturnType<typeof forge>} forgeDouble
-   * @returns {{ records: import("./state.mjs").SyncStateRecord[] }}
-   */
-  function stateBlobOf(forgeDouble) {
-    const write = /** @type {unknown} */ (
-      forgeDouble.writes.find(
-        (w) =>
-          w.op === "createBlob" && typeof w.args[0] === "string" && w.args[0].includes('"records"'),
-      )
-    );
-    return JSON.parse(/** @type {{ args: [string] }} */ (write).args[0]);
-  }
-
-  /**
    * The created-blob contents among a forge double's writes, in write order:
    * proposals first, then the state file, then the translation memory.
    *
@@ -1655,13 +1605,13 @@ describe("run with manual-edit protection and three-way merge", () => {
   it("merges the fresh proposal with the manual edit against the verified base", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const chatDouble = chat([proposes(FRESH)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": NEW_SOURCE,
-      "manual/vi/dev.md": EDITED,
-      [STATE_PATH]: renderState([viPublication()]),
-      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": NEW_SOURCE, "manual/vi/dev.md": EDITED },
+        state: renderState([viPublication()]),
+        memory: memoryWith(VI_BASE_KEY, BASE),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -1709,25 +1659,17 @@ describe("run with manual-edit protection and three-way merge", () => {
     // winner — the raw translation must not slip in behind the refusal.
     const rewritten = "# Dev\n\nBản dịch mô hình viết đè.\n";
     const chatDouble = chat([proposes(rewritten)]);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-    }`;
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": NEW_SOURCE,
-        "manual/api.md": "# Api\n\nEndpoints.\n",
-        "manual/vi/dev.md": EDITED,
-        [STATE_PATH]: renderState([viPublication()]),
-        [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/api.md", type: "blob" },
-        { path: "manual/vi/dev.md", type: "blob" },
-        { path: "manual/vi/api.md", type: "blob" },
-      ],
+      makeRepo({
+        documents: {
+          "manual/dev.md": NEW_SOURCE,
+          "manual/api.md": "# Api\n\nEndpoints.\n",
+          "manual/vi/dev.md": EDITED,
+        },
+        state: renderState([viPublication()]),
+        memory: memoryWith(VI_BASE_KEY, BASE),
+      }),
+      makeInventory(["manual/dev.md", "manual/api.md", "manual/vi/dev.md", "manual/vi/api.md"]),
     );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
@@ -1755,25 +1697,17 @@ describe("run with manual-edit protection and three-way merge", () => {
   it("refuses a drifted pair with no verifiable base before any model call while siblings translate", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const chatDouble = chat([proposes("# Api\n\nCác điểm cuối.\n")]);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-    }`;
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": NEW_SOURCE,
-        "manual/api.md": "# Api\n\nEndpoints.\n",
-        "manual/vi/dev.md": EDITED,
-        [STATE_PATH]: renderState([viPublication()]),
+      makeRepo({
+        documents: {
+          "manual/dev.md": NEW_SOURCE,
+          "manual/api.md": "# Api\n\nEndpoints.\n",
+          "manual/vi/dev.md": EDITED,
+        },
+        state: renderState([viPublication()]),
         // No TM_PATH: nothing to verify a merge base against.
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/api.md", type: "blob" },
-        { path: "manual/vi/dev.md", type: "blob" },
-        { path: "manual/vi/api.md", type: "blob" },
-      ],
+      }),
+      makeInventory(["manual/dev.md", "manual/api.md", "manual/vi/dev.md", "manual/vi/api.md"]),
     );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
@@ -1811,12 +1745,12 @@ describe("run with manual-edit protection and three-way merge", () => {
     // human edit.
     const corrupted = { ...viPublication(), translationFingerprint: "corrupted" };
     const chatDouble = chat([proposes(FRESH)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": NEW_SOURCE,
-      "manual/vi/dev.md": EDITED,
-      [STATE_PATH]: renderState([corrupted]),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": NEW_SOURCE, "manual/vi/dev.md": EDITED },
+        state: renderState([corrupted]),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
@@ -1835,12 +1769,13 @@ describe("run with manual-edit protection and three-way merge", () => {
     // judge what is not on disk, the policy preserves, and there are no
     // bytes to merge against — the deletion stands, loudly.
     const chatDouble = chat([proposes(FRESH)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": OLD_SOURCE,
-      [STATE_PATH]: renderState([viPublication()]),
-      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": OLD_SOURCE },
+        state: renderState([viPublication()]),
+        memory: memoryWith(VI_BASE_KEY, BASE),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
@@ -1860,13 +1795,13 @@ describe("run with manual-edit protection and three-way merge", () => {
     // and the record's fingerprint moves onto the merged bytes — the next
     // run sees a canonical target and skips.
     const chatDouble = chat([proposes(BASE)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": OLD_SOURCE,
-      "manual/vi/dev.md": EDITED,
-      [STATE_PATH]: renderState([viPublication()]),
-      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": OLD_SOURCE, "manual/vi/dev.md": EDITED },
+        state: renderState([viPublication()]),
+        memory: memoryWith(VI_BASE_KEY, BASE),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -1890,13 +1825,13 @@ describe("run with manual-edit protection and three-way merge", () => {
     // currency (#88, #95) — the old pin kept the stale fingerprint and the
     // pair re-translated forever.
     const chatDouble = chat([proposes(EDITED)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": NEW_SOURCE,
-      "manual/vi/dev.md": EDITED,
-      [STATE_PATH]: renderState([viPublication()]),
-      [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": NEW_SOURCE, "manual/vi/dev.md": EDITED },
+        state: renderState([viPublication()]),
+        memory: memoryWith(VI_BASE_KEY, BASE),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -1929,13 +1864,13 @@ describe("run with manual-edit protection and three-way merge", () => {
     const publishedMemory = /** @type {string} */ (
       blobsOf(forgeDouble)[blobsOf(forgeDouble).length - 1]
     );
-    const secondForge = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": NEW_SOURCE,
-      "manual/vi/dev.md": EDITED,
-      [STATE_PATH]: renderState([healed]),
-      [TM_PATH]: publishedMemory,
-    });
+    const secondForge = forge(
+      makeRepo({
+        documents: { "manual/dev.md": NEW_SOURCE, "manual/vi/dev.md": EDITED },
+        state: renderState([healed]),
+        memory: publishedMemory,
+      }),
+    );
     const secondChat = chat([new Error("the model must not be called")]);
     const secondIo = /** @type {any} */ ({ forge: secondForge, chat: secondChat, evidence });
     await expect(
@@ -1981,13 +1916,14 @@ describe("run with manual-edit protection and three-way merge", () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const chatDouble = chat([proposes(FRESH)]);
       const forgeDouble = forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": NEW_SOURCE,
-          "manual/vi/dev.md": EDITED,
-          // Neither advisory file on the default branch: the branch is the
-          // only place they exist, exactly as while the PR is unmerged.
-        },
+        makeRepo({
+          documents: {
+            "manual/dev.md": NEW_SOURCE,
+            "manual/vi/dev.md": EDITED,
+            // Neither advisory file on the default branch: the branch is the
+            // only place they exist, exactly as while the PR is unmerged.
+          },
+        }),
         undefined,
         { branches: { [BRANCH]: { sha: BRANCH_SHA, files: branchFiles() } } },
       );
@@ -2020,14 +1956,15 @@ describe("run with manual-edit protection and three-way merge", () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const chatDouble = chat([proposes(FRESH)]);
       const forgeDouble = forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": NEW_SOURCE,
-          "manual/vi/dev.md": EDITED,
-          // The memory on the default branch: a past publication landed
-          // there before the branch workflow, say — still joinable.
-          [TM_PATH]: memoryWith(VI_BASE_KEY, BASE),
-        },
+        makeRepo({
+          documents: {
+            "manual/dev.md": NEW_SOURCE,
+            "manual/vi/dev.md": EDITED,
+            // The memory on the default branch: a past publication landed
+            // there before the branch workflow, say — still joinable.
+          },
+          memory: memoryWith(VI_BASE_KEY, BASE),
+        }),
         undefined,
         {
           branches: {
@@ -2058,11 +1995,9 @@ describe("run with manual-edit protection and three-way merge", () => {
       vi.spyOn(console, "log").mockImplementation(() => undefined);
       const chatDouble = chat([proposes(FRESH)]);
       const forgeDouble = forge(
-        {
-          ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-          "manual/dev.md": NEW_SOURCE,
-          "manual/vi/dev.md": EDITED,
-        },
+        makeRepo({
+          documents: { "manual/dev.md": NEW_SOURCE, "manual/vi/dev.md": EDITED },
+        }),
         undefined,
         { branches: { [BRANCH]: { sha: BRANCH_SHA, files: branchFiles() } } },
       );
@@ -2134,10 +2069,7 @@ describe("run with frontmatter", () => {
     const chatDouble = translatingChat((masked) =>
       masked.replace("title: Dev guide", "title: Guide de dev"),
     );
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": FM_SOURCE,
-    });
+    const forgeDouble = forge(makeRepo({ documents: { "manual/dev.md": FM_SOURCE } }));
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -2166,10 +2098,7 @@ describe("run with frontmatter", () => {
     const tampered = "---\ntitle: Guide de dev\nslug: autre\n---\n\n# Dev\n\nProse.\n";
     const chatDouble = chat([proposes(tampered), proposes(tampered)]);
     const ioDouble = /** @type {any} */ ({
-      forge: forge({
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-        "manual/dev.md": FM_SOURCE,
-      }),
+      forge: forge(makeRepo({ documents: { "manual/dev.md": FM_SOURCE } })),
       chat: chatDouble,
       evidence,
     });
@@ -2186,10 +2115,11 @@ describe("run with frontmatter", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const chatDouble = chat([new Error("the model must not be called")]);
     const ioDouble = /** @type {any} */ ({
-      forge: forge({
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-        "manual/dev.md": "---\ntitle: a\ntitle: b\n---\n\n# Dev\n\nProse.\n",
-      }),
+      forge: forge(
+        makeRepo({
+          documents: { "manual/dev.md": "---\ntitle: a\ntitle: b\n---\n\n# Dev\n\nProse.\n" },
+        }),
+      ),
       chat: chatDouble,
       evidence,
     });
@@ -2208,10 +2138,7 @@ describe("run with frontmatter", () => {
         `${masked.replace("title: Dev guide", "title: Guide de dev")}\n\nVoir [[harmonise:deadbeefdeadbeef:f9]].\n`,
     );
     const ioDouble = /** @type {any} */ ({
-      forge: forge({
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-        "manual/dev.md": FM_SOURCE,
-      }),
+      forge: forge(makeRepo({ documents: { "manual/dev.md": FM_SOURCE } })),
       chat: chatDouble,
       evidence,
     });
@@ -2225,12 +2152,6 @@ describe("run with frontmatter", () => {
 });
 
 describe("run with a translation memory", () => {
-  const POLICY = policyFingerprint({
-    glossary: [],
-    languageInstructions: {},
-    transformationVersion: TRANSFORMATION_VERSION,
-  });
-
   const SOURCE = "# Dev\n\nProse.\n";
 
   /**
@@ -2289,10 +2210,7 @@ describe("run with a translation memory", () => {
   it("offers no prior translation when the memory is absent", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const chatDouble = translatingChat((source) => source.replace("Prose.", "Traduit."));
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-    });
+    const forgeDouble = forge(makeRepo({ documents: { "manual/dev.md": SOURCE } }));
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -2314,11 +2232,12 @@ describe("run with a translation memory", () => {
     // The model returns the prior text but drops the fence — a structural
     // violation that proves validation still runs on a TM-shaped answer.
     const chatDouble = chat([proposes("# Dev\n\nTraduit.\n"), proposes("# Dev\n\nTraduit.\n")]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": source,
-      [TM_PATH]: memoryWith(key, prior),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": source },
+        memory: memoryWith(key, prior),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
@@ -2338,11 +2257,12 @@ describe("run with a translation memory", () => {
       policyContext: POLICY,
     });
     const chatDouble = translatingChat((source) => source.replace("Prose.", "Traduit à nouveau."));
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      [TM_PATH]: memoryWith(key, prior),
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE },
+        memory: memoryWith(key, prior),
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -2357,11 +2277,12 @@ describe("run with a translation memory", () => {
   it("degrades a corrupt memory file to an empty store and completes", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const chatDouble = translatingChat((source) => source.replace("Prose.", "Traduit."));
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-      [TM_PATH]: "{ not json",
-    });
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE },
+        memory: "{ not json",
+      }),
+    );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -2375,10 +2296,7 @@ describe("run with a translation memory", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const translated = "# Dev\n\nTraduit.\n";
     const chatDouble = chat([proposes(translated)]);
-    const forgeDouble = forge({
-      ".github/action-agents/harmonise/harmonise.json5": CONFIG,
-      "manual/dev.md": SOURCE,
-    });
+    const forgeDouble = forge(makeRepo({ documents: { "manual/dev.md": SOURCE } }));
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
     await expect(
@@ -2405,17 +2323,14 @@ describe("run with a translation memory", () => {
 });
 
 describe("run with a bounded-concurrency pool", () => {
-  const POLICY = policyFingerprint({
-    glossary: [],
-    languageInstructions: {},
-    transformationVersion: TRANSFORMATION_VERSION,
-  });
-
-  const CONFIG_2 = `{
-    sourceLanguage: "en",
-    languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
+  const CONFIG_2 = makeConfig({
+    languages: {
+      en: "manual/{document}.md",
+      vi: "manual/vi/{document}.md",
+      fr: "manual/fr/{document}.md",
+    },
     concurrency: 2,
-  }`;
+  });
 
   const SOURCE_DEV = "# Dev\n\nProse.\n";
   const SOURCE_API = "# Api\n\nReference.\n";
@@ -2496,15 +2411,11 @@ describe("run with a bounded-concurrency pool", () => {
     const plan = [{ delay: 5 }, { delay: 0 }, { delay: 0 }, { delay: 0 }];
     const chatDouble = pooledChat(plan);
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
-        "manual/dev.md": SOURCE_DEV,
-        "manual/api.md": SOURCE_API,
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/api.md", type: "blob" },
-      ],
+      makeRepo({
+        config: CONFIG_2,
+        documents: { "manual/dev.md": SOURCE_DEV, "manual/api.md": SOURCE_API },
+      }),
+      makeInventory(["manual/dev.md", "manual/api.md"]),
     );
     /** @type {number[]} */
     const atBlob = [];
@@ -2569,18 +2480,16 @@ describe("run with a bounded-concurrency pool", () => {
     const plan = [{ delay: 0 }, { delay: 0 }, { delay: 0 }];
     const chatDouble = pooledChat(plan);
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
-        "manual/dev.md": SOURCE_DEV,
-        "manual/vi/dev.md": "# Dev\n\nTraduit.\n",
-        "manual/api.md": SOURCE_API,
-        [STATE_PATH]: renderState([viRecord]),
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/vi/dev.md", type: "blob" },
-        { path: "manual/api.md", type: "blob" },
-      ],
+      makeRepo({
+        config: CONFIG_2,
+        documents: {
+          "manual/dev.md": SOURCE_DEV,
+          "manual/vi/dev.md": "# Dev\n\nTraduit.\n",
+          "manual/api.md": SOURCE_API,
+        },
+        state: renderState([viRecord]),
+      }),
+      makeInventory(["manual/dev.md", "manual/vi/dev.md", "manual/api.md"]),
     );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
@@ -2624,15 +2533,11 @@ describe("run with a bounded-concurrency pool", () => {
     ];
     const chatDouble = pooledChat(plan);
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
-        "manual/dev.md": SOURCE_DEV,
-        "manual/api.md": SOURCE_API,
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/api.md", type: "blob" },
-      ],
+      makeRepo({
+        config: CONFIG_2,
+        documents: { "manual/dev.md": SOURCE_DEV, "manual/api.md": SOURCE_API },
+      }),
+      makeInventory(["manual/dev.md", "manual/api.md"]),
     );
     const ioDouble = /** @type {any} */ ({
       forge: forgeDouble,
@@ -2667,16 +2572,11 @@ describe("run with a bounded-concurrency pool", () => {
   it("refuses an invalid concurrency at startup", async () => {
     const bad = [0, -1, 2.5, "3"];
     for (const value of bad) {
-      const config = `{
-        sourceLanguage: "en",
-        languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
-        concurrency: ${JSON.stringify(value)},
-      }`;
+      // The test feeds concurrency values the schema refuses; the builder
+      // types the valid shape, so the raw value is smuggled through.
+      const config = makeConfig({ concurrency: /** @type {number} */ (value) });
       const chatDouble = chat([new Error("the model must not be called")]);
-      const forgeDouble = forge({
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": SOURCE_DEV,
-      });
+      const forgeDouble = forge(makeRepo({ config, documents: { "manual/dev.md": SOURCE_DEV } }));
       const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
       await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
@@ -2688,11 +2588,14 @@ describe("run with a bounded-concurrency pool", () => {
 
   it("caps the declared bound at the module maximum", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const config = `{
-      sourceLanguage: "en",
-      languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md", fr: "manual/fr/{document}.md" },
+    const config = makeConfig({
+      languages: {
+        en: "manual/{document}.md",
+        vi: "manual/vi/{document}.md",
+        fr: "manual/fr/{document}.md",
+      },
       concurrency: 50,
-    }`;
+    });
     // Three sources × two targets = six pairs — more than the cap of four.
     const plan = [
       { delay: 0 },
@@ -2704,17 +2607,15 @@ describe("run with a bounded-concurrency pool", () => {
     ];
     const chatDouble = pooledChat(plan);
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": config,
-        "manual/dev.md": SOURCE_DEV,
-        "manual/api.md": SOURCE_API,
-        "manual/guide.md": SOURCE_GUIDE,
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/api.md", type: "blob" },
-        { path: "manual/guide.md", type: "blob" },
-      ],
+      makeRepo({
+        config,
+        documents: {
+          "manual/dev.md": SOURCE_DEV,
+          "manual/api.md": SOURCE_API,
+          "manual/guide.md": SOURCE_GUIDE,
+        },
+      }),
+      makeInventory(["manual/dev.md", "manual/api.md", "manual/guide.md"]),
     );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
@@ -2732,17 +2633,13 @@ describe("run with a bounded-concurrency pool", () => {
     const plan = [{ delay: 0 }, { delay: 0 }, { delay: 0 }, { delay: 0 }];
     const chatDouble = pooledChat(plan);
     const forgeDouble = forge(
-      {
-        ".github/action-agents/harmonise/harmonise.json5": CONFIG_2,
-        "manual/dev.md": SOURCE_DEV,
-        "manual/api.md": SOURCE_API,
-        [STATE_PATH]: "{ this is not json",
-        [TM_PATH]: "{ not json",
-      },
-      [
-        { path: "manual/dev.md", type: "blob" },
-        { path: "manual/api.md", type: "blob" },
-      ],
+      makeRepo({
+        config: CONFIG_2,
+        documents: { "manual/dev.md": SOURCE_DEV, "manual/api.md": SOURCE_API },
+        state: "{ this is not json",
+        memory: "{ not json",
+      }),
+      makeInventory(["manual/dev.md", "manual/api.md"]),
     );
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
 
