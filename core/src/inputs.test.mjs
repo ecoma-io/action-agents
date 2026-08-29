@@ -18,13 +18,26 @@ const complete = {
 };
 
 describe("readSharedInputs", () => {
-  it("reads all four", () => {
+  it("reads all five", () => {
     expect(readSharedInputs(complete)).toEqual({
       githubToken: "ghs_x",
       apiUrl: "https://api.example/v1",
       apiKey: "sk-x",
       model: "gpt-x",
+      requestTimeoutMs: 30_000,
     });
+  });
+
+  it("honours a caller's request timeout", () => {
+    /** @type {import("./runtime.mjs").Env} */
+    const withTimeout = { ...complete, "INPUT_REQUEST-TIMEOUT-MS": "45000" };
+    expect(readSharedInputs(withTimeout).requestTimeoutMs).toBe(45_000);
+  });
+
+  it("refuses a request timeout below the floor", () => {
+    /** @type {import("./runtime.mjs").Env} */
+    const belowFloor = { ...complete, "INPUT_REQUEST-TIMEOUT-MS": "500" };
+    expect(() => readSharedInputs(belowFloor)).toThrow(/request-timeout-ms/);
   });
 
   it("accepts a keyless endpoint", () => {

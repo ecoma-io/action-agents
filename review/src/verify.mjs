@@ -27,6 +27,7 @@
  *   unchanged for findings left unverified.
  */
 
+import { oneLine } from "#core/one-line.mjs";
 import { extractObject, findingIdentity, stripFences } from "./answer.mjs";
 import { normaliseReadPath } from "./coverage.mjs";
 import { json5Parse } from "#core/json5-parse.mjs";
@@ -55,7 +56,7 @@ export const VERIFIER_MAX_EVIDENCE_BYTES = 128 * 2 ** 10;
 
 const EXCERPT_CUT = "…[truncated]";
 
-const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertain"]);
+export const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertain"]);
 
 /**
  * @typedef {"confirmed" | "refuted" | "uncertain"} Verdict
@@ -338,7 +339,10 @@ export function parseVerdict(text) {
     return { ok: false, defect: "the answer is missing 'reason'" };
   const verdict = record["verdict"];
   if (verdict !== "confirmed" && verdict !== "refuted" && verdict !== "uncertain") {
-    return { ok: false, defect: `'${flatten(String(verdict))}' is outside the verdict vocabulary` };
+    return {
+      ok: false,
+      defect: `'${oneLine(String(verdict), { maxChars: 120 })}' is outside the verdict vocabulary`,
+    };
   }
   const rawReason = record["reason"];
   if (typeof rawReason !== "string" || rawReason.trim() === "") {
@@ -375,7 +379,7 @@ export function applyVerdicts(findings, verdicts, plan) {
   for (const entry of verdicts) {
     if (typeof entry?.id !== "string" || !byId.has(entry.id)) {
       refusals.push(
-        `a verdict names finding id '${flatten(String(entry?.id))}', which is not in the plan — ` +
+        `a verdict names finding id '${oneLine(String(entry?.id), { maxChars: 120 })}', which is not in the plan — ` +
           `refused, never mapped by guess`,
       );
       continue;
@@ -421,12 +425,4 @@ export function applyVerdicts(findings, verdicts, plan) {
     published.push(finding);
   }
   return { findings: published, refusals };
-}
-
-/**
- * @param {string} text
- * @returns {string}
- */
-function flatten(text) {
-  return text.replace(/\s+/g, " ").trim().slice(0, 120);
 }

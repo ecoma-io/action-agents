@@ -23,6 +23,7 @@
 import { canConcludeReview, normaliseReadPath } from "./coverage.mjs";
 import { validatedLedger } from "./provenance.mjs";
 import { LIFECYCLE_OF_VERDICT, PUBLISHED_LIFECYCLE_STATES } from "./verify.mjs";
+import { STRATEGY, STRICTNESS } from "./vocabulary.mjs";
 
 /** @typedef {import("./answer.mjs").Finding} Finding */
 /** @typedef {import("./config.mjs").Strictness} Strictness */
@@ -162,10 +163,10 @@ const BOUND_REASONS = Object.freeze({
 });
 
 /** The strictness arms, as the policy spells them. */
-const STRICTNESS_ARMS = /** @type {const} */ (["low", "medium", "high"]);
+const STRICTNESS_ARMS = STRICTNESS;
 
 /** The strategy arms, as the policy spells them. */
-const STRATEGY_ARMS = /** @type {const} */ (["standard", "adversarial"]);
+const STRATEGY_ARMS = STRATEGY;
 
 /**
  * @param {unknown} value

@@ -12,7 +12,7 @@
  * an answer partly off-sheet applies its on-sheet half and logs the rest.
  */
 
-import { json5Parse } from "#core/json5-parse.mjs";
+import { parseJsonish } from "#core/answer-json.mjs";
 
 /** @typedef {{ labels: string[], rationale: string }} LabelsAnswer */
 /** @typedef {{ classification: string, rationale: string }} CommentAnswer */
@@ -95,72 +95,4 @@ function rationaleOf(answer) {
     throw new Error("the model's answer carries a rationale that is not a string");
   }
   return rationale;
-}
-
-/**
- * JSON5 with the fences stripped and a bare object located — everything a
- * drifting provider adds around the JSON it was asked for, and no more.
- * Prose before or after the object is not tolerated: an answer that is
- * mostly prose has not answered.
- *
- * @param {string} content
- * @returns {unknown}
- */
-function parseJsonish(content) {
-  const trimmed = stripFences(content.trim());
-  const attempt = extractObject(trimmed);
-  if (attempt === null) {
-    throw new Error("the model's answer holds no JSON object");
-  }
-  try {
-    return json5Parse(attempt);
-  } catch (cause) {
-    const error = new Error("the model's answer does not parse as JSON");
-    error.cause = cause;
-    throw error;
-  }
-}
-
-/**
- * Strips one fenced block wrapping the whole answer — ```json … ``` most
- * often. A fence in the middle of prose is left exactly where it is.
- *
- * @param {string} text
- * @returns {string}
- */
-function stripFences(text) {
-  const match = /^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n?```\s*$/.exec(text);
-  return match?.[1] === undefined ? text : match[1];
-}
-
-/**
- * The outermost `{…}` of the text, or null when there is none. Bracket
- * counting is string-aware so a brace inside the model's prose does not
- * close the object early.
- *
- * @param {string} text
- * @returns {string | null}
- */
-function extractObject(text) {
-  const start = text.indexOf("{");
-  if (start === -1) return null;
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
-    if (quoted) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') quoted = false;
-      continue;
-    }
-    if (char === '"') quoted = true;
-    else if (char === "{") depth++;
-    else if (char === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
 }

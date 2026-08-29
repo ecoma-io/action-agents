@@ -24,6 +24,7 @@
 
 import { TOOL_SPECS } from "./tools.mjs";
 import { canConcludeReview } from "./coverage.mjs";
+import { STRICTNESS } from "./vocabulary.mjs";
 
 /**
  * The declared phases, in the order the machine walks them. Frozen: the set
@@ -74,7 +75,7 @@ export class PhaseError extends Error {
  * @typedef {Readonly<Record<PhaseName, readonly string[]>>} PhaseToolPolicy
  */
 
-const STRICTNESS_VALUES = /** @type {const} */ (["low", "medium", "high"]);
+const STRICTNESS_VALUES = STRICTNESS;
 
 /**
  * Validates one phase → tool-names map against the registry. The map must

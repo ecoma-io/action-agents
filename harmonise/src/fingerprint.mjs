@@ -46,7 +46,9 @@ export const TRANSFORMATION_VERSION = 1;
  * @typedef {object} PolicyInputs
  * @property {readonly string[]} [glossary] terms protected verbatim in every
  *   translation, in config declaration order. Order is part of the policy.
- * @property {string} [instruction] the all-pairs instruction document text.
+ * @property {string | undefined} [instruction] the all-pairs instruction
+ *   document text. Optional: absent and explicit `undefined` both canonicalize
+ *   to `"null"`, so callers may pass the key unconditionally.
  * @property {Record<string, string>} [languageInstructions] language tag →
  *   that language's instruction prose. Key order is normalized away; the text
  *   is part of the policy.

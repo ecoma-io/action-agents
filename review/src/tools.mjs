@@ -28,6 +28,7 @@ import * as p from "node:path";
 
 import { matchGlob } from "#core/glob.mjs";
 import { MissingPathError, WorkspaceRefusal } from "#core/workspace.mjs";
+import { oneLine } from "#core/one-line.mjs";
 
 import { utf8Compare } from "./order.mjs";
 
@@ -134,7 +135,7 @@ export function createTools({ workspace, evidence, ignore, limits = {}, recorded
     execute(name, argumentsJson) {
       if (name !== "read_file" && name !== "list_files" && name !== "search") {
         return fail(
-          `unknown tool '${flatten(name)}' — the fixed registry offers read_file, list_files, search`,
+          `unknown tool '${oneLine(name, { maxChars: 200 })}' — the fixed registry offers read_file, list_files, search`,
         );
       }
 
@@ -200,14 +201,6 @@ export function createTools({ workspace, evidence, ignore, limits = {}, recorded
  */
 function fail(message) {
   return { ok: false, output: message };
-}
-
-/**
- * @param {string} text
- * @returns {string}
- */
-function flatten(text) {
-  return text.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 /**

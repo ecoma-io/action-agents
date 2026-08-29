@@ -23,7 +23,7 @@
  * default is invented for it.
  */
 
-import { findingIdentity } from "./answer.mjs";
+import { findingIdentity, SEVERITIES } from "./answer.mjs";
 import {
   APPLICABILITY_BASES,
   AUTHOR_PROVENANCES,
@@ -33,6 +33,9 @@ import {
   STRICTNESS_ARMS,
 } from "./applicability.mjs";
 import { GATES } from "./gates.mjs";
+import { PHASES } from "./phases.mjs";
+import { STRATEGY } from "./vocabulary.mjs";
+import { VERDICTS } from "./verify.mjs";
 import { utf8Compare } from "./order.mjs";
 import { MESSAGE_CHARS } from "./render.mjs";
 import {
@@ -53,10 +56,6 @@ export const applicabilityArtifactSchemaVersion = 3;
 /** @typedef {import("./verify.mjs").PublishedLifecycle} PublishedLifecycle */
 
 const CLASSIFICATIONS = /** @type {const} */ (["published", "abandoned", "refused"]);
-const STRATEGY = /** @type {const} */ (["standard", "adversarial"]);
-const SEVERITIES = /** @type {const} */ (["concern", "nit"]);
-const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertain"]);
-const PHASES = /** @type {const} */ (["orient", "investigate", "verify", "conclude"]);
 const RISKS = /** @type {const} */ (["low", "medium", "high", "critical"]);
 const ATTENTION_LANES = /** @type {const} */ (["deep", "standard", "skim"]);
 const HEAD_REF = /^[0-9a-f]{40}$/;

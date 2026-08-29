@@ -32,12 +32,12 @@ import { createForge } from "#core/forge.mjs";
 import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
+import { oneLine } from "#core/one-line.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import {
   getBooleanInput,
   getInput,
   getListInput,
-  getNumberInput,
   info,
   isProgramEntry,
   maskSecret,
@@ -58,6 +58,8 @@ import { currentSizeLabels, measureSize } from "./size.mjs";
 /** @typedef {{ labels: string[], classification: string, rationale: string, files: PullRequestFile[] }} AnswerLog */
 
 export const ACTION = "triage";
+/** The rationale's cap in the marker comment and the run log, in characters. */
+export const RATIONALE_CHARS = 300;
 
 /**
  * @typedef {SharedInputs & { labels: string[], dryRun: boolean, configPath: string, requestTimeoutMs: number }} Inputs
@@ -73,7 +75,6 @@ export function readInputs(env = process.env) {
     labels: getListInput("labels", {}, env),
     dryRun: getBooleanInput("dry-run", { default: true }, env),
     configPath: getInput("config-path", {}, env),
-    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
   };
 }
 
@@ -382,11 +383,11 @@ async function assertLabelsExist(forge, config) {
  */
 function commentBody(answer, marker) {
   const classification = sanitiseCommentText(oneLine(answer.classification), {
-    maxChars: 300,
+    maxChars: RATIONALE_CHARS,
     forbidden: [marker],
   });
   const rationale = sanitiseCommentText(oneLine(answer.rationale), {
-    maxChars: 300,
+    maxChars: RATIONALE_CHARS,
     forbidden: [marker],
   });
   for (const note of [...classification.notes, ...rationale.notes]) {
@@ -405,21 +406,10 @@ function commentBody(answer, marker) {
     .join("\n");
 }
 
-/**
- * The contract asks for one line; a model that answered in paragraphs gets
- * its answer flattened, not its comment ballooned.
- *
- * @param {string} text
- * @returns {string}
- */
-function oneLine(text) {
-  return text.replace(/\s+/g, " ").trim();
-}
-
 /** @param {string} rationale */
 function logRationale(rationale) {
   const flat = oneLine(rationale);
-  if (flat !== "") info(`rationale: ${flat.slice(0, 300)}`);
+  if (flat !== "") info(`rationale: ${flat.slice(0, RATIONALE_CHARS)}`);
 }
 
 /**

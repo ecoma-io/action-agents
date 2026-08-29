@@ -27,11 +27,11 @@ import {
 import { readSharedInputs } from "#core/inputs.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
+import { oneLine as oneLineCore } from "#core/one-line.mjs";
 import {
   getBooleanInput,
   getInput,
   getListInput,
-  getNumberInput,
   info,
   isProgramEntry,
   maskSecret,
@@ -141,7 +141,6 @@ export function readInputs(env = process.env) {
     // default here would silently hide documents the config declared.
     documents: getListInput("documents", { default: [] }, env),
     dryRun: getBooleanInput("dry-run", { default: true }, env),
-    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
   };
 }
 
@@ -347,9 +346,9 @@ export async function run(inputs, context, io) {
   // built from, hashed once and shared by every pair this run classifies.
   const policyDigest = policyFingerprint({
     glossary: config.glossary,
-    // Absent and explicit `undefined` hash identically, so omitting the key
-    // when no instruction document exists changes nothing.
-    ...(documents.instruction !== undefined ? { instruction: documents.instruction } : {}),
+    // Absent and explicit `undefined` hash identically, so the key can be
+    // passed unconditionally when no instruction document exists.
+    instruction: documents.instruction,
     languageInstructions: documents.languages,
     transformationVersion: TRANSFORMATION_VERSION,
   });
@@ -924,20 +923,14 @@ function branchName(sourceLanguage) {
 /**
  * The summary is model text and reaches logs: flattened to one line, so it
  * cannot forge report structure. Full sanitisation is the pull request's
- * business, not the log's.
+ * business, not the log's. The flatten rule and the cap live in core; this
+ * wrapper adds harmonise's control-character strip.
  *
  * @param {string} summary
  * @returns {string}
  */
 function oneLine(summary) {
-  let flat = "";
-  for (const char of summary) {
-    const code = char.codePointAt(0) ?? 0;
-    // Control characters never reach a log line: they are log-forgery
-    // material, and whitespace collapses to the space it reads as.
-    flat += code <= 0x1f || code === 0x7f ? " " : char;
-  }
-  return flat.replace(/\s+/g, " ").trim().slice(0, 200);
+  return oneLineCore(summary, { maxChars: 200, stripControlChars: true });
 }
 
 /**

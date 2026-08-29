@@ -45,6 +45,9 @@ export const MAX_TOOL_CALLS = 200;
 export const MAX_CALL_ARGUMENT_BYTES = 64 * 2 ** 10;
 export const MAX_CUMULATIVE_EVIDENCE_BYTES = 512 * 2 ** 10;
 
+/** Transcript compaction begins when its estimate exceeds this share of the context window. */
+export const COMPACT_AT = 0.8;
+
 /** @typedef {"max-turns" | "tool-calls" | "evidence"} Bound */
 
 /**
@@ -176,7 +179,7 @@ export async function runLoop({
    * @param {ChatMessage[]} [pending] one-shot additions — the finalisation instruction — never persisted
    */
   async function ask(offeredTools, pending = []) {
-    if (estimateTokens(transcript) > 0.8 * contextWindow && transcript.length > 2) {
+    if (estimateTokens(transcript) > COMPACT_AT * contextWindow && transcript.length > 2) {
       transcript = [
         ...transcript.slice(0, 2),
         // The model's own analysis prose is the one thing no ledger
