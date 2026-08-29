@@ -11,7 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { reviewPullRequest } from "./run.mjs";
 import { findingIdentity } from "./answer.mjs";
-import { VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
+import { VERIFIER_MAX_EVIDENCE_BYTES, VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -1364,6 +1364,135 @@ describe("adversarial verification pass", () => {
     expect(chat.offeredTools[4]).toBeUndefined();
     expect(logged.some((line) => line.includes("evidence budget fired"))).toBe(true);
     expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
+  });
+
+  // ── The evidence ceiling's exact boundary, pinned to the constant ──
+
+  const MEASURE = "m".repeat(1024);
+
+  /**
+   * The evidence total a conversation sits on: every tool result, byte for
+   * byte — exactly what the verdict loop accumulates.
+   *
+   * @param {import("#core/chat.mjs").ChatMessage[]} messages
+   * @returns {number}
+   */
+  function evidenceBytesOf(messages) {
+    return messages.reduce(
+      (sum, message) =>
+        message.role === "tool" ? sum + Buffer.byteLength(message.content ?? "", "utf8") : sum,
+      0,
+    );
+  }
+
+  /**
+   * A chat double that lands the verifier's accumulated evidence on an
+   * exact byte total. The first investigation turn reads measure.txt —
+   * small, so its wrapped block is never cut by the evidence frame's own
+   * 64 KiB cap — and each pad turn rewrites pad.txt so the run's evidence
+   * total steps onto `target` exactly at the last pad. Every pad size is
+   * derived from the measured first block, so the framing's cost is
+   * measured, never assumed, and the boundary rides the import.
+   *
+   * @param {number} target the evidence total the last pad must land on
+   * @param {{ content?: string, toolCalls?: { id: string, name: string, arguments: string }[] }} final the deciding turn's answer
+   * @returns {import("#core/chat.mjs").Chat & { calls: import("#core/chat.mjs").ChatMessage[][], offeredTools: Array<import("#core/chat.mjs").ChatTool[] | undefined> }}
+   */
+  function exactEvidenceChat(target, final) {
+    const pads = 3; // one wrapped read is capped at 64 KiB; three stay under it
+    const inner = scriptedChat([
+      READ,
+      answerWith("off-by-one"),
+      { toolCalls: [verifyRead("v1", "measure.txt")] },
+      ...Array.from({ length: pads }, (_, i) => ({
+        toolCalls: [verifyRead(`p${String(i)}`, "pad.txt")],
+      })),
+      final,
+    ]);
+    return {
+      calls: inner.calls,
+      offeredTools: inner.offeredTools,
+      async complete(request) {
+        const turn = inner.calls.length;
+        if (turn >= 3 && turn < 3 + pads) {
+          const prior = evidenceBytesOf(request.messages);
+          const first = request.messages.find((message) => message.role === "tool");
+          const framing =
+            Buffer.byteLength(first?.content ?? "", "utf8") -
+            Buffer.byteLength("measure.txt\n", "utf8") -
+            MEASURE.length;
+          const left = 3 + pads - turn; // this pad plus every pad after it
+          const share = left === 1 ? target - prior : Math.floor((target - prior) / left);
+          writeFileSync(
+            p.join(wsRoot, "pad.txt"),
+            "x".repeat(share - framing - Buffer.byteLength("pad.txt\n", "utf8")),
+          );
+        }
+        return inner.complete(request);
+      },
+    };
+  }
+
+  it("stays silent one byte under the evidence ceiling: the total VERIFIER_MAX_EVIDENCE_BYTES - 1 keeps the tools and settles normally", async () => {
+    writeFileSync(p.join(wsRoot, "measure.txt"), MEASURE);
+    const forge = forgeStub();
+    const chat = exactEvidenceChat(VERIFIER_MAX_EVIDENCE_BYTES - 1, {
+      content: '{"verdict":"refuted","reason":"settled with the last byte below the ceiling"}',
+    });
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    const deciding = chat.calls[6] ?? [];
+    // The verdict is reached with exactly one byte of headroom under the
+    // ceiling — the boundary pinned to the constant, not to a literal.
+    expect(evidenceBytesOf(deciding)).toBe(VERIFIER_MAX_EVIDENCE_BYTES - 1);
+    // The bound never fired: the fixed tools are still offered on the
+    // deciding request and no budget line was logged.
+    expect(chat.offeredTools[6]?.map((tool) => tool.name)).toEqual([
+      "read_file",
+      "list_files",
+      "search",
+    ]);
+    expect(logged.some((line) => line.includes("budget fired"))).toBe(false);
+    expect(forge.calls.upserts[0]?.body).toContain("settled with the last byte below the ceiling");
+    expect(forge.calls.upserts[0]?.body).toContain("Refuted during verification");
+  });
+
+  it("fires the evidence ceiling at exactly its value: the total VERIFIER_MAX_EVIDENCE_BYTES brings the final no-tools ask and an uncertain verdict", async () => {
+    writeFileSync(p.join(wsRoot, "measure.txt"), MEASURE);
+    const forge = forgeStub();
+    const chat = exactEvidenceChat(VERIFIER_MAX_EVIDENCE_BYTES, {
+      content: '{"verdict":"uncertain","reason":"the budget was spent"}',
+    });
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    // Read, answer, measure turn, three pad turns, the final ask.
+    const finalMessages = chat.calls[6] ?? [];
+    // The ask sits on exactly the ceiling's worth of evidence: one byte
+    // less keeps the loop alive (pinned beside); the constant is the line.
+    expect(evidenceBytesOf(finalMessages)).toBe(VERIFIER_MAX_EVIDENCE_BYTES);
+    // Tools are withheld from the final ask; the code-authored budget
+    // instruction rides as its last message.
+    expect(chat.offeredTools[6]).toBeUndefined();
+    expect(finalMessages[finalMessages.length - 1]?.content).toContain(
+      "The verification budget for this finding is spent",
+    );
+    expect(logged.some((line) => line.includes("evidence budget fired"))).toBe(true);
+    // The withheld verdict publishes as unresolved, never dropped.
+    expect(forge.calls.upserts[0]?.body).toContain("unverified: the budget was spent");
   });
 
   it("verifier calls refuse git paths, escapes, symlinks and ignored paths — and the review survives", async () => {
