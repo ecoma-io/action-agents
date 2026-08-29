@@ -1,12 +1,14 @@
 # Development — the review applicability policy (design)
 
-> **Status: proposed, not shipped.** This page is a design, written against
-> issue #179 and framed by the maintainer's phase-2 doctrine: three execution
-> contexts, three separable decision axes, dogfooding as the acceptance test.
-> Nothing in it describes behaviour a consumer can pin today;
-> [`review`](review.md) remains the implementation contract for the code that
-> exists. If the design lands in the sequence at the end, its normative
-> sections graduate into that page and this one is retired.
+> **Status: partially landed — PR 1 of three.** The context axis and the
+> `run` axis (rules, refusals, the skipped-run record, the dry-run and
+> zero-config guarantees) are shipped behaviour, documented normatively in
+> [`review`](review.md#the-applicability-axis); this page's design for them
+> has graduated there. Posture and intensity remain proposed, not shipped:
+> nothing in those axes describes behaviour a consumer can pin today, the
+> validator refuses their keys, and [`review`](review.md) remains the
+> implementation contract for the code that exists. When the last of the
+> three lands, this page is retired.
 
 `review` today applies one full human-style review to every pull request. The
 `strictness`, `strategy` and `ignore` dials vary review _intensity_; nothing

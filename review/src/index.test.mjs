@@ -206,7 +206,9 @@ describe("run over injected io", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     /** @type {string[]} */
     const logged = [];
-    const env = runnerEnv({ event: { action: "opened", pull_request: { number: 9 } } });
+    const env = runnerEnv({
+      event: { action: "opened", pull_request: { number: 9, base: { ref: "main" } } },
+    });
     try {
       await run(readInputs(env), readContext(env), {
         forge: {
@@ -284,7 +286,29 @@ describe("run over the real forge", () => {
         /** @param {string | URL | Request} url */
         async (url) => {
           requested.push(String(url));
-          // Draft snapshot: the cheapest honest end of the orchestration.
+          // The governance line resolves and its config file reads before a
+          // draft skip can end the run: the ref read gets a ref-shaped
+          // answer, the config read an empty object; everything else is the
+          // draft snapshot, the cheapest honest end of the run.
+          if (String(url).endsWith("/git/ref/heads/main")) {
+            return new Response(JSON.stringify({ object: { sha: "c".repeat(40) } }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          if (
+            decodeURIComponent(String(url).replace(/\?.*$/, "")).endsWith(
+              "/contents/.github/action-agents/review/review.json5",
+            )
+          ) {
+            return new Response(JSON.stringify({ content: "e30=", encoding: "base64" }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          if (String(url).split("?").at(0)?.includes("/contents/")) {
+            return new Response("not found", { status: 404 });
+          }
           return new Response(
             JSON.stringify({
               number: 9,

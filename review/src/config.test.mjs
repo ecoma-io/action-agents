@@ -231,3 +231,39 @@ describe("loadDocuments", () => {
     ).rejects.toThrow(/byte cap/);
   });
 });
+
+describe("validateConfig — the applicability axis", () => {
+  it("passes the applicability key through to the validated policy", () => {
+    const config = validateConfig({
+      applicability: {
+        bots: ["ecoma-io", "dependabot[bot]"],
+        rules: [
+          {
+            id: "release-prs",
+            context: "automation",
+            when: { title: "^chore(\\([\\w-]+\\))?: release", branch: "^release-please--" },
+            run: false,
+          },
+        ],
+      },
+    });
+    expect(config.applicability?.bots).toEqual(["ecoma-io", "dependabot[bot]"]);
+    expect(config.applicability?.rules[0]?.id).toBe("release-prs");
+    expect(config.applicability?.rules[0]?.when.title).toBeInstanceOf(RegExp);
+  });
+
+  it("refuses a policy the applicability law rejects, before any model call", () => {
+    expect(() =>
+      validateConfig({ applicability: { rules: [{ id: "x", context: "external", run: false }] } }),
+    ).toThrow(/external context is frozen/);
+    expect(() => validateConfig({ applicability: { posture: {} } })).toThrow(
+      /unknown key 'posture'/,
+    );
+    expect(() => validateConfig({ applicability: 42 })).toThrow(/must be an object/);
+  });
+
+  it("keeps the default config free of the axis entirely", () => {
+    expect(validateConfig(null)).not.toHaveProperty("applicability");
+    expect(validateConfig({})).not.toHaveProperty("applicability");
+  });
+});

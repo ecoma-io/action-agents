@@ -5,12 +5,15 @@
 // facts the artifact records.
 
 import { describe, expect, it } from "vitest";
-
 import { findingIdentity } from "./answer.mjs";
+
 import {
   ArtifactError,
+  applicabilityArtifactSchemaVersion,
+  applicabilitySection,
   assertFreshArtifact,
   buildArtifact,
+  buildSkippedArtifact,
   reviewArtifactSchemaVersion,
   serialiseArtifact,
   withCommentId,
@@ -1309,5 +1312,186 @@ describe("the canonical sort order", () => {
     for (const keys of keyLists) {
       expect([...keys].sort()).toEqual([...keys].sort(utf8Compare));
     }
+  });
+});
+
+describe("the applicability fact and the skipped-run record", () => {
+  /** A valid rule-basis fact — the one a `run: false` skip records. */
+  const ruleSection = () =>
+    applicabilitySection({
+      context: "automation",
+      applicable: false,
+      matchedRule: "release-prs",
+      basis: "rule",
+      inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+    });
+
+  /** A valid state-basis fact — the one a code-owned skip records. */
+  const stateSection = () =>
+    applicabilitySection({
+      context: "maintainer",
+      applicable: false,
+      matchedRule: null,
+      basis: "state",
+      inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+    });
+
+  it("carries the applicability fact on schema version 3, exact keys", () => {
+    const bytes = serialiseArtifact(buildArtifact(facts({ applicability: ruleSection() })));
+    const round = JSON.parse(bytes);
+    expect(round.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(Object.keys(round).sort()).toEqual(
+      [
+        "applicability",
+        "coverage",
+        "findings",
+        "gates",
+        "headRef",
+        "outcome",
+        "phases",
+        "policy",
+        "provenance",
+        "pullRequest",
+        "repository",
+        "risk",
+        "schemaVersion",
+        "verification",
+      ].sort(),
+    );
+    expect(round.applicability).toEqual({
+      context: "automation",
+      applicable: false,
+      posture: "standard",
+      intensity: {},
+      matchedRule: "release-prs",
+      basis: "rule",
+      inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+    });
+  });
+
+  it("keeps schema version 2 byte-for-byte when no applicability fact is present", () => {
+    const bytes = serialiseArtifact(buildArtifact(facts()));
+    expect(JSON.parse(bytes).schemaVersion).toBe(reviewArtifactSchemaVersion);
+    expect(bytes).not.toContain("applicability");
+  });
+
+  it("builds the reduced skipped-run record — rule basis", () => {
+    const reason = "#192 matched applicability rule 'release-prs' — review intentionally not run";
+    const artifact = buildSkippedArtifact({
+      repository: "ecoma-io/action-agents",
+      pullRequest: 192,
+      headRef: HEAD,
+      reason,
+      applicability: ruleSection(),
+    });
+    expect(artifact.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(artifact.outcome).toEqual({ classification: "skipped", reason });
+    const round = JSON.parse(serialiseArtifact(artifact));
+    expect(Object.keys(round).sort()).toEqual(
+      ["applicability", "headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+    );
+  });
+
+  it("builds the reduced skipped-run record — state basis, no matched rule", () => {
+    const artifact = buildSkippedArtifact({
+      repository: "acme/widgets",
+      pullRequest: 7,
+      headRef: HEAD,
+      reason: "#7 is a draft — not ready means not reviewed",
+      applicability: stateSection(),
+    });
+    expect(JSON.parse(serialiseArtifact(artifact)).applicability.basis).toBe("state");
+  });
+
+  it("refuses a state basis in the full shape and a default basis in the skipped shape", () => {
+    expect(() => buildArtifact(facts({ applicability: stateSection() }))).toThrow(
+      /basis 'state' cannot appear in this shape/,
+    );
+    expect(() =>
+      buildSkippedArtifact({
+        repository: "acme/widgets",
+        pullRequest: 7,
+        headRef: HEAD,
+        reason: "r",
+        applicability: applicabilitySection({
+          context: "maintainer",
+          applicable: false,
+          matchedRule: null,
+          basis: "default",
+          inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+        }),
+      }),
+    ).toThrow(/basis 'default' cannot appear in this shape/);
+  });
+
+  it("refuses an applicable skipped record — the record exists because the run did not", () => {
+    expect(() =>
+      buildSkippedArtifact({
+        repository: "acme/widgets",
+        pullRequest: 7,
+        headRef: HEAD,
+        reason: "r",
+        applicability: applicabilitySection({
+          context: "automation",
+          applicable: true,
+          matchedRule: "some-rule",
+          basis: "rule",
+          inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+        }),
+      }),
+    ).toThrow(/must record applicable: false/);
+  });
+
+  it("refuses a non-empty intensity — later-PR surface, never silently accepted", () => {
+    const tampered = /** @type {import("./artifact.mjs").ApplicabilitySection} */ (
+      /** @type {unknown} */ ({ ...ruleSection(), intensity: { file: {} } })
+    );
+    expect(() => buildArtifact(facts({ applicability: tampered }))).toThrow(
+      /intensity has an unknown key 'file'/,
+    );
+  });
+
+  it("enforces the matched-rule law in both directions", () => {
+    expect(() =>
+      buildArtifact(facts({ applicability: { ...ruleSection(), matchedRule: null } })),
+    ).toThrow(/basis 'rule' without a matched rule/);
+    expect(() =>
+      applicabilitySection({
+        context: "maintainer",
+        applicable: true,
+        matchedRule: "release-prs",
+        basis: "default",
+        inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+      }),
+    ).toThrow(/only a rule decision names a matched rule/);
+  });
+
+  it("refuses to serialise a record whose keys fit no schema of its version", () => {
+    const artifact = JSON.parse(
+      serialiseArtifact(
+        buildSkippedArtifact({
+          repository: "ecoma-io/action-agents",
+          pullRequest: 192,
+          headRef: HEAD,
+          reason: "r",
+          applicability: ruleSection(),
+        }),
+      ),
+    );
+    delete artifact.headRef;
+    expect(() => serialiseArtifact(artifact)).toThrow(/fit no schema of this version/);
+  });
+
+  it("attaches the comment id to an applicability-carrying artifact", () => {
+    const artifact = withCommentId(
+      buildArtifact(facts({ applicability: ruleSection(), provenance: {} })),
+      101,
+    );
+    expect(artifact.provenance).toEqual({ commentId: 101 });
+    expect(
+      /** @type {import("./artifact.mjs").RunArtifactWithApplicability} */ (
+        /** @type {unknown} */ (artifact)
+      ).applicability.basis,
+    ).toBe("rule");
   });
 });

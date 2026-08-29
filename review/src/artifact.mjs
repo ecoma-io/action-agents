@@ -24,6 +24,12 @@
  */
 
 import { findingIdentity } from "./answer.mjs";
+import {
+  APPLICABILITY_BASES,
+  AUTHOR_PROVENANCES,
+  EXECUTION_CONTEXTS,
+  HEAD_PROVENANCES,
+} from "./applicability.mjs";
 import { GATES } from "./gates.mjs";
 import { utf8Compare } from "./order.mjs";
 import { MESSAGE_CHARS } from "./render.mjs";
@@ -33,8 +39,11 @@ import {
   VERDICT_REASON_CHARS,
 } from "./verify.mjs";
 
-/** The artifact schema this module emits. Bumped only on a breaking shape change. */
+/** The artifact schema a run without an applicability fact emits. Bumped only on a breaking shape change. */
 export const reviewArtifactSchemaVersion = 2;
+
+/** The schema version once a run records an applicability fact — the full shape and the skipped shape alike. */
+export const applicabilityArtifactSchemaVersion = 3;
 
 /** @typedef {import("./risk.mjs").RiskLevel} RiskLevel */
 /** @typedef {import("./lanes.mjs").AttentionLane} AttentionLane */
@@ -91,6 +100,31 @@ const PHASE_KEYS = new Set(["from", "to"]);
 const PROVENANCE_KEYS = new Set(["commentId"]);
 const EMPTY_SET = new Set();
 const ARTIFACT_KEYS = new Set(["schemaVersion", ...FACTS_KEYS]);
+const FACTS_KEYS_WITH_APPLICABILITY = new Set([...FACTS_KEYS, "applicability"]);
+const APPLICABILITY_ARTIFACT_KEYS = new Set([...ARTIFACT_KEYS, "applicability"]);
+const SKIPPED_ARTIFACT_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "applicability",
+]);
+const APPLICABILITY_SECTION_KEYS = new Set([
+  "context",
+  "applicable",
+  "posture",
+  "intensity",
+  "matchedRule",
+  "basis",
+  "inputs",
+]);
+const APPLICABILITY_INPUT_KEYS = new Set(["association", "head", "authorType"]);
+const APPLICABILITY_POSTURES = /** @type {const} */ (["standard"]);
+/** A full-shape artifact describes a run that happened; a state skip never enters it. */
+const FULL_SHAPE_BASES = /** @type {const} */ (["rule", "default"]);
+/** The bases a skipped run can carry — the defaults decided nothing. */
+const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 
 /**
  * The outcome the code already classified for this run.
@@ -227,6 +261,7 @@ const ARTIFACT_KEYS = new Set(["schemaVersion", ...FACTS_KEYS]);
  * @property {number} pullRequest the pull request number
  * @property {string} headRef the reviewed head commit, full 40 hex chars
  * @property {RunOutcome} outcome
+ * @property {ApplicabilitySection} [applicability] the applicability fact when the policy is on
  * @property {RunPolicy} policy
  * @property {RiskRow[]} risk the per-file risk table, byte-wise sorted by path
  * @property {ArtifactFinding[]} findings the publication set, every finding anchored
@@ -272,6 +307,58 @@ const ARTIFACT_KEYS = new Set(["schemaVersion", ...FACTS_KEYS]);
  * @property {PhaseLogEntry[]} phases
  * @property {Provenance} provenance
  */
+
+/**
+ * The applicability fact one run records — the derived context, the axis
+ * decision and the provenance the classification read. PR 1 ships the run
+ * axis only: `posture` is constant standard and `intensity` is empty until
+ * their own PRs land, and this schema refuses anything else there.
+ *
+ * @typedef {object} ApplicabilitySection
+ * @property {import("./applicability.mjs").ExecutionContext} context the derived execution context
+ * @property {boolean} applicable whether review ran, as the rule or default decided
+ * @property {"standard"} posture the posture axis, constant until its PR lands
+ * @property {Record<string, never>} intensity the intensity axis, empty until its PR lands
+ * @property {string | null} matchedRule the deciding rule's id, or null when the defaults decided
+ * @property {import("./applicability.mjs").ApplicabilityBasis} basis where the decision's authority came from
+ * @property {ApplicabilityInputs} inputs the provenance the classification read
+ */
+
+/**
+ * The classification's own inputs, as the record carries them.
+ *
+ * @typedef {object} ApplicabilityInputs
+ * @property {string} association the raw `author_association`, `"NONE"` when absent
+ * @property {import("./applicability.mjs").HeadProvenance} head the head repository's provenance
+ * @property {import("./applicability.mjs").AuthorProvenance} authorType the author's provenance
+ */
+
+/**
+ * The reduced artifact a skipped run writes — the record IS the run's whole
+ * outcome, so it names the skip and the applicability fact that decided it,
+ * and nothing else. No policy, risk, findings or coverage: nothing was read
+ * beyond the classification.
+ *
+ * @typedef {object} SkippedRunArtifact
+ * @property {typeof applicabilityArtifactSchemaVersion} schemaVersion
+ * @property {string} repository
+ * @property {number} pullRequest
+ * @property {string} headRef
+ * @property {{ classification: "skipped", reason: string }} outcome
+ * @property {ApplicabilitySection} applicability
+ */
+
+/** The schema-version-agnostic body the full shapes share. */
+/** @typedef {Omit<RunArtifact, "schemaVersion">} PublishedArtifactBody */
+
+/** The full artifact shape, carrying an applicability fact. */
+/** @typedef {PublishedArtifactBody & { schemaVersion: typeof applicabilityArtifactSchemaVersion, applicability: ApplicabilitySection }} RunArtifactWithApplicability */
+
+/** The full-shape artifact, with or without an applicability fact. */
+/** @typedef {RunArtifact | RunArtifactWithApplicability} PublishedRunArtifact */
+
+/** Every serialisable shape this module emits. */
+/** @typedef {RunArtifact | RunArtifactWithApplicability | SkippedRunArtifact} AnyRunArtifact */
 
 /**
  * The typed refusal. Every refusal this module raises is one of these, so a
@@ -485,7 +572,12 @@ function asGateOutcome(v, label) {
  */
 export function buildArtifact(runFacts) {
   const facts = asRecord(runFacts, "run facts");
-  assertExactKeys(facts, "run facts", FACTS_KEYS);
+  const hasApplicability = "applicability" in facts;
+  assertExactKeys(
+    facts,
+    "run facts",
+    hasApplicability ? FACTS_KEYS_WITH_APPLICABILITY : FACTS_KEYS,
+  );
 
   const repository = asNonEmptyString(facts.repository, "run facts.repository");
   const pullRequest = asPositiveInt(facts.pullRequest, "run facts.pullRequest");
@@ -755,8 +847,11 @@ export function buildArtifact(runFacts) {
     provenance.commentId = asPositiveInt(provenanceRec.commentId, "run facts.provenance.commentId");
   }
 
+  const applicability = hasApplicability
+    ? asApplicabilitySection(facts.applicability, FULL_SHAPE_BASES, false)
+    : undefined;
   /** @type {RunArtifact} */
-  const artifact = {
+  const base = {
     schemaVersion: reviewArtifactSchemaVersion,
     repository,
     pullRequest,
@@ -771,7 +866,139 @@ export function buildArtifact(runFacts) {
     phases,
     provenance,
   };
-  return deepFreeze(artifact);
+  const artifact =
+    applicability !== undefined
+      ? /** @type {RunArtifactWithApplicability} */ ({
+          ...base,
+          schemaVersion: applicabilityArtifactSchemaVersion,
+          applicability,
+        })
+      : base;
+  return deepFreeze(/** @type {RunArtifact} */ (artifact));
+}
+
+/**
+ * Composes and validates the applicability fact a run records — the one
+ * place the PR 1 axis constants live (`posture: "standard"`, `intensity: {}`
+ * until their own PRs land). Returns a frozen, serialisable section.
+ *
+ * @param {object} fact the derived and evaluated applicability of one run
+ * @param {import("./applicability.mjs").ExecutionContext} fact.context the derived context
+ * @param {boolean} fact.applicable whether review runs
+ * @param {string | null} fact.matchedRule the deciding rule's id, or null
+ * @param {import("./applicability.mjs").ApplicabilityBasis} fact.basis the decision's authority
+ * @param {ApplicabilityInputs} fact.inputs the classification's provenance
+ * @returns {ApplicabilitySection}
+ * @throws {ArtifactError} when any field is outside its vocabulary
+ */
+export function applicabilitySection({ context, applicable, matchedRule, basis, inputs }) {
+  return asApplicabilitySection(
+    { context, applicable, posture: "standard", intensity: {}, matchedRule, basis, inputs },
+    APPLICABILITY_BASES,
+    false,
+  );
+}
+
+/**
+ * Builds the reduced artifact a skipped run writes — the code-owned record
+ * that review did not run and the applicability fact that decided it. The
+ * record is the skip's whole outcome: exact keys, schemaVersion 3, and
+ * nothing that was never read.
+ *
+ * @param {object} skip
+ * @param {string} skip.repository "owner/repo", as the forge names it
+ * @param {number} skip.pullRequest the pull request number
+ * @param {string} skip.headRef the head the skip describes, full 40 hex chars
+ * @param {string} skip.reason the code-composed sentence, uncapped
+ * @param {ApplicabilitySection} skip.applicability the deciding applicability fact
+ * @returns {SkippedRunArtifact}
+ * @throws {ArtifactError} on any malformed field
+ */
+export function buildSkippedArtifact({ repository, pullRequest, headRef, reason, applicability }) {
+  const repo = asNonEmptyString(repository, "skipped run.repository");
+  const number = asPositiveInt(pullRequest, "skipped run.pullRequest");
+  const ref = asNonEmptyString(headRef, "skipped run.headRef");
+  if (!HEAD_REF.test(ref)) {
+    throw new ArtifactError("skipped run.headRef must be a 40-char hex commit sha — refused");
+  }
+  asNonEmptyString(reason, "skipped run.reason");
+  const section = asApplicabilitySection(applicability, SKIPPED_SHAPE_BASES, true);
+  return deepFreeze({
+    schemaVersion: applicabilityArtifactSchemaVersion,
+    repository: repo,
+    pullRequest: number,
+    headRef: ref,
+    outcome: { classification: "skipped", reason },
+    applicability: section,
+  });
+}
+
+/**
+ * Validates one applicability section, fail-closed. Beyond per-field
+ * vocabulary it enforces the cross-field law: basis 'rule' names a rule and
+ * only a rule decision does; a full-shape artifact refuses the state basis
+ * (a state skip never becomes a review) and a skipped record refuses
+ * `applicable: true` and the default basis (the defaults never skip).
+ *
+ * @param {unknown} v
+ * @param {readonly import("./applicability.mjs").ApplicabilityBasis[]} allowBases the bases this shape may carry
+ * @param {boolean} requireInapplicable whether `applicable: false` is mandatory here
+ * @returns {ApplicabilitySection}
+ */
+function asApplicabilitySection(v, allowBases, requireInapplicable) {
+  const section = asRecord(v, "applicability");
+  assertExactKeys(section, "applicability", APPLICABILITY_SECTION_KEYS);
+  const context = asEnum(section.context, EXECUTION_CONTEXTS, "applicability.context");
+  const applicable = asBoolean(section.applicable, "applicability.applicable");
+  asEnum(section.posture, APPLICABILITY_POSTURES, "applicability.posture");
+  assertExactKeys(
+    asRecord(section.intensity, "applicability.intensity"),
+    "applicability.intensity",
+    EMPTY_SET,
+  );
+  const basis = asEnum(section.basis, APPLICABILITY_BASES, "applicability.basis");
+  if (!allowBases.includes(basis)) {
+    throw new ArtifactError(`applicability basis '${basis}' cannot appear in this shape — refused`);
+  }
+  let matchedRule = null;
+  if (section.matchedRule !== null) {
+    matchedRule = asNonEmptyString(section.matchedRule, "applicability.matchedRule");
+  }
+  if (basis === "rule" && matchedRule === null) {
+    throw new ArtifactError("applicability basis 'rule' without a matched rule — refused");
+  }
+  if (basis !== "rule" && matchedRule !== null) {
+    throw new ArtifactError("only a rule decision names a matched rule — refused");
+  }
+  if (requireInapplicable && applicable) {
+    throw new ArtifactError(
+      "a skipped run's applicability must record applicable: false — refused",
+    );
+  }
+  const inputs = asApplicabilityInputs(section.inputs);
+  return deepFreeze({
+    context,
+    applicable,
+    posture: "standard",
+    intensity: {},
+    matchedRule,
+    basis,
+    inputs,
+  });
+}
+
+/**
+ * @param {unknown} v
+ * @returns {ApplicabilityInputs}
+ */
+function asApplicabilityInputs(v) {
+  const inputs = asRecord(v, "applicability.inputs");
+  assertExactKeys(inputs, "applicability.inputs", APPLICABILITY_INPUT_KEYS);
+  return {
+    association: asNonEmptyString(inputs.association, "applicability.inputs.association"),
+    head: asEnum(inputs.head, HEAD_PROVENANCES, "applicability.inputs.head"),
+    authorType: asEnum(inputs.authorType, AUTHOR_PROVENANCES, "applicability.inputs.authorType"),
+  };
 }
 
 /**
@@ -829,20 +1056,41 @@ export function withCommentId(artifact, commentId) {
 }
 
 /**
- * Serialises a {@link RunArtifact} to a stable JSON string. Keys are sorted, so
- * the bytes are identical regardless of how the object was assembled — the
- * builder's fixed key order is the only order there is. A foreign object (wrong
- * schema version, unknown or missing keys) is refused, not mis-serialised.
+ * @param {Record<string, unknown>} obj
+ * @param {ReadonlySet<string>} keys
+ * @returns {boolean} whether obj's key set equals keys exactly
+ */
+function hasExactKeys(obj, keys) {
+  const present = Object.keys(obj);
+  return present.length === keys.size && present.every((key) => keys.has(key));
+}
+
+/**
+ * Serialises an {@link AnyRunArtifact} to a stable JSON string. Keys are
+ * sorted, so the bytes are identical regardless of how the object was
+ * assembled — the builder's fixed key order is the only order there. A
+ * foreign object (wrong schema version, unknown or missing keys) is
+ * refused, not mis-serialised.
  *
- * @param {RunArtifact} artifact
+ * @param {AnyRunArtifact} artifact
  * @returns {string}
  */
 export function serialiseArtifact(artifact) {
   const record = asRecord(artifact, "artifact");
-  assertExactKeys(record, "artifact", ARTIFACT_KEYS);
-  if (record.schemaVersion !== reviewArtifactSchemaVersion) {
+  if (record.schemaVersion === reviewArtifactSchemaVersion) {
+    assertExactKeys(record, "artifact", ARTIFACT_KEYS);
+  } else if (record.schemaVersion === applicabilityArtifactSchemaVersion) {
+    // Both v3 shapes: the full shape carrying an applicability fact, and
+    // the reduced shape a skipped run writes.
+    if (
+      !hasExactKeys(record, SKIPPED_ARTIFACT_KEYS) &&
+      !hasExactKeys(record, APPLICABILITY_ARTIFACT_KEYS)
+    ) {
+      throw new ArtifactError("artifact keys fit no schema of this version — refused");
+    }
+  } else {
     throw new ArtifactError(
-      "artifact.schemaVersion does not match reviewArtifactSchemaVersion — refused",
+      "artifact.schemaVersion does not match a schema this module emits — refused",
     );
   }
   return stableStringify(record);

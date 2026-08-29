@@ -171,6 +171,12 @@ export async function run(inputs, context, io = {}) {
       });
       log(`review: run artifact written to ${file}`);
     } catch (cause) {
+      // A skip's record is the skip's whole outcome — a failed write there
+      // is a red run, never a silently unrecorded skip. A published run
+      // keeps today's downgrade: the comment stands, the artifact is the loss.
+      if (result.outcome !== "published") {
+        throw cause;
+      }
       result.outcome = "published-without-artifact";
       result.reason = `the comment is published but the run artifact was not written: ${
         cause instanceof Error ? cause.message : String(cause)
@@ -192,7 +198,7 @@ export async function run(inputs, context, io = {}) {
  * @param {object} input
  * @param {string} input.workspace the runner's workspace root
  * @param {string} input.directory the artifact-path input, relative to the root
- * @param {import("./artifact.mjs").RunArtifact} input.artifact the run's machine-readable record
+ * @param {import("./artifact.mjs").AnyRunArtifact} input.artifact the run's machine-readable record
  * @returns {string} the file the artifact was written to
  */
 export function writeRunArtifact({ workspace, directory, artifact }) {

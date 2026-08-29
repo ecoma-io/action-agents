@@ -15,6 +15,7 @@ import { createWorkspace } from "#core/workspace.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
+import { classificationInputs, classifyContext, evaluateApplicability } from "./applicability.mjs";
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
@@ -36,7 +37,13 @@ import {
 } from "./verify.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
-import { assertFreshArtifact, buildArtifact, withCommentId } from "./artifact.mjs";
+import {
+  applicabilitySection,
+  assertFreshArtifact,
+  buildArtifact,
+  buildSkippedArtifact,
+  withCommentId,
+} from "./artifact.mjs";
 
 /**
  * The forge operations one review run makes, listed so a test doubles only
@@ -82,7 +89,7 @@ export const ACTION = "review";
  * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "published-without-artifact" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
- * @property {import("./artifact.mjs").RunArtifact} [artifact] the machine-readable run record — present only when the run published, the comment's own identity is known, and the fresh read at write time still names the reviewed head; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
+ * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact} [artifact] the machine-readable run record — present when the run published or when a policy recorded a skipped run (the record is the skip's whole outcome); absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
  */
 /**
  * @param {object} input
@@ -107,33 +114,138 @@ export async function reviewPullRequest({
   const startedAt = io.now();
   // ── Snapshot: one read fixes the subject ────────────────────────────────
   const snapshot = await io.forge.getPullRequest(pullRequestNumber);
-  if (snapshot.draft) {
-    return {
-      outcome: "skip",
-      reason: `#${String(pullRequestNumber)} is a draft — not ready means not reviewed`,
-    };
-  }
-  if (snapshot.state !== "open" || snapshot.merged) {
-    return {
-      outcome: "skip",
-      reason: `#${String(pullRequestNumber)} is ${snapshot.state}${snapshot.merged ? " and merged" : ""}`,
-    };
-  }
+  const stateSkip = snapshot.draft
+    ? `#${String(pullRequestNumber)} is a draft — not ready means not reviewed`
+    : snapshot.state !== "open" || snapshot.merged
+      ? `#${String(pullRequestNumber)} is ${snapshot.state}${snapshot.merged ? " and merged" : ""}`
+      : undefined;
   const headSha = snapshot.head.sha;
 
-  // ── Policy: resolve the source, then config + documents, all before the
-  // first model call. The base branch's tip governs; every read pins to one
-  // immutable commit, so a pull request cannot edit its own policy and a
-  // branch moving mid-run changes nothing this run reads.
+  // ── Policy: resolve the source, then config, all before the first model
+  // call and before any skip a policy would record. The base branch's tip
+  // governs; every read pins to one immutable commit, so a pull request
+  // cannot edit its own policy and a branch moving mid-run changes nothing
+  // this run reads.
   const source = await resolvePolicySource({ eventName, event, forge: io.forge });
   const policy = { getContents: policyReader(io.forge, source) };
   const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
-  io.info(policySourceAuditLine({ eventName, source, path: loaded.path }));
+  // The audit line rides every run that reads the policy for a decision — a
+  // state skip under a policy included. A policy-less state skip keeps
+  // today's exact single log line.
+  const applicabilityOn =
+    loaded.raw !== null &&
+    typeof loaded.raw === "object" &&
+    !Array.isArray(loaded.raw) &&
+    "applicability" in loaded.raw;
+  if (stateSkip === undefined || applicabilityOn) {
+    io.info(policySourceAuditLine({ eventName, source, path: loaded.path }));
+  }
   const config = validateConfig(loaded.raw);
+  const applicability = config.applicability;
+
+  // ── Applicability: a code-owned state skip joins the audit story — the
+  // record IS the skip's whole outcome. Under dry-run nothing is written,
+  // so there it stays a log line, today's exact shape.
+  if (stateSkip !== undefined) {
+    if (applicability === undefined || inputs.dryRun) {
+      return { outcome: "skip", reason: stateSkip };
+    }
+    const derived = classifyContext(
+      classificationInputs(
+        event.pull_request,
+        `${context.owner}/${context.repo}`,
+        applicability.bots,
+      ),
+    );
+    return {
+      outcome: "skip",
+      reason: stateSkip,
+      artifact: buildSkippedArtifact({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequest: pullRequestNumber,
+        headRef: headSha,
+        reason: stateSkip,
+        applicability: applicabilitySection({
+          context: derived.context,
+          applicable: false,
+          matchedRule: null,
+          basis: "state",
+          inputs: derived.inputs,
+        }),
+      }),
+    };
+  }
+
+  // ── Applicability: classification, then the rule list, before diff
+  // accounting and any model call. A `run: false` match short-circuits:
+  // the skip record is written, the documents are never read, and the
+  // changed-file listing is fetched only when a paths condition needs it —
+  // the universe below reuses that read, so it costs zero extra calls.
+  /** @type {import("./artifact.mjs").ApplicabilitySection | undefined} */
+  let applicabilityFact;
+  /** @type {import("#core/forge.mjs").PullRequestFile[] | undefined} */
+  let earlyFiles;
+  if (applicability !== undefined) {
+    let classifiedPaths = null;
+    if (applicability.rules.some((rule) => rule.when.paths !== undefined)) {
+      earlyFiles = await io.forge.listPullRequestFiles(pullRequestNumber);
+      // The classification matches the post-ignore path set; the budget has
+      // no vote here — a diff past the budget still skips on a matching
+      // rule, and a continuing run meets the budget gate below, unchanged.
+      classifiedPaths = buildInventory({
+        files: earlyFiles,
+        ignore: config.ignore,
+        maxDiffLines: Number.MAX_SAFE_INTEGER,
+      }).reviewed.map((file) => file.filename);
+    }
+    const derived = classifyContext(
+      classificationInputs(
+        event.pull_request,
+        `${context.owner}/${context.repo}`,
+        applicability.bots,
+      ),
+    );
+    const evaluated = evaluateApplicability({
+      policy: applicability,
+      context: derived.context,
+      title: snapshot.title,
+      branch: snapshot.head.ref,
+      paths: classifiedPaths,
+    });
+    applicabilityFact = applicabilitySection({
+      context: derived.context,
+      applicable: evaluated.applicable,
+      matchedRule: evaluated.matchedRule,
+      basis: evaluated.basis,
+      inputs: derived.inputs,
+    });
+    if (!evaluated.applicable) {
+      if (inputs.dryRun) {
+        return {
+          outcome: "dry-run",
+          reason:
+            `dry run: applicability rule '${evaluated.matchedRule}' matched — ` +
+            `review intentionally not run; nothing written`,
+        };
+      }
+      const skipReason = `#${String(pullRequestNumber)} matched applicability rule '${evaluated.matchedRule}' — review intentionally not run`;
+      return {
+        outcome: "skip",
+        reason: skipReason,
+        artifact: buildSkippedArtifact({
+          repository: `${context.owner}/${context.repo}`,
+          pullRequest: pullRequestNumber,
+          headRef: headSha,
+          reason: skipReason,
+          applicability: applicabilityFact,
+        }),
+      };
+    }
+  }
   const documents = await loadDocuments({ forge: policy, config, source });
 
   // ── Universe: inventory, budget, rules ──────────────────────────────────
-  const files = await io.forge.listPullRequestFiles(pullRequestNumber);
+  const files = earlyFiles ?? (await io.forge.listPullRequestFiles(pullRequestNumber));
   const inventory = buildInventory({
     files,
     ignore: config.ignore,
@@ -415,6 +527,7 @@ export async function reviewPullRequest({
     coverage: outcome.coverage,
     phases: outcome.phaseLog,
     provenance: {},
+    ...(applicabilityFact !== undefined ? { applicability: applicabilityFact } : {}),
   });
 
   // The built record is validated against a read taken here — before the
