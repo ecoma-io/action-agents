@@ -22,6 +22,7 @@
 import { closeSync, openSync, readSync } from "node:fs";
 
 import { json5Parse } from "#core/json5-parse.mjs";
+import { oneLine } from "#core/one-line.mjs";
 
 import { utf8Compare } from "./order.mjs";
 import { BINARY_SNIFF_BYTES, MAX_READ_BYTES } from "./tools.mjs";
@@ -135,7 +136,7 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
     const severity = finding["severity"];
     if (severity !== "concern" && severity !== "nit") {
       rejections.push(
-        `severity '${flatten(String(severity))}' is outside the vocabulary: ${describe}`,
+        `severity '${oneLine(String(severity), { maxChars: 120 })}' is outside the vocabulary: ${describe}`,
       );
       continue;
     }
@@ -304,12 +305,4 @@ export function extractObject(text) {
     }
   }
   return null;
-}
-
-/**
- * @param {string} text
- * @returns {string}
- */
-function flatten(text) {
-  return text.replace(/\s+/g, " ").trim().slice(0, 120);
 }

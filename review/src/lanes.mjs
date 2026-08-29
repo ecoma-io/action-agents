@@ -15,6 +15,7 @@
  */
 
 import { utf8Compare } from "./order.mjs";
+import { STRICTNESS } from "./vocabulary.mjs";
 
 /** @typedef {import("./risk.mjs").RiskLevel} RiskLevel */
 /** @typedef {import("./risk.mjs").RiskPlan} RiskPlan */
@@ -71,7 +72,7 @@ const RISK_LEVELS = /** @type {const} */ (["low", "medium", "high", "critical"])
  *
  * @type {readonly Strictness[]}
  */
-const STRICTNESS_LEVELS = /** @type {const} */ (["low", "medium", "high"]);
+const STRICTNESS_LEVELS = STRICTNESS;
 
 /**
  * The mapping table — the classifier's risk to an attention lane. This

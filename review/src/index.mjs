@@ -49,7 +49,6 @@ export function readInputs(env = process.env) {
     configPath: getInput("config-path", {}, env),
     maxTurns: getNumberInput("max-turns", { default: 30, min: 1 }, env),
     contextWindow: getNumberInput("context-window", { default: 128_000, min: 1_000 }, env),
-    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
     dryRun: getBooleanInput("dry-run", { default: false }, env),
     // Where inside the workspace the run artifact lands. The default agrees
     // with the manifest; the write is confined below either way.

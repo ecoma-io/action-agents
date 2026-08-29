@@ -14,6 +14,7 @@
  */
 
 import { matchGlob } from "#core/glob.mjs";
+import { STRICTNESS } from "./vocabulary.mjs";
 
 /** The three derived execution contexts, in derivation-table order. */
 export const EXECUTION_CONTEXTS = /** @type {const} */ (["automation", "maintainer", "external"]);
@@ -25,11 +26,11 @@ export const APPLICABILITY_BASES = /** @type {const} */ (["rule", "default", "st
 export const POSTURES = /** @type {const} */ (["standard", "maintainer", "automation"]);
 
 /**
- * The strictness arms the intensity axis's one delta speaks, mirrored from
- * the config schema — same reason as every mirror here: an unknown policy is
+ * The strictness arms the intensity axis's one delta speaks, single-homed in
+ * `vocabulary.mjs` — same reason as every mirror here: an unknown policy is
  * a refusal, never a guess.
  */
-export const STRICTNESS_ARMS = /** @type {const} */ (["low", "medium", "high"]);
+export const STRICTNESS_ARMS = STRICTNESS;
 
 /** The bases a skipped run can carry — the defaults never skip. */
 export const SKIPPED_BASES = /** @type {const} */ (["rule", "state"]);

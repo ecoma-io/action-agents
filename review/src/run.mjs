@@ -67,6 +67,9 @@ import {
 
 export const ACTION = "review";
 
+/** The assembled prompt may use up to this share of the context window before the run refuses. */
+export const PROMPT_HEADROOM = 0.5;
+
 /**
  * @typedef {object} RunInputs the action's own knobs, already read and validated
  * @property {string} model
@@ -376,7 +379,7 @@ export async function reviewPullRequest({
   const tools = createTools({ workspace, evidence, ignore: config.ignore, recordedReads });
 
   const estimated = estimateTokens(messages);
-  if (estimated > inputs.contextWindow / 2) {
+  if (estimated > PROMPT_HEADROOM * inputs.contextWindow) {
     throw new Error(
       `the assembled prompt estimates at ${String(estimated)} tokens, past half the ` +
         `${String(inputs.contextWindow)}-token window — a review that cannot fit is refused, not truncated`,
@@ -478,7 +481,7 @@ export async function reviewPullRequest({
   // consulted; each refusal names its gate in the log, and the first
   // failure's reason leads the partial comment.
   const report = evaluateGates({
-    conclusion: { held: true },
+    conclusion: { held: conclusion.passed },
     bound: {
       bound: outcome.bound,
       readingTurns: outcome.readingTurns,
@@ -775,7 +778,7 @@ const VERIFIER_BUDGET_INSTRUCTION =
  */
 async function oneVerdict({ item, chat, model, workspace, ignore, info }) {
   const evidence = createEvidence();
-  const tools = createTools({ workspace, evidence, ignore, recordedReads: new Map() });
+  const tools = createTools({ workspace, evidence, ignore });
   /** @type {import("#core/chat.mjs").ChatMessage[]} */
   const messages = verifierMessages(item, evidence);
   let toolCalls = 0;

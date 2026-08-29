@@ -11,8 +11,7 @@
  * before anything is fetched beyond the config itself.
  */
 
-import { json5Parse } from "#core/json5-parse.mjs";
-import { assertPolicySchemaVersion } from "#core/policy.mjs";
+import { loadConfigFile as loadConfigFileCore, MAX_CONFIG_BYTES } from "#core/config-file.mjs";
 
 import {
   MAX_ASSET_LAYOUTS,
@@ -56,8 +55,7 @@ import {
 /**
  * @typedef {import("./patterns.mjs").AssetLayout} AssetLayout
  */
-/** A config file larger than this is a red refusal, not a truncated policy. */
-export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
+export { MAX_CONFIG_BYTES };
 
 /** An instruction document larger than this is a red refusal — prose cut mid-sentence misleads. */
 export const MAX_INSTRUCTION_BYTES = 8 * 2 ** 10;
@@ -93,7 +91,8 @@ const DEFAULT_INSTRUCTION_PATHS = {
 
 /**
  * Reads the config file from the resolved policy source and parses it. There
- * is no absent-file case: `harmonise` without a map refuses at startup.
+ * is no absent-file case: `harmonise` without a map refuses at startup — the
+ * reading, the cap and the schema check live in `core`.
  *
  * @param {object} input
  * @param {ContentsReader} input.forge pinned to the resolved policy source
@@ -101,71 +100,23 @@ const DEFAULT_INSTRUCTION_PATHS = {
  * @param {import("#core/policy.mjs").PolicySource} input.source the resolved policy source
  * @returns {Promise<{ raw: Record<string, unknown>, path: string }>}
  */
-export async function loadConfigFile({ forge, configPath, source }) {
-  if (configPath !== "") {
-    const file = await forge.getContents(configPath);
-    if (file === null) {
-      throw new Error(
-        `config-path names '${configPath}', which does not exist on branch '${source.branch}' ` +
-          `at ${source.sha} — the policy source resolved for this run`,
-      );
-    }
-    return { raw: parseFile(configPath, file.content, source), path: configPath };
-  }
-
-  /** @type {{ path: string, content: string }[]} */
-  const found = [];
-  for (const path of DEFAULT_LOCATIONS) {
-    const file = await forge.getContents(path);
-    if (file !== null) found.push({ path, content: file.content });
-  }
-  if (found.length === 2) {
-    throw new Error(
-      `the policy is declared twice — both ${DEFAULT_LOCATIONS[0]} and ${DEFAULT_LOCATIONS[1]} ` +
-        `exist; remove one`,
-    );
-  }
-  if (found.length === 0) {
-    throw new Error(
-      `no config file exists — expected one of ${DEFAULT_LOCATIONS.join(" or ")} on ` +
+export function loadConfigFile({ forge, configPath, source }) {
+  // `absent: "refuse"` guarantees the resolved file is never null, so the
+  // narrowed return type is the promise's only inhabitant.
+  return /** @type {Promise<{ raw: Record<string, unknown>, path: string }>} */ (
+    loadConfigFileCore({
+      forge,
+      configPath,
+      source,
+      locations: DEFAULT_LOCATIONS,
+      absent: "refuse",
+      absentMessage:
+        `no config file exists — expected one of ${DEFAULT_LOCATIONS.join(" or ")} on ` +
         `${source.branch} at ${source.sha}, the policy source resolved for this run. ` +
         `harmonise keeps no documents in step without a map of them`,
-    );
-  }
-  const first = found[0];
-  if (first === undefined) throw new Error("a config file was found and then lost");
-  return { raw: parseFile(first.path, first.content, source), path: first.path };
-}
-
-/**
- * @param {string} path
- * @param {string} content
- * @param {import("#core/policy.mjs").PolicySource} source
- * @returns {Record<string, unknown>}
- */
-function parseFile(path, content, source) {
-  const bytes = new TextEncoder().encode(content).byteLength;
-  if (bytes > MAX_CONFIG_BYTES) {
-    throw new Error(
-      `'${path}' is ${String(bytes)} bytes, past the ${String(MAX_CONFIG_BYTES)}-byte cap — ` +
-        `a policy that overflows is refused rather than truncated`,
-    );
-  }
-  let parsed;
-  try {
-    parsed = json5Parse(content);
-  } catch (cause) {
-    const error = new Error(
-      `'${path}' does not parse: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
-    error.cause = cause;
-    throw error;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`'${path}' must hold an object`);
-  }
-  assertPolicySchemaVersion({ raw: parsed, supportedMajor: SCHEMA_MAJOR, path, source });
-  return /** @type {Record<string, unknown>} */ (parsed);
+      supportedMajor: SCHEMA_MAJOR,
+    })
+  );
 }
 
 /**

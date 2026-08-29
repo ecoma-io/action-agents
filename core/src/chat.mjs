@@ -42,8 +42,8 @@
  *
  * @typedef {ReturnType<typeof createChat>} Chat
  */
-
 import { createHttpClient } from "#core-transport/http.mjs";
+import { oneLine } from "./one-line.mjs";
 
 /**
  * One tool call the model asks for, verbatim off the wire. `arguments` stays
@@ -405,5 +405,5 @@ function excerpt(text) {
  * @returns {string}
  */
 function flatten(text) {
-  return text.replace(/\s+/g, " ").trim().slice(0, EXCERPT_BYTES);
+  return oneLine(text, { maxChars: EXCERPT_BYTES });
 }

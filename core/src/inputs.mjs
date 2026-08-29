@@ -18,7 +18,7 @@
  *     probe in an input reader is a unit that cannot be tested offline.
  */
 
-import { getInput } from "./runtime.mjs";
+import { getInput, getNumberInput } from "./runtime.mjs";
 
 /** @typedef {import("./runtime.mjs").Env} Env */
 
@@ -28,7 +28,9 @@ import { getInput } from "./runtime.mjs";
  * @property {string} apiUrl the OpenAI-compatible base URL, without a trailing slash
  * @property {string} apiKey the endpoint's key, or "" for a keyless endpoint
  * @property {string} model the model id to ask
- */
+ * @property {number} requestTimeoutMs the per-request timeout, in
+ *   milliseconds. One number every action shares, so a caller tightening it
+ *   for a slow model changes one input rather than three identical reads.
 
 /**
  * @param {Env} [env]
@@ -41,6 +43,7 @@ export function readSharedInputs(env = process.env) {
     apiUrl,
     apiKey: getInput("api-key", {}, env),
     model: getInput("model", { required: true }, env),
+    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
   };
 }
 
