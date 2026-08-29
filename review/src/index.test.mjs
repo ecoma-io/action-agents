@@ -647,6 +647,9 @@ describe("run writes the artifact only after publication", () => {
           async getRepository() {
             return { defaultBranch: "main", name: "widgets", description: "" };
           },
+          async getRef() {
+            return { sha: "c".repeat(40) };
+          },
           async listPullRequestFiles() {
             return [
               /** @type {any} */ ({
