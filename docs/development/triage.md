@@ -67,6 +67,11 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
     },
   },
 
+  // The queue marker: the label every issue form applies (and nothing else),
+  // cleared by code — never a model choice — once a universal category is
+  // classified. Optional; omit it and triage applies no marker at all.
+  triageMarker: "needs triage",
+
   // Size is measured from the diff — additions plus deletions — never asked
   // of the model. `upTo` is inclusive; rungs ascend; the final rung has no
   // `upTo` and catches everything above, so every diff lands somewhere.
@@ -106,6 +111,9 @@ The `labels:` input narrows that set for one call site; it never widens it.
 
 - a label name declared twice — in `universal` and a type map, or on two
   rungs — is refused, not reconciled;
+- a declared `triageMarker` must be a non-empty label name — it is the queue
+  label the issue forms apply, and triage clears it once a category is
+  classified;
 - every `size` label must be on the PR sheet (`universal` ∪ `pr`), because a
   size label is applied like any other;
 - `upTo` values must ascend, and the final rung must be the catch-all;
@@ -184,10 +192,15 @@ dry-run → log only ─┬─ real → apply labels through the GitHub API
 
 Labels are applied add-only in this first version: re-classifying an edited
 issue never removes a label a human chose, because the action does not yet
-track which labels it applied itself. Size is the exception, and the cost is
-stated — one size label is meaningful at a time and size is measured rather
-than judged, so a new size replaces the old one, including one a human applied
-by hand; an out-of-date size label is wrong whoever set it.
+track which labels it applied itself. Two labels are removed by code, never
+by the model's choice. Size is one: one size label is meaningful at a time
+and size is measured rather than judged, so a new size replaces the old one,
+including one a human applied by hand; an out-of-date size label is wrong
+whoever set it. The other is the repository's `triageMarker` — the queue
+label every issue form applies (`needs triage` here) — cleared once a
+universal category is classified, because a thread carrying a category no
+longer awaits triage. The model is never told the marker's name, because it
+is on no sheet offered to it.
 
 ## Failure posture
 

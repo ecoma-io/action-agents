@@ -38,6 +38,7 @@ import { validateSizeConfig } from "./size.mjs";
  * @property {Map<string, string>} pr
  * @property {SizeConfig | undefined} size
  * @property {{ instruction?: string, "issue-instruction"?: string, "pr-instruction"?: string }} instructions configured instruction paths, before defaults
+ * @property {string | undefined} triageMarker the queue label cleared once a universal category is classified, when declared
  */
 
 /** A config file larger than this is a red refusal, not a truncated policy. */
@@ -139,8 +140,10 @@ export function validateConfig(raw) {
   if (raw === null) return null;
 
   for (const key of Object.keys(raw)) {
-    if (key !== "labels" && key !== "size" && key !== "instructions") {
-      throw new Error(`unknown config key '${key}' — the file holds labels, size and instructions`);
+    if (key !== "labels" && key !== "size" && key !== "instructions" && key !== "triageMarker") {
+      throw new Error(
+        `unknown config key '${key}' — the file holds labels, size, instructions and the triage marker`,
+      );
     }
   }
 
@@ -189,7 +192,18 @@ export function validateConfig(raw) {
     }
   }
 
-  return { ...config, size };
+  /** @type {string | undefined} */
+  let triageMarker;
+  if (raw["triageMarker"] !== undefined) {
+    const marker = raw["triageMarker"];
+    if (typeof marker !== "string" || marker === "") {
+      throw new Error(
+        "triageMarker must be a non-empty label name — the queue label triage clears once it classifies a category",
+      );
+    }
+    triageMarker = marker;
+  }
+  return { ...config, size, triageMarker };
 }
 
 /**

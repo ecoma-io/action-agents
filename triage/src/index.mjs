@@ -11,10 +11,13 @@
  *
  * The write surface is labels and that comment, and nothing else. Labels
  * are add-only: re-classifying never removes a label a human chose, because
- * the action does not track which labels it applied itself. Size is the one
- * exception, and the cost is stated in the design page: one size label is
- * meaningful at a time and size is measured rather than judged, so a new
- * size replaces the old — including one a human applied by hand.
+ * the action does not track which labels it applied itself. Two things are
+ * removed by code, never by the model's choice. Size, because one size label
+ * is meaningful at a time and size is measured rather than judged, so a new
+ * size replaces the old — including one a human applied by hand. And the
+ * `triageMarker` — the queue label the issue forms apply — once a universal
+ * category is classified, because a thread carrying a category no longer
+ * awaits triage; the model is never told the marker's name.
  *
  * The shape is the seed's, kept: `readInputs` is pure over an environment;
  * `run` takes its inputs as arguments; and the one place that touches
@@ -231,12 +234,28 @@ export async function run(inputs, context, io) {
       ? []
       : currentSizeLabels(thread.labels, config.size.ladder).filter((name) => name !== size.label);
   const sizeAdd = size !== null && !thread.labels.includes(size.label) ? [size.label] : [];
+  // The triage marker (this repository's is `needs triage`) is the queue label
+  // the issue forms apply. It is cleared — code-deterministically, never a
+  // model choice — once a universal category is classified: a thread carrying
+  // a category no longer awaits triage. Absent from the config, nothing is
+  // removed; the model is never told the marker's name, because it is on no
+  // sheet offered to it.
+  const marker = config?.triageMarker;
+  const classifiedCategory =
+    marker !== undefined && config !== null
+      ? accepted.some((name) => config.universal.has(name))
+      : false;
+  const clearMarker =
+    marker !== undefined && classifiedCategory && thread.labels.includes(marker) ? [marker] : [];
 
   if (inputs.dryRun) {
     info(
       `dry run — would add [${[...add, ...sizeAdd].join(", ")}]` +
         (replace.length > 0
           ? ` and remove [${replace.join(", ")}] (size is replaced, not added to)`
+          : "") +
+        (clearMarker.length > 0
+          ? ` and remove [${clearMarker.join(", ")}] (triage marker cleared on classification)`
           : ""),
     );
     return;
@@ -245,6 +264,9 @@ export async function run(inputs, context, io) {
     await world.forge.addLabels(thread.number, [...add, ...sizeAdd]);
   }
   for (const name of replace) {
+    await world.forge.removeLabel(thread.number, name);
+  }
+  for (const name of clearMarker) {
     await world.forge.removeLabel(thread.number, name);
   }
 }
