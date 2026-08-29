@@ -132,6 +132,9 @@ outer safety boundary — the per-request value bounds one call, the job timeout
 run. A value below 1000 is a startup error, so the HTTP client's disabled-timeout path is
 unreachable from a workflow.
 
+The numbers — attempts, backoff, the `Retry-After` cap, the retryable
+statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
+
 There is no `instructions-path` input: the seed the design sketched was
 removed in the very change that shipped `review` (#37), so no release ever
 carried it, and instruction documents reach the action through the config
