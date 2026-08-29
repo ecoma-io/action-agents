@@ -314,6 +314,30 @@ describe("validateConfig — the applicability axis", () => {
     });
   });
 
+  it("judges an intensity delta against the config file's own strictness", () => {
+    // The default strictness is medium, so a low override is a lowering and
+    // must anchor to an immune context — present here, so it validates.
+    const config = validateConfig({
+      applicability: {
+        rules: [
+          {
+            id: "docs-maintainer",
+            context: "maintainer",
+            when: { paths: ["docs/**"] },
+            intensity: { strictness: "low" },
+          },
+        ],
+      },
+    });
+    expect(config.applicability?.rules[0]?.intensity).toEqual({ strictness: "low" });
+    // The same delta without the context refuses at parse time.
+    expect(() =>
+      validateConfig({
+        applicability: { rules: [{ id: "x", intensity: { strictness: "low" } }] },
+      }),
+    ).toThrow(/lowers intensity without a context/);
+  });
+
   it("refuses a policy the applicability law rejects, before any model call", () => {
     expect(() =>
       validateConfig({ applicability: { rules: [{ id: "x", context: "external", run: false }] } }),

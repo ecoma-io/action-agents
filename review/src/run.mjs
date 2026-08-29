@@ -186,9 +186,11 @@ export async function reviewPullRequest({
   let applicabilityFact;
   /** @type {import("#core/forge.mjs").PullRequestFile[] | undefined} */
   let earlyFiles;
-  /** The run's posture value and its document path, set only by a matched rule. */
+  /** The run's posture value, its document path, and the matched rule's intensity. */
   let runPosture = /** @type {import("./applicability.mjs").Posture} */ ("standard");
   let postureInstruction;
+  /** @type {import("./applicability.mjs").RuleIntensity | undefined} */
+  let runIntensity;
   if (applicability !== undefined) {
     let classifiedPaths = null;
     if (applicability.rules.some((rule) => rule.when.paths !== undefined)) {
@@ -218,10 +220,12 @@ export async function reviewPullRequest({
     });
     runPosture = evaluated.posture;
     postureInstruction = evaluated.instruction;
+    runIntensity = evaluated.intensity;
     applicabilityFact = applicabilitySection({
       context: derived.context,
       applicable: evaluated.applicable,
       posture: runPosture,
+      intensity: runIntensity,
       matchedRule: evaluated.matchedRule,
       basis: evaluated.basis,
       inputs: derived.inputs,
@@ -249,6 +253,13 @@ export async function reviewPullRequest({
       };
     }
   }
+
+  // ── The intensity axis: a matched rule's strictness override becomes the
+  // run's effective dial. Every downstream reader of strictness — the
+  // prompt's mode paragraph, the lanes floor, the nit-drop, the gates, the
+  // run facts — sees the one resolved value, so the axis is a config
+  // override, never a parallel path.
+  const runStrictness = runIntensity === undefined ? config.strictness : runIntensity.strictness;
   const documents = await loadDocuments({ forge: policy, config, source });
   let postureDocument;
   if (postureInstruction !== undefined) {
@@ -313,7 +324,7 @@ export async function reviewPullRequest({
   // model says can move a file between lanes.
   const lanes = assignLanes(
     inventory.reviewed.map((file) => ({ path: file.filename, riskPlan: classifyRisk([file]) })),
-    config,
+    { ...config, strictness: runStrictness },
   );
   const laneBudgets = laneBudget(lanes, inputs.maxTurns);
 
@@ -335,7 +346,7 @@ export async function reviewPullRequest({
     title: snapshot.title,
     body: snapshot.body,
     language: config.language,
-    strictness: config.strictness,
+    strictness: runStrictness,
     strategy: config.strategy,
     lanes,
     laneBudgets,
@@ -374,7 +385,7 @@ export async function reviewPullRequest({
     contextWindow: inputs.contextWindow,
     expectedPaths,
     diffInspectedPaths,
-    strictness: config.strictness,
+    strictness: runStrictness,
   });
   for (const line of outcome.log) io.info(`review: ${line}`);
   io.info(
@@ -429,7 +440,7 @@ export async function reviewPullRequest({
   }
   // Strictness is review policy, not a rendering detail: at low the nits
   // leave the published set here — each drop logged, concerns untouchable.
-  const findings = applyStrictness(anchored.published, config.strictness, (line) => io.info(line));
+  const findings = applyStrictness(anchored.published, runStrictness, (line) => io.info(line));
 
   // The verification pass sits between the nit-drop and rendering: planned
   // findings each get their own bounded investigation, and verdicts assign
@@ -437,7 +448,7 @@ export async function reviewPullRequest({
   // What it publishes is what renders and what the count names.
   const verified = await runVerificationPass({
     findings,
-    policy: { strategy: config.strategy, strictness: config.strictness },
+    policy: { strategy: config.strategy, strictness: runStrictness },
     lanes,
     recordedReads,
     workspace,
@@ -468,7 +479,7 @@ export async function reviewPullRequest({
       evidenceBytes: outcome.evidenceBytes,
       maxEvidenceBytes: outcome.maxEvidenceBytes,
     },
-    coverage: { report: outcome.coverage, strictness: config.strictness },
+    coverage: { report: outcome.coverage, strictness: runStrictness },
     provenance: {
       published,
       quarantined: anchored.quarantined,
@@ -490,7 +501,7 @@ export async function reviewPullRequest({
     summary: validated.summary,
     findings: published,
     policySource: source,
-    strictness: config.strictness,
+    strictness: runStrictness,
     quarantinedCount: anchored.quarantined.length,
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
@@ -536,7 +547,7 @@ export async function reviewPullRequest({
     pullRequest: pullRequestNumber,
     headRef: headSha,
     outcome: { classification: "published", reason },
-    policy: { strictness: config.strictness, strategy: config.strategy },
+    policy: { strictness: runStrictness, strategy: config.strategy },
     risk: lanes,
     findings: publishedAnchored,
     verification: {

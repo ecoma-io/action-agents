@@ -1,17 +1,14 @@
 # Development — the review applicability policy (design)
 
-> **Status: partially landed — PR 2 of three.** The context axis and the
-> `run` axis (rules, refusals, the skipped-run record, the dry-run and
-> zero-config guarantees) are shipped behaviour, documented normatively in
-> [`review`](review.md#the-applicability-axis); this page's design for them
-> has graduated there. The **posture axis** is now shipped too, normatively
-> in [`review`](review.md#the-posture-axis) — three fixed postures, one
-> engine, a mode-scoped instruction document at the resolved policy source,
-> and the refusal laws the design proposed. Only **intensity** remains
-> proposed, not shipped: nothing about it describes behaviour a consumer can
-> pin today, the validator refuses its key, and [`review`](review.md)
-> remains the implementation contract for the code that exists. When the
-> last of the three lands, this page is retired.
+> **Status: landed — the sequence is complete; this page is retired as
+> design record.** All three axes are shipped behaviour, documented
+> normatively in [`review`](review.md): the context and `run` axes (PR 1),
+> the posture axis (PR 2), and the intensity axis (PR 3) — the one
+> `strictness` delta, absolute per matched rule, with the lower-gates the
+> design proposed: lowering anchored to a pinned non-`external` context,
+> deepening free everywhere. The implementation contract lives in
+> [`review`](review.md#the-applicability-axis); nothing below describes
+> open work.
 
 `review` today applies one full human-style review to every pull request. The
 `strictness`, `strategy` and `ignore` dials vary review _intensity_; nothing

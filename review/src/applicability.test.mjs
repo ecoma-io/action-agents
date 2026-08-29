@@ -14,6 +14,7 @@ import {
 } from "./applicability.mjs";
 import {
   BASE_REPO_FULL_NAME,
+  DOGFOOD_INTENSITY_POLICY,
   DOGFOOD_POLICY,
   DOGFOOD_POSTURE_DOCUMENT_PATH,
   DOGFOOD_POSTURE_POLICY,
@@ -160,7 +161,7 @@ describe("context classification", () => {
 
 describe("rule evaluation", () => {
   it("skips the #192 fixture on the dogfood automation rule", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability, "medium");
     const derived = classifyContext(
       classificationInputs(RELEASE_AUTOMATION, BASE_REPO_FULL_NAME, policy.bots),
     );
@@ -180,7 +181,7 @@ describe("rule evaluation", () => {
   });
 
   it("defaults a maintainer docs change to full review — the rule's context does not apply", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability, "medium");
     const derived = classifyContext(
       classificationInputs(MAINTAINER_DOCS, BASE_REPO_FULL_NAME, policy.bots),
     );
@@ -200,13 +201,16 @@ describe("rule evaluation", () => {
   });
 
   it("matches in config order, first match wins", () => {
-    const policy = validateApplicabilityPolicy({
-      bots: ["ecoma-io"],
-      rules: [
-        { id: "first", context: "automation", when: { title: "release" }, run: false },
-        { id: "second", context: "automation", when: { title: "release" }, run: false },
-      ],
-    });
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: ["ecoma-io"],
+        rules: [
+          { id: "first", context: "automation", when: { title: "release" }, run: false },
+          { id: "second", context: "automation", when: { title: "release" }, run: false },
+        ],
+      },
+      "medium",
+    );
     const evaluated = evaluateApplicability({
       policy,
       context: "automation",
@@ -218,10 +222,13 @@ describe("rule evaluation", () => {
   });
 
   it("records a matching run: true rule — applicability is recorded, review runs", () => {
-    const policy = validateApplicabilityPolicy({
-      bots: ["ecoma-io"],
-      rules: [{ id: "own-bots", context: "automation" }],
-    });
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: ["ecoma-io"],
+        rules: [{ id: "own-bots", context: "automation" }],
+      },
+      "medium",
+    );
     const evaluated = evaluateApplicability({
       policy,
       context: "automation",
@@ -238,9 +245,12 @@ describe("rule evaluation", () => {
   });
 
   it("matches a contextless rule against any context", () => {
-    const policy = validateApplicabilityPolicy({
-      rules: [{ id: "wip", when: { title: "^\\[wip\\]" }, run: true }],
-    });
+    const policy = validateApplicabilityPolicy(
+      {
+        rules: [{ id: "wip", when: { title: "^\\[wip\\]" }, run: true }],
+      },
+      "medium",
+    );
     for (const context of /** @type {const} */ (["automation", "maintainer", "external"])) {
       const evaluated = evaluateApplicability({
         policy,
@@ -259,9 +269,12 @@ describe("rule evaluation", () => {
   });
 
   it("treats a null paths listing as no match for a paths condition", () => {
-    const policy = validateApplicabilityPolicy({
-      rules: [{ id: "docs", context: "maintainer", when: { paths: ["docs/**"] }, run: false }],
-    });
+    const policy = validateApplicabilityPolicy(
+      {
+        rules: [{ id: "docs", context: "maintainer", when: { paths: ["docs/**"] }, run: false }],
+      },
+      "medium",
+    );
     const evaluated = evaluateApplicability({
       policy,
       context: "maintainer",
@@ -278,16 +291,19 @@ describe("rule evaluation", () => {
   });
 
   it("speaks the one glob dialect — negations exclude paths from the match", () => {
-    const policy = validateApplicabilityPolicy({
-      rules: [
-        {
-          id: "public-handbook",
-          context: "maintainer",
-          when: { paths: ["handbook/**", "!handbook/private/**"] },
-          run: false,
-        },
-      ],
-    });
+    const policy = validateApplicabilityPolicy(
+      {
+        rules: [
+          {
+            id: "public-handbook",
+            context: "maintainer",
+            when: { paths: ["handbook/**", "!handbook/private/**"] },
+            run: false,
+          },
+        ],
+      },
+      "medium",
+    );
     /** @param {string[] | null} paths */
     const evaluate = (paths) =>
       evaluateApplicability({
@@ -306,7 +322,7 @@ describe("rule evaluation", () => {
   });
 
   it("is deterministic — the same inputs evaluate identically on replay", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability, "medium");
     const args = /** @type {Parameters<typeof evaluateApplicability>[0]} */ ({
       policy,
       context: "automation",
@@ -324,7 +340,7 @@ describe("policy validation refusals", () => {
   /** @param {unknown} applicability @returns {string} */
   const refused = (applicability) => {
     try {
-      validateApplicabilityPolicy(applicability);
+      validateApplicabilityPolicy(applicability, "medium");
     } catch (cause) {
       return cause instanceof Error ? cause.message : String(cause);
     }
@@ -412,7 +428,7 @@ describe("policy validation refusals", () => {
   });
 
   it("accepts the dogfood policy and normalises it", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POLICY.applicability, "medium");
     expect(policy.bots).toEqual(["ecoma-io", "dependabot[bot]"]);
     expect(policy.rules).toHaveLength(1);
     expect(policy.rules[0]).toEqual({
@@ -427,7 +443,7 @@ describe("policy validation refusals", () => {
   });
 
   it("accepts an empty policy — declared but inert", () => {
-    const policy = validateApplicabilityPolicy({ rules: [] });
+    const policy = validateApplicabilityPolicy({ rules: [] }, "medium");
     expect(policy).toEqual({ bots: [], rules: [] });
   });
 });
@@ -455,7 +471,7 @@ describe("the posture axis", () => {
   };
 
   it("evaluates the #193-shaped docs change into the maintainer posture with its document", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability, "medium");
     const { evaluated } = evaluate(MAINTAINER_DOCS, policy, ["docs/development/review.md"]);
     expect(evaluated).toEqual({
       applicable: true,
@@ -467,7 +483,7 @@ describe("the posture axis", () => {
   });
 
   it("classifies the #192 fixture identically under the posture policy — no cross-PR drift", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability, "medium");
     const { evaluated } = evaluate(RELEASE_AUTOMATION, policy, null);
     expect(evaluated).toEqual({
       applicable: false,
@@ -479,7 +495,7 @@ describe("the posture axis", () => {
   });
 
   it("leaves the external fixture on the default — a maintainer rule never reaches a fork", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability, "medium");
     const { evaluated } = evaluate(FIRST_TIME_FORK, policy, ["docs/guide.md"]);
     expect(evaluated).toEqual({
       applicable: true,
@@ -498,10 +514,13 @@ describe("the posture axis", () => {
    * @returns {() => void}
    */
   const refused = (rule) => () =>
-    validateApplicabilityPolicy({
-      bots: ["acme"],
-      rules: [/** @type {any} */ ({ id: "x", context: "maintainer", run: true, ...rule })],
-    });
+    validateApplicabilityPolicy(
+      {
+        bots: ["acme"],
+        rules: [/** @type {any} */ ({ id: "x", context: "maintainer", run: true, ...rule })],
+      },
+      "medium",
+    );
 
   it("refuses an unknown posture value — the set is fixed in code", () => {
     expect(refused({ posture: "relaxed", instruction: ".github/postures/x.md" })).toThrow(
@@ -525,18 +544,21 @@ describe("the posture axis", () => {
 
   it("refuses reframing the frozen external context off the standard posture", () => {
     expect(() =>
-      validateApplicabilityPolicy({
-        bots: ["acme"],
-        rules: [
-          /** @type {any} */ ({
-            id: "x",
-            context: "external",
-            run: true,
-            posture: "automation",
-            instruction: ".github/postures/auto.md",
-          }),
-        ],
-      }),
+      validateApplicabilityPolicy(
+        {
+          bots: ["acme"],
+          rules: [
+            /** @type {any} */ ({
+              id: "x",
+              context: "external",
+              run: true,
+              posture: "automation",
+              instruction: ".github/postures/auto.md",
+            }),
+          ],
+        },
+        "medium",
+      ),
     ).toThrow(/external context is frozen/);
   });
 
@@ -557,12 +579,9 @@ describe("the posture axis", () => {
     expect(refused({ posture: "maintainer", instruction: "" })).toThrow(/must be a document path/);
     expect(refused({ posture: "maintainer", instruction: 42 })).toThrow(/must be a document path/);
   });
-  it("still refuses intensity — later-PR surface, unchanged by this PR", () => {
-    expect(refused({ intensity: "high" })).toThrow(/unknown key 'intensity'/);
-  });
 
   it("keeps a validated posture rule's shape exact — posture and instruction ride together", () => {
-    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability);
+    const policy = validateApplicabilityPolicy(DOGFOOD_POSTURE_POLICY.applicability, "medium");
     expect(policy.rules[1]).toEqual({
       id: "docs-maintainer",
       context: "maintainer",
@@ -570,6 +589,139 @@ describe("the posture axis", () => {
       run: true,
       posture: "maintainer",
       instruction: ".github/action-agents/review/postures/docs.md",
+    });
+  });
+});
+
+describe("the intensity axis", () => {
+  /** @returns {ReturnType<typeof validateApplicabilityPolicy>} */
+  const dogfoodIntensity = () =>
+    validateApplicabilityPolicy(DOGFOOD_INTENSITY_POLICY.applicability, "medium");
+
+  /**
+   * @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture
+   * @param {import("./applicability.mjs").ApplicabilityPolicy} policy
+   * @param {string[] | null} paths
+   */
+  const evaluate = (fixture, policy, paths) => {
+    const derived = classifyContext(
+      classificationInputs(fixture, BASE_REPO_FULL_NAME, policy.bots),
+    );
+    return evaluateApplicability({
+      policy,
+      context: derived.context,
+      title: fixture.title,
+      branch: fixture.head.ref,
+      paths,
+    });
+  };
+
+  /**
+   * A refused-at-validation candidate: id and an immune maintainer context
+   * pre-set, the disputed keys spread in. The baseline is the file's own
+   * `medium`.
+   *
+   * @param {Record<string, unknown>} rule
+   * @returns {() => void}
+   */
+  const refused = (rule) => () =>
+    validateApplicabilityPolicy(
+      {
+        bots: ["acme"],
+        rules: [/** @type {any} */ ({ id: "x", context: "maintainer", run: true, ...rule })],
+      },
+      "medium",
+    );
+
+  it("rides the matched rule's override onto the verdict — absolute, the run's own dial", () => {
+    expect(evaluate(MAINTAINER_DOCS, dogfoodIntensity(), ["docs/development/review.md"])).toEqual({
+      applicable: true,
+      matchedRule: "docs-maintainer",
+      basis: "rule",
+      posture: "maintainer",
+      instruction: DOGFOOD_POSTURE_DOCUMENT_PATH,
+      intensity: { strictness: "low" },
+    });
+  });
+
+  it("deepens an external pull request with no context — the only contextless key", () => {
+    expect(evaluate(FIRST_TIME_FORK, dogfoodIntensity(), ["core/src/glob.mjs"])).toEqual({
+      applicable: true,
+      matchedRule: "core-external",
+      basis: "rule",
+      posture: "standard",
+      instruction: undefined,
+      intensity: { strictness: "high" },
+    });
+  });
+
+  it("leaves the defaults' verdict empty — no matched rule, no override", () => {
+    expect(evaluate(FIRST_TIME_FORK, dogfoodIntensity(), ["README.md"])).toEqual({
+      applicable: true,
+      matchedRule: null,
+      basis: "default",
+      posture: "standard",
+      instruction: undefined,
+      intensity: undefined,
+    });
+  });
+
+  it("refuses an unknown arm — the set is fixed in code", () => {
+    expect(refused({ intensity: { strictness: "stricter" } })).toThrow(
+      /must be one of low, medium, high — got 'stricter'/,
+    );
+  });
+
+  it("refuses a second delta — intensity carries strictness alone in v1", () => {
+    expect(refused({ intensity: { strictness: "low", nitDrop: true } })).toThrow(
+      /unknown key 'nitDrop'/,
+    );
+  });
+
+  it("refuses a non-object intensity", () => {
+    expect(refused({ intensity: "low" })).toThrow(/must be an object holding strictness/);
+  });
+
+  it("refuses lowering without an immune context — a convention never governs alone", () => {
+    expect(refused({ context: undefined, intensity: { strictness: "low" } })).toThrow(
+      /lowers intensity without a context/,
+    );
+  });
+
+  it("refuses lowering the frozen external context", () => {
+    expect(() =>
+      validateApplicabilityPolicy(
+        {
+          bots: ["acme"],
+          rules: [
+            /** @type {any} */ ({
+              id: "x",
+              context: "external",
+              run: true,
+              intensity: { strictness: "low" },
+            }),
+          ],
+        },
+        "medium",
+      ),
+    ).toThrow(/lowers an external pull request's intensity/);
+  });
+
+  it("refuses an intensity on a skipped run — dead weight, as with posture", () => {
+    expect(refused({ run: false, intensity: { strictness: "low" } })).toThrow(
+      /intensity on a skipped run/,
+    );
+  });
+
+  it("keeps a validated intensity rule's shape exact — the override rides the rule", () => {
+    expect(dogfoodIntensity().rules[1]).toEqual({
+      id: "docs-maintainer",
+      context: "maintainer",
+      when: { paths: ["docs/**"] },
+      run: true,
+      posture: "maintainer",
+      instruction: ".github/action-agents/review/postures/docs.md",
+      intensity: { strictness: "low" },
     });
   });
 });

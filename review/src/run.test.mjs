@@ -13,6 +13,7 @@ import { reviewPullRequest } from "./run.mjs";
 import { applicabilityArtifactSchemaVersion, serialiseArtifact } from "./artifact.mjs";
 import {
   DOGFOOD_CONFIG,
+  DOGFOOD_INTENSITY_CONFIG,
   DOGFOOD_POSTURE_CONFIG,
   DOGFOOD_POSTURE_DOCUMENT,
   DOGFOOD_POSTURE_DOCUMENT_PATH,
@@ -3153,5 +3154,120 @@ describe("the posture axis", () => {
       basis: "default",
       inputs: { association: "FIRST_TIME_CONTRIBUTOR", head: "fork", authorType: "human" },
     });
+  });
+});
+
+describe("the intensity axis", () => {
+  /** The dogfood context — the fixtures' head full names must match the base repo. */
+  const DOGFOOD_CONTEXT = { ...CONTEXT, owner: "ecoma-io", repo: "action-agents" };
+  /** @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture */
+  const dogfoodEvent = (fixture) => ({
+    action: "synchronize",
+    pull_request: { ...fixture, number: 7, base: { ref: "main", sha: "8".repeat(40) } },
+  });
+  /** @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture */
+  const snapshotFor = (fixture) =>
+    snapshot({ title: fixture.title, head: { ref: fixture.head.ref, sha: HEAD } });
+  const docsFiles = [
+    /** @type {any} */ ({
+      filename: "docs/guide.md",
+      status: "modified",
+      additions: 4,
+      deletions: 0,
+      patch: "@@ -1 +1,4 @@\n+a\n+b\n+c\n+d",
+    }),
+  ];
+  const coreFiles = [
+    /** @type {any} */ ({
+      filename: "core/src/glob.mjs",
+      status: "modified",
+      additions: 30,
+      deletions: 4,
+      patch: "@@ -1 +1,3 @@\n+a\n+b\n+c",
+    }),
+  ];
+  const withDocument = {
+    documents: { [DOGFOOD_POSTURE_DOCUMENT_PATH]: DOGFOOD_POSTURE_DOCUMENT },
+  };
+
+  it("runs the #193 docs change shallow — the rule's low override becomes the run's dial", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_INTENSITY_CONFIG,
+      ...withDocument,
+      files: docsFiles,
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+    });
+    const chat = capturingChat();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.applicability.intensity).toEqual({ strictness: "low" });
+    expect(record.policy.strictness).toBe("low");
+    const system = chat.captured[0]?.find((message) => message.role === "system")?.content ?? "";
+    expect(system).toContain('Review posture "maintainer"');
+    expect(system).toContain('Review mode — strictness "low"');
+    expect(system).toContain(DOGFOOD_POSTURE_DOCUMENT);
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("deepens a first-time fork's core change — high, with no document in the way", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_INTENSITY_CONFIG,
+      ...withDocument,
+      files: coreFiles,
+      snapshotOverride: snapshotFor(FIRST_TIME_FORK),
+    });
+    const chat = capturingChat();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(FIRST_TIME_FORK),
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.applicability.intensity).toEqual({ strictness: "high" });
+    expect(record.policy.strictness).toBe("high");
+    const system = chat.captured[0]?.find((message) => message.role === "system")?.content ?? "";
+    expect(system).toContain('Review mode — strictness "high"');
+    expect(system).not.toContain(DOGFOOD_POSTURE_DOCUMENT);
+  });
+
+  it("skips the #192 fixture identically under the intensity policy — no drift", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_INTENSITY_CONFIG,
+      ...withDocument,
+      snapshotOverride: snapshotFor(RELEASE_AUTOMATION),
+    });
+    const chat = capturingChat();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(RELEASE_AUTOMATION),
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("skip");
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.applicability).toEqual({
+      context: "automation",
+      applicable: false,
+      posture: "standard",
+      intensity: {},
+      matchedRule: "release-prs",
+      basis: "rule",
+      inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+    });
+    expect(chat.captured).toHaveLength(0);
   });
 });

@@ -315,7 +315,7 @@ export function validateConfig(raw) {
   const applicability =
     raw["applicability"] === undefined
       ? undefined
-      : validateApplicabilityPolicy(raw["applicability"]);
+      : validateApplicabilityPolicy(raw["applicability"], strictness);
   return {
     strictness,
     strategy,

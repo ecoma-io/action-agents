@@ -30,6 +30,7 @@ import {
   EXECUTION_CONTEXTS,
   HEAD_PROVENANCES,
   POSTURES,
+  STRICTNESS_ARMS,
 } from "./applicability.mjs";
 import { GATES } from "./gates.mjs";
 import { utf8Compare } from "./order.mjs";
@@ -52,7 +53,6 @@ export const applicabilityArtifactSchemaVersion = 3;
 /** @typedef {import("./verify.mjs").PublishedLifecycle} PublishedLifecycle */
 
 const CLASSIFICATIONS = /** @type {const} */ (["published", "abandoned", "refused"]);
-const STRICTNESS = /** @type {const} */ (["low", "medium", "high"]);
 const STRATEGY = /** @type {const} */ (["standard", "adversarial"]);
 const SEVERITIES = /** @type {const} */ (["concern", "nit"]);
 const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertain"]);
@@ -121,6 +121,8 @@ const APPLICABILITY_SECTION_KEYS = new Set([
   "inputs",
 ]);
 const APPLICABILITY_INPUT_KEYS = new Set(["association", "head", "authorType"]);
+/** The intensity section's one legal delta key. */
+const INTENSITY_KEYS = new Set(["strictness"]);
 /** A full-shape artifact describes a run that happened; a state skip never enters it. */
 const FULL_SHAPE_BASES = /** @type {const} */ (["rule", "default"]);
 /** The bases a skipped run can carry — the defaults decided nothing. */
@@ -311,16 +313,16 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 /**
  * The applicability fact one run records — the derived context, the axis
  * decisions and the provenance the classification read. PR 1 shipped the
- * run axis; PR 2 ships the posture axis, so `posture` carries whichever
- * mode the matched rule (or the default) declared. `intensity` is still
- * empty until its own PR lands, and this schema refuses anything else
- * there.
+ * run axis; PR 2 the posture axis; PR 3 the intensity axis, so `intensity`
+ * records the matched rule's strictness override as `{ strictness }` and
+ * stays `{}` under the defaults — a declaration is absolute, so the
+ * recorded value is the value the run ran under.
  *
  * @typedef {object} ApplicabilitySection
  * @property {import("./applicability.mjs").ExecutionContext} context the derived execution context
  * @property {boolean} applicable whether review ran, as the rule or default decided
  * @property {import("./applicability.mjs").Posture} posture the posture axis value the rule or default declared
- * @property {Record<string, never>} intensity the intensity axis, empty until its PR lands
+ * @property {{} | { strictness: import("./applicability.mjs").RuleIntensity["strictness"] }} intensity the intensity axis value — `{ strictness }` under a declared override, `{}` under the defaults
  * @property {string | null} matchedRule the deciding rule's id, or null when the defaults decided
  * @property {import("./applicability.mjs").ApplicabilityBasis} basis where the decision's authority came from
  * @property {ApplicabilityInputs} inputs the provenance the classification read
@@ -600,7 +602,7 @@ export function buildArtifact(runFacts) {
 
   const policyRec = asRecord(facts.policy, "run facts.policy");
   assertExactKeys(policyRec, "run facts.policy", POLICY_KEYS);
-  const strictness = asEnum(policyRec.strictness, STRICTNESS, "run facts.policy.strictness");
+  const strictness = asEnum(policyRec.strictness, STRICTNESS_ARMS, "run facts.policy.strictness");
   const strategy = asEnum(policyRec.strategy, STRATEGY, "run facts.policy.strategy");
 
   const riskRaw = asArray(facts.risk, "run facts.risk");
@@ -881,22 +883,32 @@ export function buildArtifact(runFacts) {
 
 /**
  * Composes and validates the applicability fact a run records. `posture`
- * is the axis value the run evaluated to; `intensity` stays `{}` until its
- * own PR lands. Returns a frozen, serialisable section.
+ * is the axis value the run evaluated to; `intensity` records a matched
+ * rule's strictness override, `{}` under the defaults. Returns a frozen,
+ * serialisable section.
  *
  * @param {object} fact the derived and evaluated applicability of one run
- * @param {import("./applicability.mjs").ExecutionContext} fact.context the derived context
+ * @param {import("./applicability.mjs").ExecutionContext} fact.context the derived execution context
  * @param {boolean} fact.applicable whether review runs
  * @param {import("./applicability.mjs").Posture} fact.posture the run's posture value
+ * @param {{} | import("./applicability.mjs").RuleIntensity} [fact.intensity] the matched rule's strictness override, `{}` under the defaults
  * @param {string | null} fact.matchedRule the deciding rule's id, or null
  * @param {import("./applicability.mjs").ApplicabilityBasis} fact.basis the decision's authority
  * @param {ApplicabilityInputs} fact.inputs the classification's provenance
  * @returns {ApplicabilitySection}
  * @throws {ArtifactError} when any field is outside its vocabulary
  */
-export function applicabilitySection({ context, applicable, posture, matchedRule, basis, inputs }) {
+export function applicabilitySection({
+  context,
+  applicable,
+  posture,
+  intensity,
+  matchedRule,
+  basis,
+  inputs,
+}) {
   return asApplicabilitySection(
-    { context, applicable, posture, intensity: {}, matchedRule, basis, inputs },
+    { context, applicable, posture, intensity: intensity ?? {}, matchedRule, basis, inputs },
     APPLICABILITY_BASES,
     false,
   );
@@ -942,8 +954,8 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
  * only a rule decision does; a full-shape artifact refuses the state basis
  * (a state skip never becomes a review) and a skipped record refuses
  * `applicable: true` and the default basis (the defaults never skip); and
- * anything inapplicable rides the standard posture — a skipped run took no
- * posture.
+ * anything inapplicable rides the standard posture with an empty intensity —
+ * a skipped run took neither.
  *
  * @param {unknown} v
  * @param {readonly import("./applicability.mjs").ApplicabilityBasis[]} allowBases the bases this shape may carry
@@ -956,11 +968,19 @@ function asApplicabilitySection(v, allowBases, requireInapplicable) {
   const context = asEnum(section.context, EXECUTION_CONTEXTS, "applicability.context");
   const applicable = asBoolean(section.applicable, "applicability.applicable");
   const posture = asEnum(section.posture, POSTURES, "applicability.posture");
-  assertExactKeys(
-    asRecord(section.intensity, "applicability.intensity"),
-    "applicability.intensity",
-    EMPTY_SET,
-  );
+  /** @type {{ strictness?: import("./applicability.mjs").RuleIntensity["strictness"] }} */
+  let intensity = {};
+  const rawIntensity = asRecord(section.intensity, "applicability.intensity");
+  assertExactKeys(rawIntensity, "applicability.intensity", INTENSITY_KEYS, EMPTY_SET);
+  if (rawIntensity.strictness !== undefined) {
+    intensity = {
+      strictness: asEnum(
+        rawIntensity.strictness,
+        STRICTNESS_ARMS,
+        "applicability.intensity.strictness",
+      ),
+    };
+  }
   const basis = asEnum(section.basis, APPLICABILITY_BASES, "applicability.basis");
   if (!allowBases.includes(basis)) {
     throw new ArtifactError(`applicability basis '${basis}' cannot appear in this shape — refused`);
@@ -985,12 +1005,17 @@ function asApplicabilitySection(v, allowBases, requireInapplicable) {
       `applicability records no review under posture '${posture}' — a skipped run took no posture`,
     );
   }
+  if (!applicable && intensity.strictness !== undefined) {
+    throw new ArtifactError(
+      "applicability records no review under a declared intensity — a skipped run took none",
+    );
+  }
   const inputs = asApplicabilityInputs(section.inputs);
   return deepFreeze({
     context,
     applicable,
     posture,
-    intensity: {},
+    intensity,
     matchedRule,
     basis,
     inputs,

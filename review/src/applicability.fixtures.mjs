@@ -120,3 +120,41 @@ export const DOGFOOD_POSTURE_DOCUMENT = [
   "- Nits that a maintainer would not block on are still welcome, clearly",
   "  marked as nits.",
 ].join("\n");
+
+/**
+ * The dogfood policy with the intensity axis in effect: the same release
+ * skip, the docs-maintainer rule now carrying its posture document and a
+ * `low` strictness override — a maintainer's own docs change runs shallower
+ * — plus an external rule deepening review on the core sources. Deepening
+ * needs no context; the lowering is anchored to the immune maintainer one.
+ * The instruction is {@link DOGFOOD_POSTURE_DOCUMENT} at
+ * {@link DOGFOOD_POSTURE_DOCUMENT_PATH}.
+ */
+export const DOGFOOD_INTENSITY_POLICY = {
+  applicability: {
+    bots: ["ecoma-io", "dependabot[bot]"],
+    rules: [
+      DOGFOOD_POLICY.applicability.rules[0],
+      {
+        id: "docs-maintainer",
+        context: "maintainer",
+        when: { paths: ["docs/**"] },
+        posture: "maintainer",
+        instruction: ".github/action-agents/review/postures/docs.md",
+        intensity: { strictness: "low" },
+      },
+      {
+        id: "core-external",
+        context: "external",
+        when: { paths: ["core/src/**"] },
+        intensity: { strictness: "high" },
+      },
+    ],
+  },
+};
+
+/** The intensity dogfood policy as a review.json5 body — JSON is valid JSON5. */
+export const DOGFOOD_INTENSITY_CONFIG = JSON.stringify({
+  schemaVersion: 1,
+  ...DOGFOOD_INTENSITY_POLICY,
+});
