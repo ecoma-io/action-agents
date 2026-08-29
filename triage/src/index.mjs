@@ -32,6 +32,7 @@ import { createForge } from "#core/forge.mjs";
 import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
+import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import {
   getBooleanInput,
   getInput,
@@ -144,10 +145,23 @@ export async function run(inputs, context, io) {
   const event = await world.readEvent();
   const thread = threadFromEvent(context.eventName, event);
 
-  // The config file is fetched once, from the default branch — never the
-  // working tree. A pull request cannot edit the policy that governs it.
-  const { raw } = await loadConfigFile({ forge: world.forge, configPath: inputs.configPath });
-  const config = validateConfig(raw);
+  // The policy source is resolved once, from the execution context: for a
+  // pull request thread, the base branch's live tip; for everything else,
+  // the default branch. Every policy read below is pinned to that commit —
+  // never the working tree, never another branch. A pull request cannot
+  // edit the policy that governs it.
+  const source = await resolvePolicySource({
+    eventName: context.eventName,
+    event: /** @type {Record<string, unknown>} */ (event),
+    forge: world.forge,
+  });
+  const policy = { getContents: policyReader(world.forge, source) };
+
+  // The config file is fetched once, pinned to the resolved source. A pull
+  // request cannot edit the policy that governs it.
+  const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
+  const config = validateConfig(loaded.raw);
+  info(policySourceAuditLine({ eventName: context.eventName, source, path: loaded.path }));
   if (config !== null) {
     await assertLabelsExist(world.forge, config);
   }
@@ -157,7 +171,7 @@ export async function run(inputs, context, io) {
     threadType: thread.type,
     narrowing: inputs.labels,
   });
-  const documents = await loadInstructions({ forge: world.forge, config, threadType: thread.type });
+  const documents = await loadInstructions({ forge: policy, config, threadType: thread.type });
 
   // PR: the diff counts the size measurement and the diff-stats evidence
   // both read. The event payload does not carry them, which is why the

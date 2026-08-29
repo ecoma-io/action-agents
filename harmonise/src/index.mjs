@@ -15,10 +15,13 @@
  * process state.
  */
 
+import { readFileSync } from "node:fs";
+
 import { createChat } from "#core/chat.mjs";
 import { createForge, isRefAbsentError } from "#core/forge.mjs";
 import { HttpError, TransportError as HttpTransportError } from "#core/http.mjs";
 import { readSharedInputs } from "#core/inputs.mjs";
+import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import {
   getBooleanInput,
@@ -144,6 +147,7 @@ export function readInputs(env = process.env) {
  * @property {ReturnType<typeof createChat>} chat
  * @property {ReturnType<typeof createEvidence>} evidence
  * @property {(ms: number) => Promise<void>} sleep
+ * @property {() => Promise<Record<string, unknown>>} readEvent
  */
 
 /**
@@ -172,6 +176,19 @@ function realIo(inputs, context, overrides = {}) {
       }),
     evidence: overrides.evidence ?? createEvidence(),
     sleep: overrides.sleep ?? defaultSleep,
+    readEvent:
+      overrides.readEvent ??
+      (async () => {
+        try {
+          return /** @type {Record<string, unknown>} */ (
+            JSON.parse(readFileSync(context.eventPath, "utf8"))
+          );
+        } catch (cause) {
+          const error = new Error(`the event payload at ${context.eventPath} does not parse`);
+          error.cause = cause;
+          throw error;
+        }
+      }),
   };
 }
 
@@ -224,8 +241,22 @@ function realIo(inputs, context, overrides = {}) {
 export async function run(inputs, context, io) {
   /** @type {Io} */
   const world = realIo(inputs, context, io ?? {});
-  const { raw } = await loadConfigFile({ forge: world.forge, configPath: inputs.configPath });
-  let config = validateConfig(raw);
+  const event = await world.readEvent();
+
+  // The policy source is resolved once, from the execution context: for a
+  // pull request run, the base branch's live tip; for everything else, the
+  // default branch. The config is read pinned to that commit and the whole
+  // proposal below descends from the same instant — a pull request cannot
+  // edit the policy that governs it.
+  const source = await resolvePolicySource({
+    eventName: context.eventName,
+    event: /** @type {Record<string, unknown>} */ (event),
+    forge: world.forge,
+  });
+  const policy = { getContents: policyReader(world.forge, source) };
+  const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
+  let config = validateConfig(loaded.raw);
+  info(policySourceAuditLine({ eventName: context.eventName, source, path: loaded.path }));
 
   const requested = inputs.sourceLanguage;
   if (!Object.hasOwn(config.languages, requested)) {
@@ -237,14 +268,6 @@ export async function run(inputs, context, io) {
   config = { ...config, sourceLanguage: requested };
 
   const repository = await world.forge.getRepository();
-  const ref = await world.forge.getRef(repository.defaultBranch);
-
-  // The action's own branch is snapshotted now, before any work: at update
-  // time its tip must be where this run left it, or another writer moved it
-  // mid-run and is refused rather than overwritten. This one resolution is
-  // also the branch's snapshot authority — both advisory reads below pin to
-  // this exact commit, so a push landing between two reads can never split
-  // the state→memory join across two tips.
   /** @type {import("#core/forge.mjs").Forge} */
   const f = world.forge;
   const ownBranch = branchName(config.sourceLanguage);
@@ -257,7 +280,7 @@ export async function run(inputs, context, io) {
   // config and instructions describe one instant of the repository, and the
   // commit built from them parents on that same instant.
   /** @type {(path: string) => Promise<{ content: string } | null>} */
-  const readAtBase = (path) => world.forge.getContents(path, { ref: ref.sha });
+  const readAtBase = policyReader(world.forge, source);
 
   // The recorded state is advisory and fails closed: a file that is missing,
   // unreadable, unparseable, or of a foreign schema version leaves no
@@ -272,7 +295,7 @@ export async function run(inputs, context, io) {
     const state = await readState({
       getContents: (path, options) => f.getContents(path, options),
       branchRef: branchBefore === null ? null : branchBefore.sha,
-      defaultRef: ref.sha,
+      defaultRef: source.sha,
     });
     if (state !== null) recordedRecords = state.records;
   } catch {
@@ -301,7 +324,7 @@ export async function run(inputs, context, io) {
     const stored = await readTm({
       getContents: (path, options) => f.getContents(path, options),
       branchRef: branchBefore === null ? null : branchBefore.sha,
-      defaultRef: ref.sha,
+      defaultRef: source.sha,
     });
     if (stored !== null) memory = stored.store;
   } catch {
@@ -311,7 +334,7 @@ export async function run(inputs, context, io) {
   // Instruction prose is read once, capped, pinned to the audited tip, and
   // shared by every prompt.
   const documents = await loadInstructions({
-    forge: { getContents: (path) => f.getContents(path, { ref: ref.sha }) },
+    forge: { getContents: (path) => f.getContents(path, { ref: source.sha }) },
     config,
   });
 
@@ -328,7 +351,7 @@ export async function run(inputs, context, io) {
 
   // Completeness is a contract: a listing GitHub had to truncate throws
   // rather than becoming an inventory that looks finished.
-  const entries = await world.forge.listTree(ref.sha);
+  const entries = await world.forge.listTree(source.sha);
   const inventory = buildInventory({
     entries,
     config,
@@ -338,7 +361,7 @@ export async function run(inputs, context, io) {
   if (inventory.pairs.length === 0) {
     throw new Error(
       `no document matches the source language '${config.sourceLanguage}' on ` +
-        `'${repository.defaultBranch}' — nothing to keep in step`,
+        `'${source.branch}' — nothing to keep in step`,
     );
   }
 
@@ -725,7 +748,7 @@ export async function run(inputs, context, io) {
     throw new Error(`every pair skipped:\n${skippedLines.map((line) => `- ${line}`).join("\n")}`);
   }
 
-  info(`harmonise report — ${context.owner}/${context.repo} at ${ref.sha.slice(0, 12)}`);
+  info(`harmonise report — ${context.owner}/${context.repo} at ${source.sha.slice(0, 12)}`);
   info(
     `documents: ${String(inventory.pairs.length)} source(s), ` +
       `${String(selected.length)} selected, languages ${Object.keys(config.languages).join(", ")}`,
@@ -845,11 +868,11 @@ export async function run(inputs, context, io) {
   changes.push({ path: STATE_PATH, blobSha: stateBlob.sha });
   const tmBlob = await world.forge.createBlob(serializeTm(memory, { keepKeys: liveKeys }));
   changes.push({ path: TM_PATH, blobSha: tmBlob.sha });
-  const tree = await world.forge.createTree(ref.sha, changes);
+  const tree = await world.forge.createTree(source.sha, changes);
   const commit = await world.forge.createCommit(
-    `${title}\n\nAuthored by harmonise from ${ref.sha}.`,
+    `${title}\n\nAuthored by harmonise from ${source.sha}.`,
     tree.sha,
-    ref.sha,
+    source.sha,
   );
   // The optimistic lock is the action's own branch tip as this run found it:
   // unchanged means nobody else touched our branch while we worked.
@@ -872,7 +895,7 @@ export async function run(inputs, context, io) {
     failures: failedLines,
   });
   const pullRequest = await world.forge.upsertPullRequest({
-    base: repository.defaultBranch,
+    base: source.branch,
     head: branch,
     title,
     body,
@@ -880,8 +903,8 @@ export async function run(inputs, context, io) {
 
   info(
     pullRequest.created
-      ? `opened pull request #${String(pullRequest.number)} (${branch} → ${repository.defaultBranch})`
-      : `updated pull request #${String(pullRequest.number)} in place (${branch} → ${repository.defaultBranch})`,
+      ? `opened pull request #${String(pullRequest.number)} (${branch} → ${source.branch})`
+      : `updated pull request #${String(pullRequest.number)} in place (${branch} → ${source.branch})`,
   );
 
   // Published first, red second — exactly the specification's ordering.

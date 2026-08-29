@@ -106,13 +106,16 @@ immutable or floating within a declared compatibility line.
 
 Behaviour that belongs to the repository rather than to one workflow lives in
 `.github/action-agents/<action>/<action>.json5` — one file per action, colocated
-with its action-specific files. It is read from the default branch, so a pull request
-cannot edit the policy that governs it, and every action runs without its
-file: the file adds policy, it never gates execution — `harmonise` is the
-exception, refusing rather than running green on nothing, for the reason its
-development page carries. Prose settings — a review rubric, the language a
-document is harmonised against — are markdown files the action's config file
-points at, because prose belongs in a document.
+with its action-specific files. It is read from the action's **resolved policy
+source** — the default branch on most events, the pull request's base branch on
+pull requests — at an immutable commit SHA, so a pull request cannot edit the
+policy that governs it and a push landing mid-run cannot change what a run
+reads halfway through. Every action runs without its file: the file adds
+policy, it never gates execution — `harmonise` is the exception, refusing
+rather than running green on nothing, for the reason its development page
+carries. Prose settings — a review rubric, the language a document is
+harmonised against — are markdown files the action's config file points at,
+because prose belongs in a document.
 
 ## The actions
 

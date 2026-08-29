@@ -12,6 +12,7 @@
  */
 
 import { json5Parse } from "#core/json5-parse.mjs";
+import { assertPolicySchemaVersion } from "#core/policy.mjs";
 
 import {
   MAX_ASSET_LAYOUTS,
@@ -77,6 +78,9 @@ const DEFAULT_LOCATIONS = [
   ".github/action-agents/harmonise/harmonise.json",
 ];
 
+/** The only policy schema major this build understands; a higher major is refused at startup. */
+export const SCHEMA_MAJOR = 1;
+
 /** The placeholders a pull-request title template may carry, and no others. */
 export const TITLE_PLACEHOLDERS = ["n", "sourceLanguage"];
 
@@ -88,23 +92,25 @@ const DEFAULT_INSTRUCTION_PATHS = {
 };
 
 /**
- * Reads the config file from the default branch and parses it. There is no
- * absent-file case: `harmonise` without a map refuses at startup.
+ * Reads the config file from the resolved policy source and parses it. There
+ * is no absent-file case: `harmonise` without a map refuses at startup.
  *
  * @param {object} input
- * @param {ContentsReader} input.forge
+ * @param {ContentsReader} input.forge pinned to the resolved policy source
  * @param {string} input.configPath the `config-path` input, "" for the default locations
+ * @param {import("#core/policy.mjs").PolicySource} input.source the resolved policy source
  * @returns {Promise<{ raw: Record<string, unknown>, path: string }>}
  */
-export async function loadConfigFile({ forge, configPath }) {
+export async function loadConfigFile({ forge, configPath, source }) {
   if (configPath !== "") {
     const file = await forge.getContents(configPath);
     if (file === null) {
       throw new Error(
-        `config-path names '${configPath}', which does not exist on the default branch`,
+        `config-path names '${configPath}', which does not exist on branch '${source.branch}' ` +
+          `at ${source.sha} — the policy source resolved for this run`,
       );
     }
-    return { raw: parseFile(configPath, file.content), path: configPath };
+    return { raw: parseFile(configPath, file.content, source), path: configPath };
   }
 
   /** @type {{ path: string, content: string }[]} */
@@ -121,21 +127,23 @@ export async function loadConfigFile({ forge, configPath }) {
   }
   if (found.length === 0) {
     throw new Error(
-      `no config file exists — expected one of ${DEFAULT_LOCATIONS.join(" or ")} on the ` +
-        `default branch. harmonise keeps no documents in step without a map of them`,
+      `no config file exists — expected one of ${DEFAULT_LOCATIONS.join(" or ")} on ` +
+        `${source.branch} at ${source.sha}, the policy source resolved for this run. ` +
+        `harmonise keeps no documents in step without a map of them`,
     );
   }
   const first = found[0];
   if (first === undefined) throw new Error("a config file was found and then lost");
-  return { raw: parseFile(first.path, first.content), path: first.path };
+  return { raw: parseFile(first.path, first.content, source), path: first.path };
 }
 
 /**
  * @param {string} path
  * @param {string} content
+ * @param {import("#core/policy.mjs").PolicySource} source
  * @returns {Record<string, unknown>}
  */
-function parseFile(path, content) {
+function parseFile(path, content, source) {
   const bytes = new TextEncoder().encode(content).byteLength;
   if (bytes > MAX_CONFIG_BYTES) {
     throw new Error(
@@ -156,6 +164,7 @@ function parseFile(path, content) {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`'${path}' must hold an object`);
   }
+  assertPolicySchemaVersion({ raw: parsed, supportedMajor: SCHEMA_MAJOR, path, source });
   return /** @type {Record<string, unknown>} */ (parsed);
 }
 
@@ -170,6 +179,7 @@ export function validateConfig(raw) {
   for (const key of Object.keys(raw)) {
     if (
       ![
+        "schemaVersion",
         "sourceLanguage",
         "languages",
         "ignore",
@@ -181,8 +191,8 @@ export function validateConfig(raw) {
       ].includes(key)
     ) {
       throw new Error(
-        `unknown config key '${key}' — the file holds sourceLanguage, languages, ignore, ` +
-          `glossary, instructions, concurrency, pullRequest and assets`,
+        `unknown config key '${key}' — the file holds schemaVersion, sourceLanguage, languages, ` +
+          `ignore, glossary, instructions, concurrency, pullRequest and assets`,
       );
     }
   }

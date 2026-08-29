@@ -18,6 +18,7 @@
  */
 
 import { json5Parse } from "#core/json5-parse.mjs";
+import { assertPolicySchemaVersion } from "#core/policy.mjs";
 
 /**
  * The operations the config loaders need — a slice of the forge client, so
@@ -37,7 +38,7 @@ import { json5Parse } from "#core/json5-parse.mjs";
 /**
  * @typedef {object} ReviewRule
  * @property {string[]} include globs over repository-relative paths, `!` negates within the list
- * @property {string} instruction the rule document's path on the default branch
+ * @property {string} instruction the rule document's path on the policy source
  */
 
 /**
@@ -53,6 +54,9 @@ import { json5Parse } from "#core/json5-parse.mjs";
 
 /** A config file larger than this is a red refusal, not a truncated policy. */
 export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
+
+/** The schema major this action understands; see `assertPolicySchemaVersion`. */
+export const SCHEMA_MAJOR = 1;
 
 /** An instruction or rule document larger than this is a red refusal — prose cut mid-sentence misleads. */
 export const MAX_DOCUMENT_BYTES = 8 * 2 ** 10;
@@ -75,29 +79,32 @@ const STRATEGY = /** @type {const} */ (["standard", "adversarial"]);
 // allows, and prose language is not a security surface.
 const LANGUAGE_TAG =
   /^([A-Za-z]{2,8}(-[A-Za-z0-9]+)*|i-[A-Za-z0-9]+(-[A-Za-z0-9]+)*|x-[A-Za-z0-9]+(-[A-Za-z0-9]+)*)$/;
-
 /**
- * Reads the config file from the default branch and parses it.
+ * Reads the config file from the resolved policy source and parses it.
  *
  * Absent default locations are the built-in defaults, not an error — unlike
  * `harmonise`, `review` has honest work to do with no file at all. A
  * configured `config-path` that is absent is a red refusal: a workflow
- * naming a file that does not exist has a bug.
+ * naming a file that does not exist has a bug. A file declaring a
+ * `schemaVersion` this runtime does not understand is refused before any
+ * model call.
  *
  * @param {object} input
  * @param {ContentsReader} input.forge
  * @param {string} input.configPath the `config-path` input, "" for the default locations
+ * @param {import("#core/policy.mjs").PolicySource} input.source the resolved policy source, named in refusals
  * @returns {Promise<{ raw: Record<string, unknown> | null, path: string }>}
  */
-export async function loadConfigFile({ forge, configPath }) {
+export async function loadConfigFile({ forge, configPath, source }) {
   if (configPath !== "") {
     const file = await forge.getContents(configPath);
     if (file === null) {
       throw new Error(
-        `config-path names '${configPath}', which does not exist on the default branch`,
+        `config-path names '${configPath}', which does not exist on branch '${source.branch}' ` +
+          `at ${source.sha} — the policy source resolved for this run`,
       );
     }
-    return { raw: parseFile(configPath, file.content), path: configPath };
+    return { raw: parseFile(configPath, file.content, source), path: configPath };
   }
 
   /** @type {{ path: string, content: string }[]} */
@@ -115,15 +122,20 @@ export async function loadConfigFile({ forge, configPath }) {
   if (found.length === 0) return { raw: null, path: "" };
   const first = found[0];
   if (first === undefined) throw new Error("a config file was found and then lost");
-  return { raw: parseFile(first.path, first.content), path: first.path };
+  return { raw: parseFile(first.path, first.content, source), path: first.path };
 }
 
 /**
+ * Parses, caps, and schema-checks one policy file. The schema check lives
+ * here so every read — explicit `config-path` or default location — refuses
+ * an unsupported `schemaVersion` before any model call.
+ *
  * @param {string} path
  * @param {string} content
+ * @param {import("#core/policy.mjs").PolicySource} source the resolved policy source, named in the refusal
  * @returns {Record<string, unknown>}
  */
-function parseFile(path, content) {
+function parseFile(path, content, source) {
   const bytes = new TextEncoder().encode(content).byteLength;
   if (bytes > MAX_CONFIG_BYTES) {
     throw new Error(
@@ -144,7 +156,9 @@ function parseFile(path, content) {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`'${path}' must hold an object`);
   }
-  return /** @type {Record<string, unknown>} */ (parsed);
+  const raw = /** @type {Record<string, unknown>} */ (parsed);
+  assertPolicySchemaVersion({ raw, supportedMajor: SCHEMA_MAJOR, path, source });
+  return raw;
 }
 
 /**
@@ -176,11 +190,12 @@ export function validateConfig(raw) {
       key !== "ignore" &&
       key !== "maxDiffLines" &&
       key !== "rules" &&
-      key !== "instructions"
+      key !== "instructions" &&
+      key !== "schemaVersion"
     ) {
       throw new Error(
         `unknown config key '${key}' — the file holds strictness, strategy, language, ` +
-          `ignore, maxDiffLines, rules and instructions`,
+          `ignore, maxDiffLines, rules, instructions and schemaVersion`,
       );
     }
   }
@@ -307,22 +322,23 @@ export function validateConfig(raw) {
 }
 
 /**
- * Reads every document the config names, from the default branch. Rule
- * documents are required — a declared rule with no file is a startup error,
- * whatever this pull request changes — and the custom rubric is optional at
- * its configured-or-convention path.
+ * Reads every document the config names, from the resolved policy source.
+ * Rule documents are required — a declared rule with no file is a startup
+ * error, whatever this pull request changes — and the custom rubric is
+ * optional at its configured-or-convention path.
  *
  * @param {object} input
  * @param {ContentsReader} input.forge
  * @param {ReviewConfig} input.config
+ * @param {import("#core/policy.mjs").PolicySource} input.source the resolved policy source, named in refusals
  * @returns {Promise<{ instruction?: string, ruleDocuments: Map<string, string> }>}
  */
-export async function loadDocuments({ forge, config }) {
+export async function loadDocuments({ forge, config, source }) {
   /** @type {Map<string, string>} */
   const ruleDocuments = new Map();
   for (const rule of config.rules) {
     if (ruleDocuments.has(rule.instruction)) continue;
-    const text = await readDocument(forge, rule.instruction, true);
+    const text = await readDocument(forge, rule.instruction, true, source);
     if (text === undefined) {
       throw new Error("a required rule document was read and then lost");
     }
@@ -331,7 +347,7 @@ export async function loadDocuments({ forge, config }) {
 
   /** @type {{ instruction?: string }} */
   const loaded = {};
-  const custom = await readDocument(forge, config.instructionPath, false);
+  const custom = await readDocument(forge, config.instructionPath, false, source);
   if (custom !== undefined) loaded.instruction = custom;
 
   return { ...loaded, ruleDocuments };
@@ -341,14 +357,15 @@ export async function loadDocuments({ forge, config }) {
  * @param {ContentsReader} forge
  * @param {string} path
  * @param {boolean} required
+ * @param {import("#core/policy.mjs").PolicySource} source
  * @returns {Promise<string | undefined>}
  */
-async function readDocument(forge, path, required) {
+async function readDocument(forge, path, required, source) {
   const file = await forge.getContents(path);
   if (file === null) {
     if (required) {
       throw new Error(
-        `the rule document '${path}' does not exist on the default branch — declaring a ` +
+        `the rule document '${path}' does not exist on branch '${source.branch}' at ${source.sha} ` +
           `rule and leaving its file absent is a startup error`,
       );
     }

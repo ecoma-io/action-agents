@@ -4,7 +4,7 @@
 page is the architecture the running code is built to. It still reads as the
 implementation contract: every behaviour below is stated precisely enough to
 test, and is tested. The shared mechanism it
-rests on — file discovery, the default branch, precedence — is in [the
+rests on — file discovery, the resolved policy source, precedence — is in [the
 configuration page](configuration.md). The design was benchmarked against the
 configuration surfaces of the two established AI reviewers, CodeRabbit and
 cubic; where an option of theirs is absent here, the reason is recorded rather
@@ -51,6 +51,26 @@ whole write surface.
 A draft pull request is skipped with a log line and nothing else: a draft says
 "not ready", and reviewing it anyway reviews something the author has not
 finished saying.
+
+## The policy source, and the provenance it buys
+
+Before anything else, `review` resolves its policy source from the execution
+context — under `pull_request`, the pull request's **base branch** at its live
+tip, pinned to that 40-hex SHA for the whole run ([the resolver's
+mapping](configuration.md#which-branch-governs--the-resolved-policy-source)).
+The config file and every rule and instruction document load at that SHA: a
+push to the base branch mid-review cannot swap the policy the run is judged
+by.
+
+Two records make the source auditable. The run logs one line at startup —
+`policy source: event=… basis=… branch=… sha=… path=…` — before the first
+model call. And the posted comment carries a provenance line naming the basis
+(`base` under `pull_request`), the branch and the short SHA the run read its
+policy from, so a reader judging the findings knows exactly which rules
+produced them.
+
+A config file declaring a `schemaVersion` major this build does not understand
+refuses at startup, naming the branch, SHA and path it was found on.
 
 ## The reviewed snapshot
 
@@ -175,8 +195,8 @@ file alone.
 
   // Path-scoped rubrics. `include` takes globs, and `!` negates within them.
   // A rule's document is its name in the log, and it must exist on the
-  // default branch — declaring a rule and leaving its file absent is a
-  // startup error. Only the convention paths under `instructions` are
+  // resolved policy source — declaring a rule and leaving its file absent is
+  // a startup error. Only the convention paths under `instructions` are
   // optional; a declared rule is required.
   rules: [
     {
@@ -196,7 +216,7 @@ file alone.
 
 - `strictness` is one of the three values, `strategy` one of the two,
   `language` a well-formed BCP-47 tag, `maxDiffLines` at least 1;
-- every rule's instruction document must exist on the default branch;
+- every rule's instruction document must exist on the resolved policy source;
 - instruction and rule documents carry the same 8 KiB cap as every action's
   documents on [the configuration page](configuration.md) — overflow is
   refused, never truncated;

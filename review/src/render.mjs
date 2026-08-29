@@ -33,6 +33,7 @@ export const MESSAGE_CHARS = 1000;
  * @property {string} [partialReason] required when status is Partial
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the deterministic read-coverage report; rendered as a count line when the expected set is non-empty
  * @property {number} [quarantinedCount] findings withheld as unanchored before publication — rendered when nothing published, so a withheld review never reads as clean
+ * @property {import("#core/policy.mjs").PolicySource} [policySource] the resolved policy source — the comment's provenance line, so the verdict names the branch and commit that governed it
  */
 
 /**
@@ -48,6 +49,7 @@ export function renderComment({
   partialReason,
   coverage,
   quarantinedCount,
+  policySource,
 }) {
   /** @type {string[]} */
   const lines = [];
@@ -57,7 +59,13 @@ export function renderComment({
       "",
     );
   }
-  lines.push(`**Review** — ${status}`, `Reviewed head \`${headSha}\``, "");
+  const header = [`**Review** — ${status}`, `Reviewed head \`${headSha}\``];
+  if (policySource !== undefined) {
+    header.push(
+      `Policy source \`${policySource.branch}\` at \`${policySource.sha}\` (${policySource.basis})`,
+    );
+  }
+  lines.push(...header, "");
   lines.push(sanitised(summary === "" ? "(no summary)" : summary, SUMMARY_CHARS));
 
   if (coverage !== undefined && coverage.total > 0) {

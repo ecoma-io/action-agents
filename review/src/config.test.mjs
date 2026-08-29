@@ -25,6 +25,10 @@ function reader(files) {
   };
 }
 
+/** The resolved policy source every loader test resolves against. */
+/** @type {import("#core/policy.mjs").PolicySource} */
+const SOURCE = { basis: "default", branch: "main", sha: "5".repeat(40) };
+
 const FULL_CONFIG = `{
   strictness: "high",
   language: "pt-BR",
@@ -39,19 +43,21 @@ describe("loadConfigFile", () => {
     const present = await loadConfigFile({
       forge: reader({ "policies/review.json5": "{}" }),
       configPath: "policies/review.json5",
+      source: SOURCE,
     });
     expect(present.raw).toEqual({});
     expect(present.path).toBe("policies/review.json5");
 
-    await expect(loadConfigFile({ forge: reader({}), configPath: "nope.json5" })).rejects.toThrow(
-      /does not exist on the default branch/,
-    );
+    await expect(
+      loadConfigFile({ forge: reader({}), configPath: "nope.json5", source: SOURCE }),
+    ).rejects.toThrow(/does not exist on branch/);
   });
 
   it("prefers .json5 over .json at the default location, refusing both", async () => {
     const json5 = await loadConfigFile({
       forge: reader({ ".github/action-agents/review/review.json5": "/* json5 flavor */ {}" }),
       configPath: "",
+      source: SOURCE,
     });
     expect(json5.path).toContain(".json5");
 
@@ -61,12 +67,13 @@ describe("loadConfigFile", () => {
         ".github/action-agents/review/review.json": "{}",
       }),
       configPath: "",
+      source: SOURCE,
     });
     await expect(both).rejects.toThrow(/declared twice/);
   });
 
   it("treats absent default locations as policy-empty", async () => {
-    const none = await loadConfigFile({ forge: reader({}), configPath: "" });
+    const none = await loadConfigFile({ forge: reader({}), configPath: "", source: SOURCE });
     expect(none.raw).toBeNull();
   });
 
@@ -75,6 +82,7 @@ describe("loadConfigFile", () => {
       loadConfigFile({
         forge: reader({ ".github/action-agents/review/review.json5": "x".repeat(65 * 1024) }),
         configPath: "",
+        source: SOURCE,
       }),
     ).rejects.toThrow(/past the .*-byte cap/);
 
@@ -82,6 +90,7 @@ describe("loadConfigFile", () => {
       loadConfigFile({
         forge: reader({ ".github/action-agents/review/review.json5": "{strictness:" }),
         configPath: "",
+        source: SOURCE,
       }),
     ).rejects.toThrow(/does not parse/);
   });
@@ -181,7 +190,7 @@ describe("loadDocuments", () => {
       ],
     });
 
-    const documents = await loadDocuments({ forge, config });
+    const documents = await loadDocuments({ forge, config, source: SOURCE });
     expect(documents.ruleDocuments.size).toBe(2);
     expect(documents.ruleDocuments.get(".github/rules/a.md")).toBe("# Rule A");
   });
@@ -190,8 +199,8 @@ describe("loadDocuments", () => {
     const config = validateConfig({
       rules: [{ include: ["a/**"], instruction: ".github/rules/gone.md" }],
     });
-    await expect(loadDocuments({ forge: reader({}), config })).rejects.toThrow(
-      /does not exist on the default branch/,
+    await expect(loadDocuments({ forge: reader({}), config, source: SOURCE })).rejects.toThrow(
+      /does not exist on branch/,
     );
   });
 
@@ -201,10 +210,11 @@ describe("loadDocuments", () => {
     const withDoc = await loadDocuments({
       forge: reader({ ".github/rubric.md": "Be exact." }),
       config,
+      source: SOURCE,
     });
     expect(withDoc.instruction).toBe("Be exact.");
 
-    const without = await loadDocuments({ forge: reader({}), config });
+    const without = await loadDocuments({ forge: reader({}), config, source: SOURCE });
     expect(without.instruction).toBeUndefined();
   });
 
@@ -213,7 +223,11 @@ describe("loadDocuments", () => {
       rules: [{ include: ["a/**"], instruction: ".github/rules/big.md" }],
     });
     await expect(
-      loadDocuments({ forge: reader({ ".github/rules/big.md": "x".repeat(9 * 1024) }), config }),
+      loadDocuments({
+        forge: reader({ ".github/rules/big.md": "x".repeat(9 * 1024) }),
+        config,
+        source: SOURCE,
+      }),
     ).rejects.toThrow(/byte cap/);
   });
 });

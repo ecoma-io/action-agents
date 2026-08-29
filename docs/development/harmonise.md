@@ -1,6 +1,6 @@
 # Development — `harmonise`
 
-Shipped behaviour, not intent: `harmonise` is released and pinnable, and this page is the specification the running code implements, kept as the implementation contract — every behavior below is stated precisely enough to test, and is tested. The shared mechanism it rests on — file discovery, the default branch, precedence — is in [the configuration page](configuration.md); this page is the document model, the prompt and the pull request.
+Shipped behaviour, not intent: `harmonise` is released and pinnable, and this page is the specification the running code implements, kept as the implementation contract — every behavior below is stated precisely enough to test, and is tested. The shared mechanism it rests on — file discovery, the resolved policy source, precedence — is in [the configuration page](configuration.md); this page is the document model, the prompt and the pull request.
 
 ## What `harmonise` decides
 
@@ -147,6 +147,24 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
   refused. The action hard-caps the run at 4 concurrent pairs regardless of a
   larger declared value; absent, the default is 2.
 
+## The policy source
+
+The run begins by resolving its policy source from the execution context —
+for `workflow_dispatch` on `refs/heads/main`, that is `main` at its live tip
+([the full mapping](configuration.md#which-branch-governs--the-resolved-policy-source)).
+Everything after that resolution is pinned to the resolved 40-hex SHA: every
+document and state read, the translation-memory read, the instruction
+documents, the tree enumeration, the commits' parent, the proposal pull
+request's base branch, and the short SHA the report cites. The audit log line
+— `policy source: event=… basis=… branch=… sha=… path=…` — is the run's
+first output, before any model call.
+
+`harmonise` has no policy-empty mode: no config file on the resolved source
+is a red refusal naming the branch and SHA it looked on. A `schemaVersion`
+major this build does not understand refuses the same way. The intent is
+auditability: a proposal pull request names exactly which commit's policy
+produced it, and a reader can diff that commit to see what changed.
+
 ## The document set
 
 ```text
@@ -157,9 +175,9 @@ inventory  =  discovered sources, existing translations, missing translations, o
 
 ### Document discovery
 
-Sources and translations are discovered by enumerating the Git tree of the default branch using the configured patterns:
+Sources and translations are discovered by enumerating the Git tree of the resolved policy source using the configured patterns:
 
-1. List every blob on the default branch through the Git Trees API
+1. List every blob on the resolved source through the Git Trees API
 2. Match each blob against the language patterns (minus `ignore`)
 3. For each source, extract the `{document}` slug and apply each target language pattern
 4. Classify as: existing translation, missing translation, or orphan (target exists without source)

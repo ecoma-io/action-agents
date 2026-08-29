@@ -2,7 +2,7 @@
 
 The architecture `triage` is built to, written before its implementation
 started and kept current with it. The shared mechanism it rests on — file
-discovery, the default branch, precedence — is in
+discovery, the resolved policy source, precedence — is in
 [the configuration page](configuration.md); this page is the schema, the
 prompt and the pipeline.
 
@@ -173,7 +173,7 @@ does not count toward it.
 ```text
 read inputs, mask the api-key, read the runner context
   ▼
-fetch the config file from the default branch          (absent = empty policy)
+resolve the policy source; fetch the config file from it  (absent = empty policy)
   ▼
 build the effective sheet; validate everything above   (a failure ends the run)
   ▼
@@ -189,6 +189,15 @@ measure size against the ladder                        (PRs only)
 dry-run → log only ─┬─ real → apply labels through the GitHub API
                     └─ no sheet → upsert the marker comment
 ```
+
+The first step after the context read is resolving the policy source — for a
+pull request the base branch, for a push the pushed branch at the pushed SHA
+([the full mapping](configuration.md#which-branch-governs--the-resolved-policy-source))
+— and logging one audit line, `policy source: event=… basis=… branch=… sha=…
+path=…`, before any model call: every run records which rules it answered to.
+The config file loads at that resolved SHA, and a `schemaVersion` major this
+build does not understand refuses at startup, naming the branch, SHA and path
+it was found on.
 
 Labels are applied add-only in this first version: re-classifying an edited
 issue never removes a label a human chose, because the action does not yet

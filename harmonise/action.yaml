@@ -27,7 +27,7 @@ inputs:
     required: false
     default: "30000"
   config-path:
-    description: Overrides `.github/action-agents/harmonise/harmonise.json5` / `.json`, read from the default branch. When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
+    description: Overrides `.github/action-agents/harmonise/harmonise.json5` / `.json`, read from the resolved policy source (the default branch, or a pull request's base branch). When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
     required: false
     default: ""
   source-language:

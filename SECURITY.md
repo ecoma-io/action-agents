@@ -51,9 +51,10 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    a printed multiple-choice sheet rather than writing on a blank page: an
    answer that is not on the sheet is refused and logged, and never becomes a
    request. `triage`'s sheet is the `labels` its config file declares on the
-   default branch; the workflow's `labels:` input narrows it for one call site
-   and nothing widens it. With no file there is no sheet, and comment text is
-   the whole of what the action can produce.
+   resolved policy source — the default branch, or a pull request's base branch,
+   never the pull request's own content; the workflow's `labels:` input narrows
+   it for one call site and nothing widens it. With no file there is no sheet,
+   and comment text is the whole of what the action can produce.
 
 2. **What may go on the sheet is bounded in turn, and no input widens it.**
    Enumeration alone would only move the risk out of our prompt and into a
@@ -190,6 +191,12 @@ If you use `pull_request_target`, never check out
 request's code. We consider a report that these actions _encourage_ that
 arrangement to be in scope; a report that a consumer configured it themselves is
 not.
+
+The policy side of this is structural: every policy file an action reads comes
+from the repository's resolved policy source — under `pull_request` and
+`pull_request_target` alike, the pull request's **base branch**, read at an
+immutable commit SHA — never from the pull request's own content. A pull
+request cannot edit the policy that governs it, and no input changes that.
 
 ## A note on which provider you point these at
 

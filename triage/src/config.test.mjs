@@ -43,17 +43,21 @@ function fakeForge(files) {
 const JSON5_PATH = ".github/action-agents/triage/triage.json5";
 const JSON_PATH = ".github/action-agents/triage/triage.json";
 
+/** The resolved policy source every loadConfigFile test resolves against. */
+/** @type {import("#core/policy.mjs").PolicySource} */
+const SOURCE = { basis: "default", branch: "main", sha: "5".repeat(40) };
+
 describe("loadConfigFile", () => {
   it("reads the .json5 location from the default branch", async () => {
     const forge = fakeForge({ [JSON5_PATH]: { content: "{ labels: {} }" } });
-    const { raw, path } = await loadConfigFile({ forge, configPath: "" });
+    const { raw, path } = await loadConfigFile({ forge, configPath: "", source: SOURCE });
     expect(path).toBe(JSON5_PATH);
     expect(raw).toEqual({ labels: {} });
   });
 
   it("falls back to .json when .json5 is absent — JSON is the boring case of JSON5", async () => {
     const forge = fakeForge({ [JSON_PATH]: { content: '{"labels":{}}' } });
-    const { path } = await loadConfigFile({ forge, configPath: "" });
+    const { path } = await loadConfigFile({ forge, configPath: "", source: SOURCE });
     expect(path).toBe(JSON_PATH);
   });
 
@@ -62,11 +66,17 @@ describe("loadConfigFile", () => {
       [JSON5_PATH]: { content: "{}" },
       [JSON_PATH]: { content: "{}" },
     });
-    await expect(loadConfigFile({ forge, configPath: "" })).rejects.toThrow(/declared twice/);
+    await expect(loadConfigFile({ forge, configPath: "", source: SOURCE })).rejects.toThrow(
+      /declared twice/,
+    );
   });
 
   it("treats neither present as policy-empty", async () => {
-    const { raw, path } = await loadConfigFile({ forge: fakeForge({}), configPath: "" });
+    const { raw, path } = await loadConfigFile({
+      forge: fakeForge({}),
+      configPath: "",
+      source: SOURCE,
+    });
     expect(raw).toBeNull();
     expect(path).toBe("");
   });
@@ -76,23 +86,31 @@ describe("loadConfigFile", () => {
       [JSON5_PATH]: { content: "{}" },
       "elsewhere/policy.json5": { content: "{}" },
     });
-    const { path } = await loadConfigFile({ forge, configPath: "elsewhere/policy.json5" });
+    const { path } = await loadConfigFile({
+      forge,
+      configPath: "elsewhere/policy.json5",
+      source: SOURCE,
+    });
     expect(path).toBe("elsewhere/policy.json5");
     expect(forge.reads).toEqual(["elsewhere/policy.json5"]);
 
-    await expect(loadConfigFile({ forge, configPath: "gone.json5" })).rejects.toThrow(
-      /does not exist on the default branch/,
-    );
+    await expect(
+      loadConfigFile({ forge, configPath: "gone.json5", source: SOURCE }),
+    ).rejects.toThrow(/does not exist on branch/);
   });
 
   it("refuses a malformed file with the parser's own position", async () => {
     const forge = fakeForge({ [JSON5_PATH]: { content: "{ labels: " } });
-    await expect(loadConfigFile({ forge, configPath: "" })).rejects.toThrow(/does not parse/);
+    await expect(loadConfigFile({ forge, configPath: "", source: SOURCE })).rejects.toThrow(
+      /does not parse/,
+    );
   });
 
   it("refuses a file past the 64 KiB cap rather than truncating it", async () => {
     const forge = fakeForge({ [JSON5_PATH]: { content: `// ${"x".repeat(70 * 2 ** 10)}` } });
-    await expect(loadConfigFile({ forge, configPath: "" })).rejects.toThrow(/past the/);
+    await expect(loadConfigFile({ forge, configPath: "", source: SOURCE })).rejects.toThrow(
+      /past the/,
+    );
   });
 
   it("accepts a file of exactly the 64 KiB cap — the boundary is inclusive", async () => {
@@ -100,7 +118,7 @@ describe("loadConfigFile", () => {
     const content = `{${" ".repeat(MAX_CONFIG_BYTES - 2)}}`;
     expect(new TextEncoder().encode(content).byteLength).toBe(MAX_CONFIG_BYTES);
     const forge = fakeForge({ [JSON5_PATH]: { content } });
-    const { raw, path } = await loadConfigFile({ forge, configPath: "" });
+    const { raw, path } = await loadConfigFile({ forge, configPath: "", source: SOURCE });
     expect(path).toBe(JSON5_PATH);
     expect(raw).toEqual({});
   });
@@ -110,7 +128,7 @@ describe("loadConfigFile", () => {
     const content = `{${" ".repeat(MAX_CONFIG_BYTES - 1)}}`;
     expect(new TextEncoder().encode(content).byteLength).toBe(MAX_CONFIG_BYTES + 1);
     const forge = fakeForge({ [JSON5_PATH]: { content } });
-    await expect(loadConfigFile({ forge, configPath: "" })).rejects.toThrow(
+    await expect(loadConfigFile({ forge, configPath: "", source: SOURCE })).rejects.toThrow(
       new RegExp(
         `is ${String(MAX_CONFIG_BYTES + 1)} bytes, past the ${String(MAX_CONFIG_BYTES)}-byte cap`,
       ),

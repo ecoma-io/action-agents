@@ -15,9 +15,8 @@
  * All validation happens at startup, before the model is called. A config
  * that does not validate is a red run, not a best effort.
  */
-
 import { json5Parse } from "#core/json5-parse.mjs";
-
+import { assertPolicySchemaVersion } from "#core/policy.mjs";
 import { validateSizeConfig } from "./size.mjs";
 
 /**
@@ -47,10 +46,13 @@ export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
 /** An instruction document larger than this is a red refusal — prose cut mid-sentence misleads. */
 export const MAX_INSTRUCTION_BYTES = 8 * 2 ** 10;
 
-const DEFAULT_LOCATIONS = [
+export const DEFAULT_LOCATIONS = [
   ".github/action-agents/triage/triage.json5",
   ".github/action-agents/triage/triage.json",
 ];
+
+/** The only policy schema major this build understands; a higher major is refused at startup. */
+export const SCHEMA_MAJOR = 1;
 
 const DEFAULT_INSTRUCTION_PATHS = {
   instruction: ".github/action-agents/triage/instruction.md",
@@ -59,26 +61,29 @@ const DEFAULT_INSTRUCTION_PATHS = {
 };
 
 /**
- * Reads the config file from the default branch and parses it.
+ * Reads the config file from the resolved policy source and parses it.
  *
  * Absent default locations are policy-empty; a configured `config-path`
- * that is absent is a red refusal — a workflow naming a file that does not
- * exist has a bug, and guessing `null` would silently run an empty policy.
+ * that is absent is a red refusal — a workflow naming a file that does
+ * not exist has a bug, and guessing `null` would silently run an empty
+ * policy.
  *
  * @param {object} input
- * @param {ContentsReader} input.forge
+ * @param {ContentsReader} input.forge pinned to the resolved policy source
  * @param {string} input.configPath the `config-path` input, "" for the default locations
+ * @param {import("#core/policy.mjs").PolicySource} input.source the resolved policy source
  * @returns {Promise<{ raw: Record<string, unknown> | null, path: string }>}
  */
-export async function loadConfigFile({ forge, configPath }) {
+export async function loadConfigFile({ forge, configPath, source }) {
   if (configPath !== "") {
     const file = await forge.getContents(configPath);
     if (file === null) {
       throw new Error(
-        `config-path names '${configPath}', which does not exist on the default branch`,
+        `config-path names '${configPath}', which does not exist on branch '${source.branch}' ` +
+          `at ${source.sha} — the policy source resolved for this run`,
       );
     }
-    return { raw: parseFile(configPath, file.content), path: configPath };
+    return { raw: parseFile(configPath, file.content, source), path: configPath };
   }
 
   /** @type {{ path: string, content: string }[]} */
@@ -96,15 +101,16 @@ export async function loadConfigFile({ forge, configPath }) {
   if (found.length === 0) return { raw: null, path: "" };
   const first = found[0];
   if (first === undefined) throw new Error("a config file was found and then lost");
-  return { raw: parseFile(first.path, first.content), path: first.path };
+  return { raw: parseFile(first.path, first.content, source), path: first.path };
 }
 
 /**
  * @param {string} path
  * @param {string} content
+ * @param {import("#core/policy.mjs").PolicySource} source
  * @returns {Record<string, unknown>}
  */
-function parseFile(path, content) {
+function parseFile(path, content, source) {
   const bytes = new TextEncoder().encode(content).byteLength;
   if (bytes > MAX_CONFIG_BYTES) {
     throw new Error(
@@ -125,6 +131,7 @@ function parseFile(path, content) {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`'${path}' must hold an object`);
   }
+  assertPolicySchemaVersion({ raw: parsed, supportedMajor: SCHEMA_MAJOR, path, source });
   return /** @type {Record<string, unknown>} */ (parsed);
 }
 
@@ -140,9 +147,15 @@ export function validateConfig(raw) {
   if (raw === null) return null;
 
   for (const key of Object.keys(raw)) {
-    if (key !== "labels" && key !== "size" && key !== "instructions" && key !== "triageMarker") {
+    if (
+      key !== "schemaVersion" &&
+      key !== "labels" &&
+      key !== "size" &&
+      key !== "instructions" &&
+      key !== "triageMarker"
+    ) {
       throw new Error(
-        `unknown config key '${key}' — the file holds labels, size, instructions and the triage marker`,
+        `unknown config key '${key}' — the file holds schemaVersion, labels, size, instructions and the triage marker`,
       );
     }
   }
