@@ -29,6 +29,7 @@ import {
   AUTHOR_PROVENANCES,
   EXECUTION_CONTEXTS,
   HEAD_PROVENANCES,
+  POSTURES,
 } from "./applicability.mjs";
 import { GATES } from "./gates.mjs";
 import { utf8Compare } from "./order.mjs";
@@ -120,7 +121,6 @@ const APPLICABILITY_SECTION_KEYS = new Set([
   "inputs",
 ]);
 const APPLICABILITY_INPUT_KEYS = new Set(["association", "head", "authorType"]);
-const APPLICABILITY_POSTURES = /** @type {const} */ (["standard"]);
 /** A full-shape artifact describes a run that happened; a state skip never enters it. */
 const FULL_SHAPE_BASES = /** @type {const} */ (["rule", "default"]);
 /** The bases a skipped run can carry — the defaults decided nothing. */
@@ -310,14 +310,16 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 
 /**
  * The applicability fact one run records — the derived context, the axis
- * decision and the provenance the classification read. PR 1 ships the run
- * axis only: `posture` is constant standard and `intensity` is empty until
- * their own PRs land, and this schema refuses anything else there.
+ * decisions and the provenance the classification read. PR 1 shipped the
+ * run axis; PR 2 ships the posture axis, so `posture` carries whichever
+ * mode the matched rule (or the default) declared. `intensity` is still
+ * empty until its own PR lands, and this schema refuses anything else
+ * there.
  *
  * @typedef {object} ApplicabilitySection
  * @property {import("./applicability.mjs").ExecutionContext} context the derived execution context
  * @property {boolean} applicable whether review ran, as the rule or default decided
- * @property {"standard"} posture the posture axis, constant until its PR lands
+ * @property {import("./applicability.mjs").Posture} posture the posture axis value the rule or default declared
  * @property {Record<string, never>} intensity the intensity axis, empty until its PR lands
  * @property {string | null} matchedRule the deciding rule's id, or null when the defaults decided
  * @property {import("./applicability.mjs").ApplicabilityBasis} basis where the decision's authority came from
@@ -878,22 +880,23 @@ export function buildArtifact(runFacts) {
 }
 
 /**
- * Composes and validates the applicability fact a run records — the one
- * place the PR 1 axis constants live (`posture: "standard"`, `intensity: {}`
- * until their own PRs land). Returns a frozen, serialisable section.
+ * Composes and validates the applicability fact a run records. `posture`
+ * is the axis value the run evaluated to; `intensity` stays `{}` until its
+ * own PR lands. Returns a frozen, serialisable section.
  *
  * @param {object} fact the derived and evaluated applicability of one run
  * @param {import("./applicability.mjs").ExecutionContext} fact.context the derived context
  * @param {boolean} fact.applicable whether review runs
+ * @param {import("./applicability.mjs").Posture} fact.posture the run's posture value
  * @param {string | null} fact.matchedRule the deciding rule's id, or null
  * @param {import("./applicability.mjs").ApplicabilityBasis} fact.basis the decision's authority
  * @param {ApplicabilityInputs} fact.inputs the classification's provenance
  * @returns {ApplicabilitySection}
  * @throws {ArtifactError} when any field is outside its vocabulary
  */
-export function applicabilitySection({ context, applicable, matchedRule, basis, inputs }) {
+export function applicabilitySection({ context, applicable, posture, matchedRule, basis, inputs }) {
   return asApplicabilitySection(
-    { context, applicable, posture: "standard", intensity: {}, matchedRule, basis, inputs },
+    { context, applicable, posture, intensity: {}, matchedRule, basis, inputs },
     APPLICABILITY_BASES,
     false,
   );
@@ -938,7 +941,9 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
  * vocabulary it enforces the cross-field law: basis 'rule' names a rule and
  * only a rule decision does; a full-shape artifact refuses the state basis
  * (a state skip never becomes a review) and a skipped record refuses
- * `applicable: true` and the default basis (the defaults never skip).
+ * `applicable: true` and the default basis (the defaults never skip); and
+ * anything inapplicable rides the standard posture — a skipped run took no
+ * posture.
  *
  * @param {unknown} v
  * @param {readonly import("./applicability.mjs").ApplicabilityBasis[]} allowBases the bases this shape may carry
@@ -950,7 +955,7 @@ function asApplicabilitySection(v, allowBases, requireInapplicable) {
   assertExactKeys(section, "applicability", APPLICABILITY_SECTION_KEYS);
   const context = asEnum(section.context, EXECUTION_CONTEXTS, "applicability.context");
   const applicable = asBoolean(section.applicable, "applicability.applicable");
-  asEnum(section.posture, APPLICABILITY_POSTURES, "applicability.posture");
+  const posture = asEnum(section.posture, POSTURES, "applicability.posture");
   assertExactKeys(
     asRecord(section.intensity, "applicability.intensity"),
     "applicability.intensity",
@@ -975,11 +980,16 @@ function asApplicabilitySection(v, allowBases, requireInapplicable) {
       "a skipped run's applicability must record applicable: false — refused",
     );
   }
+  if (!applicable && posture !== "standard") {
+    throw new ArtifactError(
+      `applicability records no review under posture '${posture}' — a skipped run took no posture`,
+    );
+  }
   const inputs = asApplicabilityInputs(section.inputs);
   return deepFreeze({
     context,
     applicable,
-    posture: "standard",
+    posture,
     intensity: {},
     matchedRule,
     basis,

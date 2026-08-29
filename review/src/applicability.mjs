@@ -2,8 +2,8 @@
  * The applicability engine — execution-context derivation and the rule
  * evaluator, one pure module over injected inputs. It decides, before diff
  * accounting and before any model call, whether review applies to a pull
- * request at all (`run`), and names the rule or default that decided it.
- * Everything else here — posture, intensity — is later-PR surface refused
+ * request at all (`run`) and which posture it takes, naming the rule or
+ * default that decided each. Intensity remains later-PR surface, refused
  * at validation until its own PR lands.
  *
  * The doctrine, restated where it bites: classification reads event
@@ -20,6 +20,9 @@ export const EXECUTION_CONTEXTS = /** @type {const} */ (["automation", "maintain
 
 /** Where a decision's authority came from. */
 export const APPLICABILITY_BASES = /** @type {const} */ (["rule", "default", "state"]);
+
+/** The three review postures, fixed in code — a policy file selects, never defines. */
+export const POSTURES = /** @type {const} */ (["standard", "maintainer", "automation"]);
 
 /** The bases a skipped run can carry — the defaults never skip. */
 export const SKIPPED_BASES = /** @type {const} */ (["rule", "state"]);
@@ -43,14 +46,19 @@ const WRITE_CLASS_ASSOCIATIONS = /** @type {const} */ (["OWNER", "MEMBER", "COLL
 /** @typedef {(typeof SKIPPED_BASES)[number]} SkippedBasis */
 /** @typedef {(typeof HEAD_PROVENANCES)[number]} HeadProvenance */
 /** @typedef {(typeof AUTHOR_PROVENANCES)[number]} AuthorProvenance */
+/** @typedef {(typeof POSTURES)[number]} Posture */
 
 /**
  * @typedef {object} ApplicabilityRule a validated rule: `context` plus
- * `when` conditions combine conjunctively; `run` defaults true.
+ * `when` conditions combine conjunctively; `run` defaults true. A
+ * non-standard `posture` is the same pipeline with a mode-scoped document,
+ * so `posture` and `instruction` appear together or not at all.
  * @property {string} id the name the audit record carries
  * @property {ExecutionContext} [context] absent matches every derived context
  * @property {{ title?: RegExp, branch?: RegExp, paths?: string[] }} when compiled conditions
  * @property {boolean} run the applicability axis value
+ * @property {Exclude<Posture, "standard">} [posture] the posture axis value, present only when a deviation is declared
+ * @property {string} [instruction] the posture document's path on the policy source, alongside a non-standard posture
  */
 
 /**
@@ -149,9 +157,11 @@ export function classifyContext(inputs) {
  * Evaluates the rule list against a derived context, in config order,
  * first match wins — never reordered, scored or merged. Nothing matching
  * means: run, standard posture, file intensity — the defaults, literally.
- * `title`, `branch` and the changed paths are match values, never
- * instruction; the paths globs speak the one configuration dialect and run
- * over the post-ignore inventory.
+ * The matched rule's posture rides the verdict with its document path, so
+ * the caller never re-finds the rule; `instruction` is set exactly when the
+ * posture is not standard. `title`, `branch` and the changed paths are
+ * match values, never instruction; the paths globs speak the one
+ * configuration dialect and run over the post-ignore inventory.
  *
  * @param {object} input
  * @param {ApplicabilityPolicy} input.policy the validated policy
@@ -159,15 +169,27 @@ export function classifyContext(inputs) {
  * @param {string} input.title the pull request's title
  * @param {string} input.branch the head ref name
  * @param {string[] | null} input.paths the post-ignore changed paths, or null when no rule carries a paths condition and no listing was fetched
- * @returns {{ applicable: boolean, matchedRule: string | null, basis: "rule" | "default" }}
+ * @returns {{ applicable: boolean, matchedRule: string | null, basis: "rule" | "default", posture: Posture, instruction: string | undefined }}
  */
 export function evaluateApplicability({ policy, context, title, branch, paths }) {
   for (const rule of policy.rules) {
     if (rule.context !== undefined && rule.context !== context) continue;
     if (!conditionsHold(rule.when, title, branch, paths)) continue;
-    return { applicable: rule.run, matchedRule: rule.id, basis: "rule" };
+    return {
+      applicable: rule.run,
+      matchedRule: rule.id,
+      basis: "rule",
+      posture: rule.posture ?? "standard",
+      instruction: rule.instruction,
+    };
   }
-  return { applicable: true, matchedRule: null, basis: "default" };
+  return {
+    applicable: true,
+    matchedRule: null,
+    basis: "default",
+    posture: "standard",
+    instruction: undefined,
+  };
 }
 
 /**
@@ -191,8 +213,8 @@ function conditionsHold(when, title, branch, paths) {
  * Absent means the policy is off entirely — no classification, no axes,
  * byte-for-byte today's behaviour. Every refusal below is red at startup,
  * before the first model call, the same refusal class as a bad
- * `strictness`. Posture and intensity are later-PR surface: a rule or
- * policy carrying them is refused as unknown, never silently ignored.
+ * `strictness`. Intensity is later-PR surface: a policy carrying it is
+ * refused as unknown, never silently ignored.
  *
  * @param {unknown} value the raw key value
  * @returns {ApplicabilityPolicy}
@@ -206,7 +228,7 @@ export function validateApplicabilityPolicy(value) {
     if (key !== "bots" && key !== "rules") {
       throw new Error(
         `applicability holds unknown key '${key}' — applicability carries bots and rules ` +
-          `(posture and intensity arrive with later pull requests)`,
+          `(intensity arrives with a later pull request)`,
       );
     }
   }
@@ -263,7 +285,14 @@ function validateRule(entry, index, ids) {
   }
   const raw = /** @type {Record<string, unknown>} */ (entry);
   for (const key of Object.keys(raw)) {
-    if (key !== "id" && key !== "context" && key !== "when" && key !== "run") {
+    if (
+      key !== "id" &&
+      key !== "context" &&
+      key !== "when" &&
+      key !== "run" &&
+      key !== "posture" &&
+      key !== "instruction"
+    ) {
       throw new Error(`${label} holds unknown key '${key}'`);
     }
   }
@@ -314,11 +343,79 @@ function validateRule(entry, index, ids) {
     );
   }
 
+  // The posture axis: the mode set is fixed in code, the default restated
+  // is dead weight, and the same eligibility doctrine that guards `run`
+  // guards the reframe — a convention never governs alone, the external
+  // context is frozen, and a skipped run takes no posture at all. A
+  // non-standard posture IS its mode-scoped document, so the two keys stand
+  // or fall together.
+  /** @type {Exclude<Posture, "standard"> | undefined} */
+  let posture;
+  if (raw["posture"] !== undefined) {
+    const declared = raw["posture"];
+    if (typeof declared !== "string" || !POSTURES.includes(/** @type {never} */ (declared))) {
+      throw new Error(
+        `${label}.posture must be one of standard, maintainer, automation — got '${String(declared)}'`,
+      );
+    }
+    if (declared === "standard") {
+      throw new Error(
+        `${label} declares posture 'standard' — the default restated is dead weight; ` +
+          `a posture key states only a deviation`,
+      );
+    }
+    if (context === undefined) {
+      throw new Error(
+        `${label} sets a non-standard posture without a context — a convention never governs ` +
+          `alone; it must declare an immune context`,
+      );
+    }
+    if (context === "external") {
+      throw new Error(
+        `${label} reframes an external pull request off the standard posture — the external ` +
+          `context is frozen; full review is what an untrusted contribution is for`,
+      );
+    }
+    if (!run) {
+      throw new Error(
+        `${label} sets a posture on a skipped run — run: false ends the run before a posture ` +
+          `could apply, so the declaration is dead weight`,
+      );
+    }
+    posture = /** @type {Exclude<Posture, "standard">} */ (declared);
+  }
+  let instruction;
+  if (raw["instruction"] !== undefined) {
+    const declared = raw["instruction"];
+    if (typeof declared !== "string" || declared === "") {
+      throw new Error(`${label}.instruction must be a document path`);
+    }
+    if (posture === undefined) {
+      throw new Error(
+        `${label} declares an instruction without a non-standard posture — the document has ` +
+          `nothing to be the document of`,
+      );
+    }
+    instruction = declared;
+  }
+  if (posture !== undefined && instruction === undefined) {
+    throw new Error(
+      `${label} declares posture '${posture}' without an instruction — a non-standard posture ` +
+        `is its mode-scoped document, never a second engine`,
+    );
+  }
+
   let when = {};
   if (raw["when"] !== undefined) {
     when = validateWhen(raw["when"], label);
   }
-  return { id, ...(context !== undefined ? { context } : {}), when, run };
+  /** @type {ApplicabilityRule} */
+  const rule = { id, ...(context !== undefined ? { context } : {}), when, run };
+  if (posture !== undefined && instruction !== undefined) {
+    rule.posture = posture;
+    rule.instruction = instruction;
+  }
+  return rule;
 }
 
 /**

@@ -13,6 +13,9 @@ import { reviewPullRequest } from "./run.mjs";
 import { applicabilityArtifactSchemaVersion, serialiseArtifact } from "./artifact.mjs";
 import {
   DOGFOOD_CONFIG,
+  DOGFOOD_POSTURE_CONFIG,
+  DOGFOOD_POSTURE_DOCUMENT,
+  DOGFOOD_POSTURE_DOCUMENT_PATH,
   FIRST_TIME_FORK,
   MAINTAINER_DOCS,
   RELEASE_AUTOMATION,
@@ -36,7 +39,6 @@ beforeAll(() => {
   writeFileSync(p.join(wsRoot, "lib", "new.mjs"), "moved\n");
   CONTEXT.workspace = wsRoot;
 });
-
 /**
  * @param {Partial<import("#core/forge.mjs").PullRequestSnapshot>} [over]
  * @returns {import("#core/forge.mjs").PullRequestSnapshot}
@@ -58,7 +60,7 @@ function snapshot(over = {}) {
 /**
  * A forge stub covering the reads a full happy-path run makes.
  *
- * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot, whoamiLogin?: string, whoamiError?: Error }} [options]
+ * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot, whoamiLogin?: string, whoamiError?: Error, documents?: Record<string, string> }} [options]
  * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }> } }}
  */
 function forgeStub(options = {}) {
@@ -87,6 +89,9 @@ function forgeStub(options = {}) {
     /** @param {string} path */
     /** @param {string} path @returns {Promise<{ content: string } | null>} */
     async getContents(path) {
+      if (options.documents !== undefined && options.documents[path] !== undefined) {
+        return { content: options.documents[path] };
+      }
       if (path.endsWith("review.json5")) {
         return options.config === undefined
           ? null
@@ -2956,5 +2961,197 @@ describe("the applicability axis", () => {
       io: { ...io(withoutPolicy), info: (m) => bare.push(m) },
     });
     expect(bare.some((line) => line.startsWith("policy source:"))).toBe(false);
+  });
+});
+
+describe("the posture axis", () => {
+  /** The dogfood context — the fixtures' head full names must match the base repo. */
+  const DOGFOOD_CONTEXT = { ...CONTEXT, owner: "ecoma-io", repo: "action-agents" };
+  /** @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture */
+  const dogfoodEvent = (fixture) => ({
+    action: "synchronize",
+    pull_request: { ...fixture, number: 7, base: { ref: "main", sha: "8".repeat(40) } },
+  });
+  /** @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture */
+  const snapshotFor = (fixture) =>
+    snapshot({ title: fixture.title, head: { ref: fixture.head.ref, sha: HEAD } });
+  const docsFiles = [
+    /** @type {any} */ ({
+      filename: "docs/guide.md",
+      status: "modified",
+      additions: 4,
+      deletions: 0,
+      patch: "@@ -1 +1,4 @@\n+a\n+b\n+c\n+d",
+    }),
+  ];
+  const withDocument = {
+    documents: { [DOGFOOD_POSTURE_DOCUMENT_PATH]: DOGFOOD_POSTURE_DOCUMENT },
+  };
+
+  it("runs the #193-shaped docs change in the maintainer posture, document in the prompt", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_POSTURE_CONFIG,
+      ...withDocument,
+      files: docsFiles,
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+    });
+    const chat = capturingChat();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(MAINTAINER_DOCS),
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("published");
+    const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
+    expect(
+      /** @type {import("./artifact.mjs").RunArtifactWithApplicability} */ (artifact).applicability,
+    ).toEqual({
+      context: "maintainer",
+      applicable: true,
+      posture: "maintainer",
+      intensity: {},
+      matchedRule: "docs-maintainer",
+      basis: "rule",
+      inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+    });
+    const system = chat.captured[0]?.find((message) => message.role === "system")?.content ?? "";
+    expect(system).toContain('Review posture "maintainer"');
+    expect(system).toContain(DOGFOOD_POSTURE_DOCUMENT);
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("refuses a declared posture document absent from the policy source, before any model call", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_POSTURE_CONFIG,
+      files: docsFiles,
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+    });
+    const chat = capturingChat();
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: DOGFOOD_CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: dogfoodEvent(MAINTAINER_DOCS),
+        io: io(forge, chat),
+      }),
+    ).rejects.toThrow(/posture document .* does not exist on branch/);
+    expect(chat.captured).toHaveLength(0);
+  });
+
+  it("refuses a posture document past the byte cap, before any model call", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_POSTURE_CONFIG,
+      documents: { [DOGFOOD_POSTURE_DOCUMENT_PATH]: "x".repeat(9 * 1024) },
+      files: docsFiles,
+      snapshotOverride: snapshotFor(MAINTAINER_DOCS),
+    });
+    const chat = capturingChat();
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: DOGFOOD_CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: dogfoodEvent(MAINTAINER_DOCS),
+        io: io(forge, chat),
+      }),
+    ).rejects.toThrow(/byte cap/);
+    expect(chat.captured).toHaveLength(0);
+  });
+
+  it("refuses an external-context posture rule red, before any model call", async () => {
+    const forge = forgeStub({
+      config: JSON.stringify({
+        schemaVersion: 1,
+        applicability: {
+          bots: ["acme"],
+          rules: [
+            {
+              id: "forks-posture",
+              context: "external",
+              run: true,
+              posture: "automation",
+              instruction: ".github/action-agents/review/postures/auto.md",
+            },
+          ],
+        },
+      }),
+      snapshotOverride: snapshotFor(FIRST_TIME_FORK),
+    });
+    const chat = capturingChat();
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: DOGFOOD_CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: dogfoodEvent(FIRST_TIME_FORK),
+        io: io(forge, chat),
+      }),
+    ).rejects.toThrow(/external context is frozen/);
+    expect(chat.captured).toHaveLength(0);
+  });
+
+  it("skips the #192 fixture identically under the posture policy — standard, no drift", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_POSTURE_CONFIG,
+      ...withDocument,
+      snapshotOverride: snapshotFor(RELEASE_AUTOMATION),
+    });
+    const chat = capturingChat();
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(RELEASE_AUTOMATION),
+      io: io(forge, chat),
+    });
+    expect(result.outcome).toBe("skip");
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.applicability).toEqual({
+      context: "automation",
+      applicable: false,
+      posture: "standard",
+      intensity: {},
+      matchedRule: "release-prs",
+      basis: "rule",
+      inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+    });
+    expect(chat.captured).toHaveLength(0);
+  });
+
+  it("reviews a first-time fork under the posture policy on the default — the rule never reaches it", async () => {
+    const forge = forgeStub({
+      config: DOGFOOD_POSTURE_CONFIG,
+      ...withDocument,
+      snapshotOverride: snapshotFor(FIRST_TIME_FORK),
+    });
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: DOGFOOD_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: dogfoodEvent(FIRST_TIME_FORK),
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
+    expect(
+      /** @type {import("./artifact.mjs").RunArtifactWithApplicability} */ (artifact).applicability,
+    ).toEqual({
+      context: "external",
+      applicable: true,
+      posture: "standard",
+      intensity: {},
+      matchedRule: null,
+      basis: "default",
+      inputs: { association: "FIRST_TIME_CONTRIBUTOR", head: "fork", authorType: "human" },
+    });
   });
 });

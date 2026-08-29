@@ -166,22 +166,51 @@ in config order, first match wins — never reordered, scored or merged. A rule
 names itself (`id`, unique, the audit record's name), may pin a context
 (absent matches every context), carries conjunctive `when` conditions —
 `title` and `branch` as regular-expression sources, `paths` as globs in the
-one configuration dialect over the post-ignore inventory — and a `run`
-boolean (default true). Nothing matching is the defaults: review runs, and
-the record says so with basis `default`.
+one configuration dialect over the post-ignore inventory — a `run`
+boolean (default true), and, on a rule that pins a non-`external` context and
+runs, a [`posture`](#the-posture-axis) with its instruction document. Nothing
+matching is the defaults: review runs, and the record says so with basis
+`default`.
 
-Two laws the validator enforces rather than asks reviewers to remember:
+Three laws the validator enforces rather than asks reviewers to remember:
 
 - `run: false` must declare a pinned context — a rule built from title,
-  branch or paths conventions never governs alone; and
+  branch or paths conventions never governs alone;
 - that context is never `external` — the external context is frozen; full
-  review is what an untrusted contribution is for.
+  review is what an untrusted contribution is for; and
+- a non-standard posture declares its mode-scoped instruction document, and
+  neither it nor its document rides a `run: false` skip — a skipped run took
+  no posture ([the posture axis](#the-posture-axis)).
 
 An automation rule over an empty allowlist is refused too: it could classify
-nothing and would exist only to confuse the audit. A rule carrying `posture`
-or `intensity` — the later pull requests' surface — is refused as unknown,
-never silently ignored. Every one of these refusals is red at startup, before
+nothing and would exist only to confuse the audit. A rule carrying
+`intensity` — a later pull request's surface — is refused as unknown, never
+silently ignored. Every one of these refusals is red at startup, before
 the first model call, the same refusal class as a bad `strictness`.
+
+### The posture axis
+
+Posture is the applicability axis's second dial: not whether review runs,
+but how a run reads when it does. The set is fixed in code — `standard`
+(the default), `maintainer`, `automation` — and never grows through
+configuration. A non-standard posture is never a second engine: it is the
+same pipeline with a mode-scoped instruction document, loaded at the resolved
+policy source under the same 8 KiB cap as every document and delivered as its
+own prompt tier — below the adversarial strategy, above the rule documents.
+They narrow judgement; they grant nothing.
+
+Posture is declared per rule, and only where the laws allow it to mean
+something: a rule that pins a non-`external` context and runs. An external
+pull request keeps the default whatever any rule says, and a `run: false`
+skip takes no posture at all. The document is required at startup: declaring
+a posture and leaving its document absent at the resolved policy source is a
+refusal before the first model call, the same class as a missing rule
+document. Restating the default (`posture: "standard"`) is refused too — the
+axis exists for the runs that deviate, and a default restated is dead weight.
+
+The applicability fact records the posture next to the deciding rule; a
+skipped run's record always says `standard`. `intensity` remains a later
+pull request's surface.
 
 ### What a skip leaves behind
 
@@ -191,8 +220,8 @@ budget accounting, before the model: the run is green, writes no comment, and
 publishes a **skipped-run record** where a full run would write its artifact —
 the same repository/head/pull-request facts, `outcome: skipped` with the
 reason naming the rule (`#N matched applicability rule '<id>' — review
-intentionally not run`), and the applicability fact with `applicable: false`
-and the deciding rule's id. A pull request already skipped by its draft or
+intentionally not run`), and the applicability fact with `applicable: false`,
+posture `standard`, and the deciding rule's id. A pull request already skipped by its draft or
 closed state writes the same reduced record **when the policy is on**, with
 basis `state` — under a policy, a skip is recorded honestly rather than only
 logged; without one, today's log line alone, unchanged. The log carries one
@@ -251,7 +280,7 @@ file alone.
   // instruction document, not here.
   strictness: "medium",
 
-  // The review's posture, orthogonal to strictness. "standard" (the
+  // The review's strategy, orthogonal to strictness. "standard" (the
   // default) reviews normally; "adversarial" tells the reviewer to treat
   // its candidate findings as hypotheses pending verification. It shapes
   // how the model reviews — never what the contract enforces.
@@ -287,8 +316,10 @@ file alone.
   // allowlists the logins that classify as automation (exact bytes);
   // `rules` are first-match-wins: pin a context, declare conjunctive
   // `when` conditions, and whether review runs. `run: false` must pin a
-  // context and that context is never `external`. See [the applicability
-  // axis](#the-applicability-axis).
+  // context and that context is never `external`. A rule may also declare a
+  // non-standard `posture` with its instruction document — a non-`external`
+  // context only. See [the applicability axis](#the-applicability-axis) and
+  // [the posture axis](#the-posture-axis).
   applicability: {
     bots: ["ecoma-io", "renovate[bot]"],
     rules: [
@@ -297,6 +328,13 @@ file alone.
         context: "automation",
         when: { title: "^chore\\(release\\)", branch: "^release/" },
         run: false,
+      },
+      {
+        id: "docs-maintainer",
+        context: "maintainer",
+        when: { paths: ["docs/**"] },
+        posture: "maintainer",
+        instruction: ".github/action-agents/review/postures/docs.md",
       },
     ],
   },
@@ -312,7 +350,8 @@ file alone.
 
 - `strictness` is one of the three values, `strategy` one of the two,
   `language` a well-formed BCP-47 tag, `maxDiffLines` at least 1;
-- every rule's instruction document must exist on the resolved policy source;
+- every rule's and posture's instruction document must exist on the resolved
+  policy source;
 - instruction and rule documents carry the same 8 KiB cap as every action's
   documents on [the configuration page](configuration.md) — overflow is
   refused, never truncated;

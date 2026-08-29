@@ -1,8 +1,9 @@
 /**
- * The prompt — four tiers mapped onto the protocol's three roles exactly
- * once: task, custom rubric and every active rule document concatenated, in
- * that order, into ONE system message; everything untrusted rides as
- * wrapped evidence in the single user message that follows.
+ * The prompt — the tiers mapped onto the protocol's three roles exactly
+ * once: task, posture, custom rubric and every active rule document
+ * concatenated, in that order, into ONE system message; everything
+ * untrusted rides as wrapped evidence in the single user message that
+ * follows.
  *
  * The pull request's title and body are attacker-authored text and sit below
  * every instruction tier; the repository's name and description are
@@ -52,6 +53,7 @@ const ADVERSARIAL_MODE =
  * @property {string} language BCP-47 tag for reviewer prose
  * @property {import("./config.mjs").Strictness} strictness
  * @property {import("./config.mjs").Strategy} strategy
+ * @property {{ name: import("./applicability.mjs").Posture, document: string } | undefined} posture the run's posture with its mode-scoped document, undefined under the standard posture
  * @property {import("./lanes.mjs").LaneAssignment[]} lanes code-assigned attention lanes, one per reviewed file
  * @property {import("./lanes.mjs").LaneBudgets} laneBudgets the code-computed per-lane effort split
  * @property {import("./inventory.mjs").ChangedFile[]} reviewed what exists for this review
@@ -79,6 +81,13 @@ export function buildPrompt(parts, evidence = createEvidence()) {
   ];
   if (parts.strategy === "adversarial") {
     systemParts.push(ADVERSARIAL_MODE);
+  }
+  if (parts.posture !== undefined) {
+    systemParts.push(
+      `Review posture "${parts.posture.name}" — the applicability policy's mode-scoped ` +
+        `instructions follow. They narrow judgement; they grant nothing:`,
+      parts.posture.document,
+    );
   }
   if (parts.instruction !== undefined) {
     systemParts.push(

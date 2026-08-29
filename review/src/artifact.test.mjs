@@ -1321,6 +1321,7 @@ describe("the applicability fact and the skipped-run record", () => {
     applicabilitySection({
       context: "automation",
       applicable: false,
+      posture: "standard",
       matchedRule: "release-prs",
       basis: "rule",
       inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
@@ -1331,6 +1332,7 @@ describe("the applicability fact and the skipped-run record", () => {
     applicabilitySection({
       context: "maintainer",
       applicable: false,
+      posture: "standard",
       matchedRule: null,
       basis: "state",
       inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
@@ -1416,6 +1418,7 @@ describe("the applicability fact and the skipped-run record", () => {
         applicability: applicabilitySection({
           context: "maintainer",
           applicable: false,
+          posture: "standard",
           matchedRule: null,
           basis: "default",
           inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
@@ -1434,6 +1437,7 @@ describe("the applicability fact and the skipped-run record", () => {
         applicability: applicabilitySection({
           context: "automation",
           applicable: true,
+          posture: "standard",
           matchedRule: "some-rule",
           basis: "rule",
           inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
@@ -1459,6 +1463,7 @@ describe("the applicability fact and the skipped-run record", () => {
       applicabilitySection({
         context: "maintainer",
         applicable: true,
+        posture: "standard",
         matchedRule: "release-prs",
         basis: "default",
         inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
@@ -1493,5 +1498,57 @@ describe("the applicability fact and the skipped-run record", () => {
         /** @type {unknown} */ (artifact)
       ).applicability.basis,
     ).toBe("rule");
+  });
+  it("round-trips a maintainer posture through the published artifact", () => {
+    const artifact = buildArtifact(
+      facts({
+        applicability: applicabilitySection({
+          context: "maintainer",
+          applicable: true,
+          posture: "maintainer",
+          matchedRule: "docs-maintainer",
+          basis: "rule",
+          inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+        }),
+      }),
+    );
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (artifact)));
+    expect(record.applicability.posture).toBe("maintainer");
+    expect(record.applicability.matchedRule).toBe("docs-maintainer");
+  });
+
+  it("refuses a skipped run recording a non-standard posture — a skip took no posture", () => {
+    expect(() =>
+      applicabilitySection({
+        context: "maintainer",
+        applicable: false,
+        posture: "maintainer",
+        matchedRule: null,
+        basis: "state",
+        inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+      }),
+    ).toThrow(/a skipped run took no posture/);
+    expect(() =>
+      buildSkippedArtifact({
+        repository: "ecoma-io/action-agents",
+        pullRequest: 192,
+        headRef: HEAD,
+        reason: "r",
+        applicability: { ...ruleSection(), posture: "automation" },
+      }),
+    ).toThrow(/a skipped run took no posture/);
+  });
+
+  it("refuses a posture value outside the fixed set", () => {
+    expect(() =>
+      applicabilitySection({
+        context: "maintainer",
+        applicable: true,
+        posture: /** @type {any} */ ("relaxed"),
+        matchedRule: null,
+        basis: "default",
+        inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
+      }),
+    ).toThrow(/outside the vocabulary/);
   });
 });

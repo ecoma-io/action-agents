@@ -4,19 +4,19 @@ The pages here are written as they are earned. This index is the map; a row
 without a link is a page that does not exist yet, and saying so is better than
 a link that goes nowhere.
 
-| Page                                                                     | What it covers                                                                                                 |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| [Doctrine](doctrine.md)                                                  | Where a new piece of code goes, and what an action may become                                                  |
-| [Development: configuration](development/configuration.md)               | The shared config-file mechanism — discovery, format, the default branch, precedence                           |
-| [Development: `triage`](development/triage.md)                           | `triage`'s full design — schema, prompt, pipeline                                                              |
-| [Development: `harmonise`](development/harmonise.md)                     | `harmonise`'s full design — document model, prompt, pull request                                               |
-| [Development: `review`](development/review.md)                           | `review`'s full design — config, tool surface, agent loop                                                      |
-| [Development: review applicability](development/applicability-policy.md) | Proposed design (issue #179) — which review mode a pull request gets, from provenance and declared conventions |
-| [Development: the core ceilings](development/ceilings.md)                | The ceiling modules' contracts — evidence, sanitiser, marker comment, workspace, seam                          |
-| Getting started                                                          | Adding one action to a workflow, and the permissions it needs                                                  |
-| Configuration                                                            | `.github/action-agents/<action>.json5`, and the inputs each action takes                                       |
-| `triage`, `review`, `harmonise`                                          | One page per action: what it decides, and what it is not allowed to decide                                     |
-| Providers                                                                | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless                                        |
+| Page                                                                     | What it covers                                                                                                               |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| [Doctrine](doctrine.md)                                                  | Where a new piece of code goes, and what an action may become                                                                |
+| [Development: configuration](development/configuration.md)               | The shared config-file mechanism — discovery, format, the default branch, precedence                                         |
+| [Development: `triage`](development/triage.md)                           | `triage`'s full design — schema, prompt, pipeline                                                                            |
+| [Development: `harmonise`](development/harmonise.md)                     | `harmonise`'s full design — document model, prompt, pull request                                                             |
+| [Development: `review`](development/review.md)                           | `review`'s full design — config, tool surface, agent loop                                                                    |
+| [Development: review applicability](development/applicability-policy.md) | Remaining intensity design (issue #179) — the context, run and posture axes are shipped in [`review`](development/review.md) |
+| [Development: the core ceilings](development/ceilings.md)                | The ceiling modules' contracts — evidence, sanitiser, marker comment, workspace, seam                                        |
+| Getting started                                                          | Adding one action to a workflow, and the permissions it needs                                                                |
+| Configuration                                                            | `.github/action-agents/<action>.json5`, and the inputs each action takes                                                     |
+| `triage`, `review`, `harmonise`                                          | One page per action: what it decides, and what it is not allowed to decide                                                   |
+| Providers                                                                | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless                                                      |
 
 Doctrine comes first deliberately. The rows below it describe behaviour that
 exists — all three actions do their work, released and pinnable —
