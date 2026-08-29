@@ -659,6 +659,37 @@ with a memory from another.
 
 All pairs in step with no recorded state to re-pin → no commit, no branch, no pull request: a green run and a log line. That is the common case on a schedule, and it is the honest one. A run that re-pinned even one record is not this case — its state write still publishes, as the bookkeeping-only commit [the pull request](#the-pull-request) describes.
 
+## Design note — advisory-file shape for concurrent runs
+
+> **Status: open design question, not shipped behaviour.** This section records the decision called for by #156. It compares three shapes for the advisory files; none is implemented yet, and nothing here is behaviour a run exhibits today.
+
+### The collision
+
+Both advisory files publish at fixed paths — `STATE_PATH` and `TM_PATH` are constants, not derived from a run's language — and each holds records for **every** target language: state records are keyed by `destinationPath` across all languages, translation-memory entries by `{sourceHash, targetLang, policyContext}`. A run publishes one commit on `harmonise/<sourceLanguage>` carrying both files in full. Whenever two publishing branches exist — a repository keeping more than one source language, or any workflow topology landing harmonise work on separate branches — both rewrite the same two files, so merging them sequentially conflicts on the advisory files even when their translations touch disjoint paths. The merge queue serializes landings, so this is friction, not data loss: the second branch rebases. The failure mode the queue cannot catch is human — a rebase resolved by dropping records leaves pairs unrecorded or without a verified merge base, which the [manual-edit protection](#manual-edit-protection) doctrine turns into refusals and re-work: fail-closed, surfaced as red runs and cost, never as silent data loss.
+
+### The three shapes
+
+| Axis                                               | (1) Language-suffixed names                                                                                                                                                                                                    | (2) One shared file, queue-serialized runs                                                                                                                                                            | (3) Accept and document the friction                 |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Merge-conflict surface                             | Removed across branches: each branch owns a disjoint file set, so sequential merges never touch the same bytes. Within one branch there is still one writer (the run), so no conflict.                                         | Present but avoided **iff** runs are serialized — the second starts only after the first lands, reads its advisory file, commits on top, a clean fast-forward. Two overlapping runs collide as today. | Present and accepted.                                |
+| TM and state fan-in per language                   | The action reads only its own file (fan-in of one for the run). Reconstructing a cross-source view of the memory joins N files — but the action is the sole reader in v1, so that cost is latent, not paid.                    | One file; no fan-in, ever.                                                                                                                                                                            | One file; no fan-in.                                 |
+| Consumer visibility                                | 2 × (publishing keys) files in `.github/action-agents/harmonise/`, each smaller and scoped; the directory grows with the source-language count.                                                                                | One file, the simplest surface, unchanged.                                                                                                                                                            | One file, unchanged.                                 |
+| Migration for existing repos                       | Real cost: repos carry un-suffixed `state.json`/`tm.json`. A missed migration is loud — refusals, a red run — not silent, and recoverable. Mitigated by a one-cycle legacy-path fallback read the implementation must specify. | None — this is the current shape.                                                                                                                                                                     | None.                                                |
+| Interaction with #165's one-resolved-SHA guarantee | Preserved: the run resolves its branch tip once and reads its own suffixed files at that SHA; the per-file default-branch fallback still applies per file. Cross-branch ownership only narrows what one SHA must cover.        | The natural fit — one shared file, one resolved SHA, exactly the read-side invariant #165 states (restating #112's contract).                                                                         | Unchanged; #165 already covers today's shared files. |
+
+### Recommendation
+
+**Shape 1 — language-suffixed advisory file names, keyed to the publishing branch dimension** (today, the source language, matching `harmonise/<sourceLanguage>`).
+
+The collision is structural — shared advisory files rewritten from disjoint branches — and Shape 1 removes it by construction: a property of the action's own output, enforced in code, holding for every consumer regardless of workflow topology. Shape 2 delegates correctness to the consumer's `concurrency:` configuration, which the action cannot enforce — a group keyed by source language serializes same-source runs but not cross-source ones, and a global group that does is a throughput cost the consumer is free to omit. Where that precondition breaks, Shape 2 regresses to Shape 3's failure mode. Shape 3 codifies it.
+
+Shape 1's only real cost is migration, and it is bounded: the action is the sole reader of these files in v1, so the fan-in cost is latent rather than paid, and a missed migration fails loud (refusals, red) rather than silent. It also fits the generality rule — the suffix is derived from the configured source language, not hard-coded to one, so no rule is special-cased by language.
+
+Two caveats the implementation must settle before code:
+
+- **Suffix follows the branch key.** The advisory files must carry the same key the publishing branch is named by; if the branch scheme later moves to per-target-language branching, the suffix moves with it or the guarantee breaks.
+- **Same target from multiple sources still collides.** Two branches both translating `fr` write the same target's records — but that is genuine content overlap, not a spurious advisory collision, and is outside the common one-source-per-target case.
+
 ## Failure posture
 
 The same law as `triage`: the provider unreachable after retries, a config that does not validate, a set narrowed to nothing — red, not green-on-nothing.
