@@ -664,6 +664,38 @@ describe("run — the size half", () => {
     expect(world.forge.writes).toEqual([]);
   });
 
+  it("reconciles a model-named rung on a PR: never applies it raw, the measured rung stands", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: FILES,
+      answer: '{"labels":["size/s"],"rationale":"echoes the measurement"}',
+    });
+
+    // The ladder is on no sheet, so `size/s` is off-sheet — but on a PR the
+    // rung's only role is to echo the measurement, so a rung-only answer must
+    // not red-run the whole classification: the measured rung is applied and
+    // the answer adds nothing of its own.
+    await run(inputs(), prContext, world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["size/xs"]] }]);
+  });
+
+  it("reconciles a PR answer naming a different rung than the measurement", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: FILES,
+      answer: '{"labels":["size/xl"],"rationale":"wrong guess"}',
+    });
+
+    await run(inputs(), prContext, world);
+
+    // The measurement is authoritative: the wrong rung is ignored (not
+    // applied, not a red-run), and the measured rung is the only size change.
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["size/xs"]] }]);
+  });
+
   it("refuses a pull request past the files listing's ceiling rather than guessing", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const world = io({

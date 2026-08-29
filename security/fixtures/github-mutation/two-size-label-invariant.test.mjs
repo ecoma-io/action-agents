@@ -9,16 +9,15 @@
 // apply the measured rung as the sole size mutation. So the applied set
 // carries at most one rung, from measurement, never from the answer.
 //
-// EXPECTED RED TODAY. The hole the red test points at is the answer side of
-// that same doctrine: the model is offered no rungs, so when it answers the
-// measured rung itself (the cheapest honest answer to a "how big is this"
-// prompt), the run rejects the whole classification as "entirely off-sheet"
-// and applies NOTHING — not even the rung measurement would apply anyway.
-// An answer naming a ladder rung must proceed with exactly that rung, never
-// red-run the run. That hardening belongs in `triage/` (treat ladder names
-// as measured-rung confirmations, or drop them before the off-sheet check);
-// this corpus does not modify production code, so the fixture stays red
-// until it lands.
+// This fixture previously pinned the hole on the answer side of that same
+// doctrine as EXPECTED RED: the model is offered no rungs, so when it
+// answers the measured rung itself (the cheapest honest answer to a "how big
+// is this" prompt), the run used to reject the whole classification as
+// "entirely off-sheet" and apply NOTHING — not even the rung measurement
+// would apply anyway. Hardening in `triage/src/index.mjs` now reconciles a
+// rung-named answer on a PR as a measured-rung confirmation: it is never
+// applied raw, never a red-run, and the measured rung proceeds alone. This
+// fixture is the green pin for that fix.
 //
 // Sibling tests pin what holds today: a mixed answer carrying a rung plus a
 // real category lands exactly the measured rung (one size label), an old
@@ -244,27 +243,25 @@ function appliedSizeLabels(writes) {
 }
 
 describe("triage — exactly one size label, and size rungs never red-run the run", () => {
-  it("EXPECTED RED TODAY — an answer naming the measured rung itself proceeds with exactly that rung, not a red run", async () => {
+  it("an answer naming the measured rung itself proceeds with exactly that rung, not a red run", async () => {
     const world = io({
       event: prEvent(),
       prFiles: FILES,
       answer: '{"labels":["size/s"],"rationale":"it matches the diff"}',
     });
 
-    // TODAY the run rejects "entirely off-sheet" and applies nothing —
-    // this await is where the fixture is red. The rung the model named is
-    // the rung measurement applies anyway; a rung answer must not kill
-    // the run's only size mutation.
+    // A rung-only answer is reconciled before the off-sheet check: the rung
+    // the model named is the rung the measurement applies anyway, so the run
+    // proceeds and lands exactly that rung. This pin is green since the
+    // hardening in triage/src/index.mjs.
     await run(inputs(), prContext, world);
 
     assert.deepEqual(
       appliedSizeLabels(world.forge.writes),
       ["size/s"],
-      "an answer naming the measured rung must land exactly that rung — today " +
-        "the run rejects the whole classification as entirely off-sheet because " +
-        "triage hides rungs from the sheet then treats a rung-only answer as " +
-        "off-sheet (EXPECTED RED); hardening in triage/src/index.mjs should " +
-        "treat ladder names as measured-rung confirmations",
+      "an answer naming the measured rung must land exactly that rung — the " +
+        "run reconciles a ladder name as a measured-rung confirmation instead " +
+        "of treating a rung-only answer as entirely off-sheet",
     );
   });
 

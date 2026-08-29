@@ -228,13 +228,22 @@ export async function run(inputs, context, io) {
 
   const answer = parseLabelsAnswer(content);
   const { accepted, refused } = matchLabels(answer.labels, sheet);
-  for (const name of refused) {
+  // A size rung is a measurement, never a model choice: the ladder is never
+  // offered, so a model naming a rung cannot be "on sheet" — but on a PR the
+  // rung's only legitimate role is to echo the measurement the diff already
+  // produced. A rung-named answer therefore never counts as off-sheet and is
+  // never applied raw; the measured rung stays authoritative (code-derived,
+  // always on-sheet, reversible). On an issue there is no measurement, so a
+  // rung name is off-sheet like any other unoffered name.
+  const rungs = config?.size?.ladder.map((rung) => rung.label) ?? [];
+  const offSheet = size === null ? refused : refused.filter((name) => !rungs.includes(name));
+  for (const name of offSheet) {
     warning(
       `refused the off-sheet label '${name}' — it is not on the effective sheet; not applied`,
     );
   }
   logRationale(answer.rationale);
-  if (accepted.length === 0 && refused.length > 0) {
+  if (accepted.length === 0 && offSheet.length > 0) {
     throw new Error(
       "the model's answer was entirely off-sheet — refusing rather than applying nothing",
     );

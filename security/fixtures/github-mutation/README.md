@@ -7,10 +7,11 @@ drives the real production module through a local fake; none imports another
 test file.
 
 - `two-size-label-invariant.test.mjs` — size rungs are a singleton in the
-  applied label set, measured and never chosen. The rung-answer case is
-  **EXPECTED RED TODAY**: an answer naming the measured rung itself red-runs
-  the whole classification instead of proceeding with that rung; the fix
-  belongs in `triage/`, not in this corpus.
+  applied label set, measured and never chosen. The rung-answer case pins
+  the hardening in `triage/`: an answer naming the measured rung itself now
+  proceeds with exactly that rung instead of red-running the classification
+  (reconciled as a measured-rung confirmation, never applied raw, never
+  coercing a different size).
 - `off-sheet-refusal.test.mjs` — byte-exact sheet membership: off-sheet
   twins (`BUG`, `bug `, `⭐`) and labels a hostile thread body framed for the
   model never reach the forge as a write; a mixed answer applies only its
