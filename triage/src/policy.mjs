@@ -12,11 +12,14 @@
  * Currently it reproduces, faithfully and deterministically, the mutation
  * semantics triage has always had — sheet ceiling, size measured/replaced,
  * workflow-marker clear, off-sheet refusal, entirely-off-sheet red, add
- * dedupe. The config keys that describe future policy (labels.exclusive,
- * labels.priority, labels.triageOwned) stay parsed-but-unapplied here, as
- * they are today; wiring them into mutation is the evaluator PRs' work
- * (items 3/4 of #224), and this module is where that decision logic will
- * live.
+ * dedupe — and it enforces the one-per-thread role rules the policy can
+ * already express: `labels.exclusive` groups and the single-valued
+ * `priority` role (no two members of the same such role in one assessment;
+ * off-policy is a red run, never a partial apply). Wiring `labels.triageOwned`
+ * into mutation and deriving a priority label from a severity judgement are
+ * the evaluator PRs' work (items 3/4 of #224) — the size ladder already
+ * realises owned replacement for the shipped config — and this module is
+ * where that decision logic will live.
  */
 
 import { oneLine } from "#core/one-line.mjs";
@@ -84,6 +87,29 @@ export function decide({ evidence, assessment }) {
     throw new Error(
       "the model's answer was entirely off-sheet — refusing rather than applying nothing",
     );
+  }
+
+  // Exclusive groups and priority are one-per-thread role rules: a config
+  // that lists `labels.exclusive` names roles of which only one label may sit
+  // on a thread, and the `priority` role is ordering metadata that is by
+  // definition single-valued. An assessment that proposes two labels under
+  // the same such role is off-policy — not a judgement the policy can act on
+  // deterministically — so it is refused as a red run: logged, no mutation.
+  // The dogfood policy declares no exclusive group and no priority role, so
+  // this is a no-op for the shipped config while still closing the loophole
+  // for a policy that does declare one. Priority-role labels are never
+  // offered to the model, so this branch is only reachable via a config that
+  // places a priority label on the sheet; the rule still holds if one does.
+  const roleOf = new Map([...(policy?.labels.roles ?? [])]);
+  const singleValuedRoles = new Set([...(policy?.labels.exclusive ?? []), "priority"]);
+  for (const role of singleValuedRoles) {
+    const members = accepted.filter((name) => roleOf.get(name) === role);
+    if (members.length > 1) {
+      throw new Error(
+        `the model's answer names two members of the single-valued '${role}' role ` +
+          `(${members.join(", ")}) — a thread may carry only one; refusing rather than applying both`,
+      );
+    }
   }
 
   // Add-only for the sheet's labels; replacement for size, whichever hand

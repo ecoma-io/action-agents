@@ -157,6 +157,117 @@ describe("decide — labels intent", () => {
   });
 });
 
+describe("decide — exclusive and priority are single-valued role rules", () => {
+  it("applies a lone member of an exclusive role", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          policy: {
+            ...CONFIG,
+            labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
+          },
+        },
+        assessment: { intent: "labels", labels: ["bug"], rationale: "r" },
+      }),
+    );
+    expect(decision.add).toEqual(["bug"]);
+  });
+
+  it("refuses two members of one exclusive role — fail closed, no mutation", () => {
+    expect(() =>
+      decide(
+        input({
+          evidence: {
+            policy: {
+              ...CONFIG,
+              labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
+            },
+          },
+          assessment: { intent: "labels", labels: ["bug", "docs"], rationale: "r" },
+        }),
+      ),
+    ).toThrow(
+      "the model's answer names two members of the single-valued 'semantic-classification' role",
+    );
+  });
+
+  it("allows one label per exclusive role — different roles do not conflict", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          policy: {
+            ...CONFIG,
+            labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
+          },
+        },
+        assessment: { intent: "labels", labels: ["bug", "question"], rationale: "r" },
+      }),
+    );
+    expect(decision.add).toEqual(["bug", "question"]);
+  });
+
+  it("refuses two priority-role labels — ordering metadata is single-valued", () => {
+    expect(() =>
+      decide(
+        input({
+          evidence: {
+            sheet: new Map([
+              ["bug", "a bug"],
+              ["docs", "a doc"],
+              ["prio/a", "priority a"],
+              ["prio/b", "priority b"],
+            ]),
+            policy: {
+              ...CONFIG,
+              labels: {
+                ...CONFIG.labels,
+                use: new Set(["bug", "docs", "prio/a", "prio/b"]),
+                roles: new Map([
+                  ["bug", "semantic-classification"],
+                  ["prio/a", "priority"],
+                  ["prio/b", "priority"],
+                ]),
+                priority: new Map([
+                  ["prio/a", 1],
+                  ["prio/b", 2],
+                ]),
+              },
+            },
+          },
+          assessment: { intent: "labels", labels: ["prio/a", "prio/b"], rationale: "r" },
+        }),
+      ),
+    ).toThrow("the model's answer names two members of the single-valued 'priority' role");
+  });
+
+  it("applies a lone priority-role label", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          sheet: new Map([
+            ["bug", "a bug"],
+            ["prio/a", "priority a"],
+          ]),
+          policy: {
+            ...CONFIG,
+            labels: {
+              ...CONFIG.labels,
+              use: new Set(["bug", "prio/a"]),
+              roles: new Map([
+                ["bug", "semantic-classification"],
+                ["prio/a", "priority"],
+              ]),
+              priority: new Map([["prio/a", 1]]),
+            },
+          },
+        },
+        assessment: { intent: "labels", labels: ["prio/a"], rationale: "r" },
+      }),
+    );
+    expect(decision.add).toEqual(["prio/a"]);
+  });
+});
+
 describe("decide — size semantics", () => {
   /**
    * @param {string[]} labels
