@@ -162,8 +162,8 @@ export function decide({ evidence, assessment }) {
       : [];
 
   // Issue-side evaluator dimensions (PR-C): a sheet-mode issue run asks the
-  // model four bounded questions — quality, routing, relationships,
-  // priority — and this deterministic stage turns the answers into
+  // model three bounded questions — quality, relationships, priority —
+  // and this deterministic stage turns the answers into
   // mutation. Every label these produce comes only through a map the config
   // declares (a form id's routing area, a severity's priority rung, the
   // needs-more-info label); a judgement the config cannot express as a

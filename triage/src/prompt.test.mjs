@@ -261,8 +261,6 @@ describe("the issue-side dimension layer", () => {
     expect(system).toContain('"completeness"');
     // The severity vocabulary comes from labels.priority, not from prose.
     expect(system).toContain('"severity": "high"');
-    // The routing vocabulary comes from the routing-area role.
-    expect(system).toContain('"area": "area/loom"');
   });
 
   it("adds the form facts and the candidates to the user evidence", () => {
@@ -354,9 +352,10 @@ describe("the issue-side dimension layer", () => {
     });
     const system = messages[0]?.content ?? "";
     // The quality and relationships questions are always asked; the severity
-    // and routing vocabularies only when the config declares them.
+    // vocabulary only when the config declares one. Routing is never asked
+    // — it is code-derived from the matched form.
     expect(system).toContain("Answer the issue-side dimensions too");
     expect(system).not.toContain('"severity"');
-    expect(system).not.toContain('"area"');
+    expect(system).not.toContain("- routing:");
   });
 });

@@ -98,7 +98,7 @@ function rationaleOf(answer) {
 }
 
 /**
- * The issue-side dimensions the model answers about — quality, routing,
+ * The issue-side dimensions the model answers about — quality,
  * relationships and priority — on top of the labels it chose. Strict shape
  * (a dimension of the wrong type is a red run, exactly like a malformed
  * labels answer), lenient vocabulary: a relationship `type` outside the five
@@ -106,7 +106,6 @@ function rationaleOf(answer) {
  *
  * @typedef {object} IssueDimensions
  * @property {{ missing?: string[], weak?: string[], completeness?: string, confidence?: number | null }} [quality]
- * @property {{ area?: string | null, confidence?: number | null }} [routing]
  * @property {{ candidates?: Array<{ index: number, type?: string, confidence?: number | null, evidence?: string }> }} [relationships]
  * @property {{ severity?: string | null, confidence?: number | null }} [priority]
  */
@@ -170,29 +169,6 @@ export function parseIssueDimensions(content) {
       parsed.confidence = q["confidence"];
     }
     result.quality = parsed;
-  }
-
-  if (dimensions["routing"] !== undefined) {
-    const routing = dimensions["routing"];
-    if (typeof routing !== "object" || routing === null || Array.isArray(routing)) {
-      throw new Error("the model's routing dimension is not a JSON object");
-    }
-    const r = /** @type {Record<string, unknown>} */ (routing);
-    /** @type {IssueDimensions["routing"]} */
-    const parsed = {};
-    if (r["area"] !== undefined && r["area"] !== null) {
-      if (typeof r["area"] !== "string") {
-        throw new Error("the model's routing.area is not a string");
-      }
-      parsed.area = r["area"];
-    }
-    if (r["confidence"] !== undefined && r["confidence"] !== null) {
-      if (typeof r["confidence"] !== "number") {
-        throw new Error("the model's routing.confidence is not a number");
-      }
-      parsed.confidence = r["confidence"];
-    }
-    result.routing = parsed;
   }
 
   if (dimensions["relationships"] !== undefined) {

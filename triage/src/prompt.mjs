@@ -97,14 +97,6 @@ function layerDimensions(input) {
       `- priority: { "severity": "${severityKeys.join('" | "')}" | null, "confidence": <0..1 or null> }`,
     );
   }
-  const areaLabels = [...(input.policy?.labels.use ?? [])].filter(
-    (name) => input.policy?.labels.roles.get(name) === "routing-area",
-  );
-  if (areaLabels.length > 0) {
-    lines.push(
-      `- routing: { "area": "${areaLabels.join('" | "')}" | null, "confidence": <0..1 or null> }`,
-    );
-  }
   const types = ["duplicate", "related", "likely-resolves", "supersedes", "similar"];
   lines.push(
     `- relationships: { "candidates": [{ "index": <n>, "type": "${types.join(

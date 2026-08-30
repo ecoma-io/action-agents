@@ -33,7 +33,6 @@ export const ASSESSMENT_VERSION = 1;
  * @typedef {object} AssessmentDimensions
  * @property {unknown} classification
  * @property {unknown} quality
- * @property {unknown} routing
  * @property {unknown} relationships
  * @property {unknown} priority
  * @property {unknown} pr
@@ -93,9 +92,9 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
     sheet,
     documents,
     files: evidence.files,
+    forgeSearch: evidence.forgeSearch,
     evidence: evidenceWrapper,
     quality: evidence.quality,
-    forgeSearch: evidence.forgeSearch,
     policy: evidence.policy,
   });
   const { content } = await chat.complete({ model, messages });
@@ -114,7 +113,6 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
       dimensions: {
         classification: undefined,
         quality: undefined,
-        routing: undefined,
         relationships: undefined,
         priority: undefined,
         pr: undefined,
@@ -125,7 +123,6 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
   const emptyDimensions = {
     classification: undefined,
     quality: undefined,
-    routing: undefined,
     relationships: undefined,
     priority: undefined,
     pr: undefined,

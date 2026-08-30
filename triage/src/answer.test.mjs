@@ -107,7 +107,7 @@ describe("parseIssueDimensions", () => {
     expect(parseIssueDimensions('{"labels":["bug"],"rationale":"r"}')).toEqual({});
   });
 
-  it("parses all four dimensions leniently", () => {
+  it("parses all three issue-side dimensions leniently", () => {
     const parsed = parseIssueDimensions(
       JSON.stringify({
         labels: ["bug"],
@@ -119,7 +119,6 @@ describe("parseIssueDimensions", () => {
             completeness: "missing-evidence",
             confidence: 0.8,
           },
-          routing: { area: "loom", confidence: 0.9 },
           relationships: {
             candidates: [
               { index: 0, type: "duplicate", confidence: 0.6, evidence: "same crash" },
@@ -137,7 +136,6 @@ describe("parseIssueDimensions", () => {
         completeness: "missing-evidence",
         confidence: 0.8,
       },
-      routing: { area: "loom", confidence: 0.9 },
       relationships: {
         candidates: [
           { index: 0, type: "duplicate", confidence: 0.6, evidence: "same crash" },
@@ -183,13 +181,18 @@ describe("parseIssueDimensions", () => {
   });
 
   it("treats null members as absent and non-object answers as refused", () => {
-    const parsed = parseIssueDimensions(
-      '{"dimensions":{"priority":{"severity":null},"routing":{"area":null}}}',
-    );
+    const parsed = parseIssueDimensions('{"dimensions":{"priority":{"severity":null}}}');
     expect(parsed.priority).toEqual({});
-    expect(parsed.routing).toEqual({});
     expect(() => parseIssueDimensions("just prose, no object")).toThrow(
       "the model's answer holds no JSON object",
     );
+  });
+
+  it("ignores a routing answer the prompt no longer asks for", () => {
+    // Routing is code-derived from the matched form; a model that still
+    // answers it is never refused on it — the judgement is simply not part
+    // of the output contract any more.
+    expect(parseIssueDimensions('{"dimensions":{"routing":{"area":5}}}')).toEqual({});
+    expect(parseIssueDimensions('{"dimensions":{"routing":"nope"}}')).toEqual({});
   });
 });

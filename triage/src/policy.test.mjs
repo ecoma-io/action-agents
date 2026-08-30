@@ -617,8 +617,8 @@ describe("decide — issue evaluators (sheet mode)", () => {
   });
 
   /**
-   * `assess()` stamps all six dimension slots on a real run; these tests
-   * bypass it, so each fixture spreads its partial over the full six-slot
+   * `assess()` stamps every dimension slot on a real run; these tests
+   * bypass it, so each fixture spreads its partial over the full five-slot
    * shape the Assessment contract requires.
    *
    * @param {import("./answer.mjs").IssueDimensions} dims
@@ -627,7 +627,6 @@ describe("decide — issue evaluators (sheet mode)", () => {
   const fullDimensions = (dims) => ({
     classification: undefined,
     quality: undefined,
-    routing: undefined,
     relationships: undefined,
     priority: undefined,
     pr: undefined,

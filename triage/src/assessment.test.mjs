@@ -95,7 +95,6 @@ describe("assess", () => {
       dimensions: {
         classification: undefined,
         quality: undefined,
-        routing: undefined,
         relationships: undefined,
         priority: undefined,
         pr: undefined,
@@ -116,7 +115,6 @@ describe("assess", () => {
       dimensions: {
         classification: undefined,
         quality: undefined,
-        routing: undefined,
         relationships: undefined,
         priority: undefined,
         pr: undefined,
@@ -143,7 +141,6 @@ describe("assess", () => {
       "priority",
       "quality",
       "relationships",
-      "routing",
     ]);
   });
   it("forwards the model, the messages and the configured model name to the chat", async () => {
