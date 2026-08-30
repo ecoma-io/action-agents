@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { decide } from "./policy.mjs";
+import { renderDryRun } from "./decision.mjs";
 
 const LADDER = [
   { upTo: 10, label: "size/xs" },
@@ -690,6 +691,52 @@ describe("decide — issue evaluators (sheet mode)", () => {
     );
     expect(decision.add).toEqual(["bug", "p1"]);
     expect(decision.remove).toEqual([]);
+  });
+
+  it("does not re-list a derived priority label the thread already carries", () => {
+    const policy = {
+      ...CONFIG,
+      labels: {
+        ...CONFIG.labels,
+        use: new Set(["bug", "p1"]),
+        roles: new Map([
+          ["bug", "semantic-classification"],
+          ["p1", "priority"],
+        ]),
+        priority: new Map([["high", "p1"]]),
+      },
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          policy,
+          thread: {
+            type: "issue",
+            number: 7,
+            title: "t",
+            body: "b",
+            labels: ["p1"],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({ priority: { severity: "high", confidence: 0.9 } }),
+        },
+      }),
+    );
+    // The derived rung is already on the thread: a no-op, never a re-list —
+    // in the decision, in the dry-run preview, and therefore in the write
+    // (mutate sends `decision.add` verbatim).
+    expect(decision.add).toEqual(["bug"]);
+    expect(decision.remove).toEqual([]);
+    const [line] = renderDryRun(decision);
+    expect(line).toContain("would add [bug]");
+    expect(line).not.toMatch(/p1/);
   });
 
   it("warns on an off-map severity and derives no priority label", () => {

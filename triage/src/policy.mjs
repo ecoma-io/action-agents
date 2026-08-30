@@ -302,8 +302,12 @@ export function decide({ evidence, assessment }) {
   // accepted category, or an issue-side label colliding with either) must
   // not send the same label twice, in the dry-run log or in the write.
   // GitHub would absorb the duplicate, but the dry-run promise is a
-  // faithful preview.
-  const toAdd = [...new Set([...add, ...sizeAdd, ...issueAdds])];
+  // faithful preview. The thread's own labels are the other dedupe: a
+  // code-derived issue label — a routing area, a derived priority rung,
+  // the needs-more-info label — the thread already carries is a no-op,
+  // never a re-list.
+  const derivedAdds = issueAdds.filter((name) => !thread.labels.includes(name));
+  const toAdd = [...new Set([...add, ...sizeAdd, ...derivedAdds])];
 
   return {
     kind: "labels",
