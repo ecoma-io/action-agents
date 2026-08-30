@@ -670,6 +670,185 @@ describe("run — the triage marker", () => {
   });
 });
 
+describe("run — the event gate (PR-E)", () => {
+  // Item 1 of #224: a run only pays for the model call and the evidence
+  // reads when the event it was given could have changed triage-relevant
+  // evidence. A skip is decided from payload facts plus the policy's own
+  // declarations, logs one audit line, and writes nothing — so a rerun of
+  // an unchanged thread cannot re-derive a different mutation.
+  const CONFIG_WITH_MARKER = JSON.stringify({
+    ...JSON.parse(CONFIG),
+    labels: { ...JSON.parse(CONFIG).labels, workflowMarkers: ["needs triage"] },
+  });
+  const REPO_LABELS_WITH_MARKER = [...REPO_LABELS, "needs triage"];
+  const withConfig = (files = {}) => ({
+    files: { ".github/action-agents/triage/triage.json5": CONFIG_WITH_MARKER, ...files },
+    repoLabels: REPO_LABELS_WITH_MARKER,
+  });
+  /** @param {string} name @param {{ labels?: string[] }} [thread] */
+  const labeled = (name, thread) => ({ action: "labeled", label: { name }, ...issueEvent(thread) });
+  /** @param {string} name @param {{ labels?: string[] }} [thread] */
+  const unlabeled = (name, thread) => ({
+    action: "unlabeled",
+    label: { name },
+    ...issueEvent(thread),
+  });
+  /** @param {string} action @param {{ labels?: string[] }} [thread] */
+  const prAction = (action, thread) => ({ action, ...prEvent(thread) });
+
+  it("re-triages when the queue marker is applied, and clears it on classification", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: labeled("needs triage", { labels: ["needs triage"] }),
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.request()).not.toBeNull();
+    expect(world.forge.writes).toEqual([
+      { op: "addLabels", args: [7, ["bug"]] },
+      { op: "removeLabel", args: [7, "needs triage"] },
+    ]);
+  });
+
+  it("re-triages when a classification label is applied to a still-queued thread, adding nothing but the marker clear", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: labeled("bug", { labels: ["needs triage", "bug"] }),
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    // The category is already on the thread, so the run only completes the
+    // queue lifecycle: no duplicate add, marker cleared once classified.
+    expect(world.request()).not.toBeNull();
+    expect(world.forge.writes).toEqual([{ op: "removeLabel", args: [7, "needs triage"] }]);
+  });
+
+  it.each([
+    ["a routing-area label on a queued thread", labeled("question", { labels: ["needs triage"] })],
+    ["an unrelated label on an unqueued thread", labeled("breaking", { labels: [] })],
+    [
+      "a classification on an unqueued thread (nothing to clear)",
+      labeled("bug", { labels: ["bug"] }),
+    ],
+  ])("skips %s — no model call, no mutation, one audit line", async (_case, event) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ ...withConfig(), event });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.request()).toBeNull();
+    expect(world.forge.writes).toEqual([]);
+    expect(log.mock.calls.some((call) => String(call[0]).includes("issues.labeled → skip"))).toBe(
+      true,
+    );
+  });
+
+  it("skips a closed issue — no model call, no mutation", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ ...withConfig(), event: { action: "closed", ...issueEvent() } });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.request()).toBeNull();
+    expect(world.forge.writes).toEqual([]);
+  });
+
+  it("skips converting a pull request to draft", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: prAction("converted_to_draft"),
+    });
+
+    await run(inputs(), prContext, world);
+  });
+
+  it.each(["ready_for_review", "synchronized"])(
+    "re-triages pull_request.%s — new evidence reaches the model",
+    async (action) => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const world = io({ ...withConfig(), event: prAction(action) });
+
+      await run(inputs(), prContext, world);
+
+      expect(world.request()).not.toBeNull();
+    },
+  );
+
+  it("removing the queue marker by hand is a dequeue triage respects — it re-adds nothing", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: unlabeled("needs triage", { labels: [] }),
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.request()).toBeNull();
+    expect(world.forge.writes).toEqual([]);
+    expect(log.mock.calls.some((call) => String(call[0]).includes("by hand"))).toBe(true);
+  });
+
+  it("removing a category by hand is respected — no evidence changed, nothing rewritten", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ ...withConfig(), event: unlabeled("bug", { labels: [] }) });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.request()).toBeNull();
+    expect(world.forge.writes).toEqual([]);
+  });
+
+  it("a skipped dry run writes nothing and logs the skip audit line", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: labeled("question", { labels: ["needs triage"] }),
+    });
+
+    await run(inputs({ dryRun: true }), readContext(runner), world);
+
+    expect(world.request()).toBeNull();
+    expect(world.forge.writes).toEqual([]);
+    expect(log.mock.calls.some((call) => String(call[0]).includes("→ skip"))).toBe(true);
+  });
+
+  it("a rerun of an unchanged thread adds no duplicate label", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io();
+    /** @param {string[]} labels */
+    const makeEvent = (labels) => ({ action: "opened", ...issueEvent({ labels }) });
+
+    await run(inputs(), readContext(runner), { ...world, readEvent: async () => makeEvent([]) });
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+
+    // The second event reflects the thread's real post-first-run state: "bug"
+    // is already on it, so the rerun re-derives the same decision and adds
+    // nothing — the label set is stable under rerun.
+    await run(inputs(), readContext(runner), {
+      ...world,
+      readEvent: async () => makeEvent(["bug"]),
+    });
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+  });
+
+  it("a rerun never duplicates the classification comment — the upsert updates in place", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ files: {}, answer: COMMENT_ANSWER });
+    const makeEvent = () => ({ action: "opened", ...issueEvent({ labels: [] }) });
+
+    await run(inputs(), readContext(runner), { ...world, readEvent: async () => makeEvent() });
+    await run(inputs(), readContext(runner), { ...world, readEvent: async () => makeEvent() });
+
+    expect(world.forge.writes.filter((write) => write.op === "createComment")).toHaveLength(1);
+    expect(world.forge.writes.filter((write) => write.op === "updateComment")).toHaveLength(1);
+  });
+});
+
 describe("issue forms apply only the triage marker", () => {
   // The forms and the action share one lifecycle: a form files an issue as
   // `needs triage` and nothing else — no pre-chosen category, which triage's

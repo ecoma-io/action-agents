@@ -19,6 +19,13 @@
  * semantic-classification category is classified, because a thread carrying a
  * category no longer awaits triage; the model is never told the marker's name.
  *
+ * Before any of that, an event gate (item 1 of #224) decides whether the
+ * event that fired this run could have changed triage-relevant evidence.
+ * An event that cannot — a milestone, a review request, a label change
+ * that does not move the queue, a close — logs one audit line and stops:
+ * no evidence read, no model call, no mutation. The matrix and its
+ * reasons live in `events.mjs`.
+ *
  * The shape is the seed's, kept: `readInputs` is pure over an environment;
  * `run` takes its inputs as arguments; and the one place that touches
  * process state is `main` plus the default `io`, which tests replace whole.
@@ -56,6 +63,7 @@ import { assess } from "./assessment.mjs";
 import { decide } from "./policy.mjs";
 import { mutate } from "./mutate.mjs";
 import { measureSize } from "./size.mjs";
+import { decideEvent, eventAuditLine, eventChangedLabel } from "./events.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -169,6 +177,26 @@ export async function run(inputs, context, io) {
   }
   const config = validateConfig(migration.raw);
   info(policySourceAuditLine({ eventName: context.eventName, source, path: loaded.path }));
+  // The event gate (item 1 of #224): whether this event could have changed
+  // triage-relevant evidence. A skip logs one audit line and stops before
+  // any read past the config — no metadata fetch, no evidence, no model
+  // call, no mutation. The label-relevant facts are the payload's and the
+  // policy's own declarations; `events.mjs` documents the whole matrix.
+  const eventAction = typeof event["action"] === "string" ? event["action"] : "";
+  const changedLabel = eventChangedLabel(event);
+  const eventCall = decideEvent({
+    eventName: context.eventName,
+    action: eventAction,
+    changedLabel,
+    markerLabel: config?.labels.workflowMarkers[0] ?? null,
+    roleOf: config === null ? undefined : (name) => config.labels.roles.get(name),
+    threadLabels: thread.labels,
+  });
+  info(eventAuditLine({ eventName: context.eventName, action: eventAction, decision: eventCall }));
+  if (eventCall.mode === "skip") {
+    info("triage: nothing written — the event changed no triage-relevant evidence");
+    return;
+  }
   // The repository's label metadata is read once and shared by the name
   // check and the sheet: what the config declares must exist on GitHub, and
   // what the sheet offers to the model is each label's own description.
@@ -297,7 +325,7 @@ export async function run(inputs, context, io) {
     size,
     quality,
     forgeSearch,
-    eventAction: typeof event["action"] === "string" ? event["action"] : "",
+    eventAction,
     pr,
   });
 

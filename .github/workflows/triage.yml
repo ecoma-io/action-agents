@@ -23,10 +23,17 @@ name: Triage
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, labeled]
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened, labeled]
   workflow_dispatch:
+
+# `labeled` is the queue-marker lifecycle event (item 1 of #224): the issue
+# forms apply `needs triage`, and the action classifies on `labeled` and
+# clears the marker once a category is on the thread. `dry-run: false`
+# below is the only reason triage fires on real threads; every other event
+# in these triggers is re-triaged by the action's event matrix, and the
+# label-only or non-evidence events it receives are skipped internally.
 
 # Exactly what a real run writes and nothing more: labels on issues and
 # pull requests, and the one marked comment. `contents` stays read-only —

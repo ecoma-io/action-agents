@@ -291,6 +291,17 @@ MUTATION    dry-run → logs only                     mutate()
             real    → labels and one marked comment, nothing else
 ````
 
+Between the policy-source audit line and the metadata read, the Read stage
+decides whether the event that fired the run could have changed triage-
+relevant evidence (`triage/src/events.mjs`). The matrix is
+a pure function of payload facts and the policy's own declarations — the
+first `workflowMarkers` entry and the role map — so a skip is decided before
+any forge read exists, logs one audit line (`triage: event issues.labeled →
+skip — reason`), and stops the run: no metadata fetch, no evidence, no model
+call, no mutation. An event that is not on the matrix is re-triaged, never
+silently skipped; `labeled` re-triages only when the change could move the
+queue lifecycle, and `unlabeled` always skips.
+
 The model's answer is matched exactly against the sheet, in the Policy stage:
 `bug `, `Bug` and `BUG` are not `bug`, an off-sheet label is refused and
 logged rather than coerced, and an answer entirely off-sheet fails the run
