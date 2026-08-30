@@ -28,43 +28,45 @@ function createFakeForge() {
   /** @type {{ writes: { op: string, args: unknown[] }[], forge: import("#core/forge.mjs").Forge }} */
   return {
     writes,
-    forge: /** @type {import("#core/forge.mjs").Forge} */ ({
-      whoami: vi.fn(async () => {
-        writes.push({ op: "whoami", args: [] });
-        return { login: "github-actions[bot]" };
-      }),
-      getRepository: fail("getRepository"),
-      getRef: fail("getRef"),
-      readRef: fail("readRef"),
-      listTree: fail("listTree"),
-      getContents: fail("getContents"),
-      listRepositoryLabels: fail("listRepositoryLabels"),
-      listRepositoryLabelsDetailed: fail("listRepositoryLabelsDetailed"),
-      getPullRequest: fail("getPullRequest"),
-      listPullRequestFiles: fail("listPullRequestFiles"),
-      addLabels: vi.fn(async (number, labels) => {
-        writes.push({ op: "addLabels", args: [number, labels] });
-      }),
-      removeLabel: vi.fn(async (number, name) => {
-        writes.push({ op: "removeLabel", args: [number, name] });
-      }),
-      listComments: vi.fn(async () => []),
-      createComment: vi.fn(async (number, body) => {
-        writes.push({ op: "createComment", args: [number, body] });
-        return { id: commentId++ };
-      }),
-      updateComment: vi.fn(async () => {
-        writes.push({ op: "updateComment", args: [] });
-      }),
-      deleteComment: vi.fn(async () => {
-        writes.push({ op: "deleteComment", args: [] });
-      }),
-      createBlob: fail("createBlob"),
-      createTree: fail("createTree"),
-      createCommit: fail("createCommit"),
-      upsertBranch: fail("upsertBranch"),
-      upsertPullRequest: fail("upsertPullRequest"),
-    }),
+    forge: /** @type {import("#core/forge.mjs").Forge} */ (
+      /** @type {unknown} */ ({
+        whoami: vi.fn(async () => {
+          writes.push({ op: "whoami", args: [] });
+          return { login: "github-actions[bot]" };
+        }),
+        getRepository: fail("getRepository"),
+        getRef: fail("getRef"),
+        readRef: fail("readRef"),
+        listTree: fail("listTree"),
+        getContents: fail("getContents"),
+        listRepositoryLabels: fail("listRepositoryLabels"),
+        listRepositoryLabelsDetailed: fail("listRepositoryLabelsDetailed"),
+        getPullRequest: fail("getPullRequest"),
+        listPullRequestFiles: fail("listPullRequestFiles"),
+        searchIssues: fail("searchIssues"),
+        addLabels: vi.fn(async (number, labels) => {
+          writes.push({ op: "addLabels", args: [number, labels] });
+        }),
+        removeLabel: vi.fn(async (number, name) => {
+          writes.push({ op: "removeLabel", args: [number, name] });
+        }),
+        listComments: vi.fn(async () => []),
+        createComment: vi.fn(async (number, body) => {
+          writes.push({ op: "createComment", args: [number, body] });
+          return { id: commentId++ };
+        }),
+        updateComment: vi.fn(async () => {
+          writes.push({ op: "updateComment", args: [] });
+        }),
+        deleteComment: vi.fn(async () => {
+          writes.push({ op: "deleteComment", args: [] });
+        }),
+        createBlob: fail("createBlob"),
+        createTree: fail("createTree"),
+        createCommit: fail("createCommit"),
+        upsertBranch: fail("upsertBranch"),
+      })
+    ),
   };
 }
 
@@ -233,6 +235,81 @@ describe("mutate — comment decision", () => {
     expect(
       log.mock.calls.some((call) =>
         String(call[0]).includes("dry run — the classification would be written as this comment:"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("mutate — signal comment on a labels decision", () => {
+  it("writes the labels, then resolves logins and upserts the signal comment", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fake = createFakeForge();
+    await mutate({
+      decision: {
+        kind: "labels",
+        add: ["bug"],
+        remove: [],
+        refusals: [],
+        logs: [{ level: "info", text: "rationale: Because." }],
+        rationale: "Because.",
+        comment: undefined,
+        signal: {
+          needsMoreInfo: ["Steps to reproduce"],
+          modelJudgedQuality: false,
+          related: null,
+        },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+    });
+    // Order: the labels first, then the identity read a comment write pays
+    // for, then the comment itself.
+    expect(fake.writes[0]).toEqual({ op: "addLabels", args: [7, ["bug"]] });
+    expect(fake.writes[1]).toEqual({ op: "whoami", args: [] });
+    const commentWrite = /** @type {{ op: string, args: unknown[] }} */ (fake.writes[2]);
+    expect(commentWrite.op).toBe("createComment");
+    const body = String(commentWrite.args[1]);
+    expect(body).toContain("<!-- action-agents:triage:");
+    expect(body).toContain("This issue looks incomplete. This is a note, not a closing");
+    expect(body).toContain("The following required field is empty: Steps to reproduce.");
+    expect(body).toContain("_Posted by the `triage` action._");
+    expect(log.mock.calls.some((call) => String(call[0]) === "signal comment created (100)")).toBe(
+      true,
+    );
+  });
+
+  it("renders the signal comment in a dry run and writes nothing", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fake = createFakeForge();
+    await mutate({
+      decision: {
+        kind: "labels",
+        add: ["bug"],
+        remove: [],
+        refusals: [],
+        logs: [{ level: "info", text: "rationale: Because." }],
+        rationale: "Because.",
+        comment: undefined,
+        signal: {
+          needsMoreInfo: [],
+          modelJudgedQuality: false,
+          related: { number: 12, title: "the same crash", type: "duplicate" },
+        },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: true,
+      now: () => 1,
+      action: "triage",
+    });
+    expect(
+      log.mock.calls.some((call) =>
+        String(call[0]).includes(
+          "dry run — would add [bug] and post a signal comment: <!-- action-agents:triage:dry-run -->  Possibly duplicate of #12 — the same crash.",
+        ),
       ),
     ).toBe(true);
   });

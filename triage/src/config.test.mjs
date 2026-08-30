@@ -320,6 +320,67 @@ describe("validateConfig", () => {
     ).toThrow(/also a classification label/);
   });
 });
+describe("validateConfig — issue evaluator keys", () => {
+  it("derives a priority label from a severity-to-label priority mapping", () => {
+    const config = validateConfig({
+      labels: {
+        use: ["high", "normal", "bug"],
+        roles: { high: "priority", normal: "priority" },
+        priority: { high: "high", normal: "normal" },
+      },
+    });
+    expect(config?.labels.priority.get("high")).toBe("high");
+    expect(config?.labels.priority.get("normal")).toBe("normal");
+  });
+
+  it("refuses a priority value that labels.use does not declare", () => {
+    expect(() =>
+      validateConfig({
+        labels: { use: ["bug"], priority: { high: "urgent" } },
+      }),
+    ).toThrow(/labels.use does not declare/);
+  });
+
+  it("refuses a priority value that does not carry the priority role", () => {
+    expect(() =>
+      validateConfig({
+        labels: { use: ["high"], priority: { high: "high" } },
+      }),
+    ).toThrow(/does not carry the priority role/);
+  });
+
+  it("carries an optional needsMoreInfo label through", () => {
+    const config = validateConfig({
+      labels: { use: ["needs more info"], needsMoreInfo: "needs more info" },
+    });
+    expect(config?.labels.needsMoreInfo).toBe("needs more info");
+  });
+
+  it("refuses a needsMoreInfo label that labels.use does not declare", () => {
+    expect(() =>
+      validateConfig({ labels: { use: ["bug"], needsMoreInfo: "needs more info" } }),
+    ).toThrow(/labels.use does not declare/);
+  });
+
+  it("carries a routing map from form id to a routing-area label", () => {
+    const config = validateConfig({
+      labels: {
+        use: ["bug", "core", "docs"],
+        roles: { core: "routing-area", docs: "routing-area" },
+        routing: { bug_report: "core", feature_request: "docs" },
+      },
+    });
+    expect(config?.labels.routing).toEqual({ bug_report: "core", feature_request: "docs" });
+  });
+
+  it("refuses a routing value that does not carry the routing-area role", () => {
+    expect(() =>
+      validateConfig({
+        labels: { use: ["core"], routing: { bug_report: "core" } },
+      }),
+    ).toThrow(/does not carry the routing-area role/);
+  });
+});
 
 describe("migrateConfig — schema 1 to schema 2", () => {
   it("folds the v1 sheets into labels.use, drops the glosses, and moves the marker", () => {
@@ -408,6 +469,14 @@ describe("effectiveSheet", () => {
     expect([...(pr.sheet?.keys() ?? [])].sort()).toEqual(expected);
   });
 
+  it("never offers the needsMoreInfo label — it is added by code, not chosen", () => {
+    const cfg = validateConfig({
+      labels: { use: ["bug", "needs more info"], needsMoreInfo: "needs more info" },
+    });
+    const { sheet } = effectiveSheet({ config: cfg, threadType: "issue", narrowing: [] });
+    expect(sheet?.has("needs more info")).toBe(false);
+    expect(sheet?.has("bug")).toBe(true);
+  });
   it("never offers a label GitHub describes a measurement or a queue reset by", () => {
     // size/xl is on the ladder and size/xs is on the ladder and carries the
     // priority role; 'needs triage' is a workflow marker. None reach a model.

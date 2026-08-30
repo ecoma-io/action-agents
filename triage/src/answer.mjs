@@ -96,3 +96,156 @@ function rationaleOf(answer) {
   }
   return rationale;
 }
+
+/**
+ * The issue-side dimensions the model answers about — quality,
+ * relationships and priority — on top of the labels it chose. Strict shape
+ * (a dimension of the wrong type is a red run, exactly like a malformed
+ * labels answer), lenient vocabulary: a relationship `type` outside the five
+ * the prompt offers is a warning the policy logs, never a coercion.
+ *
+ * @typedef {object} IssueDimensions
+ * @property {{ missing?: string[], weak?: string[], completeness?: string, confidence?: number | null }} [quality]
+ * @property {{ candidates?: Array<{ index: number, type?: string, confidence?: number | null, evidence?: string }> }} [relationships]
+ * @property {{ severity?: string | null, confidence?: number | null }} [priority]
+ */
+
+/**
+ * Parses the model's `dimensions` field, present only on sheet-mode issue
+ * runs. Absent, it is `{}` — the original PR-A/PR-B contract, where an issue
+ * answer carried only labels and a rationale, stays a valid answer. Every
+ * dimension is optional; a wrong type is refused.
+ *
+ * @param {string} content
+ * @returns {IssueDimensions}
+ */
+export function parseIssueDimensions(content) {
+  const value = parseJsonish(content);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("the model's answer is not a JSON object");
+  }
+  const answer = /** @type {Record<string, unknown>} */ (value);
+  if (answer["dimensions"] === undefined) return {};
+
+  const raw = answer["dimensions"];
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("the model's dimensions are not a JSON object");
+  }
+  const dimensions = /** @type {Record<string, unknown>} */ (raw);
+
+  /** @type {IssueDimensions} */
+  const result = {};
+
+  if (dimensions["quality"] !== undefined) {
+    const quality = dimensions["quality"];
+    if (typeof quality !== "object" || quality === null || Array.isArray(quality)) {
+      throw new Error("the model's quality dimension is not a JSON object");
+    }
+    const q = /** @type {Record<string, unknown>} */ (quality);
+    /** @type {IssueDimensions["quality"]} */
+    const parsed = {};
+    if (q["missing"] !== undefined) {
+      if (!Array.isArray(q["missing"]) || !q["missing"].every((item) => typeof item === "string")) {
+        throw new Error("the model's quality.missing is not an array of strings");
+      }
+      parsed.missing = /** @type {string[]} */ (q["missing"]);
+    }
+    if (q["weak"] !== undefined) {
+      if (!Array.isArray(q["weak"]) || !q["weak"].every((item) => typeof item === "string")) {
+        throw new Error("the model's quality.weak is not an array of strings");
+      }
+      parsed.weak = /** @type {string[]} */ (q["weak"]);
+    }
+    if (q["completeness"] !== undefined) {
+      if (typeof q["completeness"] !== "string") {
+        throw new Error("the model's quality.completeness is not a string");
+      }
+      parsed.completeness = q["completeness"];
+    }
+    if (q["confidence"] !== undefined && q["confidence"] !== null) {
+      if (typeof q["confidence"] !== "number") {
+        throw new Error("the model's quality.confidence is not a number");
+      }
+      parsed.confidence = q["confidence"];
+    }
+    result.quality = parsed;
+  }
+
+  if (dimensions["relationships"] !== undefined) {
+    const relationships = dimensions["relationships"];
+    if (
+      typeof relationships !== "object" ||
+      relationships === null ||
+      Array.isArray(relationships)
+    ) {
+      throw new Error("the model's relationships dimension is not a JSON object");
+    }
+    const r = /** @type {Record<string, unknown>} */ (relationships);
+    /** @type {IssueDimensions["relationships"]} */
+    const parsed = {};
+    if (r["candidates"] !== undefined) {
+      if (!Array.isArray(r["candidates"])) {
+        throw new Error("the model's relationships.candidates is not an array");
+      }
+      /** @type {NonNullable<import("./answer.mjs").IssueDimensions["relationships"]>["candidates"]} */
+      const candidates = [];
+      for (const item of r["candidates"]) {
+        if (typeof item !== "object" || item === null || Array.isArray(item)) {
+          throw new Error("a model relationship candidate is not a JSON object");
+        }
+        const candidate = /** @type {Record<string, unknown>} */ (item);
+        if (typeof candidate["index"] !== "number") {
+          throw new Error("a model relationship candidate has no numeric index");
+        }
+        /** @type {{ index: number, type?: string, confidence?: number | null, evidence?: string }} */
+        const parsedCandidate = { index: candidate["index"] };
+        if (candidate["type"] !== undefined) {
+          if (typeof candidate["type"] !== "string") {
+            throw new Error("a model relationship candidate type is not a string");
+          }
+          parsedCandidate.type = candidate["type"];
+        }
+        if (candidate["confidence"] !== undefined && candidate["confidence"] !== null) {
+          if (typeof candidate["confidence"] !== "number") {
+            throw new Error("a model relationship candidate confidence is not a number");
+          }
+          parsedCandidate.confidence = candidate["confidence"];
+        }
+        if (candidate["evidence"] !== undefined) {
+          if (typeof candidate["evidence"] !== "string") {
+            throw new Error("a model relationship candidate evidence is not a string");
+          }
+          parsedCandidate.evidence = candidate["evidence"];
+        }
+        candidates.push(parsedCandidate);
+      }
+      parsed.candidates = candidates;
+    }
+    result.relationships = parsed;
+  }
+
+  if (dimensions["priority"] !== undefined) {
+    const priority = dimensions["priority"];
+    if (typeof priority !== "object" || priority === null || Array.isArray(priority)) {
+      throw new Error("the model's priority dimension is not a JSON object");
+    }
+    const p = /** @type {Record<string, unknown>} */ (priority);
+    /** @type {IssueDimensions["priority"]} */
+    const parsed = {};
+    if (p["severity"] !== undefined && p["severity"] !== null) {
+      if (typeof p["severity"] !== "string") {
+        throw new Error("the model's priority.severity is not a string");
+      }
+      parsed.severity = p["severity"];
+    }
+    if (p["confidence"] !== undefined && p["confidence"] !== null) {
+      if (typeof p["confidence"] !== "number") {
+        throw new Error("the model's priority.confidence is not a number");
+      }
+      parsed.confidence = p["confidence"];
+    }
+    result.priority = parsed;
+  }
+
+  return result;
+}

@@ -1071,3 +1071,120 @@ describe("listPullRequestFiles extras", () => {
     });
   });
 });
+
+describe("searchIssues", () => {
+  const QUERY = "repo:o/r state:open importer crashes";
+  const KEY = `GET /search/issues?q=${encodeURIComponent(QUERY)}&per_page=5`;
+
+  it("returns the shaped hits, the total count and the cap it read at", async () => {
+    const client = forge("o", "r", {
+      [KEY]: json({
+        total_count: 12,
+        items: [
+          {
+            number: 9,
+            title: "Importer crashes on empty files",
+            state: "open",
+            html_url: "https://github.com/o/r/issues/9",
+            created_at: "2026-01-02T03:04:05Z",
+          },
+        ],
+      }),
+    });
+
+    await expect(client.searchIssues(QUERY)).resolves.toEqual({
+      items: [
+        {
+          number: 9,
+          title: "Importer crashes on empty files",
+          state: "open",
+          url: "https://github.com/o/r/issues/9",
+          createdAt: "2026-01-02T03:04:05Z",
+        },
+      ],
+      totalCount: 12,
+      cappedAt: 5,
+    });
+  });
+
+  it("makes exactly one request, at per_page=limit, ignoring any Link: next", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        [KEY]: page(
+          {
+            total_count: 900,
+            items: [],
+          },
+          '<https://api.github.com/search/issues?q=x&page=2>; rel="next"',
+        ),
+      },
+      recorder,
+    );
+
+    const result = await client.searchIssues(QUERY, { limit: 5 });
+    expect(result.totalCount).toBe(900);
+    expect(result.cappedAt).toBe(5);
+    expect(recorder.calls).toHaveLength(1);
+    expect(recorder.calls?.[0]?.url).toContain("per_page=5");
+  });
+
+  it("honours an explicit smaller limit", async () => {
+    const explicit = `GET /search/issues?q=${encodeURIComponent(QUERY)}&per_page=2`;
+    const client = forge("o", "r", {
+      [explicit]: json({ total_count: 3, items: [] }),
+    });
+
+    const result = await client.searchIssues(QUERY, { limit: 2 });
+    expect(result.cappedAt).toBe(2);
+  });
+
+  it("refuses a limit outside 1..MAX_SEARCH_CANDIDATES and a non-integer one", async () => {
+    const client = forge("o", "r", {});
+    await expect(client.searchIssues(QUERY, { limit: 0 })).rejects.toThrow(ForgeError);
+    await expect(client.searchIssues(QUERY, { limit: 6 })).rejects.toThrow(ForgeError);
+    await expect(client.searchIssues(QUERY, { limit: 2.5 })).rejects.toThrow(ForgeError);
+  });
+
+  it("refuses an empty or over-long query before any request is spent", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge("o", "r", {}, recorder);
+    await expect(client.searchIssues("   ")).rejects.toThrow(ForgeError);
+    await expect(client.searchIssues("x".repeat(257))).rejects.toThrow(ForgeError);
+    expect(recorder.calls).toHaveLength(0);
+  });
+
+  it("names the operation when the search fails", async () => {
+    const client = forge("o", "r", { [KEY]: () => new Response("boom", { status: 500 }) });
+    const error = await client.searchIssues(QUERY).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/searching for related issues/);
+  });
+
+  it("refuses a response that is not shaped like a search result", async () => {
+    for (const payload of [
+      { items: [] },
+      { total_count: 0 },
+      { total_count: "many", items: [] },
+      { total_count: 0, items: { 0: {} } },
+    ]) {
+      const client = forge("o", "r", { [KEY]: json(payload) });
+      await expect(client.searchIssues(QUERY)).rejects.toThrow(ForgeError);
+    }
+  });
+
+  it("refuses a hit that is not shaped like an issue", async () => {
+    const malformed = {
+      total_count: 1,
+      items: [{ number: 9, state: "open", html_url: "https://github.com/o/r/issues/9" }],
+    };
+    const client = forge("o", "r", { [KEY]: json(malformed) });
+    const error = await client.searchIssues(QUERY).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/not shaped like an issue/);
+  });
+});

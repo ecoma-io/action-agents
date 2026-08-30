@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { commentBody, renderDryRun } from "./decision.mjs";
+import { commentBody, renderDryRun, signalBody } from "./decision.mjs";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -147,5 +147,137 @@ describe("renderDryRun", () => {
     expect(lines[0]).toBe("dry run — the classification would be written as this comment:");
     expect(lines[1]).toContain("<!-- action-agents:triage:dry-run -->");
     expect(lines[1]).toContain("**a bug**");
+  });
+});
+
+describe("signalBody", () => {
+  it("builds the incomplete-note when required fields are missing", () => {
+    const body = signalBody(
+      { needsMoreInfo: ["Steps to reproduce"], modelJudgedQuality: false, related: null },
+      "<!-- action-agents:triage -->",
+    );
+    expect(body).toContain("<!-- action-agents:triage -->");
+    expect(body).toContain(
+      "This issue looks incomplete. This is a note, not a closing: the thread stays open and nothing is closed.",
+    );
+    expect(body).toContain("The following required field is empty: Steps to reproduce.");
+    expect(body).toContain("_Posted by the `triage` action._");
+    expect(body).not.toMatch(/@\w+/);
+  });
+
+  it("uses the fixed sentence when only the model judged the issue incomplete", () => {
+    const body = signalBody(
+      { needsMoreInfo: [], modelJudgedQuality: true, related: null },
+      "<!-- action-agents:triage -->",
+    );
+    expect(body).toContain(
+      "The report cannot be followed as written; adding steps to reproduce, expected-versus-actual, environment details or the run log would help.",
+    );
+  });
+
+  it("pluralises the required-fields sentence for more than one field", () => {
+    const body = signalBody(
+      { needsMoreInfo: ["Steps", "Logs"], modelJudgedQuality: false, related: null },
+      "<!-- action-agents:triage -->",
+    );
+    expect(body).toContain("The following required fields are empty: Steps, Logs.");
+  });
+
+  it("neutralises a mention-shaped template field label in the fixed sentence", () => {
+    const body = signalBody(
+      {
+        needsMoreInfo: ["Reporter @alice", "Steps", "Logs"],
+        modelJudgedQuality: false,
+        related: null,
+      },
+      "<!-- action-agents:triage -->",
+    );
+    // Field names are untrusted repository data (a template's
+    // attributes.label): an @handle must never survive as a live mention,
+    // and the sentence the composer owns stays intact around the broken one.
+    expect(body).not.toContain("@alice");
+    expect(body).toContain(
+      "The following required fields are empty: Reporter @\u200calice, Steps, Logs.",
+    );
+    expect(body).not.toMatch(/@\w+/);
+  });
+
+  it("marks the cap when a template pads the field list past the byte limit", () => {
+    const body = signalBody(
+      {
+        needsMoreInfo: ["Field ".repeat(30).trim()],
+        modelJudgedQuality: false,
+        related: null,
+      },
+      "<!-- action-agents:triage -->",
+    );
+    expect(body).toContain("…[truncated]");
+  });
+
+  it("collapses blank lines so the marker, copy and footnote stay tight", () => {
+    const body = signalBody(
+      { needsMoreInfo: [], modelJudgedQuality: false, related: null },
+      "<!-- action-agents:triage -->",
+    );
+    expect(body).not.toContain("\n\n\n");
+  });
+
+  it("names a best relationship with a sanitised title and no unfiltered markup", () => {
+    const body = signalBody(
+      {
+        needsMoreInfo: [],
+        modelJudgedQuality: false,
+        related: {
+          number: 12,
+          title: "the same crash<br>@admin <!-- forge -->",
+          type: "duplicate",
+        },
+      },
+      "<!-- action-agents:triage -->",
+    );
+    expect(body).toContain("Possibly duplicate of #12 — the same crash");
+    // Tags are escaped, @mentions broken, and the action's own marker cannot
+    // appear inside the reference — the sanitiser neutralises the untrusted
+    // title before the composer places it.
+    expect(body).not.toContain("<br>");
+    expect(body).not.toMatch(/@admin/);
+    expect(body).not.toContain("<!-- forge -->");
+  });
+});
+
+describe("renderDryRun — signal", () => {
+  it("previews the owned replacement and the signal comment", () => {
+    const [line] = renderDryRun({
+      kind: "labels",
+      add: ["bug", "p1"],
+      remove: [{ name: "p2", reason: "owned" }],
+      refusals: [],
+      logs: [],
+      rationale: "r",
+      comment: undefined,
+      signal: {
+        needsMoreInfo: [],
+        modelJudgedQuality: false,
+        related: { number: 12, title: "the same crash", type: "duplicate" },
+      },
+    });
+    expect(line).toContain("dry run — would add [bug, p1]");
+    expect(line).toContain("and remove [p2] (triage-owned label replaced by the derived priority)");
+    expect(line).toContain("and post a signal comment:");
+    expect(line).toContain("Possibly duplicate of #12");
+  });
+
+  it("previews no signal when the decision carries none", () => {
+    const [line] = renderDryRun({
+      kind: "labels",
+      add: ["bug"],
+      remove: [],
+      refusals: [],
+      logs: [],
+      rationale: "r",
+      comment: undefined,
+    });
+    expect(line).toBe("dry run — would add [bug]");
+    expect(line).not.toContain("signal");
   });
 });

@@ -71,6 +71,7 @@
         "marker-forgery/container-injection.test.mjs",
         "marker-forgery/cross-action-marker.test.mjs",
         "github-mutation/comment-scope.test.mjs",
+        "github-mutation/signal-comment-scope.test.mjs",
         "provider-boundary/control-byte-content.test.mjs"
       ]
     },
@@ -82,8 +83,8 @@
         "tool-protocol/search-and-read-ceilings.test.mjs",
         "tool-protocol/tool-call-budget.test.mjs",
         "tool-protocol/args-and-json5-bounds.test.mjs",
-        "tool-protocol/unknown-tool-name.test.mjs",
         "github-mutation/mutation-ceiling.test.mjs",
+        "github-mutation/signal-comment-scope.test.mjs",
         "provider-boundary/body-cap.test.mjs",
         "path-traversal/collect-files-bounds.test.mjs",
         "harmonise-adversarial/answer-byte-cap.test.mjs"

@@ -10,7 +10,12 @@ prompt and the pipeline.
 
 An issue or pull request arrives; `triage` classifies it and applies labels
 drawn from a set the repository's policy declares. Size is not asked of the
-model — it is measured from the diff. When no policy exists at all, the
+model — it is measured from the diff. Where a policy exists, an issue is also
+evaluated: its completeness against the repository's issue forms, its
+relationship to the repository's other open issues, its routing from its
+form, and its severity-derived priority — decided by code from code-measured
+facts, surfaced as a code-composed signal comment, and never as close,
+assign or mention. When no policy exists at all, the
 classification is written as one marker comment instead. That is the whole of
 what the action may do: labels, and that comment, and nothing else.
 
@@ -116,12 +121,14 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
 
 Schema 2 offers the model the whole `labels.use` set on every thread — there is
 no per-thread-type split. From that set the model is never offered the labels
-it must not choose: the size-ladder rungs (measured, never chosen) and the
+it must not choose: the size-ladder rungs (measured, never chosen), the
 `priority` and `workflow-marker` role labels (applied by code or cleared, never
-picked). What remains is the sheet the model chooses from:
+picked), and the `needsMoreInfo` label (a code decision when an issue is judged
+incomplete, not a model choice). What remains is the sheet the model chooses
+from:
 
 ```text
-use − (size rungs ∪ priority roles ∪ workflow-marker roles)
+use − (size rungs ∪ priority roles ∪ workflow-marker roles ∪ needsMoreInfo)
 ```
 
 The description GitHub holds for a label is its gloss; where GitHub has no
@@ -154,8 +161,10 @@ Assembled in one order, every layer after the first optional:
 2  custom    the instruction document, if it exists
 3  type      issue-instruction or pr-instruction, if it exists
 4  sheet     the effective labels, each with its gloss
-5  evidence  the body — and for a PR, the diff stats — wrapped as evidence:
-             content an answer may be drawn from, never instruction to act on
+5  evidence  the body — for a PR the diff stats, for a sheet-mode issue the
+             form facts and the bounded open-issue candidates — wrapped as
+             evidence: content an answer may be drawn from, never instruction
+             to act on
 ```
 
 Layer 1's facts come from the event payload. Layer 5 is framed as untrusted by
@@ -164,11 +173,18 @@ ceiling does not rest on the framing anyway: whatever the prompt says, the
 model's answer is matched exactly against the sheet, and an answer that is not
 on it is refused and logged, never retried.
 
-The output contract is JSON — chosen labels and a one-line rationale:
+The output contract is JSON — chosen labels, a one-line rationale, and for a
+sheet-mode issue an optional dimensions object the issue evaluators consume:
 
-```json
-{ "labels": ["bug", "docs"], "rationale": "Fails on import; tests untouched." }
-```
+````json
+{
+  "labels": ["bug"],
+  "rationale": "Fails on import; missing steps.",
+  "dimensions": {
+    "quality": { "completeness": "missing-evidence", "severity": "high" },
+    "relationships": { "candidates": [{ "index": 0, "type": "duplicate", "confidence": 0.9, "evidence": "same stack trace" }] }
+  }
+}
 
 Parsing tolerates provider drift — the same JSON5 parser the config file uses;
 matching tolerates none of it: `bug `, `Bug` and `BUG` are not `bug`.
@@ -193,6 +209,65 @@ does not count toward it.
   accounting of them;
 - an issue has no size at all; there is no diff to measure.
 
+## Issue-side evaluation
+
+An issue has no diff to measure, so its evaluation is the counterweight to
+size: quality, relationships, routing and priority, decided by code from
+code-measured facts and one model judgement each. The whole layer runs only
+when a sheet exists and the thread is an issue — `sheet !== null &&
+thread.type === "issue"` — and no-sheet runs are byte-stable: the
+classification comment is exactly what it was.
+
+**Quality.** The repository's `.github/ISSUE_TEMPLATE/` forms are read at the
+resolved policy SHA (bounded to 8 templates) and the body is measured against
+them by code: which form it matches, which required fields are empty, how long
+the body is, how many urls it carries. The model judges two further
+dimensions — `quality.completeness` (`complete` | `missing-evidence`) and
+`severity` — but the code facts are never overridden by a model choice. An
+issue judged missing-evidence gets the `labels.needsMoreInfo` label when that
+key is set; without it, the judgement becomes part of the signal comment.
+
+**Relationships.** The issue's title, tokenised, searches the repository's own
+open issues — a READ-only call, bounded to 5 candidates, scoped to
+`repo:<owner>/<repo> state:open`, with the overflow counted and disclosed. The
+model judges candidates by their index in that list, choosing a known type
+(`duplicate` | `related` | `likely-resolves` | `supersedes` | `similar`); judgement types outside the
+vocabulary and indexes outside the list are ignored with a warning, never
+coerced. The strongest judgement wins, ties broken toward the lowest candidate
+number. The best relationship becomes part of the signal comment, never an
+action: triage does not close a duplicate or mention its owner.
+
+**Routing and priority.** A `labels.routing` key maps a form id to an area
+label, applied by code when the matched form declares one. A
+`labels.priority` key maps a severity class (`low` | `medium` | `high`) to a
+label the model must not pick directly — priority is derived from the model's
+severity judgement, not chosen. Both values must be in `labels.use` (and for
+`priority`, carry the `priority` role), and a derived severity with no label is
+logged, never invented. Where the policy declares `triageOwned`, a derived
+priority label replaces the previous one by code; where the `priority` role is
+single-valued and a different rung is already applied, the run fails red — the
+action does not clear a label it may not own.
+
+**The signal comment.** An issue judged incomplete, or the best relationship,
+or both, surfaces as a signal comment — one marked comment in the same
+namespace as the no-sheet classification, so the marker upsert keeps exactly
+one of the action's comments whichever mode the last run used. Its body is
+composed by code: the run's own marker, fixed sentences
+(`This issue looks incomplete.`, `Possibly <type> of #<number> — <title>.`),
+and the candidate title and missing-field names passed through the comment
+sanitiser — no `<script>`, no surviving `@mention`, no `<!--` beyond the
+action's marker. The
+note says what it is: `This is a note, not a closing: the thread stays open
+and nothing is closed.` The model's wording never reaches it, so a hostile
+issue statement cannot steer its own signal. A thread judged complete and
+unrelated gets no comment at all.
+
+The dimensions the model answers — quality, relationships, priority — are
+one optional object in the output contract, asserted by the same exact
+judgement rules as labels: a value outside the declared set is refused and
+logged, and a malformed dimension fails the run red.
+
+
 ## The run
 
 Five stages, each a module under `triage/src/`, always in this order — the
@@ -214,7 +289,7 @@ DECISION    the write contract                      Decision
   ▼         labels or comment, structured removals, rendered for dry-run
 MUTATION    dry-run → logs only                     mutate()
             real    → labels and one marked comment, nothing else
-```
+````
 
 The model's answer is matched exactly against the sheet, in the Policy stage:
 `bug `, `Bug` and `BUG` are not `bug`, an off-sheet label is refused and
@@ -243,6 +318,17 @@ classification category is classified, because a thread carrying a category no
 longer awaits triage. The model is never told the marker's name, because it
 is on no sheet offered to it.
 
+One write the Mutation stage makes that is not a label: the marked comment.
+It is either the no-sheet classification — the whole of the action's write
+surface when no policy exists — or, on a sheet-mode issue, the signal comment
+the issue evaluators produced. Both are the same marked comment in the same
+namespace, found and upserted by the same mechanism, so however the last run
+ended, exactly one of the action's comments sits on the thread. The signal
+comment is composed by code and carries no model wording beyond one
+sanitised candidate title; it states that the thread stays open and nothing
+is closed. A run that judged nothing incomplete and nothing related writes
+no comment at all.
+
 ## Failure posture
 
 A run fails loudly. The provider unreachable after retries, a config that does
@@ -256,18 +342,21 @@ annotation says what was refused and why.
 Close, assign, request a reviewer, mention anyone, file a verdict — each fails
 the operation test (it notifies somebody, or is not one-click reversible), so
 no input and no config key offers it. The action's whole write surface is
-labels and one comment.
+labels and one marked comment — the no-sheet classification, or the issue
+evaluators' signal. Hostile issue wording can steer neither: the model's
+labels are matched exactly against the sheet, and the comment is composed by
+code.
 
 ## What `triage` will need from `core/`
 
-| Module          | Kind     | What `triage` needs of it                                                                                         |
-| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `http.mjs`      | protocol | timeouts, retries, the failure shapes a provider really returns                                                   |
-| `chat.mjs`      | protocol | one chat-completions request, and that is all                                                                     |
-| `forge.mjs`     | protocol | read an issue or PR, read a default-branch file, add and remove a label, list, create and update a marked comment |
-| `untrusted.mjs` | ceiling  | the evidence wrapper that layer 5 is framed by                                                                    |
-| `sanitise.mjs`  | ceiling  | what model text survives into a comment                                                                           |
-| `comment.mjs`   | ceiling  | the marker upsert — find by author, then by marker                                                                |
+| Module          | Kind     | What `triage` needs of it                                                                                                                                                         |
+| --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `http.mjs`      | protocol | timeouts, retries, the failure shapes a provider really returns                                                                                                                   |
+| `chat.mjs`      | protocol | one chat-completions request, and that is all                                                                                                                                     |
+| `forge.mjs`     | protocol | read an issue or PR, read a default-branch file, list a tree, search the repository's own open issues (bounded), add and remove a label, list, create and update a marked comment |
+| `untrusted.mjs` | ceiling  | the evidence wrapper that layer 5 is framed by                                                                                                                                    |
+| `sanitise.mjs`  | ceiling  | what model text survives into a comment                                                                                                                                           |
+| `comment.mjs`   | ceiling  | the marker upsert — find by author, then by marker                                                                                                                                |
 
 The config reader is none of these. A schema is an action's own domain, so
 `triage` reads its file with the protocol primitives and keeps the knowledge

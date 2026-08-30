@@ -12,7 +12,7 @@
  */
 
 import { buildPrompt } from "./prompt.mjs";
-import { parseCommentAnswer, parseLabelsAnswer } from "./answer.mjs";
+import { parseCommentAnswer, parseIssueDimensions, parseLabelsAnswer } from "./answer.mjs";
 /** @typedef {import("#core/untrusted.mjs").Evidence} EvidenceWrapper */
 
 /** @typedef {import("./evidence.mjs").Evidence} Evidence */
@@ -33,7 +33,6 @@ export const ASSESSMENT_VERSION = 1;
  * @typedef {object} AssessmentDimensions
  * @property {unknown} classification
  * @property {unknown} quality
- * @property {unknown} routing
  * @property {unknown} relationships
  * @property {unknown} priority
  * @property {unknown} pr
@@ -93,7 +92,10 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
     sheet,
     documents,
     files: evidence.files,
+    forgeSearch: evidence.forgeSearch,
     evidence: evidenceWrapper,
+    quality: evidence.quality,
+    policy: evidence.policy,
   });
   const { content } = await chat.complete({ model, messages });
   const descriptor = {
@@ -102,18 +104,32 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
     // Advisory strength, never a probability-of-correctness. Empty in this
     // contract; an evaluator (PR-C/D) populates it from a rubric judgement.
     confidence: null,
-    // The evaluator-populated judgment slots; empty until PR-C/D.
-    dimensions: {
-      classification: undefined,
-      quality: undefined,
-      routing: undefined,
-      relationships: undefined,
-      priority: undefined,
-      pr: undefined,
-    },
   };
   if (sheet === null) {
-    return { intent: "comment", ...parseCommentAnswer(content), ...descriptor };
+    return {
+      intent: "comment",
+      ...parseCommentAnswer(content),
+      ...descriptor,
+      dimensions: {
+        classification: undefined,
+        quality: undefined,
+        relationships: undefined,
+        priority: undefined,
+        pr: undefined,
+      },
+    };
   }
-  return { intent: "labels", ...parseLabelsAnswer(content), ...descriptor };
+  const labels = parseLabelsAnswer(content);
+  const emptyDimensions = {
+    classification: undefined,
+    quality: undefined,
+    relationships: undefined,
+    priority: undefined,
+    pr: undefined,
+  };
+  const isIssue = evidence.thread.type === "issue";
+  const dimensions = isIssue
+    ? { ...emptyDimensions, ...parseIssueDimensions(content) }
+    : emptyDimensions;
+  return { intent: "labels", ...labels, ...descriptor, dimensions };
 }

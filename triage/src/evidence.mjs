@@ -29,14 +29,49 @@
  * @property {string} title untrusted — the author's words
  * @property {string} body untrusted — the author's words
  * @property {string[]} labels the labels the thread already carries, trusted facts
+ * @property {string} createdAt when the thread was filed, ISO — trusted event fact
+ * @property {string} creator the thread author's login — trusted event fact
+ * @property {string} state "open", "closed", or whatever the event names — trusted event fact
  */
 
 /**
- * @typedef {object} SizeMeasurement
- * @property {number} counted
- * @property {number} excluded
- * @property {number} files
- * @property {string} label
+ * One search hit offered to the model as a relationship candidate. The
+ * number and state are forge facts; the title is author prose — untrusted,
+ * like the thread's own title, and framed as such when the prompt is built.
+ *
+ * @typedef {object} SearchCandidate
+ * @property {number} number
+ * @property {string} title untrusted — the author's words
+ * @property {string} state
+ * @property {string} url the thread's html URL
+ * @property {string} createdAt
+ */
+
+/**
+ * The bounded search read: the candidates the model was offered (in the
+ * order offered — position is the index its relationship judgement cites),
+ * the forge's total count, and the cap the read was taken at. `totalCount`
+ * above `cappedAt` means overflow: a search that found more than the cap was
+ * a search that found more than this run ever looks at.
+ *
+ * @typedef {object} ForgeSearchFacts
+ * @property {SearchCandidate[]} candidates
+ * @property {number} totalCount
+ * @property {number} cappedAt
+ */
+
+/**
+ * The deterministic quality facts: which issue form the body came from (if
+ * any), which of its fields are answered, and the body's shape. All code
+ * facts — `missingRequired` is never a model judgement.
+ *
+ * @typedef {object} QualityFacts
+ * @property {{ id: string, name: string } | null} template the form the body matches, if any
+ * @property {Array<{ label: string, present: boolean, required: boolean }>} fieldsPresent the matched form's fields
+ * @property {string[]} missingRequired the matched form's required fields the body leaves empty
+ * @property {number} bodyLength
+ * @property {number} urlCount
+ * @property {boolean} templatesOverflow true when the template read was capped
  */
 
 /**
@@ -50,19 +85,31 @@
  * @property {Map<string, { name: string, description: string, color: string }>} labelMetadata the repository's label registry, GitHub as source of truth
  * @property {PullRequestFile[]} files the PR's diff files (empty for an issue)
  * @property {SizeMeasurement | null} measuredSize measured in code, never a model choice
+ * @property {QualityFacts | null} quality the issue-form facts, when policy and thread type make them available
+ * @property {ForgeSearchFacts | null} forgeSearch the bounded duplicate/relationship search, when it ran
  * @property {string} eventAction the event's `action` field
  */
 
 /**
  * @typedef {object} EvidenceInput
- * @property {{ type: "issue" | "pr", number: number, title: string, body: string, labels: string[] }} thread
+ * @property {{ type: "issue" | "pr", number: number, title: string, body: string, labels: string[], createdAt?: string, creator?: string, state?: string }} thread
  * @property {{ name: string, description: string }} repository
  * @property {TriageConfig | null} config
  * @property {Map<string, string> | null} sheet
  * @property {Map<string, { name: string, description: string, color: string }>} metadata
  * @property {PullRequestFile[]} files
  * @property {SizeMeasurement | null} size
+ * @property {QualityFacts | null} [quality] the issue-form facts, when a sheet-mode issue run gathered them
+ * @property {ForgeSearchFacts | null} [forgeSearch] the bounded candidate search, when a sheet-mode issue run ran it
  * @property {string} eventAction
+ */
+
+/**
+ * @typedef {object} SizeMeasurement
+ * @property {number} counted
+ * @property {number} excluded
+ * @property {number} files
+ * @property {string} label
  */
 
 /**
@@ -81,6 +128,8 @@ export function gatherEvidence({
   metadata,
   files,
   size,
+  quality,
+  forgeSearch,
   eventAction,
 }) {
   return {
@@ -90,6 +139,9 @@ export function gatherEvidence({
       title: thread.title,
       body: thread.body,
       labels: thread.labels,
+      createdAt: thread.createdAt ?? "",
+      creator: thread.creator ?? "",
+      state: thread.state ?? "",
     },
     repository,
     policy: config,
@@ -97,6 +149,8 @@ export function gatherEvidence({
     labelMetadata: metadata,
     files,
     measuredSize: size,
+    quality: quality ?? null,
+    forgeSearch: forgeSearch ?? null,
     eventAction,
   };
 }

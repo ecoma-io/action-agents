@@ -226,6 +226,53 @@ function isNotFound(cause) {
  * @property {string} color the label's hex colour without the `#`, "" when unset
  */
 
+/**
+ * One search hit from the issue-search endpoint. The title is author prose —
+ * untrusted content, evidence an answer may be drawn from, never instruction —
+ * while the number and state are forge facts. The URL is the thread's html
+ * URL, for a human to click; the API URL is never the citation.
+ *
+ * @typedef {object} SearchItem
+ * @property {number} number
+ * @property {string} title untrusted — the author's words
+ * @property {string} state "open", "closed", or whatever the forge answers
+ * @property {string} url the thread's html URL
+ * @property {string} createdAt
+ */
+
+/**
+ * The shaped answer of one bounded search: the hits that fit the page, the
+ * forge's total count — which may exceed the page; that is exactly what
+ * `cappedAt` exists to say — and the cap the page was read at.
+ *
+ * @typedef {object} SearchResult
+ * @property {SearchItem[]} items
+ * @property {number} totalCount
+ * @property {number} cappedAt
+ */
+
+/**
+ * The most candidates one duplicate/relationship search may return — the
+ * top-N the policy's most-likely selection reads. A hard cap: the search is
+ * a bounded surface, and the model's relationship judgement stays a shortlist
+ * (SECURITY ceiling on resources: a search with no bound on the work it
+ * causes is a gap). 5 is deliberately small: the assessment only ever needs
+ * the few threads most likely to be the same work.
+ */
+export const MAX_SEARCH_CANDIDATES = 5;
+
+/**
+ * The search API's own query-length ceiling, mirrored here so a caller's
+ * composed query is refused before it reaches the wire — an over-long query
+ * would otherwise fail as a provider error, after the request was spent.
+ */
+const SEARCH_QUERY_MAX_CHARS = 256;
+
+/**
+ * The per-page ceiling for list operation pages: every list endpoint asks
+ * for at most this many entries in one request, so one bounded page is all
+ * any operation reads.
+ */
 const PER_PAGE = 100;
 
 /**
@@ -248,6 +295,7 @@ const PER_PAGE = 100;
  *   listRepositoryLabelsDetailed: () => Promise<RepositoryLabel[]>,
  *   getPullRequest: (number: number) => Promise<PullRequestSnapshot>,
  *   listPullRequestFiles: (number: number) => Promise<PullRequestFile[]>,
+ *   searchIssues: (query: string, options?: { limit?: number }) => Promise<SearchResult>,
  *   addLabels: (number: number, names: string[]) => Promise<void>,
  *   removeLabel: (number: number, name: string) => Promise<void>,
  *   listComments: (number: number) => Promise<CommentEntry[]>,
@@ -568,6 +616,7 @@ export function createForge(config) {
             status,
             additions,
             deletions,
+
             ...(typeof previousFilename === "string" ? { previousFilename } : {}),
             ...(typeof patch === "string" ? { patch } : {}),
             ...(typeof sha === "string" ? { sha } : {}),
@@ -578,6 +627,75 @@ export function createForge(config) {
         throw new PastFileCeilingError(number, files.length);
       }
       return files;
+    },
+    /**
+     * The bounded issue-search read: `GET /search/issues`, one page of at
+     * most `limit` hits — the cap the policy's duplicate/relationship
+     * shortlist is read from. One request, never a `Link: next` follow: the
+     * page IS the bound, and the caller's `totalCount` tells it what it did
+     * not get. The query is wholly caller-composed (repository scope and
+     * `state:open` live in it); nothing the model says ever reaches it. Each
+     * hit's title is author prose and travels untrusted.
+     *
+     * @param {string} query the full search query, caller-composed
+     * @param {{ limit?: number }} [options]
+     */
+    async searchIssues(query, options = {}) {
+      const operation = "searching for related issues";
+      if (
+        typeof query !== "string" ||
+        query.trim() === "" ||
+        query.length > SEARCH_QUERY_MAX_CHARS
+      ) {
+        throw new ForgeError(
+          operation,
+          new Error(
+            `the search query must be a non-empty string of at most ${String(SEARCH_QUERY_MAX_CHARS)} characters`,
+          ),
+        );
+      }
+      const limit = options.limit ?? MAX_SEARCH_CANDIDATES;
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SEARCH_CANDIDATES) {
+        throw new ForgeError(
+          operation,
+          new Error(
+            `the candidate limit must be an integer between 1 and ${String(MAX_SEARCH_CANDIDATES)}`,
+          ),
+        );
+      }
+      const json = await call(operation, () =>
+        http.request(`/search/issues?q=${encodeURIComponent(query)}&per_page=${String(limit)}`),
+      );
+      const record = asRecord(json);
+      const totalCount = record?.["total_count"];
+      const items = record?.["items"];
+      if (typeof totalCount !== "number") {
+        throw new ForgeError(operation, new Error("the search response names no total_count"));
+      }
+      if (!Array.isArray(items)) {
+        throw new ForgeError(operation, new Error("the search response carries no items list"));
+      }
+      /** @type {SearchItem[]} */
+      const hits = [];
+      for (const raw of items) {
+        const entry = asRecord(raw);
+        const number = entry?.["number"];
+        const title = entry?.["title"];
+        const state = entry?.["state"];
+        const url = entry?.["html_url"];
+        const createdAt = entry?.["created_at"];
+        if (
+          typeof number !== "number" ||
+          typeof title !== "string" ||
+          typeof state !== "string" ||
+          typeof url !== "string" ||
+          typeof createdAt !== "string"
+        ) {
+          throw new ForgeError(operation, new Error("a search hit is not shaped like an issue"));
+        }
+        hits.push({ number, title, state, url, createdAt });
+      }
+      return { items: hits, totalCount, cappedAt: limit };
     },
 
     /**

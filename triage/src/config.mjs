@@ -33,7 +33,9 @@ import { validateSizeConfig } from "./size.mjs";
  * @property {string[]} exclusive role groups whose labels are mutually exclusive — only one label per listed role may sit on a thread
  * @property {string[]} workflowMarkers the queue labels the action clears by code, never by model choice
  * @property {Set<string>} triageOwned labels the action may remove or replace by code — a size rung it measures, never a category a human chose
- * @property {Map<string, unknown>} priority an optional label → priority mapping; empty means no such mapping
+ * @property {Map<string, string>} priority an optional severity-class → priority-label mapping; empty means no such mapping
+ * @property {string | null} needsMoreInfo an optional `use` label the action adds by code when an issue is judged incomplete; null means the action reports it as a comment instead
+ * @property {Record<string, string>} routing an optional issue-form-id → routing-area-label mapping; the label the action adds by code when an issue matches that form, empty by default
  */
 
 /**
@@ -197,6 +199,8 @@ export function validateConfig(raw) {
     workflowMarkers: [],
     triageOwned: new Set(),
     priority: new Map(),
+    needsMoreInfo: null,
+    routing: {},
   };
   /** @type {Partial<Record<keyof typeof DEFAULT_INSTRUCTION_PATHS, string>>} */
   const instructions = {};
@@ -278,18 +282,55 @@ export function validateConfig(raw) {
     }
 
     if (labels["priority"] !== undefined) {
+      // v2 semantics: keys are severity classes the model may choose from,
+      // values are priority-role labels the action derives by code. Each
+      // value must be a `use` label carrying the priority role — a value the
+      // action would derive must be a label it may already apply, and it must
+      // compete in the single-valued priority role for the removal logic to
+      // stay coherent.
       const priority = expectObject(labels["priority"], "labels.priority");
-      for (const [name, value] of Object.entries(priority)) {
-        if (
-          !policy.use.has(name) &&
-          !policy.workflowMarkers.includes(name) &&
-          !policy.roles.has(name)
-        ) {
+      for (const [severity, labelName] of Object.entries(priority)) {
+        if (typeof labelName !== "string" || labelName === "")
           throw new Error(
-            `labels.priority maps '${name}', which no label or role in the policy declares`,
+            `labels.priority.${severity} must be a label name — got '${String(labelName)}'`,
           );
-        }
-        policy.priority.set(name, value);
+        if (!policy.use.has(labelName))
+          throw new Error(
+            `labels.priority maps severity '${severity}' to '${labelName}', which labels.use does not declare`,
+          );
+        if (policy.roles.get(labelName) !== "priority")
+          throw new Error(
+            `labels.priority maps severity '${severity}' to '${labelName}', which does not carry the priority role`,
+          );
+        policy.priority.set(severity, labelName);
+      }
+    }
+
+    if (labels["needsMoreInfo"] !== undefined) {
+      const name = labels["needsMoreInfo"];
+      if (typeof name !== "string" || name === "")
+        throw new Error("labels.needsMoreInfo must be a label name");
+      if (!policy.use.has(name))
+        throw new Error(`labels.needsMoreInfo names '${name}', which labels.use does not declare`);
+      policy.needsMoreInfo = name;
+    }
+
+    if (labels["routing"] !== undefined) {
+      const routing = expectObject(labels["routing"], "labels.routing");
+      for (const [formId, labelName] of Object.entries(routing)) {
+        if (typeof labelName !== "string" || labelName === "")
+          throw new Error(
+            `labels.routing.${formId} must be a label name — got '${String(labelName)}'`,
+          );
+        if (!policy.use.has(labelName))
+          throw new Error(
+            `labels.routing maps form '${formId}' to '${labelName}', which labels.use does not declare`,
+          );
+        if (policy.roles.get(labelName) !== "routing-area")
+          throw new Error(
+            `labels.routing maps form '${formId}' to '${labelName}', which does not carry the routing-area role`,
+          );
+        policy.routing[formId] = labelName;
       }
     }
   }
@@ -357,6 +398,9 @@ export function effectiveSheet({
   for (const [name, role] of config.labels.roles) {
     if (role === "priority" || role === "workflow-marker") neverOffered.add(name);
   }
+  // needsMoreInfo is added by code, never chosen by the model — so it is
+  // never offered on the sheet, like the priority rungs it joins.
+  if (config.labels.needsMoreInfo !== null) neverOffered.add(config.labels.needsMoreInfo);
   const offered = [...config.labels.use].filter((name) => !neverOffered.has(name));
 
   // A file that declares no usable labels is no sheet: the classification

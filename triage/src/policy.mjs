@@ -34,6 +34,18 @@ import { RATIONALE_CHARS } from "./decision.mjs";
 /** @typedef {import("./assessment.mjs").Assessment} Assessment */
 
 /**
+ * The relationship vocabulary the model may judge a candidate with. The
+ * prompt offers exactly these five; anything else a model answers is
+ * ignored with a warning, never coerced into one of these.
+ */
+const RELATIONSHIP_TYPES = new Set([
+  "duplicate",
+  "related",
+  "likely-resolves",
+  "supersedes",
+  "similar",
+]);
+/**
  * @typedef {object} PolicyInput
  * @property {Evidence} evidence
  * @property {Assessment} assessment
@@ -60,6 +72,7 @@ export function decide({ evidence, assessment }) {
         classification: assessment.classification,
         rationale: assessment.rationale,
       },
+      signal: null,
     };
   }
 
@@ -148,20 +161,163 @@ export function decide({ evidence, assessment }) {
       ? [{ name: marker, reason: /** @type {"marker"} */ ("marker") }]
       : [];
 
+  // Issue-side evaluator dimensions (PR-C): a sheet-mode issue run asks the
+  // model three bounded questions — quality, relationships, priority —
+  // and this deterministic stage turns the answers into
+  // mutation. Every label these produce comes only through a map the config
+  // declares (a form id's routing area, a severity's priority rung, the
+  // needs-more-info label); a judgement the config cannot express as a
+  // label becomes a signal comment (`decision.signal`), composed by the
+  // action, never by the model. The whole block is gated on sheet + issue,
+  // so a PR run or a no-sheet run changes nothing it did before.
+  /** @type {string[]} */
+  const issueAdds = [];
+  /** @type {import("./decision.mjs").Removal[]} */
+  const issueRemoves = [];
+  /** @type {{ needsMoreInfo: string[], modelJudgedQuality: boolean, related: import("./decision.mjs").Signal["related"] }} */
+  const signalParts = { needsMoreInfo: [], modelJudgedQuality: false, related: null };
+
+  if (sheet !== null && thread.type === "issue") {
+    const dimensions = /** @type {import("./answer.mjs").IssueDimensions} */ (
+      assessment.dimensions
+    );
+    const qualityFacts = evidence.quality;
+
+    // Routing is deterministic by form: the template the body matched names
+    // the area label, exactly, with no model in the loop. The form facts are
+    // code-measured on the issue itself, never model output.
+    const routingArea = policy?.labels.routing?.[qualityFacts?.template?.id ?? ""];
+    if (routingArea !== undefined) issueAdds.push(routingArea);
+
+    // Priority is a derivation, never a proposal: the model's severity
+    // judgement maps through `labels.priority` to exactly one label. A
+    // severity off the map is a warning, not a failure — the judgement is
+    // advisory, the derivation is the policy's own. Carrying a different
+    // priority-role member is handled by the triageOwned replace below or
+    // the single-valued-role red run above; the derived label itself is
+    // code-derived, so it is excluded from the model's `accepted` set.
+    const severity = dimensions?.priority?.severity;
+    const priorityMap = policy?.labels.priority;
+    if (severity !== undefined && severity !== null && priorityMap !== undefined) {
+      const derived = priorityMap.get(severity);
+      if (derived === undefined) {
+        logs.push({
+          level: "warning",
+          text: `severity '${severity}' is not on the labels.priority map — no priority label applied`,
+        });
+      } else {
+        const members = [...thread.labels, ...accepted].filter(
+          (name) => roleOf.get(name) === "priority",
+        );
+        const carryingOther = members.find((name) => name !== derived);
+        if (carryingOther !== undefined) {
+          if (policy?.labels.triageOwned.has(carryingOther)) {
+            // A triage-owned label is replaced, never left to sit beside a
+            // derived priority: the ownership is the config's promise that
+            // the label is replaceable.
+            issueRemoves.push({ name: carryingOther, reason: "owned" });
+            issueAdds.push(derived);
+          } else {
+            throw new Error(
+              `the thread may carry only one member of the single-valued 'priority' role — ` +
+                `'${carryingOther}', '${derived}' cannot sit together; refusing rather than applying both`,
+            );
+          }
+        } else {
+          issueAdds.push(derived);
+        }
+      }
+    }
+
+    // Quality: an issue judged incomplete gets the config's needs-more-info
+    // label when one is declared; otherwise the judgement becomes a signal
+    // comment naming the deterministic missing-required fields (or, when
+    // only the model judged it, a fixed sentence — never model prose).
+    const needsMoreInfoLabel = policy?.labels.needsMoreInfo ?? null;
+    const modelJudgedIncomplete = dimensions?.quality?.completeness === "missing-evidence";
+    const missingRequired = qualityFacts?.missingRequired ?? [];
+    if (modelJudgedIncomplete || missingRequired.length > 0) {
+      if (needsMoreInfoLabel !== null) {
+        issueAdds.push(needsMoreInfoLabel);
+      } else {
+        signalParts.needsMoreInfo = [...missingRequired];
+        signalParts.modelJudgedQuality = modelJudgedIncomplete;
+      }
+    }
+
+    // Relationships: the model judges search candidates by index; the
+    // deterministic stage keeps only judgements that point at a real
+    // candidate with a known type and a positive confidence, and picks the
+    // most confident (ties: lowest candidate number). Off-vocab types and
+    // out-of-range indexes are ignored with a warning — a model naming
+    // something that is not a candidate mutates nothing.
+    const candidates = evidence.forgeSearch?.candidates ?? [];
+    const judged = (dimensions?.relationships?.candidates ?? []).filter((item) => {
+      const indexOk =
+        Number.isInteger(item.index) && item.index >= 0 && item.index < candidates.length;
+      const typeOk = typeof item.type === "string" && RELATIONSHIP_TYPES.has(item.type);
+      if (!indexOk || !typeOk) {
+        logs.push({
+          level: "warning",
+          text: `ignored a relationship judgement for candidate ${String(item.index)} (${String(
+            item.type,
+          )}) — not a search candidate or not a known relationship type`,
+        });
+        return false;
+      }
+      return typeof item.confidence === "number" && item.confidence > 0;
+    });
+    if (judged.length > 0) {
+      let best = /** @type {(typeof judged)[number]} */ (judged[0]);
+      for (const item of judged) {
+        const itemConfidence = item.confidence ?? 0;
+        const bestConfidence = best.confidence ?? 0;
+        const bestItem = candidates[best.index];
+        const itemFor = candidates[item.index];
+        if (bestItem === undefined || itemFor === undefined) continue;
+        const better =
+          itemConfidence > bestConfidence ||
+          (itemConfidence === bestConfidence && itemFor.number < bestItem.number);
+        if (better) best = item;
+      }
+      const bestCandidate = candidates[best.index];
+      if (bestCandidate !== undefined) {
+        signalParts.related = {
+          number: bestCandidate.number,
+          title: bestCandidate.title,
+          type: /** @type {string} */ (best.type),
+        };
+      }
+    }
+  }
+
+  const signal =
+    signalParts.needsMoreInfo.length > 0 ||
+    signalParts.modelJudgedQuality ||
+    signalParts.related !== null
+      ? { ...signalParts }
+      : null;
+
   // Dedupe the add list: a model answer (or a size rung colliding with an
-  // accepted category) must not send the same label twice, in the dry-run
-  // log or in the write. GitHub would absorb the duplicate, but the dry-run
-  // promise is a faithful preview.
-  const toAdd = [...new Set([...add, ...sizeAdd])];
+  // accepted category, or an issue-side label colliding with either) must
+  // not send the same label twice, in the dry-run log or in the write.
+  // GitHub would absorb the duplicate, but the dry-run promise is a
+  // faithful preview. The thread's own labels are the other dedupe: a
+  // code-derived issue label — a routing area, a derived priority rung,
+  // the needs-more-info label — the thread already carries is a no-op,
+  // never a re-list.
+  const derivedAdds = issueAdds.filter((name) => !thread.labels.includes(name));
+  const toAdd = [...new Set([...add, ...sizeAdd, ...derivedAdds])];
 
   return {
     kind: "labels",
     add: toAdd,
-    remove: [...replace, ...clearMarker],
+    remove: [...replace, ...clearMarker, ...issueRemoves],
     refusals: offSheet,
     logs: [...logs, ...rationaleLog(assessment.rationale)],
     rationale: assessment.rationale,
     comment: undefined,
+    signal,
   };
 }
 

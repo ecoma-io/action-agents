@@ -25,7 +25,20 @@ export const RATIONALE_CHARS = 300;
  *
  * @typedef {object} Removal
  * @property {string} name
- * @property {"size" | "marker"} reason
+ * @property {"size" | "marker" | "owned"} reason
+ */
+
+/**
+ * A code-derived signal a sheet-mode issue run posts as a comment: the
+ * action's own words about the thread's quality or relationship to another
+ * thread. Only needs-more-info and a best relationship are signalled; a
+ * priority the action derives is a label, never a signal. Every word here is
+ * composed by the action — model text never reaches a signal body.
+ *
+ * @typedef {object} Signal
+ * @property {string[]} needsMoreInfo the deterministic missing-required fields, when the issue is judged incomplete
+ * @property {boolean} modelJudgedQuality true when the incomplete judgement came from the model's completeness, not from a missing form field
+ * @property {{ number: number, title: string, type: string } | null} related the best relationship candidate, when one was judged
  */
 
 /**
@@ -52,6 +65,7 @@ export const RATIONALE_CHARS = 300;
  * @property {DecisionLog[]} logs lines the executor emits verbatim
  * @property {string} rationale the model's one-line rationale, for the run log
  * @property {{ classification: string, rationale: string } | undefined} comment present only when `kind === "comment"`
+ * @property {Signal | null} [signal] a code-composed signal comment a sheet-mode issue run may post; absent for runs that post none
  */
 
 /**
@@ -89,6 +103,58 @@ export function commentBody(answer, marker) {
 }
 
 /**
+ * The signal comment a sheet-mode issue run posts — the action's own words,
+ * never model prose. It states what is missing or related, and names the
+ * one-click reversible surface (a comment) as the ceiling: it never asks to
+ * close, assign or mention anyone. `#n` references and the candidate title
+ * are the only untrusted fragments, and they pass through the sanitiser.
+ *
+ * @param {Signal} signal
+ * @param {string} marker
+ * @returns {string}
+ */
+export function signalBody(signal, marker) {
+  /** @type {string[]} */
+  const lines = [marker];
+  // The field names enter `signal.needsMoreInfo` from the repository's own
+  // `.github/ISSUE_TEMPLATE/*.yml` `attributes.label` entries — untrusted
+  // repository data on its way into a comment. They get the same treatment
+  // as the related-candidate title below: one line, mention-broken, tags
+  // escaped, capped, and the action's own marker stripped.
+  const missingFields =
+    signal.needsMoreInfo.length > 0
+      ? sanitiseCommentText(oneLine(signal.needsMoreInfo.join(", ")), {
+          maxChars: 80,
+          forbidden: [marker],
+        }).text
+      : "";
+  if (signal.needsMoreInfo.length > 0 || signal.modelJudgedQuality) {
+    lines.push(
+      "",
+      "This issue looks incomplete. This is a note, not a closing: the thread stays open and nothing is closed.",
+      "",
+      signal.modelJudgedQuality && signal.needsMoreInfo.length === 0
+        ? "The report cannot be followed as written; adding steps to reproduce, expected-versus-actual, environment details or the run log would help."
+        : `The following required field${signal.needsMoreInfo.length === 1 ? "" : "s"} ${
+            signal.needsMoreInfo.length === 1 ? "is" : "are"
+          } empty: ${missingFields}.`,
+    );
+  }
+  if (signal.related !== null) {
+    const title = sanitiseCommentText(oneLine(signal.related.title), {
+      maxChars: 80,
+      forbidden: [marker],
+    }).text;
+    lines.push(
+      "",
+      `Possibly ${signal.related.type} of #${String(signal.related.number)} — ${title || "(untitled)"}.`,
+    );
+  }
+  lines.push("", "_Posted by the `triage` action._");
+  return lines.filter((line, index, all) => !(line === "" && all[index - 1] === "")).join("\n");
+}
+
+/**
  * Renders a decision as a human-readable dry-run preview. Faithful: every
  * line here is exactly the line a live run would print or write, so the
  * dry-run promise — a preview that cannot surprise — is kept by
@@ -107,6 +173,7 @@ export function renderDryRun(decision) {
   }
   const replace = decision.remove.filter((removal) => removal.reason === "size");
   const clearMarker = decision.remove.filter((removal) => removal.reason === "marker");
+  const owned = decision.remove.filter((removal) => removal.reason === "owned");
   const parts = [`dry run — would add [${decision.add.join(", ")}]`];
   if (replace.length > 0) {
     parts.push(
@@ -116,6 +183,16 @@ export function renderDryRun(decision) {
   if (clearMarker.length > 0) {
     parts.push(
       ` and remove [${clearMarker.map((removal) => removal.name).join(", ")}] (triage marker cleared on classification)`,
+    );
+  }
+  if (owned.length > 0) {
+    parts.push(
+      ` and remove [${owned.map((removal) => removal.name).join(", ")}] (triage-owned label replaced by the derived priority)`,
+    );
+  }
+  if (decision.signal != null) {
+    parts.push(
+      ` and post a signal comment: ${signalBody(decision.signal, "<!-- action-agents:triage:dry-run -->").replace(/\n/g, " ")}`,
     );
   }
   return [parts.join("")];
