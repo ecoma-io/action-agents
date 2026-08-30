@@ -119,11 +119,11 @@ because prose belongs in a document.
 
 ## The actions
 
-|                                          |                                                                                                                                      |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| [**`triage`**](triage/action.yaml)       | Classifies issues and pull requests, applies semantic labels drawn from a list you declare, and assesses size.                       |
-| [**`review`**](review/action.yaml)       | Reviews a pull request as an agent: it decides what to read, searches and verifies before it claims anything, and comments findings. |
-| [**`harmonise`**](harmonise/action.yaml) | Keeps the multilingual versions of a repository's documentation semantically in step with one another.                               |
+|                                          |                                                                                                                                                                                                                                     |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**`triage`**](triage/action.yaml)       | Classifies issues and pull requests against a label sheet you declare; a bounded model assessment feeds a deterministic policy that decides the mutation — labels and one comment, nothing else — with size measured from the diff. |
+| [**`review`**](review/action.yaml)       | Reviews a pull request as an agent: it decides what to read, searches and verifies before it claims anything, and comments findings.                                                                                                |
+| [**`harmonise`**](harmonise/action.yaml) | Keeps the multilingual versions of a repository's documentation semantically in step with one another.                                                                                                                              |
 
 `review` is designed for pull requests raised from within the repository. If you
 are tempted to reach for `pull_request_target` to cover forks, read

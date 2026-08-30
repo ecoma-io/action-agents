@@ -94,12 +94,12 @@ The full mechanism is in the [configuration page](../development/configuration.m
 
 The file is JSON5 (comments, trailing commas, single quotes).
 
-| Key             | Required | What it does                                                                                                                                                         |
-| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | no       | Must be `2` if present. A higher major is refused at startup. A schema-1 file (`labels.{universal,issues,pr}` + `triageMarker`) is migrated on read, with a warning. |
-| `labels`        | no       | The policy block: `use` (the usable set), `roles` (what each label is for), `exclusive`, `workflowMarkers`, `triageOwned`, `priority`. See below.                    |
-| `size`          | no       | Size measurement from the diff: `exclude` (globs), `ladder` (rungs with `upTo` and `label`). The catch-all rung has no `upTo`.                                       |
-| `instructions`  | no       | Paths to instruction documents: `instruction` (both), `issue-instruction` (issues only), `pr-instruction` (pull requests only).                                      |
+| Key             | Required | What it does                                                                                                                                                                  |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | no       | Absent is accepted (pre-versioning files keep working); `1` and `2` are readable — a schema-1 file is migrated on read with a warning; anything else is refused at startup.   |
+| `labels`        | no       | The policy block: `use` (the usable set), `roles` (what each label is for), `exclusive`, `workflowMarkers`, `triageOwned`, `priority`, `needsMoreInfo`, `routing`. See below. |
+| `size`          | no       | Size measurement from the diff: `exclude` (globs), `ladder` (rungs with `upTo` and `label`). The catch-all rung has no `upTo`.                                                |
+| `instructions`  | no       | Paths to instruction documents: `instruction` (both), `issue-instruction` (issues only), `pr-instruction` (pull requests only).                                               |
 
 #### `labels` — a policy, not a registry
 
@@ -125,11 +125,16 @@ from the repository.
   The model is never told the marker's name.
 - **`triageOwned`** — an array of label names the action owns and may clear or
   replace (for example the size rungs it measures and supersedes).
-- **`priority`** — a map of name to ordering metadata.
+- **`priority`** — a map of severity class — the keys are yours, `low`/`medium`/`high` by convention — to a priority-role label the action derives by code; never offered to the model.
+- **`needsMoreInfo`** — a label the action applies by code when an issue is
+  judged incomplete; never offered to the model as a choice.
+- **`routing`** — a map of issue-form id to a `routing-area` label, applied by
+  code when the matched form declares one.
 
-The labels the model is offered are `use` minus the size-ladder labels and the
-`priority`/`workflow-marker` role labels: the rungs are measured, not chosen,
-and the queue marker is cleared, not picked.
+The labels the model is offered are `use` minus the size-ladder labels, the
+`priority` and `workflow-marker` role labels, and the `needsMoreInfo` label:
+the rungs are measured, the priority label is derived, the queue marker is
+cleared and `needsMoreInfo` is a code decision — none of them picked.
 
 ```json5
 labels: {
@@ -154,8 +159,7 @@ labels: {
     "priority/low": "priority",
   },
   exclusive: ["semantic-classification"],
-  workflowMarkers: ["needs-triage"],
-  triageOwned: ["needs-triage"],
+  workflowMarkers: ["needs triage"],
 }
 ```
 
@@ -197,7 +201,7 @@ model is never told the marker's name — it is on no offered sheet.
 
 ```json5
 labels: {
-  workflowMarkers: ["needs-triage"],
+  workflowMarkers: ["needs triage"],
 }
 ```
 
@@ -236,7 +240,7 @@ The defaults, when a key is absent:
       question: "routing-area",
     },
     exclusive: ["semantic-classification"],
-    workflowMarkers: ["needs-triage"],
+    workflowMarkers: ["needs triage"],
     triageOwned: ["size/small", "size/xl"],
   },
   size: {
@@ -285,6 +289,13 @@ its own. The two deliberate exceptions are code-driven, never model choices:
 the **size** label is a replacement (the measured rung supersedes whichever
 hand last applied a size on the thread), and a **workflow marker** queue label is
 removed once the run classifies a classification category.
+**Issue-side outputs, sheet mode**: where a sheet exists and the thread is an
+issue, the run may also apply `labels.needsMoreInfo` (an issue judged
+incomplete), `labels.routing` (the matched form's area label) and
+`labels.priority` (derived from the model's severity judgement) — each
+decided by code, none by the model — and post one code-composed signal
+comment when it judged the issue incomplete or related. The signal states
+that the thread stays open; nothing is closed, assigned or mentioned.
 
 **Marker comment**: when the config file has no label sheet (policy-empty), the
 action writes a single comment with the classification text. This is the same
@@ -350,17 +361,18 @@ and answers in one round.
 
 ## Failure modes
 
-| Symptom                                                      | Cause                                                                 | Resolution                                                           |
-| ------------------------------------------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| "Label X is not in the sheet"                                | The model chose a label the config does not declare.                  | Declare it in the config, or remove it from the `labels:` input.     |
-| "No config file at PATH"                                     | `config-path` set to a path that does not exist.                      | Fix the path, or remove `config-path` and use the default locations. |
-| "schemaVersion Y is not supported"                           | Config file declares a schema version this build does not understand. | Downgrade `schemaVersion` or update the action tag.                  |
-| "Size label X is declared on multiple rungs"                 | A label appears on two ladder entries.                                | Deduplicate.                                                         |
-| "declares the label 'X', which the repository does not have" | A policy names a label GitHub does not hold.                          | Create the label in GitHub, or remove it from `labels.use`.          |
-| "Instruction document exceeds 8 KiB"                         | An instruction document is too large.                                 | Shorten it.                                                          |
-| "Config file exceeds 64 KiB"                                 | The config file is too large.                                         | Reduce it — a 64 KiB policy is already very long prose.              |
-| Provider unreachable                                         | The `api-url` endpoint did not respond within `request-timeout-ms`.   | Check the endpoint, the network, and the timeout value.              |
-| HTTP 403 on labels                                           | `pull-requests: write` scope missing.                                 | Add the scope to the workflow's `permissions:` block.                |
+| Symptom                                                      | Cause                                                                     | Resolution                                                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| "Label X is not in the sheet"                                | The model chose a label the config does not declare.                      | Declare it in the config, or remove it from the `labels:` input.                 |
+| "No config file at PATH"                                     | `config-path` set to a path that does not exist.                          | Fix the path, or remove `config-path` and use the default locations.             |
+| "schemaVersion Y is not supported"                           | Config file declares a schema version this build does not understand.     | Downgrade `schemaVersion` or update the action tag.                              |
+| "Size label X is declared on multiple rungs"                 | A label appears on two ladder entries.                                    | Deduplicate.                                                                     |
+| "declares the label 'X', which the repository does not have" | A policy names a label GitHub does not hold.                              | Create the label in GitHub, or remove it from `labels.use`.                      |
+| "Instruction document exceeds 8 KiB"                         | An instruction document is too large.                                     | Shorten it.                                                                      |
+| "Config file exceeds 64 KiB"                                 | The config file is too large.                                             | Reduce it — a 64 KiB policy is already very long prose.                          |
+| Provider unreachable                                         | The `api-url` endpoint did not respond within `request-timeout-ms`.       | Check the endpoint, the network, and the timeout value.                          |
+| HTTP 403 on labels                                           | `pull-requests: write` scope missing.                                     | Add the scope to the workflow's `permissions:` block.                            |
+| Run failed red — the answer was entirely off-sheet           | The model named no label the sheet declares, and no PR size rung applies. | The sheet is the contract: refine it, or the `labels:` input, never the matcher. |
 
 ## Recipes
 
@@ -423,7 +435,7 @@ at the same point the sheet is — before the first model call.
 
 ### Queue marker
 
-Mark every unclassified issue with `needs-triage` and let the action remove it
+Mark every unclassified issue with `needs triage` and let the action remove it
 once a classification category is assigned.
 
 ```json5
@@ -435,7 +447,7 @@ once a classification category is assigned.
       bug: "semantic-classification",
       enhancement: "semantic-classification",
     },
-    workflowMarkers: ["needs-triage"],
+    workflowMarkers: ["needs triage"],
   },
 }
 ```

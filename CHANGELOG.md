@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Migration notes
+
+- **triage config schema 2.** The config is now a policy, not a label
+  registry: labels are named in `labels.use` with a `roles` policy, and their
+  words come from GitHub's own label metadata. A schema-1 file
+  (`labels.{universal,issues,pr}` + `triageMarker`) is migrated on read with
+  a warning — no action needed — and the queue marker label is spelled
+  `needs triage` (with a space) everywhere.
+
 ## [0.5.0](https://github.com/ecoma-io/action-agents/compare/v0.4.1...v0.5.0) (2026-08-29)
 
 
