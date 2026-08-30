@@ -231,7 +231,7 @@ key is set; without it, the judgement becomes part of the signal comment.
 open issues — a READ-only call, bounded to 5 candidates, scoped to
 `repo:<owner>/<repo> state:open`, with the overflow counted and disclosed. The
 model judges candidates by their index in that list, choosing a known type
-(`duplicate` | `related` | `parent` | `child`); judgement types outside the
+(`duplicate` | `related` | `likely-resolves` | `supersedes` | `similar`); judgement types outside the
 vocabulary and indexes outside the list are ignored with a warning, never
 coerced. The strongest judgement wins, ties broken toward the lowest candidate
 number. The best relationship becomes part of the signal comment, never an
@@ -254,15 +254,16 @@ namespace as the no-sheet classification, so the marker upsert keeps exactly
 one of the action's comments whichever mode the last run used. Its body is
 composed by code: the run's own marker, fixed sentences
 (`This issue looks incomplete.`, `Possibly <type> of #<number> — <title>.`),
-and the candidate title passed through the comment sanitiser — no
-`<script>`, no surviving `@mention`, no `<!--` beyond the action's marker. The
+and the candidate title and missing-field names passed through the comment
+sanitiser — no `<script>`, no surviving `@mention`, no `<!--` beyond the
+action's marker. The
 note says what it is: `This is a note, not a closing: the thread stays open
 and nothing is closed.` The model's wording never reaches it, so a hostile
 issue statement cannot steer its own signal. A thread judged complete and
 unrelated gets no comment at all.
 
-The dimensions the model answers — quality, relationships, routing, priority
-— are one optional object in the output contract, asserted by the same exact
+The dimensions the model answers — quality, relationships, priority — are
+one optional object in the output contract, asserted by the same exact
 judgement rules as labels: a value outside the declared set is refused and
 logged, and a malformed dimension fails the run red.
 
