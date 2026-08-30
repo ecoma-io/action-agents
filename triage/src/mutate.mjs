@@ -2,7 +2,8 @@
  * The Controlled Mutation stage — the only writer in the Work Item pipeline.
  *
  * A `Decision` produced by the policy engine is executed here, and here
- * alone. It writes labels and one comment through the forge's primitives,
+ * alone. It writes labels and the action's one comment — the no-sheet
+ * classification or a sheet-mode signal — through the forge's primitives,
  * nothing else: assign, close, merge, review, any mention — all stay
  * unreachable, because no `Decision` this repository's policy can produce
  * names them (SECURITY ceiling #2). Dry run renders the decision and writes
@@ -12,7 +13,7 @@
 import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { info, warning } from "#core/runtime.mjs";
 
-import { commentBody, renderDryRun } from "./decision.mjs";
+import { commentBody, renderDryRun, signalBody } from "./decision.mjs";
 
 /** @typedef {import("./decision.mjs").Decision} Decision */
 
@@ -64,5 +65,25 @@ export async function mutate({ decision, forge, issueNumber, dryRun, now, action
   }
   for (const removal of decision.remove) {
     await forge.removeLabel(issueNumber, removal.name);
+  }
+
+  // A sheet-mode issue run may carry a code-composed signal: needs-more-info
+  // or a best relationship. It is a comment in the same marker namespace as
+  // the no-sheet classification, so the upsert keeps exactly one of the
+  // action's comments on the thread whichever mode the last run used. The
+  // signal is composed entirely by code — model text never reaches it.
+  if (decision.signal != null) {
+    const signal = decision.signal;
+    const ownLogins = await resolveOwnLogins(forge, info);
+    const outcome = await upsertComment({
+      store: forge,
+      action,
+      issueNumber,
+      buildBody: (marker) => signalBody(signal, marker),
+      ownLogins,
+      startedAt: now(),
+      log: info,
+    });
+    info(`signal comment ${outcome.outcome} (${String(outcome.id)})`);
   }
 }

@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
 
 import { readSharedInputs } from "#core/inputs.mjs";
 import { createChat } from "#core/chat.mjs";
-import { createForge } from "#core/forge.mjs";
+import { MAX_SEARCH_CANDIDATES, createForge } from "#core/forge.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import {
@@ -50,6 +50,7 @@ import {
   migrateConfig,
   validateConfig,
 } from "./config.mjs";
+import { assessIssueForm, loadIssueForms } from "./issue-forms.mjs";
 import { gatherEvidence } from "./evidence.mjs";
 import { assess } from "./assessment.mjs";
 import { decide } from "./policy.mjs";
@@ -186,6 +187,40 @@ export async function run(inputs, context, io) {
   });
   const documents = await loadInstructions({ forge: policy, config, threadType: thread.type });
 
+  // Issue-side deterministic facts, gathered only when a sheet makes the
+  // issue evaluators live (sheet mode + issue thread): which issue form the
+  // body came through and what it leaves missing, and the bounded
+  // duplicate/relationship search — at most MAX_SEARCH_CANDIDATES open
+  // threads in this repository, never followed past the cap. Both stay
+  // facts for the model and the policy to judge; neither writes anything.
+  let quality = null;
+  let forgeSearch = null;
+  if (sheet !== null && thread.type === "issue") {
+    const forms = await loadIssueForms({ forge: world.forge, policy, source });
+    quality = assessIssueForm(thread.body, forms.forms, {
+      templatesOverflow: forms.templatesOverflow,
+    });
+    const query = issueSearchQuery(context, thread.title);
+    if (query !== null) {
+      const search = await world.forge.searchIssues(query, {
+        limit: MAX_SEARCH_CANDIDATES,
+      });
+      forgeSearch = {
+        candidates: search.items
+          .filter((item) => item.number !== thread.number)
+          .map((item) => ({
+            number: item.number,
+            title: item.title,
+            state: item.state,
+            url: item.url,
+            createdAt: item.createdAt,
+          })),
+        totalCount: search.totalCount,
+        cappedAt: search.cappedAt,
+      };
+    }
+  }
+
   // PR: the diff counts the size measurement and the diff-stats evidence
   // both read. The event payload does not carry them, which is why the
   // files listing is walked here — and a pull request past that listing's
@@ -206,7 +241,6 @@ export async function run(inputs, context, io) {
 
   // Evidence → Assessment → Policy → Decision → Controlled Mutation.
   // The model answers only the one bounded question (assessment); every
-  // mutation decision is the policy engine's, and mutate is the only writer.
   const evidence = gatherEvidence({
     thread,
     repository: repositoryFromEvent(event, context),
@@ -215,6 +249,8 @@ export async function run(inputs, context, io) {
     metadata,
     files,
     size,
+    quality,
+    forgeSearch,
     eventAction: typeof event["action"] === "string" ? event["action"] : "",
   });
 
@@ -245,7 +281,7 @@ export async function run(inputs, context, io) {
  *
  * @param {string} eventName
  * @param {Record<string, unknown>} event
- * @returns {{ type: "issue" | "pr", number: number, title: string, body: string, labels: string[] }}
+ * @returns {{ type: "issue" | "pr", number: number, title: string, body: string, labels: string[], createdAt: string, creator: string, state: string }}
  */
 function threadFromEvent(eventName, event) {
   const key =
@@ -281,12 +317,21 @@ function threadFromEvent(eventName, event) {
       labels.push(name);
     }
   }
+  const createdAt = thread["created_at"];
+  const state = thread["state"];
+  const author =
+    typeof thread["user"] === "object" && thread["user"] !== null
+      ? /** @type {Record<string, unknown>} */ (thread["user"])["login"]
+      : undefined;
   return {
     type: eventName === "issues" ? "issue" : "pr",
     number,
     title,
     body: typeof body === "string" ? body : "",
     labels,
+    createdAt: typeof createdAt === "string" ? createdAt : "",
+    creator: typeof author === "string" ? author : "",
+    state: typeof state === "string" ? state : "",
   };
 }
 
@@ -304,6 +349,33 @@ function repositoryFromEvent(event, context) {
   const description =
     typeof repository["description"] === "string" ? repository["description"] : "";
   return { name, description };
+}
+
+/**
+ * Composes the bounded search query for the duplicate/relationship pass:
+ * the repository, open threads only, and the issue title's substantive
+ * tokens. The query is capped so an over-long or empty title yields a
+ * `null` (no search) rather than an over-length request or a search for
+ * nothing — the search itself is deterministic and never writes.
+ *
+ * @param {ReturnType<typeof readContext>} context
+ * @param {string} title
+ * @returns {string | null}
+ */
+function issueSearchQuery(context, title) {
+  const tokens = title
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((token) => /^[a-z0-9]+$/u.test(token))
+    .filter((token, index, all) => index === all.indexOf(token));
+  if (tokens.length === 0) {
+    return null;
+  }
+  const keywords = tokens.join(" ").slice(0, 100).trim();
+  if (keywords.length === 0) {
+    return null;
+  }
+  return `repo:${context.owner}/${context.repo} state:open ${keywords}`;
 }
 
 /**
