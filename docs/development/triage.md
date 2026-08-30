@@ -195,28 +195,35 @@ does not count toward it.
 
 ## The run
 
+Five stages, each a module under `triage/src/`, always in this order — the
+classification path and the no-sheet comment path run through the same stages:
+
 ```text
-read inputs, mask the api-key, read the runner context
-  ▼
-resolve the policy source; fetch the config file from it  (absent = empty policy)
-  ▼
-build the effective sheet; validate everything above   (a failure ends the run)
-  ▼
-read the thread from the event: type, title, body      (PR: + per-file diff counts)
-  ▼
-assemble the prompt, make one chat request
-  ▼
-parse the answer; match each label exactly             (off-sheet → refused
-log the rationale                                       and logged, no retry)
-  ▼
-measure size against the ladder                        (PRs only)
-  ▼
-dry-run → log only ─┬─ real → apply labels through the GitHub API
-                    └─ no sheet → upsert the marker comment
+READ        event payload, resolved policy source, the config file at that
+  ▼         SHA, the effective sheet — all validated before anything else
+EVIDENCE    package the deterministic facts        gatherEvidence()
+  ▼         thread (title and body stay on it, framed as evidence, never
+            promoted to facts), repository, policy, sheet, per-file diff
+            counts, measured size
+ASSESSMENT  one chat request, and only one         assess()
+  ▼         the evidence-framed prompt; the answer parsed tolerantly
+POLICY      judge the assessment, never the model  decide()
+  ▼         pure: labels to add, the two code-removed labels to drop, what
+            to log — no network, no half-way failure
+DECISION    the write contract                      Decision
+  ▼         labels or comment, structured removals, rendered for dry-run
+MUTATION    dry-run → logs only                     mutate()
+            real    → labels and one marked comment, nothing else
 ```
 
-The first step after the context read is resolving the policy source — for a
-pull request the base branch, for a push the pushed branch at the pushed SHA
+The model's answer is matched exactly against the sheet, in the Policy stage:
+`bug `, `Bug` and `BUG` are not `bug`, an off-sheet label is refused and
+logged rather than coerced, and an answer entirely off-sheet fails the run
+red. The ceiling rests on that exact match, not on the prompt; the sheet is
+the one offer the repository itself declared.
+
+The Read stage's first act is resolving the policy source — for a pull
+request the base branch, for a push the pushed branch at the pushed SHA
 ([the full mapping](configuration.md#which-branch-governs--the-resolved-policy-source))
 — and logging one audit line, `policy source: event=… basis=… branch=… sha=…
 path=…`, before any model call: every run records which rules it answered to.
