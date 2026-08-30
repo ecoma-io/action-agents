@@ -12,6 +12,7 @@ off-sheet applies its on-sheet half and logs the rest.
 - [Config file](#config-file)
 - [Permissions](#permissions)
 - [Outputs and artifacts](#outputs-and-artifacts)
+- [Events](#events)
 - [Cost and budget controls](#cost-and-budget-controls)
 - [Failure modes](#failure-modes)
 - [Recipes](#recipes)
@@ -293,6 +294,48 @@ _is_ the output rather than a side-channel.
 **Size label**: when the `size` key is configured and the event is a pull
 request, the action measures the diff against the ladder and applies the
 matching size label.
+
+## Events
+
+`triage` decides exactly which events re-run its pipeline. Its expensive work
+is one model call plus the evidence reads that feed it, so it only pays for
+them when the event could have changed triage-relevant evidence: the thread's
+content, its diff, its draft state, or the queue state the
+`labels.workflowMarkers` lifecycle keys on. Everything else logs one audit
+line — `triage: event issues.labeled → skip — …` — and writes nothing. The
+event matrix is decided from the payload and your config alone, before any
+read past the config; a rerun of an unchanged thread re-derives the same
+decision.
+
+Which actions re-triage, per event:
+
+| Event          | Action re-triaged                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| `issues`       | `opened`, `edited`, `reopened`, `labeled` (see below)                                    |
+| `pull_request` | `opened`, `edited`, `synchronize`, `ready_for_review`, `reopened`, `labeled` (see below) |
+| either         | a missing or unlisted action (re-triaged conservatively, never skipped)                  |
+
+Which actions skip, writing nothing:
+
+| Event          | Action skipped                                                  |
+| -------------- | --------------------------------------------------------------- |
+| `issues`       | `closed`, `transferred`, `milestoned`, `unlabeled`              |
+| `pull_request` | `closed`, `review_requested`, `converted_to_draft`, `unlabeled` |
+
+`labeled` re-triages only when the change could move the queue lifecycle:
+applying the queue marker (`labels.workflowMarkers`), or applying a
+`semantic-classification` label to a thread still carrying the marker — the
+stuck-queue case where a category exists but the marker remains. Applying any
+other label skips: a label the policy does not own or read cannot change what
+the model would classify. `unlabeled` always skips: removing a label changes
+no content evidence, and removing the queue marker is a human dequeue triage
+respects rather than rewrites.
+
+An event that is not on the matrix is re-triaged, never silently skipped — a
+payload this action was not built for is not classified as a no-op. To run
+only on the events that matter, list them in your workflow's `on:` block; the
+matrix is the action's belt-and-braces guard for whatever your trigger sends
+it.
 
 ## Cost and budget controls
 
