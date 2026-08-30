@@ -32,10 +32,10 @@ import { matchGlob } from "#core/glob.mjs";
 
 /**
  * @param {unknown} raw the `size` value from the config file
- * @param {Set<string>} prSheet every label on the PR sheet (universal ∪ pr) — each size label must be one
+ * @param {Set<string>} useSet every label the policy may apply — each size label must be a usable label
  * @returns {SizeConfig}
  */
-export function validateSizeConfig(raw, prSheet) {
+export function validateSizeConfig(raw, useSet) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error("size must be an object");
   }
@@ -74,10 +74,10 @@ export function validateSizeConfig(raw, prSheet) {
       throw new Error(`the label '${label}' is declared on two rungs — refused, not reconciled`);
     }
     seen.add(label);
-    if (!prSheet.has(label)) {
+    if (!useSet.has(label)) {
       throw new Error(
-        `the size label '${label}' is not on the PR sheet (labels.universal ∪ labels.pr) — ` +
-          `a size label is applied like any other, so it must be declared like any other`,
+        `the size label '${label}' is not in labels.use — a size label is applied like any other, ` +
+          `so it must be declared in the policy's usable set`,
       );
     }
     const upTo = rung["upTo"];

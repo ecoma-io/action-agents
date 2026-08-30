@@ -1,45 +1,58 @@
 {
+  schemaVersion: 2,
+
   // This repository's own triage policy — the dogfood configuration, and a
   // live example of the schema docs/development/triage.md documents.
   //
-  // The sheet is split three ways: `universal` applies to every thread;
-  // `issues` and `pr` are added to it according to what is classified.
-  // The label names must exist in this repository — a sheet naming a label
-  // the repository does not have is refused at startup.
+  // Schema 2 is a policy, not a label registry: the config names the labels
+  // it uses and the role each one plays; their words (description, colour)
+  // come from GitHub, the source of truth, and are never duplicated here.
+  // A label the config names must exist in this repository — a policy that
+  // names a label the repository does not have is refused at startup, and a
+  // description the model sees is GitHub's own.
   labels: {
-    universal: {
-      bug: "Reproducible incorrect behaviour — it worked before, or should have.",
-      documentation: "Documentation or examples only; no runtime code is affected.",
-      enhancement: "A new capability, or an improvement to one that exists.",
-      question: "Asking how something works or is meant to be used, not reporting that it is broken.",
+    // The whole usable set. A label is applied only if it is on this sheet.
+    use: [
+      "bug",
+      "documentation",
+      "enhancement",
+      "question",
+      "good first issue",
+      "size/xs",
+      "size/s",
+      "size/m",
+      "size/l",
+      "size/xl",
+    ],
+
+    // What each label is for. A category clears the queue marker once it is
+    // classified; routing/rungs and the marker itself are never offered to
+    // the model as choices.
+    roles: {
+      bug: "semantic-classification",
+      documentation: "semantic-classification",
+      enhancement: "semantic-classification",
+      question: "semantic-classification",
+      "good first issue": "routing-area",
     },
-    issues: {
-      "good first issue": "Small, self-contained, and needs no prior context with this repository.",
-    },
-    pr: {
-      // Size is measured from the diff and never offered to the model; the
-      // rung labels are declared here because a size label is applied like
-      // any other and must be on the PR sheet.
-      "size/xs": "",
-      "size/s": "",
-      "size/m": "",
-      "size/l": "",
-      "size/xl": "",
-    },
+
+    // `needs triage` is this repository's queue marker: every issue form
+    // applies it (and nothing else), so a freshly filed issue sits in exactly
+    // one queue. `triage` clears it — code-deterministically, never a model
+    // choice — once a category is classified, because a thread carrying a
+    // category no longer awaits triage. The model is never told the marker's
+    // name: it is on no sheet, so a classification can only ever cause its
+    // removal. An empty array applies no marker at all.
+    workflowMarkers: ["needs triage"],
+
+    // Labels the action owns and may clear or replace — here, the size rungs.
+    triageOwned: ["size/xs", "size/s", "size/m", "size/l", "size/xl"],
   },
 
-  // `needs triage` is this repository's queue marker: every issue form applies
-  // it (and nothing else), so a freshly filed issue sits in exactly one queue.
-  // `triage` clears it — code-deterministically, never a model choice — once a
-  // universal category is classified, because a thread carrying a category no
-  // longer awaits triage. The model is never told the marker's name: it is on
-  // no sheet, so a classification can only ever cause its removal. Omit the
-  // key and triage applies no marker at all. docs/development/triage.md
-  // carries the full lifecycle.
-  triageMarker: "needs triage",
-
   // Review effort, not raw magnitude: a lockfile nobody reads line by line
-  // does not make a pull request large to review.
+  // does not make a pull request large to review. Size is measured from the
+  // diff and never offered to the model; the rung labels are declared in
+  // labels.use because a size label is applied like any other.
   size: {
     exclude: ["pnpm-lock.yaml", "coverage/**"],
     ladder: [

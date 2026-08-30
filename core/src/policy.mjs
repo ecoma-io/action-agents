@@ -266,12 +266,16 @@ export function policySourceAuditLine({ eventName, source, path }) {
  * untouched. Any other value — an older major, a newer one, a string, a
  * fraction — is a startup refusal naming the branch, the sha, the path, and
  * both majors, before any model call. This runtime understands exactly one
- * major per action; a minor digit, if ever introduced, will be a deliberate
- * widening of this check, not a silent one.
+ * major per action when `supportedMajor` is a single number; a range
+ * (`number[]`) is how a migration window reads more than one. A migration
+ * window is a deliberate, documented widening — the reader accepts the old
+ * major alongside the current one while existing policies move over — not a
+ * license to hold every major forever. A minor digit, if ever introduced,
+ * will be a deliberate widening of this check, not a silent one.
  *
  * @param {object} input
  * @param {Record<string, unknown> | null} input.raw the parsed policy file, null when absent
- * @param {number} input.supportedMajor the schema major this action understands
+ * @param {number | number[]} input.supportedMajor the schema major(s) this action understands; an array is a migration window
  * @param {string} input.path the policy file's path, for the refusal
  * @param {PolicySource} input.source the resolved policy source, for the refusal
  * @returns {void}
@@ -280,7 +284,11 @@ export function assertPolicySchemaVersion({ raw, supportedMajor, path, source })
   if (raw === null) return;
   const declared = raw["schemaVersion"];
   if (declared === undefined) return;
-  if (typeof declared !== "number" || !Number.isInteger(declared) || declared !== supportedMajor) {
+  if (
+    typeof declared !== "number" ||
+    !Number.isInteger(declared) ||
+    !majors(supportedMajor).includes(declared)
+  ) {
     const found = JSON.stringify(declared) ?? String(declared);
     throw new PolicyResolutionError(
       `'${path}' on branch '${source.branch}' at ${source.sha} declares schemaVersion ${found}, ` +
@@ -288,4 +296,12 @@ export function assertPolicySchemaVersion({ raw, supportedMajor, path, source })
         `update the file on its branch, or run an action version that reads it`,
     );
   }
+}
+
+/**
+ * @param {number | number[]} supportedMajor
+ * @returns {number[]}
+ */
+function majors(supportedMajor) {
+  return Array.isArray(supportedMajor) ? supportedMajor : [supportedMajor];
 }

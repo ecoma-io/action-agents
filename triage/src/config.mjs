@@ -1,19 +1,18 @@
 /**
  * `triage`'s config file — the schema, its validation, and the effective
- * sheet. Everything here is `triage`'s own domain: `core/` never learns a
- * key's name, and no other action imports this reader.
+ * sheet. The `labels` block is policy only: it names the labels the action
+ * may use and what each is for, never their words. Descriptions and colours
+ * come from GitHub — `core/forge.mjs` reads each label's metadata — so the
+ * repository stops duplicating its label registry and the model reads what
+ * GitHub already says. A config never needs to restate a gloss; the one
+ * thing it must get right is which labels are usable and in what role.
  *
- * The mechanism (where the file lives, the default branch, precedence) is
- * `docs/development/configuration.md`'s and is spoken through the protocol
- * primitives; what the keys mean lives here. The law that matters most is
- * narrowing: a `labels:` input selects a subset of what the file declares —
- * an entry the file does not declare is refused at startup with both names
- * in the message, and nothing widens the sheet, ever. With no file there is
- * no sheet at all: the classification becomes the marker comment, and a
- * `labels:` input with nothing to narrow is refused too.
- *
- * All validation happens at startup, before the model is called. A config
- * that does not validate is a red run, not a best effort.
+ * Schema major 2. A v1 file — `labels.{universal,issues,pr}` name→gloss
+ * maps plus an optional top-level `triageMarker` — is migrated on read:
+ * its sheet names become the v2 `labels.use` set, its marker becomes the
+ * first `labels.workflowMarkers` entry, and the migration is logged. v1
+ * files keep working; only their glosses stop being read (GitHub supplies
+ * them).
  */
 import { loadConfigFile as loadConfigFileCore, MAX_CONFIG_BYTES } from "#core/config-file.mjs";
 import { validateSizeConfig } from "./size.mjs";
@@ -25,18 +24,23 @@ import { validateSizeConfig } from "./size.mjs";
  * @typedef {{ getContents: (path: string) => Promise<{ content: string } | null> }} ContentsReader
  */
 
+/** @typedef {import("./size.mjs").SizeConfig} SizeConfig */
+
 /**
- * @typedef {import("./size.mjs").SizeConfig} SizeConfig
+ * @typedef {object} LabelPolicy
+ * @property {Set<string>} use every label the action may apply, by name — GitHub is the source of truth for its description and colour
+ * @property {Map<string, string>} roles the role each `use` label carries: semantic-classification, routing-area, priority, workflow-marker or triage-owned
+ * @property {string[]} exclusive role groups whose labels are mutually exclusive — only one label per listed role may sit on a thread
+ * @property {string[]} workflowMarkers the queue labels the action clears by code, never by model choice
+ * @property {Set<string>} triageOwned labels the action may remove or replace by code — a size rung it measures, never a category a human chose
+ * @property {Map<string, unknown>} priority an optional label → priority mapping; empty means no such mapping
  */
 
 /**
  * @typedef {object} TriageConfig
- * @property {Map<string, string>} universal
- * @property {Map<string, string>} issues
- * @property {Map<string, string>} pr
+ * @property {LabelPolicy} labels
  * @property {SizeConfig | undefined} size
  * @property {{ instruction?: string, "issue-instruction"?: string, "pr-instruction"?: string }} instructions configured instruction paths, before defaults
- * @property {string | undefined} triageMarker the queue label cleared once a universal category is classified, when declared
  */
 
 export { MAX_CONFIG_BYTES };
@@ -49,8 +53,25 @@ export const DEFAULT_LOCATIONS = [
   ".github/action-agents/triage/triage.json",
 ];
 
-/** The only policy schema major this build understands; a higher major is refused at startup. */
-export const SCHEMA_MAJOR = 1;
+/** The only policy schema major this build emits; a higher major is refused at startup. */
+export const SCHEMA_MAJOR = 2;
+
+/**
+ * The schema majors this build reads. Schema 1 is a migration window: a v1
+ * `labels.{universal,issues,pr}` config is accepted and migrated to the v2
+ * `labels.use` policy shape. The window is deliberate — it closes once v1
+ * files are gone — never a promise to hold every major forever.
+ */
+export const SUPPORTED_SCHEMA_MAJORS = [1, 2];
+
+/** The role a config may give a `use` label — the whole vocabulary of what a label is for. */
+const ROLES = new Set([
+  "semantic-classification",
+  "routing-area",
+  "priority",
+  "workflow-marker",
+  "triage-owned",
+]);
 
 const DEFAULT_INSTRUCTION_PATHS = {
   instruction: ".github/action-agents/triage/instruction.md",
@@ -80,8 +101,71 @@ export function loadConfigFile({ forge, configPath, source }) {
     source,
     locations: DEFAULT_LOCATIONS,
     absent: "empty",
-    supportedMajor: SCHEMA_MAJOR,
+    supportedMajor: SUPPORTED_SCHEMA_MAJORS,
   });
+}
+
+/**
+ * Migrates a schema-1 config into the schema-2 shape, idempotently. A v1
+ * file declares `labels.{universal,issues,pr}` name→gloss maps and an
+ * optional top-level `triageMarker`; schema 2 declares `labels.use` (the
+ * usable set) plus the policy block and keeps workflow markers in
+ * `labels.workflowMarkers`. Migration folds every v1 sheet name into
+ * `use` and the marker into `workflowMarkers`; descriptions are dropped
+ * because GitHub now supplies them. A v2 file is returned untouched, so
+ * calling `validateConfig` twice is safe.
+ *
+ * @template {Record<string, unknown> | null} T
+ * @param {T} raw
+ * @returns {{ raw: T, migrated: boolean }}
+ */
+export function migrateConfig(raw) {
+  if (raw === null) return { raw, migrated: false };
+  const labels = /** @type {unknown} */ (raw["labels"]);
+  const isV1 =
+    typeof labels === "object" &&
+    labels !== null &&
+    !Array.isArray(labels) &&
+    (Object.hasOwn(labels, "universal") ||
+      Object.hasOwn(labels, "issues") ||
+      Object.hasOwn(labels, "pr"));
+  if (!isV1) return { raw, migrated: false };
+
+  const sheet = /** @type {Record<string, unknown>} */ (labels);
+  /** @type {string[]} */
+  const use = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+  for (const kind of ["universal", "issues", "pr"]) {
+    const map = sheet[kind];
+    if (typeof map !== "object" || map === null || Array.isArray(map)) continue;
+    for (const name of Object.keys(map)) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        use.push(name);
+      }
+    }
+  }
+
+  const migrated = { ...raw };
+  delete migrated["labels"];
+  delete migrated["triageMarker"];
+  /** @type {Record<string, string>} */
+  const roles = {};
+  // A v1 `universal` label was the closest thing schema 1 had to a category
+  // — the marker was cleared once one was classified. Preserve that exactly:
+  // those names carry the semantic-classification role under schema 2, so a
+  // migrated queue marker still clears when the model classifies a category.
+  const universal = sheet["universal"];
+  if (typeof universal === "object" && universal !== null && !Array.isArray(universal)) {
+    for (const name of Object.keys(universal)) roles[name] = "semantic-classification";
+  }
+  /** @type {string[]} */
+  const workflowMarkers = [];
+  const marker = raw["triageMarker"];
+  if (typeof marker === "string" && marker !== "") workflowMarkers.push(marker);
+  migrated["labels"] = { use, roles, workflowMarkers };
+  return { raw: migrated, migrated: true };
 }
 
 /**
@@ -93,106 +177,171 @@ export function loadConfigFile({ forge, configPath, source }) {
  * @returns {TriageConfig | null}
  */
 export function validateConfig(raw) {
-  if (raw === null) return null;
+  /** @type {Record<string, unknown> | null} */
+  const migrated = migrateConfig(raw).raw;
+  if (migrated === null) return null;
 
-  for (const key of Object.keys(raw)) {
-    if (
-      key !== "schemaVersion" &&
-      key !== "labels" &&
-      key !== "size" &&
-      key !== "instructions" &&
-      key !== "triageMarker"
-    ) {
+  for (const key of Object.keys(migrated)) {
+    if (key !== "schemaVersion" && key !== "labels" && key !== "size" && key !== "instructions") {
       throw new Error(
-        `unknown config key '${key}' — the file holds schemaVersion, labels, size, instructions and the triage marker`,
+        `unknown config key '${key}' — the file holds schemaVersion, labels, size and instructions`,
       );
     }
   }
 
-  /** @type {{ instruction?: string, "issue-instruction"?: string, "pr-instruction"?: string }} */
+  /** @type {LabelPolicy} */
+  const policy = {
+    use: new Set(),
+    roles: new Map(),
+    exclusive: [],
+    workflowMarkers: [],
+    triageOwned: new Set(),
+    priority: new Map(),
+  };
+  /** @type {Partial<Record<keyof typeof DEFAULT_INSTRUCTION_PATHS, string>>} */
   const instructions = {};
-  const config = { universal: new Map(), issues: new Map(), pr: new Map(), instructions };
 
-  if (raw["labels"] !== undefined) {
-    const labels = expectObject(raw["labels"], "labels");
-    for (const kind of ["universal", "issues", "pr"]) {
-      if (labels[kind] === undefined) continue;
-      const map = expectObject(labels[kind], `labels.${kind}`);
-      for (const [name, gloss] of Object.entries(map)) {
-        if (typeof gloss !== "string") {
-          throw new Error(`labels.${kind}.${name} must be a one-line gloss (a string)`);
-        }
-        const target =
-          kind === "universal" ? config.universal : kind === "issues" ? config.issues : config.pr;
-        if (config.universal.has(name) || config.issues.has(name) || config.pr.has(name)) {
+  if (migrated["labels"] !== undefined) {
+    const labels = expectObject(migrated["labels"], "labels");
+
+    if (labels["use"] !== undefined) {
+      if (!Array.isArray(labels["use"]))
+        throw new Error("labels.use must be an array of label names");
+      for (const name of labels["use"]) {
+        if (typeof name !== "string" || name === "")
+          throw new Error("labels.use must contain non-empty label names");
+        if (policy.use.has(name))
           throw new Error(
-            `the label '${name}' is declared twice — in two of universal/issues/pr; ` +
-              `refused, not reconciled`,
+            `the label '${name}' is declared twice in labels.use — refused, not reconciled`,
+          );
+        policy.use.add(name);
+      }
+    }
+
+    if (labels["roles"] !== undefined) {
+      const roles = expectObject(labels["roles"], "labels.roles");
+      for (const [name, role] of Object.entries(roles)) {
+        if (typeof role !== "string" || !ROLES.has(role))
+          throw new Error(
+            `labels.roles.${name} must be one of ${[...ROLES].join(", ")} — got '${String(role)}'`,
+          );
+        if (!policy.use.has(name))
+          throw new Error(`labels.roles names '${name}', which labels.use does not declare`);
+        policy.roles.set(name, role);
+      }
+    }
+
+    if (labels["exclusive"] !== undefined) {
+      if (!Array.isArray(labels["exclusive"]))
+        throw new Error("labels.exclusive must be an array of role names");
+      for (const group of labels["exclusive"]) {
+        if (typeof group !== "string" || group === "")
+          throw new Error("labels.exclusive must contain non-empty role names");
+        const carries = [...policy.roles.values()].includes(group);
+        if (!carries)
+          throw new Error(
+            `labels.exclusive names role '${group}', which no labels.roles entry carries`,
+          );
+        policy.exclusive.push(group);
+      }
+    }
+
+    if (labels["workflowMarkers"] !== undefined) {
+      if (!Array.isArray(labels["workflowMarkers"]))
+        throw new Error("labels.workflowMarkers must be an array of label names");
+      for (const marker of labels["workflowMarkers"]) {
+        if (typeof marker !== "string" || marker === "")
+          throw new Error("labels.workflowMarkers must contain non-empty label names");
+        // The marker is cleared once a category is classified. If it is
+        // itself a classification label, clearing it would un-classify the
+        // thread it just marked — refused rather than silently self-defeating.
+        if (policy.roles.get(marker) === "semantic-classification") {
+          throw new Error(
+            `workflow marker '${marker}' is also a classification label — the queue label ` +
+              `must not carry the semantic-classification role`,
           );
         }
-        target.set(name, gloss);
+        policy.workflowMarkers.push(marker);
+      }
+    }
+
+    if (labels["triageOwned"] !== undefined) {
+      if (!Array.isArray(labels["triageOwned"]))
+        throw new Error("labels.triageOwned must be an array of label names");
+      for (const name of labels["triageOwned"]) {
+        if (typeof name !== "string" || name === "")
+          throw new Error("labels.triageOwned must contain non-empty label names");
+        if (!policy.use.has(name))
+          throw new Error(`labels.triageOwned names '${name}', which labels.use does not declare`);
+        policy.triageOwned.add(name);
+      }
+    }
+
+    if (labels["priority"] !== undefined) {
+      const priority = expectObject(labels["priority"], "labels.priority");
+      for (const [name, value] of Object.entries(priority)) {
+        if (
+          !policy.use.has(name) &&
+          !policy.workflowMarkers.includes(name) &&
+          !policy.roles.has(name)
+        ) {
+          throw new Error(
+            `labels.priority maps '${name}', which no label or role in the policy declares`,
+          );
+        }
+        policy.priority.set(name, value);
       }
     }
   }
 
-  const prSheet = new Set([...config.universal.keys(), ...config.pr.keys()]);
+  const useSet = policy.use;
   /** @type {SizeConfig | undefined} */
-  const size = raw["size"] === undefined ? undefined : validateSizeConfig(raw["size"], prSheet);
+  const size =
+    migrated["size"] === undefined ? undefined : validateSizeConfig(migrated["size"], useSet);
 
-  if (raw["instructions"] !== undefined) {
-    const instructions = expectObject(raw["instructions"], "instructions");
-    for (const key of Object.keys(instructions)) {
+  if (migrated["instructions"] !== undefined) {
+    const rawInstructions = expectObject(migrated["instructions"], "instructions");
+    for (const key of Object.keys(rawInstructions)) {
       // own-property, not `in`: a key like "constructor" is a path to refuse,
       // never a prototype member to let through.
       if (!Object.hasOwn(DEFAULT_INSTRUCTION_PATHS, key)) {
         throw new Error(`unknown instructions key '${key}'`);
       }
-      const value = instructions[key];
+      const value = rawInstructions[key];
       if (typeof value !== "string" || value === "") {
         throw new Error(`instructions.${key} must be a path`);
       }
       const typed = /** @type {keyof typeof DEFAULT_INSTRUCTION_PATHS} */ (key);
-      config.instructions[typed] = value;
+      instructions[typed] = value;
     }
   }
 
-  /** @type {string | undefined} */
-  let triageMarker;
-  if (raw["triageMarker"] !== undefined) {
-    const marker = raw["triageMarker"];
-    if (typeof marker !== "string" || marker === "") {
-      throw new Error(
-        "triageMarker must be a non-empty label name — the queue label triage clears once it classifies a category",
-      );
-    }
-    // The marker is cleared once a universal category is classified. If it
-    // is itself a classification label, clearing it would un-classify the
-    // thread it just marked — refused rather than silently self-defeating.
-    if (config.universal.has(marker) || config.issues.has(marker) || config.pr.has(marker)) {
-      throw new Error(
-        `triageMarker '${marker}' is also a classification label — the queue label ` +
-          `must not collide with a category the run assigns`,
-      );
-    }
-    triageMarker = marker;
-  }
-  return { ...config, size, triageMarker };
+  return { labels: policy, size, instructions };
 }
 
 /**
- * The effective sheet for a thread: `universal ∪ issues` for an issue,
- * `universal ∪ pr` for a pull request, narrowed by the workflow's `labels:`
- * input when it names a subset — and never carrying the size labels, which
- * are measured rather than asked and are never on any sheet offered to a
- * model.
+ * The effective sheet for a thread: every `use` label except those the
+ * action measures or resets by code — size rungs and workflow markers —
+ * each carrying the repository's own description as its gloss. GitHub is
+ * the source of truth for what a label means, so the sheet is built from
+ * the label metadata the forge just read, not from the config. A label
+ * with no description on GitHub is offered by name alone (a normal label,
+ * not a broken one); a `metadata` map may be omitted by tests that have
+ * no forge, in which case each label's gloss is its name.
  *
  * @param {object} input
  * @param {TriageConfig | null} input.config
  * @param {"issue" | "pr"} input.threadType
  * @param {string[]} input.narrowing the `labels:` input; empty means no narrowing
- * @returns {{ sheet: Map<string, string> | null, sizeLabels: string[] }}
+ * @param {Map<string, { name: string, description: string, color: string }>} [input.metadata] repository label metadata by name
+ * @returns {{ sheet: Map<string, string> | null }}
  */
-export function effectiveSheet({ config, threadType, narrowing }) {
+export function effectiveSheet({
+  config,
+  threadType: _threadType,
+  narrowing,
+  metadata = new Map(),
+}) {
   if (config === null) {
     if (narrowing.length > 0) {
       throw new Error(
@@ -200,29 +349,29 @@ export function effectiveSheet({ config, threadType, narrowing }) {
           `a sheet must be declared before it can be narrowed`,
       );
     }
-    return { sheet: null, sizeLabels: [] };
+    return { sheet: null };
   }
 
-  // A file that declares no labels at all is no sheet: the classification
-  // becomes the marker comment, exactly as with no file. (A file declaring
-  // size labels but no sheet never validates — every size label must be on
-  // the PR sheet, and an empty sheet holds none.)
-  if (config.universal.size + config.issues.size + config.pr.size === 0) {
+  const sizeLabels = config.size?.ladder.map((rung) => rung.label) ?? [];
+  const neverOffered = new Set([...sizeLabels]);
+  for (const [name, role] of config.labels.roles) {
+    if (role === "priority" || role === "workflow-marker") neverOffered.add(name);
+  }
+  const offered = [...config.labels.use].filter((name) => !neverOffered.has(name));
+
+  // A file that declares no usable labels is no sheet: the classification
+  // becomes the marker comment, exactly as with no file.
+  if (offered.length === 0) {
     if (narrowing.length > 0) {
       throw new Error(
         `the labels input names ${narrowing.join(", ")}, which the config file does not declare — ` +
-          `the file declares no labels at all`,
+          `the file offers no labels at all`,
       );
     }
-    return { sheet: null, sizeLabels: [] };
+    return { sheet: null };
   }
 
-  const declared = new Set([
-    ...config.universal.keys(),
-    ...config.issues.keys(),
-    ...config.pr.keys(),
-    ...(config.size?.ladder.map((rung) => rung.label) ?? []),
-  ]);
+  const declared = new Set([...config.labels.use, ...sizeLabels]);
   for (const name of narrowing) {
     if (!declared.has(name)) {
       throw new Error(
@@ -232,21 +381,19 @@ export function effectiveSheet({ config, threadType, narrowing }) {
     }
   }
 
-  const sizeLabels = config.size?.ladder.map((rung) => rung.label) ?? [];
-  const typeMap = threadType === "issue" ? config.issues : config.pr;
   /** @type {Map<string, string>} */
   const sheet = new Map();
-  for (const [name, gloss] of config.universal) sheet.set(name, gloss);
-  for (const [name, gloss] of typeMap) sheet.set(name, gloss);
+  for (const name of offered) {
+    const known = metadata.get(name);
+    const gloss = (known?.description ?? "") || name;
+    sheet.set(name, gloss);
+  }
   if (narrowing.length > 0) {
     const keep = new Set(narrowing);
     for (const name of sheet.keys()) {
       if (!keep.has(name)) sheet.delete(name);
     }
   }
-  // Size is measured from the diff, never asked of the model: the size
-  // labels stay off every sheet offered, however configured.
-  for (const name of sizeLabels) sheet.delete(name);
 
   if (sheet.size === 0) {
     throw new Error(
@@ -255,7 +402,7 @@ export function effectiveSheet({ config, threadType, narrowing }) {
     );
   }
 
-  return { sheet, sizeLabels };
+  return { sheet };
 }
 
 /**

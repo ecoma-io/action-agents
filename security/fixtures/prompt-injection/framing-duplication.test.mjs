@@ -123,6 +123,21 @@ function fakeForge(options = {}) {
     async listRepositoryLabels() {
       return REPO_LABELS;
     },
+    async listRepositoryLabelsDetailed() {
+      // GitHub is the source of truth for a label's words: the descriptions
+      // the sheet glosses with live here, mirroring what the v1 sheet once
+      // declared, so a forged sheet in the body still cannot reach the model.
+      const descriptions = {
+        bug: "Incorrect behaviour.",
+        docs: "Documentation only.",
+        question: "Asking, not reporting.",
+      };
+      return REPO_LABELS.map((name) => ({
+        name,
+        description: descriptions[name] ?? "",
+        color: "",
+      }));
+    },
     async listPullRequestFiles() {
       return [];
     },

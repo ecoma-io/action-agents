@@ -35,7 +35,7 @@ export const MAX_CONFIG_BYTES = 64 * 2 ** 10;
  * @param {string[]} input.locations the default locations to try when `configPath` is "", in order
  * @param {"empty" | "refuse"} [input.absent] what an absent default set means; "empty" returns `raw: null`, "refuse" throws (default "empty")
  * @param {string} [input.absentMessage] the refusal text for an absent set under `absent: "refuse"`, when the caller wants to name why it refuses
- * @param {number} input.supportedMajor the schema major this action understands
+ * @param {number | number[]} input.supportedMajor the schema major(s) this action understands
  * @returns {Promise<{ raw: Record<string, unknown> | null, path: string }>}
  */
 export async function loadConfigFile({
@@ -96,7 +96,7 @@ export async function loadConfigFile({
  * @param {string} content
  * @param {string} path the file's location, named in refusals
  * @param {import("#core/policy.mjs").PolicySource} source the resolved policy source, named in the refusal
- * @param {number} supportedMajor the schema major this action understands
+ * @param {number | number[]} supportedMajor the schema major(s) this action understands
  * @returns {Record<string, unknown>}
  */
 function parsePolicyFile(content, path, source, supportedMajor) {

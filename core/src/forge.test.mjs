@@ -227,6 +227,33 @@ describe("listRepositoryLabels", () => {
   });
 });
 
+describe("listRepositoryLabelsDetailed", () => {
+  it("reads full name, description and colour metadata, across pages", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/labels?per_page=100": page(
+        [{ name: "bug", description: "Incorrect behaviour.", color: "d73a4a" }],
+        '<https://api.github.com/repos/o/r/labels?per_page=100&page=2>; rel="next"',
+      ),
+      "GET /repos/o/r/labels?per_page=100&page=2": page([
+        { name: "docs", description: "Documentation only.", color: "0075ca" },
+      ]),
+    });
+    await expect(client.listRepositoryLabelsDetailed()).resolves.toEqual([
+      { name: "bug", description: "Incorrect behaviour.", color: "d73a4a" },
+      { name: "docs", description: "Documentation only.", color: "0075ca" },
+    ]);
+  });
+
+  it("fills absent description and colour with empty strings — a normal label, not a broken answer", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/labels?per_page=100": page([{ name: "bug" }, { colour: "red" }]),
+    });
+    await expect(client.listRepositoryLabelsDetailed()).resolves.toEqual([
+      { name: "bug", description: "", color: "" },
+    ]);
+  });
+});
+
 describe("listPullRequestFiles", () => {
   /** @param {number} count @returns {() => Response} */
   function files(count) {

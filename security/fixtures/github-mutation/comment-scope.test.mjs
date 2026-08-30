@@ -259,6 +259,9 @@ describe("triage run — a hostile marker-quoting comment on the live thread", (
         async listRepositoryLabels() {
           return [];
         },
+        async listRepositoryLabelsDetailed() {
+          return [];
+        },
         async listComments() {
           return store.listComments();
         },

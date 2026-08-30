@@ -113,6 +113,9 @@ function fakeForge(options = {}) {
     async listRepositoryLabels() {
       return REPO_LABELS;
     },
+    async listRepositoryLabelsDetailed() {
+      return REPO_LABELS.map((name) => ({ name, description: "", color: "" }));
+    },
     /** @param {string} path */
     async getContents(path) {
       // The prowl path is `.github/action-agents/triage/triage.json5`; other

@@ -91,6 +91,9 @@ async function driveRun({ sheet, answer }) {
     async listRepositoryLabels() {
       return repoLabels;
     },
+    async listRepositoryLabelsDetailed() {
+      return repoLabels.map((name) => ({ name, description: "", color: "" }));
+    },
     async addLabels(number, names) {
       writes.push({ op: "addLabels", args: [number, names] });
     },
