@@ -11,7 +11,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { evaluate, parseDeclared, readNames } from "./check-action-inputs.mjs";
+import {
+  evaluate,
+  optionsSemantics,
+  parseDeclared,
+  parseManifest,
+  readNames,
+} from "./check-action-inputs.mjs";
 
 /** The real shared reader, reduced to what the scan looks at. */
 const SHARED = {
@@ -212,4 +218,194 @@ test("readNames takes both quote styles and ignores everything else", () => {
   const text = `getInput("a"), getBooleanInput('b'), getNumberInput("c"), getListInput("d"), getThing("e")`;
 
   assert.deepEqual(readNames(text), ["a", "b", "c", "d"]);
+});
+
+/**
+ * An action with a manifest, so the required/default comparison has facts on
+ * both sides. Fields default to the same values parseManifest produces for a
+ * manifest that says nothing: required=false, default="".
+ *
+ * @param {object} spec
+ * @param {string} [spec.name]
+ * @param {string[]} [spec.declared]
+ * @param {Array<{ name: string, required?: boolean, default?: string }>} spec.manifest
+ * @param {string} spec.source
+ * @param {boolean} [spec.shared]
+ */
+const actionWithManifest = ({ name = "review", declared, manifest, source, shared = true }) => {
+  const base = action({ name, declared, source, shared });
+  return {
+    ...base,
+    manifest: manifest.map((entry) => ({
+      name: entry.name,
+      required: entry.required ?? false,
+      default: entry.default ?? "",
+    })),
+  };
+};
+test("the code requiring an input the manifest leaves optional is a failure", () => {
+  // A `getNumberInput` with no default throws on absence: that input is
+  // required from the code's side even though the helper takes no required
+  // flag. A manifest that does not say so sends a consumer into a crash.
+
+  const result = evaluate({
+    actions: [
+      actionWithManifest({
+        declared: ["max-turns"],
+        manifest: [{ name: "max-turns", required: false }],
+        source: `maxTurns: getNumberInput("max-turns", { min: 1 }, env),`,
+      }),
+    ],
+    sharedInputs: SHARED,
+  });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0], /'max-turns' is required by the code/);
+});
+
+test("the manifest requiring an input the code reads optionally is a failure", () => {
+  const result = evaluate({
+    actions: [
+      actionWithManifest({
+        declared: ["config-path"],
+        manifest: [{ name: "config-path", required: true }],
+        source: `configPath: getInput("config-path", {}, env),`,
+      }),
+    ],
+    sharedInputs: SHARED,
+  });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0], /'config-path' is marked required in review\/action\.yaml/);
+});
+
+test("a manifest default that differs from the code's default is a failure", () => {
+  const result = evaluate({
+    actions: [
+      actionWithManifest({
+        declared: ["max-turns"],
+        manifest: [{ name: "max-turns", required: false, default: "60" }],
+        source: `maxTurns: getNumberInput("max-turns", { default: 30 }, env),`,
+      }),
+    ],
+    sharedInputs: SHARED,
+  });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(
+    result.failures[0],
+    /'max-turns' default differs: review\/action\.yaml declares '60' but the code applies '30'/,
+  );
+});
+
+test("a manifest default the code does not apply is a failure", () => {
+  // The manifest promises 30 turns when omitted; the code's bare getNumberInput
+  // throws instead. A consumer who read the manifest gets a crash, not 30.
+  // That is two breaches at once: the default never lands, and the input is
+  // required on the code's side while the manifest leaves it optional.
+  const result = evaluate({
+    actions: [
+      actionWithManifest({
+        declared: ["max-turns"],
+        manifest: [{ name: "max-turns", required: false, default: "30" }],
+        source: `maxTurns: getNumberInput("max-turns", { min: 1 }, env),`,
+      }),
+    ],
+    sharedInputs: SHARED,
+  });
+
+  assert.equal(result.failures.length, 2);
+  assert.ok(
+    result.failures.some((failure) =>
+      /declared in review\/action\.yaml with default '30' but the code applies no default/.test(
+        failure,
+      ),
+    ),
+  );
+  assert.ok(result.failures.some((failure) => /'max-turns' is required by the code/.test(failure)));
+});
+
+test("a code default the manifest does not declare is a failure", () => {
+  const result = evaluate({
+    actions: [
+      actionWithManifest({
+        declared: ["dry-run"],
+        manifest: [{ name: "dry-run", required: false }],
+        source: `dryRun: getBooleanInput("dry-run", { default: false }, env),`,
+      }),
+    ],
+    sharedInputs: SHARED,
+  });
+
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0], /'dry-run' applies a default the manifest does not declare/);
+});
+
+test("an empty manifest default equals no code default", () => {
+  // `config-path` with `default: ""` in the manifest and a bare getInput are
+  // the same behaviour; this is what keeps the real manifests green.
+  const result = evaluate({
+    actions: [
+      actionWithManifest({
+        declared: ["config-path"],
+        manifest: [{ name: "config-path", required: false, default: "" }],
+        source: `configPath: getInput("config-path", {}, env),`,
+      }),
+    ],
+    sharedInputs: SHARED,
+  });
+
+  assert.deepEqual(result.failures, []);
+});
+
+test("an options object spread across lines is one fact, not several", () => {
+  const result = evaluate({
+    actions: [
+      actionWithManifest({
+        declared: ["context-window"],
+        manifest: [{ name: "context-window", required: false, default: "128000" }],
+        source: [
+          `contextWindow: getNumberInput(`,
+          `  "context-window",`,
+          `  { default: 128_000, min: 1_000 },`,
+          `  env,`,
+          `),`,
+        ].join("\n"),
+      }),
+    ],
+    sharedInputs: SHARED,
+  });
+
+  assert.deepEqual(result.failures, []);
+});
+
+test("parseManifest reads required and default and stops at the next top-level key", () => {
+  const manifest = [
+    "inputs:",
+    "  github-token:",
+    "    description: Token the action writes with.",
+    "    required: true",
+    "",
+    "  max-turns:",
+    "    description: Some text with a default: nobody reads this as one.",
+    "    required: false",
+    '    default: "30"',
+    "",
+    "  dry-run:",
+    '    default: "true"',
+    "",
+    "runs:",
+    "  using: node24",
+    "  main: src/index.mjs",
+    "",
+  ].join("\n");
+
+  assert.deepEqual(parseManifest(manifest), [
+    { name: "github-token", required: true, default: "" },
+    { name: "max-turns", required: false, default: "30" },
+    { name: "dry-run", required: false, default: "true" },
+  ]);
+
+  // The description's prose "default:" must not leak into the fact.
+  assert.deepEqual(optionsSemantics(`{ required: true }`), { required: true, default: "" });
 });

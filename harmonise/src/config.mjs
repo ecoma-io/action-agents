@@ -166,6 +166,9 @@ export function validateConfig(raw) {
   if (typeof sourceLanguage !== "string" || sourceLanguage === "") {
     throw new Error("sourceLanguage must name the language every other version is judged against");
   }
+  if (!/^[a-zA-Z]{2,8}(-[a-zA-Z0-9]+)*$/.test(sourceLanguage)) {
+    throw new Error(`sourceLanguage '${sourceLanguage}' is not a valid language tag`);
+  }
   if (!Object.hasOwn(languages, sourceLanguage)) {
     throw new Error(
       `sourceLanguage '${sourceLanguage}' is not a key of languages — the source needs a ` +

@@ -190,6 +190,16 @@ jobs:
       - name: Check action manifests against their code
         run: pnpm check-action-inputs
 
+      # The step above ties each action.yaml to the code behind it; nothing
+      # ties the workflows under .github/workflows to the manifests. A `with:`
+      # key the manifest never declared reaches the action as a runner warning
+      # nobody reads, and a `required: true` input no step passes fails only
+      # when a run actually starts. Both directions are drift the rest of the
+      # gates are green over, so this step closes the loop on the other side
+      # of the same contract.
+      - name: Check workflows against the action manifests
+        run: pnpm check-workflow-inputs
+
       # Validates the release surface: root action stub contract, every child
       # action manifest with resolvable entry point, no undocumented action
       # directory, and version consistency across release-please files.

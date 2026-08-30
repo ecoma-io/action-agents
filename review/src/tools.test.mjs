@@ -126,11 +126,17 @@ describe("read_file", () => {
     expect(execute("read_file", '{"path":"logo.bin"}').output).toMatch(/binary content/);
   });
 
-  it("refuses ignored paths on their canonical spelling", () => {
+  it("refuses ignored paths on their canonical spelling — resolution decides, not the spelling", () => {
+    // `dist/bundle.js` is ignored; every spelling that resolves to it — dot-
+    // prefixed, or reached through a `..` that normalization collapses — is
+    // refused on `entry.relative`, the same path the listing hides it under.
     expect(execute("read_file", '{"path":"dist/bundle.js"}').output).toMatch(
       /the config ignores this path/,
     );
     expect(execute("read_file", '{"path":"./dist/bundle.js"}').output).toMatch(
+      /the config ignores this path/,
+    );
+    expect(execute("read_file", '{"path":"src/../dist/bundle.js"}').output).toMatch(
       /the config ignores this path/,
     );
   });

@@ -62,7 +62,7 @@ export function renderComment({
   const header = [`**Review** — ${status}`, `Reviewed head \`${headSha}\``];
   if (policySource !== undefined) {
     header.push(
-      `Policy source \`${policySource.branch}\` at \`${policySource.sha}\` (${policySource.basis})`,
+      `Policy source \`${defang(policySource.branch)}\` at \`${policySource.sha}\` (${policySource.basis})`,
     );
   }
   lines.push(...header, "");

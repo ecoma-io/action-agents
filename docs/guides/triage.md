@@ -2,7 +2,10 @@
 
 Classify issues and pull requests against a label sheet you declare, with any
 OpenAI-compatible model. Labels are drawn from the sheet and nowhere else, and
-an off-sheet label is refused at startup — the model picks, it does not invent.
+an off-sheet label the model names is refused at the point of application —
+the model picks from the printed sheet, it does not invent. An answer entirely
+off-sheet refuses the run rather than applying nothing; an answer partly
+off-sheet applies its on-sheet half and logs the rest.
 
 - [Install and pin](#install-and-pin)
 - [Inputs](#inputs)
@@ -98,13 +101,12 @@ The file is JSON5 (comments, trailing commas, single quotes).
 | `triageMarker`  | no       | A queue label name the action clears once a universal category is classified.                                                                                           |
 | `instructions`  | no       | Paths to instruction documents: `instruction` (both), `issue-instruction` (issues only), `pr-instruction` (pull requests only).                                         |
 
-#### `labels`
-
 The three sub-keys are each a map of label name to gloss string. The effective
 sheet for a thread is `universal ∪ issues` for an issue, `universal ∪ pr` for a
-pull request. A label appearing on more than one map is still a single
-selectable entry — the gloss from the first map found (universal > issues/pr)
-wins.
+pull request — with every label held once, so a name declared on more than one
+map is refused at startup (a label that is "universal" on an issue and "PR-only"
+on a pull request would be ambiguous, and the config rejects rather than
+resolves it).
 
 ```json5
 labels: {
@@ -238,9 +240,12 @@ than silently skipping, because without write access it cannot do its job.
 
 ## Outputs and artifacts
 
-**Labels** are applied add-only. The action never removes a label a human or
-another action applied — it only adds its own classification labels (category +
-size) and, when `triageMarker` is configured, removes that marker.
+**Labels** are **add-only for the classification (sheet) labels** — the action
+never removes a category a human or another action applied, and only ever adds
+its own. The two deliberate exceptions are code-driven, never model choices:
+the **size** label is a replacement (the measured rung supersedes whichever
+hand last applied a size on the thread), and the `triageMarker` queue label is
+removed once the run classifies a universal category.
 
 **Marker comment**: when the config file has no label sheet (policy-empty), the
 action writes a single comment with the classification text. This is the same

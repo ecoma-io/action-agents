@@ -148,7 +148,19 @@ export function createHttpClient(config) {
           });
         }
 
-        const target = new URL(location, url);
+        let target;
+        try {
+          target = new URL(location, url);
+        } catch {
+          // A malformed Location (no host, a bare relative path that cannot
+          // resolve) is a broken redirect, refused like a missing one — the
+          // caller's failure vocabulary sees an HttpError either way, never a
+          // raw TypeError.
+          throw new HttpError(`redirect to a malformed location '${location}'`, {
+            status: response.status,
+            url: where(url),
+          });
+        }
         if (target.origin !== origin) {
           throw new CrossOriginRedirectError(origin, target.origin);
         }
@@ -290,6 +302,14 @@ export function createHttpClient(config) {
       const seconds = Number(retryAfter);
       if (Number.isFinite(seconds) && seconds >= 0) {
         return Math.min(seconds * 1000, maxRetryAfterMs);
+      }
+      // Retry-After may be an HTTP-date (RFC 7231) rather than seconds: wait
+      // until that instant. A date in the past is a provider already done
+      // waiting — fall back to the ordinary backoff.
+      const at = Date.parse(retryAfter);
+      if (Number.isFinite(at)) {
+        const wait = at - Date.now();
+        if (wait > 0) return Math.min(wait, maxRetryAfterMs);
       }
     }
     return backoff(number);

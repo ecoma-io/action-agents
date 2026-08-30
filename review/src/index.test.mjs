@@ -576,6 +576,28 @@ describe("writeRunArtifact", () => {
     ).toThrow(/touches .git/);
   });
 
+  it("refuses a path through .git case-insensitively", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    expect(() =>
+      writeRunArtifact({
+        workspace: root,
+        directory: ".Git/artifacts",
+        artifact: artifactFixture(),
+      }),
+    ).toThrow(/touches \.git/);
+  });
+
+  it("refuses a symlinked directory that resolves into .git", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    mkdirSync(p.join(root, ".git"));
+    // The lexical path carries no `.git` segment, so only the post-resolve
+    // check can see that the real location is the metadata directory.
+    symlinkSync(p.join(root, ".git"), p.join(root, "link"), "dir");
+    expect(() =>
+      writeRunArtifact({ workspace: root, directory: "link", artifact: artifactFixture() }),
+    ).toThrow(/resolves inside \.git/);
+  });
+
   it("refuses a symlinked directory that leaves the workspace", () => {
     const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
     const outside = mkdtempSync(p.join(tmpdir(), "artifact-outside-"));

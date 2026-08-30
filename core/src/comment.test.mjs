@@ -288,6 +288,27 @@ describe("the newer-head rule", () => {
     expect(outcome.outcome).toBe("abandoned");
     expect(api.log.some((line) => line.includes("abandoning"))).toBe(true);
   });
+  it("abandons when the newer head cannot be dated — a NaN updated_at must not prove the comment older", async () => {
+    const undated = comment({
+      id: 6,
+      body: `${markerLine("triage", "d0d00006", "aaaabbbbccccdddde")} undated`,
+      updated_at: "not-a-timestamp",
+    });
+    const api = store([undated]);
+
+    const outcome = await upsertComment({
+      ...baseOptions(api, {
+        head: "ffff0000ffff0000f",
+        startedAt: Date.parse("2026-07-01T11:00:00Z"),
+      }),
+      log: (line) => api.log.push(line),
+    });
+
+    // Fail closed: a body that cannot be dated is treated as possibly a
+    // concurrent run's, never as provably older — abandoned, not clobbered.
+    expect(outcome.outcome).toBe("abandoned");
+    expect(api.log.some((line) => line.includes("abandoning"))).toBe(true);
+  });
 
   it("updates when the recorded head is this run's head, however old the comment", async () => {
     const mine = comment({

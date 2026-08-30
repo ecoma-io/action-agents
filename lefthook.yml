@@ -54,3 +54,13 @@ pre-commit:
       # exactly the drift that has no diff through. Reads five small files and
       # a manifest — fast enough that nobody learns to skip it.
       run: pnpm check-skills
+
+    - name: workflow-inputs
+      # Same reasoning as doc-links and skills: a workflow that drifts from
+      # the action manifest it runs is a failure of the tree, not of one
+      # staged path, so a glob would miss the commit that only touched
+      # package.json. It reads a handful of small files in milliseconds —
+      # faster than a contributor notices — and fails the commit that would
+      # otherwise land a `with:` key nobody declares or a required input no
+      # step passes.
+      run: pnpm check-workflow-inputs

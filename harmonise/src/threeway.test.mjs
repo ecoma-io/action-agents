@@ -322,3 +322,12 @@ describe("determinism and summaries", () => {
     expect(summarizeMerge(result)).toEqual({ preservedManual: 1, adoptedFresh: 1, conflicts: 1 });
   });
 });
+
+describe("table budget", () => {
+  it("refuses a merge whose LCS table would exceed the budget, as a content refusal", () => {
+    // 4 000-line sides: (4001)² ≈ 16 M Int32 entries, far past the 2²³ cap —
+    // a short-line document that would otherwise allocate a ~64 MB table.
+    const big = Array.from({ length: 4_000 }, (_, i) => `line ${i}`).join("\n");
+    expect(() => mergeThreeWay(big, big, "fresh\nonly\n")).toThrow(/too large to reconcile safely/);
+  });
+});

@@ -131,72 +131,29 @@ jobs:
       # whose manifest names an entry point that is not there, fails inside the
       # consumer's repository rather than here.
       #
-      # Checked both ways: a named action whose manifest is missing fails; a
-      # directory carrying a manifest this list does not name fails too, because
-      # that is how an action ships unannounced, undocumented and unpinnable.
-      #
-      # The root action is checked separately: it exists as a deliberate stub
-      # that fails with usage guidance (following the github/codeql-action
-      # pattern), not as a runnable action. Its contract is: valid YAML,
-      # required metadata present, composite runner, always fails.
+      # That verification is `tools/check-release-invariants.mjs`, the same
+      # gate CI's Verify job runs on every merge: root action stub contract
+      # and, against the list of public actions (root, triage, review,
+      # harmonise), each child manifest with a resolvable entry point, no
+      # unnamed action directory, and version consistency across
+      # release-please's files. At the released SHA it also proves the
+      # CHANGELOG head names the same version those files do — a release cut
+      # with its changelog and version files out of step would fail here.
+      # There is deliberately no second, hand-rolled copy of these rules: a
+      # script the build already enforces is one source of truth, and drift
+      # between two versions of the same check is exactly what a release gate
+      # exists to prevent.
       #
       # A failure here leaves the release created with no floating tag pointing
       # at it, which is the recoverable order: delete the release, fix the tree,
       # release again.
+      #
+      # It is invoked with `node`, not `pnpm`: this workflow runs no install
+      # and the script is plain Node with no dependencies, so it must not need
+      # a package manager that is not on the PATH.
       - name: Verify every action resolves at this tag
         if: steps.release.outputs.release_created
-        run: |
-          set -euo pipefail
-
-          # ── Root action stub ──────────────────────────────────────────
-          # The root action.yml exists so that
-          # `uses: ecoma-io/action-agents@v0.1.0` resolves.  It is NOT a
-          # runnable action — it is a composite stub that always fails with
-          # guidance pointing consumers to the real actions.  Its contract:
-          if [ ! -f "action.yml" ]; then
-            echo "::error::Root action.yml missing — 'ecoma-io/action-agents@v0.1.0' would fail to resolve."
-            exit 1
-          fi
-          root_uses="$(sed -n 's/^ *using: *//p' action.yml | head -1)"
-          if [ "$root_uses" != "composite" ]; then
-            echo "::error::Root action.yml runs.using must be 'composite', got '${root_uses}'."
-            exit 1
-          fi
-          echo "Root action stub validated."
-
-          # ── Child actions ─────────────────────────────────────────────
-          # Each child action must have a manifest with a valid entry point.
-          actions="triage review harmonise"
-          for action in $actions; do
-            manifest="$action/action.yaml"
-            if [ ! -f "$manifest" ]; then
-              echo "::error::'$action' has no $manifest — refusing to cut a release that would break its pin."
-              exit 1
-            fi
-            # `runs.main` is resolved by the runner relative to the action
-            # directory, so that is where it is checked from.
-            main="$(sed -n 's/^ *main: *//p' "$manifest" | head -1)"
-            if [ -z "$main" ] || [ ! -f "$action/$main" ]; then
-              echo "::error::$manifest names entry point '${main:-<none>}', which does not exist at this tag."
-              exit 1
-            fi
-          done
-
-          # ── Unexpected action detection ───────────────────────────────
-          # A directory carrying an action.yaml that is NOT in the list above
-          # ships undocumented, unpinnable and unannounced.  Fail so it is
-          # either added to the list or removed from the tree.
-          for found in */action.yaml; do
-            dir="${found%/action.yaml}"
-            case " $actions " in
-              *" $dir "*) ;;
-              *)
-                echo "::error::'$dir' carries $found but is not in this step's action list — add it here and to README.md, or its bytes ship undocumented."
-                exit 1
-                ;;
-            esac
-          done
-          echo "Every action resolves at this tag."
+        run: node tools/check-release-invariants.mjs
 
   # The floating tag is what a consumer pins to get fixes without editing their
   # workflow, so what it is allowed to deliver decides its shape.

@@ -457,6 +457,38 @@ describe("the retry wall-clock contract", () => {
       vi.useRealTimers();
     }
   });
+  it("honours an HTTP-date Retry-After (RFC 7231), waiting until that instant", async () => {
+    vi.useFakeTimers();
+    try {
+      /** @type {{ calls?: RecordedCall[] }} */
+      const recorder = {};
+      const http = createHttpClient({
+        baseUrl: "https://api.example",
+        fetchImpl: scripted(
+          [
+            status(429, "", { "retry-after": new Date(Date.now() + 10_000).toUTCString() }),
+            ok('"after"'),
+          ],
+          recorder,
+        ),
+        retryDelayMs: 1_000,
+        timeoutMs: 5_000,
+      });
+      const settled = http.request("/x").catch((cause) => cause);
+
+      // A date, not a seconds count: the plain backoff would have retried
+      // after one second; the header says wait nearly ten seconds, so nine
+      // seconds in the request has still not retried.
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(recorder.calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(settled).resolves.toMatchObject({ status: 200, text: '"after"' });
+      expect(recorder.calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("takes no abort from the caller — the inter-attempt sleep is the client's alone", async () => {
     vi.useFakeTimers();
@@ -622,6 +654,17 @@ describe("the redirect ceiling", () => {
     });
 
     await expect(http.request("/x")).rejects.toThrow(/no location/);
+  });
+  it("refuses a redirect to a malformed location as an HttpError, never a splicing TypeError", async () => {
+    const http = createHttpClient({
+      baseUrl: "https://api.example/v1",
+      fetchImpl: scripted([redirect(302, "http://")]),
+      ...FAST,
+    });
+
+    const error = await http.request("/x").catch((cause) => cause);
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error.message).toMatch(/malformed location/);
   });
 });
 

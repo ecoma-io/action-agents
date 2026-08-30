@@ -30,6 +30,23 @@ describe("renderComment", () => {
     expect(body.indexOf("Concerns")).toBeLessThan(body.indexOf("Nits"));
   });
 
+  it("defangs an attacker-chosen policy branch before it enters the provenance line", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "n/a",
+      findings: [],
+      strictness: "high",
+      policySource: { basis: "pushed", branch: "feature`x<!--`", sha: HEAD },
+    });
+
+    // Backticks cannot open a code span from inside the branch name, and the
+    // HTML-comment opener cannot survive to start a comment.
+    expect(body).toContain("Policy source `feature'x&lt;-'`");
+    expect(body).not.toContain("feature`");
+    expect(body).not.toContain("<!--");
+  });
+
   it("collapses nits at medium strictness — one click away, still anchored", () => {
     const body = renderComment({
       status: "Complete",

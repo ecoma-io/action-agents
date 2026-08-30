@@ -194,6 +194,17 @@ describe("getContents", () => {
       "https://api.github.com/repos/o/r/contents/docs%2F50%2525.md",
     ]);
   });
+  it("refuses content that is not valid UTF-8 instead of slurping replacement characters", async () => {
+    const invalid = Buffer.from([0xff, 0xfe, 0xfd]).toString("base64");
+    const client = forge("o", "r", {
+      "GET /repos/o/r/contents/blob.bin": json({ content: invalid, encoding: "base64" }),
+    });
+
+    const error = await client.getContents("blob.bin").catch((c) => c);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("NonUtf8ContentError");
+    expect(error.message).toMatch(/not valid UTF-8/);
+  });
 });
 
 describe("listRepositoryLabels", () => {
@@ -344,6 +355,51 @@ describe("label writes", () => {
     expect(error.cause).toBeInstanceOf(HttpError);
     expect(error.cause.status).toBe(503);
     expect(recorder.calls).toHaveLength(1);
+  });
+  it("treats a 404 as the label already absent — a replayed removal succeeds", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        "DELETE /repos/o/r/issues/7/labels/size%2Fxl": () =>
+          new Response("Not Found", { status: 404 }),
+      },
+      recorder,
+    );
+
+    await expect(client.removeLabel(7, "size/xl")).resolves.toBeUndefined();
+    expect(recorder.calls).toHaveLength(1);
+  });
+});
+describe("pagination cap", () => {
+  it("refuses a listing whose Link header never ends", async () => {
+    const self = '<https://api.github.com/repos/o/r/labels?per_page=100&page=2>; rel="next"';
+    const client = forge("o", "r", {
+      "GET /repos/o/r/labels?per_page=100": page([{ name: "bug" }], self),
+      "GET /repos/o/r/labels?per_page=100&page=2": page([{ name: "docs" }], self),
+    });
+
+    const error = await client.listRepositoryLabels().catch((c) => c);
+
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/after 100 pages/);
+  });
+
+  it("bounds a tree listing's pages the same way", async () => {
+    const sha = "abc123def4567890abcdef1234567890abcdef12";
+    const self = `<https://api.github.com/repos/o/r/git/trees/${sha}?recursive=1&page=2>; rel="next"`;
+    const tree = { truncated: false, tree: [{ path: "a.md", type: "blob" }] };
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/git/trees/${sha}?recursive=1`]: page(tree, self),
+      [`GET /repos/o/r/git/trees/${sha}?recursive=1&page=2`]: page(tree, self),
+    });
+
+    const error = await client.listTree(sha).catch((c) => c);
+
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/after 100 pages/);
   });
 });
 
@@ -642,12 +698,17 @@ describe("write operations", () => {
   it("upsertBranch force-updates when the branch sits where the run found it", async () => {
     /** @type {{ calls?: RecordedCall[] }} */
     const recorder = {};
+    let patched = false;
     const client = forge(
       "o",
       "r",
       {
-        [`GET /repos/o/r/git/ref/heads/harmonise%2Fen`]: json({ object: { sha: SHA } }),
-        "PATCH /repos/o/r/git/refs/heads/harmonise%2Fen": json({ object: { sha: "new" } }),
+        [`GET /repos/o/r/git/ref/heads/harmonise%2Fen`]: () =>
+          patched ? json({ object: { sha: "newsha" } })() : json({ object: { sha: SHA } })(),
+        "PATCH /repos/o/r/git/refs/heads/harmonise%2Fen": () => {
+          patched = true;
+          return json({ object: { sha: "new" } })();
+        },
       },
       recorder,
     );
@@ -656,8 +717,9 @@ describe("write operations", () => {
     const patch = recorder.calls?.find((call) => call.method === "PATCH");
     expect(patch).toBeDefined();
     expect(JSON.parse(String(patch?.body))).toEqual({ sha: "newsha", force: true });
-    // The lock is re-read immediately before the write: two reads, then the PATCH.
-    expect(recorder.calls?.map((call) => call.method)).toEqual(["GET", "GET", "PATCH"]);
+    // The lock is re-read immediately before the write and verified after it:
+    // read, re-read, PATCH, then the tip must be our commit.
+    expect(recorder.calls?.map((call) => call.method)).toEqual(["GET", "GET", "PATCH", "GET"]);
   });
 
   it("refuses with BranchMovedError when the branch moved under the run", async () => {

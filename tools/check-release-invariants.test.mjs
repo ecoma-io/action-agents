@@ -414,6 +414,62 @@ test("version: flags wrong initial-version", () => {
   );
 });
 
+test("changelog: passes when the CHANGELOG head matches the version files", () => {
+  const { failures } = evaluate({
+    ...stubFs({
+      ...FULL_TREE,
+      "release-please-config.json": JSON.stringify({
+        packages: { ".": { "initial-version": "0.1.0" } },
+      }),
+      ".release-please-manifest.json": '{".":"0.5.0"}',
+      "package.json": JSON.stringify({ version: "0.5.0" }),
+      "CHANGELOG.md":
+        "# Changelog\n\n## [0.5.0](https://example.com/compare/v0.4.0...v0.5.0) (2026-08-30)\n\n### Features\n\n* something ([#1](https://example.com/1))\n",
+    }),
+    discoveredDirs: ["triage", "review", "harmonise"],
+  });
+  assert.equal(failures.length, 0, `unexpected failures: ${failures.join(", ")}`);
+});
+
+test("changelog: flags a CHANGELOG head that disagrees with the version files", () => {
+  const { failures } = evaluate({
+    ...stubFs({
+      ...FULL_TREE,
+      "release-please-config.json": JSON.stringify({
+        packages: { ".": { "initial-version": "0.1.0" } },
+      }),
+      ".release-please-manifest.json": '{".":"0.5.0"}',
+      "package.json": JSON.stringify({ version: "0.5.0" }),
+      "CHANGELOG.md":
+        "# Changelog\n\n## [0.4.1](https://example.com/compare/v0.4.0...v0.4.1) (2026-08-29)\n",
+    }),
+    discoveredDirs: ["triage", "review", "harmonise"],
+  });
+  assert.ok(
+    failures.some((f) => f.includes("CHANGELOG head describes '0.4.1'")),
+    `expected CHANGELOG-head failure, got: ${failures.join(", ")}`,
+  );
+});
+
+test("changelog: flags a CHANGELOG with no release heading", () => {
+  const { failures } = evaluate({
+    ...stubFs({
+      ...FULL_TREE,
+      "release-please-config.json": JSON.stringify({
+        packages: { ".": { "initial-version": "0.1.0" } },
+      }),
+      ".release-please-manifest.json": '{".":"0.5.0"}',
+      "package.json": JSON.stringify({ version: "0.5.0" }),
+      "CHANGELOG.md": "# Changelog\n\nNothing released yet.\n",
+    }),
+    discoveredDirs: ["triage", "review", "harmonise"],
+  });
+  assert.ok(
+    failures.some((f) => f.includes("no `## [<version>]` release heading")),
+    `expected missing-head failure, got: ${failures.join(", ")}`,
+  );
+});
+
 // ── Checks count ──────────────────────────────────────────────────────────
 
 test("checks: counts at least one check per invariant category", () => {

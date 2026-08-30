@@ -284,26 +284,24 @@ export async function run(inputs, context, io) {
   /** @type {(path: string) => Promise<{ content: string } | null>} */
   const readAtBase = policyReader(world.forge, source);
 
-  // The recorded state is advisory and fails closed: a file that is missing,
-  // unreadable, unparseable, or of a foreign schema version leaves no
-  // records, and a thrown read degrades the same way. A state problem may
-  // never block the run and may never cause a silent skip — with no usable
-  // records every pair is judged from the world alone: a missing target
-  // still translates, and existing bytes are human work that manual-edit
-  // protection preserves (merge against a verified base, or refuse).
+  // The recorded state is advisory but, like every read pinned to the base
+  // tip, fails closed: a missing or corrupt file (404 from the reader, or an
+  // unparseable/foreign-schema document) leaves no records and every pair is
+  // judged from the world alone — a missing target still translates, and
+  // existing bytes are human work that manual-edit protection preserves.
+  // Absence degrades; a transport failure in the read is a real error and
+  // propagates — a run never silently continues on a state file it could
+  // not reach (the reader maps 404 to `null` and repairs corruption itself,
+  // so nothing is lost by letting every other failure through).
   /** @type {import("./state.mjs").SyncStateRecord[]} */
   let recordedRecords = [];
-  try {
-    const state = await readState({
-      getContents: (path, options) => f.getContents(path, options),
-      branchRef: branchBefore === null ? null : branchBefore.sha,
-      defaultRef: source.sha,
-      sourceLanguage: config.sourceLanguage,
-    });
-    if (state !== null) recordedRecords = state.records;
-  } catch {
-    recordedRecords = [];
-  }
+  const state = await readState({
+    getContents: (path, options) => f.getContents(path, options),
+    branchRef: branchBefore === null ? null : branchBefore.sha,
+    defaultRef: source.sha,
+    sourceLanguage: config.sourceLanguage,
+  });
+  if (state !== null) recordedRecords = state.records;
 
   // The translation memory resolves from the same snapshot authority as the
   // sync state above: ONE resolution of the harmonise branch tip — the
@@ -312,7 +310,6 @@ export async function run(inputs, context, io) {
   // run publishes the language-suffixed advisory files in one commit on
   // the proposal branch, so reading both at that resolved tip keeps the
   // state→memory join resolvable while the pull request is still unmerged —
-  // a record can always reach the merge base it references. The memory is
   // advisory both ways: a file that is missing, unreadable, corrupt or of a
   // foreign schema version leaves an empty store — no prior translations are
   // offered and the run proceeds exactly as a repository without a memory
@@ -320,20 +317,18 @@ export async function run(inputs, context, io) {
   // state does, without silently substituting a stale default. Writing:
   // entries recorded on publication are offered to later runs as reference
   // only; everything the model returns passes the same deterministic
-  // validation with or without a hit.
+  // validation with or without a hit. Absence and corruption degrade; a
+  // transport failure in the read propagates, exactly as for state above —
+  // a run never continues on a memory it could not reach.
   /** @type {ReturnType<typeof createTmStore>} */
   let memory = createTmStore();
-  try {
-    const stored = await readTm({
-      getContents: (path, options) => f.getContents(path, options),
-      branchRef: branchBefore === null ? null : branchBefore.sha,
-      defaultRef: source.sha,
-      sourceLanguage: config.sourceLanguage,
-    });
-    if (stored !== null) memory = stored.store;
-  } catch {
-    memory = createTmStore();
-  }
+  const stored = await readTm({
+    getContents: (path, options) => f.getContents(path, options),
+    branchRef: branchBefore === null ? null : branchBefore.sha,
+    defaultRef: source.sha,
+    sourceLanguage: config.sourceLanguage,
+  });
+  if (stored !== null) memory = stored.store;
 
   // Instruction prose is read once, capped, pinned to the audited tip, and
   // shared by every prompt.
@@ -1008,6 +1003,7 @@ export async function main(env = process.env, execute = run) {
     const inputs = readInputs(env);
     // Before anything can print it, and before the first request is built.
     maskSecret(inputs.apiKey);
+    maskSecret(inputs.githubToken);
     const context = readContext(env);
     info(
       `harmonise: ${context.owner}/${context.repo} on ${context.eventName}` +

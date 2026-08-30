@@ -55,6 +55,8 @@
  * recognised; a caller holding `\r\n` text normalizes it first.
  */
 
+import { RefusalError } from "./recovery.mjs";
+
 /**
  * A region both sides changed differently: the merged output keeps the manual
  * text and reports the disagreement.
@@ -106,6 +108,12 @@
 
 /** Maximum character length of a conflict excerpt, `...` suffix included. */
 const EXCERPT_MAX_LENGTH = 120;
+/**
+ * Cap on the LCS DP table size, in Int32 entries — `(n+1)·(m+1)` for each
+ * diffed pair. Refused past this, never thrashed: the default policy then
+ * declines to retry a merge no retry could make smaller.
+ */
+const MERGE_TABLE_LIMIT = 2 ** 23;
 
 /**
  * Split text into lines: an empty string has no lines, a trailing newline is
@@ -311,6 +319,20 @@ export function mergeThreeWay(baseText, manualText, freshText) {
   const base = toLines(baseText);
   const manual = toLines(manualText);
   const fresh = toLines(freshText);
+  // The LCS tables are (`n+1`)×(`m+1`) Int32 entries; short-line documents
+  // let that product blow up quadratically (a single-char-per-line document
+  // around 32 KB is ~16 K lines and a ~1 GB table). Refuse before allocating
+  // — a merge this large is refused as content, never approximated.
+  if (
+    (base.length + 1) * (manual.length + 1) > MERGE_TABLE_LIMIT ||
+    (base.length + 1) * (fresh.length + 1) > MERGE_TABLE_LIMIT
+  ) {
+    throw new RefusalError(
+      `merge is too large to reconcile safely ` +
+        `(${String(base.length)}/base, ${String(manual.length)}/manual, ` +
+        `${String(fresh.length)}/fresh lines exceed the table budget)`,
+    );
+  }
   const manualMatches = lcsMatches(base, manual);
   const freshMatches = lcsMatches(base, fresh);
   const manualRegions = changeRegions(manualMatches, base.length, manual.length);

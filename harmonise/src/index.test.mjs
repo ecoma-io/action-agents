@@ -1429,6 +1429,62 @@ describe("run with recorded state", () => {
     expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
   });
 
+  describe("advisory reads propagate transport failures", () => {
+    it("a state read that fails transport rejects the run instead of degrading", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      // Absence and corruption degrade to no records; a failure to reach the
+      // state file at all is a real error and must fail the run — never a
+      // silent continue on records the run could not read. The double's
+      // `getContents` is overridden to throw on the state path only.
+      const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
+      const forgeDouble = forge(makeRepo());
+      const originalGetContents = forgeDouble.getContents.bind(forgeDouble);
+      forgeDouble.getContents = async (
+        /** @type {string} */ path,
+        /** @type {{ ref?: string } | undefined} */ opts,
+      ) => {
+        if (path === STATE_PATH)
+          throw new ForgeError(
+            "reading the state",
+            new Error("transactional outage reading state"),
+          );
+        return originalGetContents(path, opts);
+      };
+      const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+      await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+        /transactional outage reading state/,
+      );
+      expect(chatDouble.calls()).toBe(0);
+      expect(forgeDouble.writes).toEqual([]);
+    });
+
+    it("a translation-memory read that fails transport rejects the run instead of degrading", async () => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const chatDouble = chat([proposes("# Dev\n\nTraduit à nouveau.\n")]);
+      const forgeDouble = forge(makeRepo());
+      const originalGetContents = forgeDouble.getContents.bind(forgeDouble);
+      forgeDouble.getContents = async (
+        /** @type {string} */ path,
+        /** @type {{ ref?: string } | undefined} */ opts,
+      ) => {
+        if (path === TM_PATH)
+          throw new ForgeError(
+            "reading the memory",
+            new Error("transactional outage reading memory"),
+          );
+        return originalGetContents(path, opts);
+      };
+      const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+      await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+        /transactional outage reading memory/,
+      );
+      expect(chatDouble.calls()).toBe(0);
+      expect(forgeDouble.writes).toEqual([]);
+    });
+  });
+
   it("refuses a drifted pair with no verifiable base — zero model calls, nothing written", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const edited = "# Dev\n\nTraduit et mis à jour.\n";
