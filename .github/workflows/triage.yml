@@ -5,8 +5,10 @@ name: Triage
 # The dry-run phase is over: five real threads — three issues including an
 # adversarial one, two pull requests — classified correctly with nothing
 # written, the adversarial body refused, size measured from a real diff, and
-# the key masked in every log line. Real runs write labels, and only labels;
-# the action's whole write surface is labels and, with no sheet, one comment.
+# the key masked in every log line. Real runs write labels, and one marked
+# comment: a no-sheet classification or, on an issue, a code-composed signal
+# comment when the issue is judged incomplete or a duplicate of an open one.
+# That is the whole write surface — nothing is closed, assigned or mentioned.
 #
 # The action is referenced as `./triage` from the checkout of the ref that
 # triggered the run, which under `pull_request` is the merge commit of this
@@ -27,12 +29,12 @@ on:
   workflow_dispatch:
 
 # Exactly what a real run writes and nothing more: labels on issues and
-# pull requests. `contents` stays read-only — the config file is read, never
-# written. The block itself is the security boundary, which is the point of
-# the design: a fork's pull request gets a read-only token under
-# `pull_request`, so a real run there fails loudly rather than silently
-# skipping — the posture the action documents, and `continue-on-error`
-# remains a workflow choice nobody has made here.
+# pull requests, and the one marked comment. `contents` stays read-only —
+# the config file is read, never written. The block itself is the security
+# boundary, which is the point of the design: a fork's pull request gets a
+# read-only token under `pull_request`, so a real run there fails loudly
+# rather than silently skipping — the posture the action documents, and
+# `continue-on-error` remains a workflow choice nobody has made here.
 permissions:
   contents: read
   issues: write
