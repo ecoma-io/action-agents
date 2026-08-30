@@ -109,7 +109,6 @@ function rationaleOf(answer) {
  * @property {{ candidates?: Array<{ index: number, type?: string, confidence?: number | null, evidence?: string }> }} [relationships]
  * @property {{ severity?: string | null, confidence?: number | null }} [priority]
  */
-
 /**
  * Parses the model's `dimensions` field, present only on sheet-mode issue
  * runs. Absent, it is `{}` — the original PR-A/PR-B contract, where an issue
