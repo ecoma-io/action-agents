@@ -186,9 +186,7 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
           assessment: { intent: "labels", labels: ["bug", "docs"], rationale: "r" },
         }),
       ),
-    ).toThrow(
-      "the model's answer names two members of the single-valued 'semantic-classification' role",
-    );
+    ).toThrow("single-valued 'semantic-classification' role");
   });
 
   it("allows one label per exclusive role — different roles do not conflict", () => {
@@ -204,6 +202,39 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
       }),
     );
     expect(decision.add).toEqual(["bug", "question"]);
+  });
+
+  it("refuses an exclusive member when the thread already carries another of that role", () => {
+    expect(() =>
+      decide(
+        input({
+          evidence: {
+            thread: { type: "issue", number: 7, title: "t", body: "b", labels: ["bug"] },
+            policy: {
+              ...CONFIG,
+              labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
+            },
+          },
+          assessment: { intent: "labels", labels: ["docs"], rationale: "r" },
+        }),
+      ),
+    ).toThrow("single-valued 'semantic-classification' role");
+  });
+
+  it("re-applying the same exclusive member is idempotent, not a conflict", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          thread: { type: "issue", number: 7, title: "t", body: "b", labels: ["bug"] },
+          policy: {
+            ...CONFIG,
+            labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
+          },
+        },
+        assessment: { intent: "labels", labels: ["bug"], rationale: "r" },
+      }),
+    );
+    expect(decision.add).toEqual([]);
   });
 
   it("refuses two priority-role labels — ordering metadata is single-valued", () => {
@@ -237,9 +268,8 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
           assessment: { intent: "labels", labels: ["prio/a", "prio/b"], rationale: "r" },
         }),
       ),
-    ).toThrow("the model's answer names two members of the single-valued 'priority' role");
+    ).toThrow("single-valued 'priority' role");
   });
-
   it("applies a lone priority-role label", () => {
     const decision = decide(
       input({

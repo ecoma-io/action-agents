@@ -80,7 +80,22 @@ describe("assess", () => {
     const assessment = await assess(
       input({ chat, evidence: { ...input().evidence, sheet: new Map([["bug", "a bug"]]) } }),
     );
-    expect(assessment).toEqual({ intent: "labels", labels: ["bug", "docs"], rationale: "two" });
+    expect(assessment).toEqual({
+      intent: "labels",
+      labels: ["bug", "docs"],
+      rationale: "two",
+      issuedBy: "triage",
+      version: 1,
+      confidence: null,
+      dimensions: {
+        classification: undefined,
+        quality: undefined,
+        routing: undefined,
+        relationships: undefined,
+        priority: undefined,
+        pr: undefined,
+      },
+    });
   });
 
   it("parses a no-sheet answer into a comment assessment", async () => {
@@ -90,9 +105,42 @@ describe("assess", () => {
       intent: "comment",
       classification: "a bug",
       rationale: "Because.",
+      issuedBy: "triage",
+      version: 1,
+      confidence: null,
+      dimensions: {
+        classification: undefined,
+        quality: undefined,
+        routing: undefined,
+        relationships: undefined,
+        priority: undefined,
+        pr: undefined,
+      },
     });
   });
 
+  it("stamps the Assessment contract shape on every judgement", async () => {
+    const chat = world({ content: '{"labels":["bug"],"rationale":"one"}' }).chat;
+    const assessment = await assess(
+      input({ chat, evidence: { ...input().evidence, sheet: new Map([["bug", "a bug"]]) } }),
+    );
+    expect(assessment.issuedBy).toBe("triage");
+    expect(typeof assessment.version).toBe("number");
+    // Advisory strength slot — never a probability-of-correctness in this
+    // contract; empty (null) until an evaluator (PR-C/D) populates it.
+    expect(assessment.confidence).toBeNull();
+    const dimensions = /** @type {import("./assessment.mjs").AssessmentDimensions} */ (
+      assessment.dimensions
+    );
+    expect(Object.keys(dimensions).sort()).toEqual([
+      "classification",
+      "pr",
+      "priority",
+      "quality",
+      "relationships",
+      "routing",
+    ]);
+  });
   it("forwards the model, the messages and the configured model name to the chat", async () => {
     const chat = world({ content: '{"labels":[],"rationale":""}' }).chat;
     await assess(

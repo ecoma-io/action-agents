@@ -102,12 +102,17 @@ export function decide({ evidence, assessment }) {
   // places a priority label on the sheet; the rule still holds if one does.
   const roleOf = new Map([...(policy?.labels.roles ?? [])]);
   const singleValuedRoles = new Set([...(policy?.labels.exclusive ?? []), "priority"]);
+  // The final state, not just the assessment: the thread's current labels and
+  // the assessment together must never leave two members of a single-valued
+  // role on the thread. A thread already carrying one exclusive member while
+  // the assessment proposes another of the same role is off-policy too.
+  const onThread = new Set([...thread.labels, ...accepted]);
   for (const role of singleValuedRoles) {
-    const members = accepted.filter((name) => roleOf.get(name) === role);
+    const members = [...onThread].filter((name) => roleOf.get(name) === role);
     if (members.length > 1) {
       throw new Error(
-        `the model's answer names two members of the single-valued '${role}' role ` +
-          `(${members.join(", ")}) — a thread may carry only one; refusing rather than applying both`,
+        `the thread may carry only one member of the single-valued '${role}' role — ` +
+          `'${members.join("', '")}' cannot sit together; refusing rather than applying both`,
       );
     }
   }
