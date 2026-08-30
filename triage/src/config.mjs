@@ -362,7 +362,8 @@ export function validateConfig(raw) {
 
 /**
  * The effective sheet for a thread: every `use` label except those the
- * action measures or resets by code — size rungs and workflow markers —
+ * action measures or resets by code — size rungs, workflow markers, and
+ * triage-owned labels —
  * each carrying the repository's own description as its gloss. GitHub is
  * the source of truth for what a label means, so the sheet is built from
  * the label metadata the forge just read, not from the config. A label

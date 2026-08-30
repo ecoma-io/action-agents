@@ -127,12 +127,13 @@ Schema 2 offers the model the whole `labels.use` set on every thread — there i
 no per-thread-type split. From that set the model is never offered the labels
 it must not choose: the size-ladder rungs (measured, never chosen), the
 `priority` and `workflow-marker` role labels (applied by code or cleared, never
-picked), and the `needsMoreInfo` label (a code decision when an issue is judged
-incomplete, not a model choice). What remains is the sheet the model chooses
-from:
+picked), the workflow markers and triage-owned labels (maintained by code and
+events, never chosen), and the `needsMoreInfo` label (a code decision when an
+issue is judged incomplete, not a model choice). What remains is the sheet the
+model chooses from:
 
 ```text
-use − (size rungs ∪ priority roles ∪ workflow-marker roles ∪ needsMoreInfo)
+use − (size rungs ∪ priority roles ∪ workflow-marker roles ∪ workflow markers ∪ triage-owned labels ∪ needsMoreInfo)
 ```
 
 The description GitHub holds for a label is its gloss; where GitHub has no
