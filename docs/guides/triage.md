@@ -132,9 +132,11 @@ from the repository.
   code when the matched form declares one.
 
 The labels the model is offered are `use` minus the size-ladder labels, the
-`priority` and `workflow-marker` role labels, and the `needsMoreInfo` label:
-the rungs are measured, the priority label is derived, the queue marker is
-cleared and `needsMoreInfo` is a code decision — none of them picked.
+`priority` and `workflow-marker` role labels, the workflow markers and
+triage-owned labels, and the `needsMoreInfo` label: the rungs are measured, the
+priority label is derived, the queue marker is cleared, triage-owned labels are
+maintained by code, and `needsMoreInfo` is a code decision — none of them
+picked.
 
 ```json5
 labels: {

@@ -362,7 +362,8 @@ export function validateConfig(raw) {
 
 /**
  * The effective sheet for a thread: every `use` label except those the
- * action measures or resets by code — size rungs and workflow markers —
+ * action measures or resets by code — size rungs, workflow markers, and
+ * triage-owned labels —
  * each carrying the repository's own description as its gloss. GitHub is
  * the source of truth for what a label means, so the sheet is built from
  * the label metadata the forge just read, not from the config. A label
@@ -401,6 +402,17 @@ export function effectiveSheet({
   // needsMoreInfo is added by code, never chosen by the model — so it is
   // never offered on the sheet, like the priority rungs it joins.
   if (config.labels.needsMoreInfo !== null) neverOffered.add(config.labels.needsMoreInfo);
+  // Queue markers and triage-owned labels are maintained by code and events,
+  // never chosen by the model — so neither may leak onto the offered sheet,
+  // even when a consumer lists one in `use` (the schema requires a declared
+  // marker and an owned label to sit in `use`). A marker is cleared by
+  // classification, an owned label is derived or replaced by the policy; the
+  // model picking either would act on a surface it is not offered. Validation
+  // has already normalised these lists to their policy shapes — markers to
+  // `string[]`, owned labels to `Set<string>` — so iterating them directly
+  // covers a v1 migration's marker and a raw config array alike.
+  for (const marker of config.labels.workflowMarkers) neverOffered.add(marker);
+  for (const owned of config.labels.triageOwned) neverOffered.add(owned);
   const offered = [...config.labels.use].filter((name) => !neverOffered.has(name));
 
   // A file that declares no usable labels is no sheet: the classification
