@@ -7,7 +7,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { matchLabels, parseCommentAnswer, parseLabelsAnswer } from "./answer.mjs";
+import {
+  matchLabels,
+  parseCommentAnswer,
+  parseIssueDimensions,
+  parseLabelsAnswer,
+} from "./answer.mjs";
 
 const SHEET = new Map([
   ["bug", "Reproducible incorrect behaviour"],
@@ -94,5 +99,97 @@ describe("matchLabels", () => {
     const { accepted, refused } = matchLabels(["Bug", "bug ", "BUG", "bug"], SHEET);
     expect(accepted).toEqual(["bug"]);
     expect(refused).toEqual(["Bug", "bug ", "BUG"]);
+  });
+});
+
+describe("parseIssueDimensions", () => {
+  it("returns {} when the answer carries no dimensions field", () => {
+    expect(parseIssueDimensions('{"labels":["bug"],"rationale":"r"}')).toEqual({});
+  });
+
+  it("parses all four dimensions leniently", () => {
+    const parsed = parseIssueDimensions(
+      JSON.stringify({
+        labels: ["bug"],
+        rationale: "r",
+        dimensions: {
+          quality: {
+            missing: ["logs"],
+            weak: ["env"],
+            completeness: "missing-evidence",
+            confidence: 0.8,
+          },
+          routing: { area: "loom", confidence: 0.9 },
+          relationships: {
+            candidates: [
+              { index: 0, type: "duplicate", confidence: 0.6, evidence: "same crash" },
+              { index: 2, type: "related" },
+            ],
+          },
+          priority: { severity: "high", confidence: 0.9 },
+        },
+      }),
+    );
+    expect(parsed).toEqual({
+      quality: {
+        missing: ["logs"],
+        weak: ["env"],
+        completeness: "missing-evidence",
+        confidence: 0.8,
+      },
+      routing: { area: "loom", confidence: 0.9 },
+      relationships: {
+        candidates: [
+          { index: 0, type: "duplicate", confidence: 0.6, evidence: "same crash" },
+          { index: 2, type: "related" },
+        ],
+      },
+      priority: { severity: "high", confidence: 0.9 },
+    });
+  });
+
+  it("refuses a wrong-typed dimensions field", () => {
+    expect(() => parseIssueDimensions('{"dimensions":"nope"}')).toThrow(
+      "the model's dimensions are not a JSON object",
+    );
+  });
+
+  it("refuses a non-object quality dimension", () => {
+    expect(() => parseIssueDimensions('{"dimensions":{"quality":42}}')).toThrow(
+      "the model's quality dimension is not a JSON object",
+    );
+  });
+
+  it("refuses a relationship candidate with no numeric index", () => {
+    expect(() =>
+      parseIssueDimensions(
+        '{"dimensions":{"relationships":{"candidates":[{"type":"duplicate"}]}}}',
+      ),
+    ).toThrow("a model relationship candidate has no numeric index");
+  });
+
+  it("refuses a non-string relationship candidate type", () => {
+    expect(() =>
+      parseIssueDimensions(
+        '{"dimensions":{"relationships":{"candidates":[{"index":0,"type":7}]}}}',
+      ),
+    ).toThrow("a model relationship candidate type is not a string");
+  });
+
+  it("refuses a non-string severity", () => {
+    expect(() => parseIssueDimensions('{"dimensions":{"priority":{"severity":5}}}')).toThrow(
+      "the model's priority.severity is not a string",
+    );
+  });
+
+  it("treats null members as absent and non-object answers as refused", () => {
+    const parsed = parseIssueDimensions(
+      '{"dimensions":{"priority":{"severity":null},"routing":{"area":null}}}',
+    );
+    expect(parsed.priority).toEqual({});
+    expect(parsed.routing).toEqual({});
+    expect(() => parseIssueDimensions("just prose, no object")).toThrow(
+      "the model's answer holds no JSON object",
+    );
   });
 });

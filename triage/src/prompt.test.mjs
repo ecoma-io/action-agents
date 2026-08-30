@@ -36,6 +36,9 @@ describe("the system message", () => {
       sheet: new Map([["bug", "Incorrect behaviour."]]),
       documents: {},
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
 
@@ -58,6 +61,9 @@ describe("the system message", () => {
       sheet: null,
       documents: {},
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
     expect(messages[0]?.content).toContain('{"classification"');
@@ -70,6 +76,9 @@ describe("the system message", () => {
       sheet: new Map([["bug", "gloss"]]),
       documents: { instruction: "CUSTOM DOC", typeInstruction: "PR DOC" },
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
     const system = messages[0]?.content ?? "";
@@ -93,6 +102,9 @@ describe("the system message", () => {
       ]),
       documents: {},
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
     const system = withSheet.messages[0]?.content ?? "";
@@ -105,6 +117,9 @@ describe("the system message", () => {
       sheet: null,
       documents: {},
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
     expect(without.messages[0]?.content).not.toContain("labels you may choose from");
@@ -122,6 +137,9 @@ describe("the evidence message", () => {
       sheet: new Map([["bug", "gloss"]]),
       documents: {},
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
 
@@ -139,6 +157,9 @@ describe("the evidence message", () => {
       sheet: new Map(),
       documents: {},
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
 
@@ -160,6 +181,9 @@ describe("the evidence message", () => {
         { filename: "src/a.mjs", additions: 3, deletions: 1 },
         { filename: "docs/b.md", additions: 10, deletions: 0 },
       ],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
 
@@ -177,6 +201,9 @@ describe("the evidence message", () => {
       sheet: new Map([["bug", "gloss"]]),
       documents: {},
       files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
       evidence: EVIDENCE,
     });
 
@@ -186,5 +213,150 @@ describe("the evidence message", () => {
     expect(evidence).toContain("[evidence:fixed0001 thread-body]");
     expect(evidence).toContain(hostile);
     expect(messages[0]?.content).toContain("labels you may choose from");
+  });
+});
+
+describe("the issue-side dimension layer", () => {
+  /** @type {import("./config.mjs").TriageConfig} */
+  const POLICY = {
+    labels: {
+      use: new Set(["bug", "p1", "area/loom"]),
+      roles: new Map([
+        ["bug", "semantic-classification"],
+        ["p1", "priority"],
+        ["area/loom", "routing-area"],
+      ]),
+      exclusive: [],
+      workflowMarkers: [],
+      triageOwned: new Set(),
+      priority: new Map([["high", "p1"]]),
+      needsMoreInfo: null,
+      routing: {},
+    },
+    size: undefined,
+    instructions: {},
+  };
+
+  it("asks for the dimensions on a sheet-mode issue run", () => {
+    const { messages } = buildPrompt({
+      thread: threadOf(),
+      repository: REPOSITORY,
+      sheet: new Map([["bug", "gloss"]]),
+      documents: {},
+      files: [],
+      quality: {
+        template: { id: "bug-report", name: "Bug report" },
+        missingRequired: [],
+        bodyLength: 10,
+        urlCount: 0,
+        fieldsPresent: [],
+        templatesOverflow: false,
+      },
+      forgeSearch: null,
+      policy: POLICY,
+      evidence: EVIDENCE,
+    });
+    const system = messages[0]?.content ?? "";
+    expect(system).toContain("Answer the issue-side dimensions too");
+    expect(system).toContain('"completeness"');
+    // The severity vocabulary comes from labels.priority, not from prose.
+    expect(system).toContain('"severity": "high"');
+    // The routing vocabulary comes from the routing-area role.
+    expect(system).toContain('"area": "area/loom"');
+  });
+
+  it("adds the form facts and the candidates to the user evidence", () => {
+    const { messages } = buildPrompt({
+      thread: threadOf(),
+      repository: REPOSITORY,
+      sheet: new Map([["bug", "gloss"]]),
+      documents: {},
+      files: [],
+      quality: {
+        template: { id: "bug-report", name: "Bug report" },
+        missingRequired: ["Steps to reproduce"],
+        bodyLength: 10,
+        urlCount: 0,
+        fieldsPresent: [],
+        templatesOverflow: false,
+      },
+      forgeSearch: {
+        candidates: [
+          {
+            number: 12,
+            title: "the same crash",
+            state: "open",
+            url: "u",
+            createdAt: "2026-01-01T00:00:00Z",
+          },
+        ],
+        totalCount: 1,
+        cappedAt: 10,
+      },
+      policy: POLICY,
+      evidence: EVIDENCE,
+    });
+    const evidence = messages[1]?.content ?? "";
+    expect(evidence).toContain("matched form: Bug report");
+    expect(evidence).toContain("missing required: Steps to reproduce");
+    expect(evidence).toContain("Open issues in this repository (candidates):");
+    expect(evidence).toContain("#12");
+  });
+
+  it("adds no dimension layer on a no-sheet issue run", () => {
+    const { messages } = buildPrompt({
+      thread: threadOf(),
+      repository: REPOSITORY,
+      sheet: null,
+      documents: {},
+      files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: null,
+      evidence: EVIDENCE,
+    });
+    expect(messages[0]?.content).not.toContain("issue-side dimensions");
+  });
+
+  it("adds no dimension layer on a PR run even with a sheet", () => {
+    const { messages } = buildPrompt({
+      thread: threadOf({ type: "pr" }),
+      repository: REPOSITORY,
+      sheet: new Map([["bug", "gloss"]]),
+      documents: {},
+      files: [],
+      quality: null,
+      forgeSearch: null,
+      policy: POLICY,
+      evidence: EVIDENCE,
+    });
+    expect(messages[0]?.content).not.toContain("issue-side dimensions");
+  });
+
+  it("omits the severity prompt when the policy declares no priority map", () => {
+    const { messages } = buildPrompt({
+      thread: threadOf(),
+      repository: REPOSITORY,
+      sheet: new Map([["bug", "gloss"]]),
+      documents: {},
+      files: [],
+      quality: {
+        template: null,
+        missingRequired: [],
+        bodyLength: 10,
+        urlCount: 0,
+        fieldsPresent: [],
+        templatesOverflow: false,
+      },
+      forgeSearch: null,
+      policy: null,
+      evidence: EVIDENCE,
+    });
+    const system = messages[0]?.content ?? "";
+    // The quality and relationships questions are always asked; the severity
+    // and routing vocabularies only when the config declares them.
+    expect(system).toContain("Answer the issue-side dimensions too");
+    expect(system).not.toContain('"severity"');
+    expect(system).not.toContain('"area"');
   });
 });

@@ -29,6 +29,8 @@ const CONFIG = {
     workflowMarkers: [],
     triageOwned: new Set(),
     priority: new Map(),
+    needsMoreInfo: null,
+    routing: {},
   },
   size: {
     exclude: [],
@@ -52,13 +54,24 @@ const SHEET = new Map([
 function input(overrides = {}) {
   return {
     evidence: {
-      thread: { type: "issue", number: 7, title: "t", body: "b", labels: [] },
+      thread: {
+        type: "issue",
+        number: 7,
+        title: "t",
+        body: "b",
+        labels: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        creator: "author",
+        state: "open",
+      },
       repository: { name: "repo", description: "d" },
       policy: CONFIG,
       sheet: SHEET,
       labelMetadata: new Map([["bug", { name: "bug", description: "a bug", color: "blue" }]]),
       files: [],
       measuredSize: null,
+      quality: null,
+      forgeSearch: null,
       eventAction: "opened",
       ...(overrides.evidence ?? {}),
     },
@@ -80,7 +93,18 @@ describe("decide — labels intent", () => {
   it("adds nothing for labels already present — idempotent", () => {
     const decision = decide(
       input({
-        evidence: { thread: { type: "issue", number: 7, title: "t", body: "b", labels: ["bug"] } },
+        evidence: {
+          thread: {
+            type: "issue",
+            number: 7,
+            title: "t",
+            body: "b",
+            labels: ["bug"],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
+        },
       }),
     );
     expect(decision.add).toEqual([]);
@@ -209,7 +233,16 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
       decide(
         input({
           evidence: {
-            thread: { type: "issue", number: 7, title: "t", body: "b", labels: ["bug"] },
+            thread: {
+              type: "issue",
+              number: 7,
+              title: "t",
+              body: "b",
+              labels: ["bug"],
+              createdAt: "2026-01-01T00:00:00Z",
+              creator: "author",
+              state: "open",
+            },
             policy: {
               ...CONFIG,
               labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
@@ -225,7 +258,16 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
     const decision = decide(
       input({
         evidence: {
-          thread: { type: "issue", number: 7, title: "t", body: "b", labels: ["bug"] },
+          thread: {
+            type: "issue",
+            number: 7,
+            title: "t",
+            body: "b",
+            labels: ["bug"],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
           policy: {
             ...CONFIG,
             labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
@@ -258,10 +300,7 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
                   ["prio/a", "priority"],
                   ["prio/b", "priority"],
                 ]),
-                priority: new Map([
-                  ["prio/a", 1],
-                  ["prio/b", 2],
-                ]),
+                priority: new Map(),
               },
             },
           },
@@ -287,7 +326,7 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
                 ["bug", "semantic-classification"],
                 ["prio/a", "priority"],
               ]),
-              priority: new Map([["prio/a", 1]]),
+              priority: new Map(),
             },
           },
         },
@@ -306,7 +345,16 @@ describe("decide — size semantics", () => {
    * @returns {Partial<import("./evidence.mjs").Evidence>}
    */
   const prEvidence = (labels, measured, ladder = LADDER) => ({
-    thread: { type: "pr", number: 8, title: "t", body: "b", labels },
+    thread: {
+      type: "pr",
+      number: 8,
+      title: "t",
+      body: "b",
+      labels,
+      createdAt: "2026-01-01T00:00:00Z",
+      creator: "author",
+      state: "open",
+    },
     policy: { ...CONFIG, size: { exclude: [], ladder } },
     sheet: SHEET,
     labelMetadata: new Map(),
@@ -371,7 +419,16 @@ describe("decide — size semantics", () => {
     const decision = decide(
       input({
         evidence: {
-          thread: { type: "pr", number: 8, title: "t", body: "b", labels: ["size/xl"] },
+          thread: {
+            type: "pr",
+            number: 8,
+            title: "t",
+            body: "b",
+            labels: ["size/xl"],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
           policy: {
             labels: {
               use: new Set(["bug"]),
@@ -380,6 +437,8 @@ describe("decide — size semantics", () => {
               workflowMarkers: [],
               triageOwned: new Set(),
               priority: new Map(),
+              needsMoreInfo: null,
+              routing: {},
             },
             size: undefined,
             instructions: {},
@@ -415,7 +474,16 @@ describe("decide — workflow marker semantics", () => {
    * @returns {Partial<import("./evidence.mjs").Evidence>}
    */
   const markerEvidence = (threadLabels) => ({
-    thread: { type: "issue", number: 7, title: "t", body: "b", labels: threadLabels },
+    thread: {
+      type: "issue",
+      number: 7,
+      title: "t",
+      body: "b",
+      labels: threadLabels,
+      createdAt: "2026-01-01T00:00:00Z",
+      creator: "author",
+      state: "open",
+    },
     policy: {
       ...CONFIG,
       labels: { ...CONFIG.labels, workflowMarkers: ["needs triage"] },
@@ -452,7 +520,16 @@ describe("decide — workflow marker semantics", () => {
     const decision = decide(
       input({
         evidence: {
-          thread: { type: "issue", number: 7, title: "t", body: "b", labels: ["needs triage"] },
+          thread: {
+            type: "issue",
+            number: 7,
+            title: "t",
+            body: "b",
+            labels: ["needs triage"],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
         },
         assessment: { intent: "labels", labels: ["bug"], rationale: "r" },
       }),
@@ -476,7 +553,16 @@ describe("decide — comment intent", () => {
     const decision = decide(
       input({
         evidence: {
-          thread: { type: "issue", number: 7, title: "t", body: "b", labels: [] },
+          thread: {
+            type: "issue",
+            number: 7,
+            title: "t",
+            body: "b",
+            labels: [],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
           repository: { name: "repo", description: "d" },
           policy: null,
           sheet: null,
@@ -493,5 +579,501 @@ describe("decide — comment intent", () => {
     expect(decision.remove).toEqual([]);
     expect(decision.refusals).toEqual([]);
     expect(decision.comment).toEqual({ classification: "a bug", rationale: "Because." });
+  });
+});
+
+describe("decide — issue evaluators (sheet mode)", () => {
+  // The sheet-mode issue block reads evidence.quality, evidence.forgeSearch
+  // and assessment.dimensions, and composes the decision only from maps the
+  // config declares. These tests pin each dimension's derivation: the
+  // deterministic routing map, the priority map and its triageOwned replace,
+  // the needs-more-info label-versus-comment split, the relationship best
+  // pick, and the fact that the decision surface offers no close/assign/
+  // mention route at all.
+
+  /**
+   * @param {Partial<import("./evidence.mjs").Evidence>} [over]
+   * @returns {Partial<import("./evidence.mjs").Evidence>}
+   */
+  const issueEvidence = (over = {}) => ({
+    thread: {
+      type: "issue",
+      number: 7,
+      title: "t",
+      body: "b",
+      labels: [],
+      createdAt: "2026-01-01T00:00:00Z",
+      creator: "author",
+      state: "open",
+    },
+    policy: CONFIG,
+    sheet: SHEET,
+    labelMetadata: new Map([["bug", { name: "bug", description: "a bug", color: "blue" }]]),
+    files: [],
+    measuredSize: null,
+    eventAction: "opened",
+    repository: { name: "repo", description: "d" },
+    ...over,
+  });
+
+  /**
+   * `assess()` stamps all six dimension slots on a real run; these tests
+   * bypass it, so each fixture spreads its partial over the full six-slot
+   * shape the Assessment contract requires.
+   *
+   * @param {import("./answer.mjs").IssueDimensions} dims
+   * @returns {import("./assessment.mjs").AssessmentDimensions}
+   */
+  const fullDimensions = (dims) => ({
+    classification: undefined,
+    quality: undefined,
+    routing: undefined,
+    relationships: undefined,
+    priority: undefined,
+    pr: undefined,
+    ...dims,
+  });
+
+  it("routes deterministically by the matched form id", () => {
+    const policy = {
+      ...CONFIG,
+      labels: { ...CONFIG.labels, routing: { "bug-report": "question" } },
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          policy,
+          quality: {
+            template: { id: "bug-report", name: "Bug report" },
+            missingRequired: [],
+            bodyLength: 10,
+            urlCount: 0,
+            fieldsPresent: [],
+            templatesOverflow: false,
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({}),
+        },
+      }),
+    );
+    // routing maps the form to the area label, added beside the classification.
+    expect(decision.add).toEqual(["bug", "question"]);
+  });
+
+  it("derives the priority label from a severity on the map", () => {
+    const policy = {
+      ...CONFIG,
+      labels: {
+        ...CONFIG.labels,
+        use: new Set(["bug", "p1", "p2"]),
+        roles: new Map([
+          ["bug", "semantic-classification"],
+          ["p1", "priority"],
+          ["p2", "priority"],
+        ]),
+        priority: new Map([["high", "p1"]]),
+      },
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({ policy }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({ priority: { severity: "high", confidence: 0.9 } }),
+        },
+      }),
+    );
+    expect(decision.add).toEqual(["bug", "p1"]);
+    expect(decision.remove).toEqual([]);
+  });
+
+  it("warns on an off-map severity and derives no priority label", () => {
+    const policy = {
+      ...CONFIG,
+      labels: {
+        ...CONFIG.labels,
+        priority: new Map([["high", "p1"]]),
+      },
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({ policy }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({ priority: { severity: "nowhere", confidence: 0.9 } }),
+        },
+      }),
+    );
+    expect(decision.add).toEqual(["bug"]);
+    expect(
+      decision.logs.some((log) =>
+        log.text.includes("severity 'nowhere' is not on the labels.priority map"),
+      ),
+    ).toBe(true);
+  });
+
+  it("replaces a triage-owned priority label instead of leaving it beside the derived one", () => {
+    const policy = {
+      ...CONFIG,
+      labels: {
+        ...CONFIG.labels,
+        use: new Set(["bug", "p1", "p2"]),
+        roles: new Map([
+          ["bug", "semantic-classification"],
+          ["p1", "priority"],
+          ["p2", "priority"],
+        ]),
+        triageOwned: new Set(["p2"]),
+        priority: new Map([["high", "p1"]]),
+      },
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          policy,
+          thread: {
+            type: "issue",
+            number: 7,
+            title: "t",
+            body: "b",
+            labels: ["p2"],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({ priority: { severity: "high", confidence: 0.9 } }),
+        },
+      }),
+    );
+    // The old owned priority is removed (reason "owned") and the derived one added.
+    expect(decision.remove).toEqual([{ name: "p2", reason: "owned" }]);
+    expect(decision.add).toEqual(["bug", "p1"]);
+  });
+
+  it("red-runs when a foreign priority-role label sits with the derived one and is not triage-owned", () => {
+    const policy = {
+      ...CONFIG,
+      labels: {
+        ...CONFIG.labels,
+        use: new Set(["bug", "p1", "p2"]),
+        roles: new Map([
+          ["bug", "semantic-classification"],
+          ["p1", "priority"],
+          ["p2", "priority"],
+        ]),
+        triageOwned: new Set(),
+        priority: new Map([["high", "p1"]]),
+      },
+    };
+    expect(() =>
+      decide(
+        input({
+          evidence: issueEvidence({
+            policy,
+            thread: {
+              type: "issue",
+              number: 7,
+              title: "t",
+              body: "b",
+              labels: ["p2"],
+              createdAt: "2026-01-01T00:00:00Z",
+              creator: "author",
+              state: "open",
+            },
+          }),
+          assessment: {
+            intent: "labels",
+            labels: ["bug"],
+            rationale: "r",
+            dimensions: fullDimensions({ priority: { severity: "high", confidence: 0.9 } }),
+          },
+        }),
+      ),
+    ).toThrow(/single-valued 'priority' role/);
+  });
+
+  it("applies the needs-more-info label when declared and the issue is incomplete", () => {
+    const policy = {
+      ...CONFIG,
+      labels: { ...CONFIG.labels, needsMoreInfo: "question" },
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          policy,
+          quality: {
+            template: null,
+            missingRequired: ["Steps to reproduce"],
+            bodyLength: 5,
+            urlCount: 0,
+            fieldsPresent: [],
+            templatesOverflow: false,
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({}),
+        },
+      }),
+    );
+    expect(decision.add).toEqual(["bug", "question"]);
+    expect(decision.signal).toBeNull();
+  });
+
+  it("signals the missing-required fields when no needs-more-info label is declared", () => {
+    // CONFIG declares needsMoreInfo: null — the judgement becomes a signal.
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          quality: {
+            template: null,
+            missingRequired: ["Steps to reproduce"],
+            bodyLength: 5,
+            urlCount: 0,
+            fieldsPresent: [],
+            templatesOverflow: false,
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({}),
+        },
+      }),
+    );
+    expect(decision.signal).toEqual({
+      needsMoreInfo: ["Steps to reproduce"],
+      modelJudgedQuality: false,
+      related: null,
+    });
+  });
+
+  it("signals a model-judged incompleteness even with no missing required fields", () => {
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          quality: {
+            template: null,
+            missingRequired: [],
+            bodyLength: 200,
+            urlCount: 0,
+            fieldsPresent: [],
+            templatesOverflow: false,
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({
+            quality: { completeness: "missing-evidence", confidence: 0.8 },
+          }),
+        },
+      }),
+    );
+    expect(decision.signal).toEqual({
+      needsMoreInfo: [],
+      modelJudgedQuality: true,
+      related: null,
+    });
+  });
+
+  it("picks the most confident relationship candidate", () => {
+    const forgeSearch = {
+      candidates: [
+        { number: 10, title: "ten", state: "open", url: "u", createdAt: "2026-01-01T00:00:00Z" },
+        { number: 11, title: "eleven", state: "open", url: "u", createdAt: "2026-01-01T00:00:00Z" },
+      ],
+      totalCount: 2,
+      cappedAt: 10,
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({ forgeSearch }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({
+            relationships: {
+              candidates: [
+                { index: 1, type: "duplicate", confidence: 0.6, evidence: "same crash" },
+                { index: 0, type: "related", confidence: 0.4, evidence: "similar" },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+    expect(decision.signal?.related).toEqual({
+      number: 11,
+      title: "eleven",
+      type: "duplicate",
+    });
+  });
+
+  it("breaks a confidence tie toward the lowest candidate number", () => {
+    const forgeSearch = {
+      candidates: [
+        { number: 10, title: "ten", state: "open", url: "u", createdAt: "2026-01-01T00:00:00Z" },
+        { number: 11, title: "eleven", state: "open", url: "u", createdAt: "2026-01-01T00:00:00Z" },
+      ],
+      totalCount: 2,
+      cappedAt: 10,
+    };
+    const decision = decide(
+      input({
+        evidence: issueEvidence({ forgeSearch }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({
+            relationships: {
+              candidates: [
+                { index: 1, type: "duplicate", confidence: 0.5, evidence: "e" },
+                { index: 0, type: "related", confidence: 0.5, evidence: "e" },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+    // Equal confidence -> the lower-numbered candidate (#10) wins.
+    expect(decision.signal?.related?.number).toBe(10);
+  });
+
+  it("ignores off-vocabulary types and out-of-range indexes with a warning, signalling nothing", () => {
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          forgeSearch: {
+            candidates: [
+              {
+                number: 10,
+                title: "ten",
+                state: "open",
+                url: "u",
+                createdAt: "2026-01-01T00:00:00Z",
+              },
+            ],
+            totalCount: 1,
+            cappedAt: 10,
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({
+            relationships: {
+              candidates: [
+                { index: 5, type: "duplicate", confidence: 0.9, evidence: "oob" },
+                { index: 0, type: "is-a-parent-of", confidence: 0.9, evidence: "off-vocab" },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+    expect(decision.signal).toBeNull();
+    expect(decision.logs.some((log) => log.text.includes("ignored a relationship judgement"))).toBe(
+      true,
+    );
+  });
+
+  it("signals nothing when no dimension needs it", () => {
+    const decision = decide(
+      input({
+        evidence: issueEvidence({
+          quality: {
+            template: null,
+            missingRequired: [],
+            bodyLength: 200,
+            urlCount: 0,
+            fieldsPresent: [],
+            templatesOverflow: false,
+          },
+        }),
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({}),
+        },
+      }),
+    );
+    expect(decision.signal).toBeNull();
+    expect(decision.add).toEqual(["bug"]);
+  });
+
+  it("is gated off for a PR thread even with a sheet", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          thread: {
+            type: "pr",
+            number: 8,
+            title: "t",
+            body: "b",
+            labels: [],
+            createdAt: "2026-01-01T00:00:00Z",
+            creator: "author",
+            state: "open",
+          },
+          repository: { name: "repo", description: "d" },
+          policy: {
+            ...CONFIG,
+            labels: {
+              ...CONFIG.labels,
+              needsMoreInfo: "question",
+              routing: { "bug-report": "question" },
+            },
+          },
+          sheet: SHEET,
+          labelMetadata: new Map(),
+          files: [],
+          measuredSize: null,
+          eventAction: "opened",
+        },
+        assessment: {
+          intent: "labels",
+          labels: ["bug"],
+          rationale: "r",
+          dimensions: fullDimensions({ priority: { severity: "high" } }),
+        },
+      }),
+    );
+    // The issue block never runs on a PR: no routing, no priority, no signal.
+    expect(decision.add).toEqual(["bug"]);
+    expect(decision.remove).toEqual([]);
+    expect(decision.signal).toBeNull();
+  });
+
+  it("offers no close, assign or mention route on the decision surface", () => {
+    const decision = decide(input());
+    // The Decision shape (kind/add/remove/refusals/logs/rationale/comment/signal)
+    // has no field that could carry a close, an assignee or a @mention; the
+    // spec forbids all three and the shape makes them inexpressible.
+    expect(decision).not.toHaveProperty("close");
+    expect(decision).not.toHaveProperty("assign");
+    expect(decision).not.toHaveProperty("mention");
+    expect(JSON.stringify(decision)).not.toMatch(/@\w+/);
   });
 });

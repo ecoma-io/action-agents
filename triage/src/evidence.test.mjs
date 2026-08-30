@@ -16,7 +16,82 @@ describe("gatherEvidence", () => {
     title: "Import fails",
     body: "Steps to reproduce.",
     labels: ["triage"],
+    createdAt: "2026-01-02T03:04:05Z",
+    creator: "someauthor",
+    state: "open",
   };
+
+  it("exposes the trusted thread facts and defaults absent ones", () => {
+    const { createdAt: _createdAt, creator: _creator, state: _state, ...bare } = thread;
+    void _createdAt;
+    void _creator;
+    void _state;
+    const evidence = gatherEvidence({
+      thread: bare,
+      repository: { name: "repo", description: "d" },
+      config: null,
+      sheet: null,
+      metadata: new Map(),
+      files: [],
+      size: null,
+      eventAction: "opened",
+    });
+    expect(evidence.thread.createdAt).toBe("");
+    expect(evidence.thread.creator).toBe("");
+    expect(evidence.thread.state).toBe("");
+  });
+
+  it("packages the thread, repository, sheet, metadata, files and event action", () => {
+    const sheet = new Map([["bug", "a bug"]]);
+    const files = [{ filename: "a.mjs", status: "modified", additions: 1, deletions: 2 }];
+    const metadata = new Map([["bug", { name: "bug", description: "a bug", color: "blue" }]]);
+    const evidence = gatherEvidence({
+      thread,
+      repository: { name: "repo", description: "d" },
+      config: null,
+      sheet,
+      metadata,
+      files,
+      size: null,
+      eventAction: "opened",
+    });
+    expect(evidence.thread).toEqual(thread);
+    expect(evidence.repository).toEqual({ name: "repo", description: "d" });
+    expect(evidence.policy).toBeNull();
+    expect(evidence.sheet).toBe(sheet);
+    expect(evidence.labelMetadata).toBe(metadata);
+    expect(evidence.files).toBe(files);
+    expect(evidence.measuredSize).toBeNull();
+    expect(evidence.quality).toBeNull();
+    expect(evidence.forgeSearch).toBeNull();
+    expect(evidence.eventAction).toBe("opened");
+  });
+
+  it("passes quality and forge search facts through when present", () => {
+    const quality = {
+      template: null,
+      fieldsPresent: [],
+      missingRequired: [],
+      bodyLength: 1,
+      urlCount: 0,
+      templatesOverflow: false,
+    };
+    const forgeSearch = { candidates: [], totalCount: 0, cappedAt: 5 };
+    const evidence = gatherEvidence({
+      thread,
+      repository: { name: "repo", description: "d" },
+      config: null,
+      sheet: null,
+      metadata: new Map(),
+      files: [],
+      size: null,
+      quality,
+      forgeSearch,
+      eventAction: "opened",
+    });
+    expect(evidence.quality).toBe(quality);
+    expect(evidence.forgeSearch).toBe(forgeSearch);
+  });
 
   it("packages the thread, repository, sheet, metadata, files and event action", () => {
     const sheet = new Map([["bug", "a bug"]]);

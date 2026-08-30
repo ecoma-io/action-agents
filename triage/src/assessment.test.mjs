@@ -17,6 +17,9 @@ const THREAD = {
   title: "Import fails",
   body: "Steps to reproduce.",
   labels: [],
+  createdAt: "2026-01-02T03:04:05Z",
+  creator: "someauthor",
+  state: "open",
 };
 
 /** @type {import("#core/untrusted.mjs").Evidence} */
@@ -56,6 +59,8 @@ function input(overrides = {}) {
       labelMetadata: new Map(),
       files: [],
       measuredSize: null,
+      quality: null,
+      forgeSearch: null,
       eventAction: "opened",
     },
     documents: {},
@@ -198,5 +203,68 @@ describe("assess", () => {
     await expect(
       assess(input({ chat, evidence: { ...input().evidence, sheet: new Map() } })),
     ).rejects.toThrow();
+  });
+
+  it("parses the dimensions on a sheet-mode issue run", async () => {
+    const chat = world({
+      content: JSON.stringify({
+        labels: ["bug"],
+        rationale: "r",
+        dimensions: {
+          quality: { completeness: "missing-evidence" },
+          priority: { severity: "high" },
+        },
+      }),
+    }).chat;
+    const assessment = await assess(
+      input({
+        chat,
+        evidence: {
+          ...input().evidence,
+          sheet: new Map([["bug", "gloss"]]),
+          thread: { ...THREAD, type: "issue" },
+        },
+      }),
+    );
+    expect(assessment.dimensions).toMatchObject({
+      quality: { completeness: "missing-evidence" },
+      priority: { severity: "high" },
+    });
+  });
+
+  it("leaves the dimensions empty on a PR run even with a sheet", async () => {
+    const chat = world({
+      content: JSON.stringify({
+        labels: ["bug"],
+        rationale: "r",
+        dimensions: { priority: { severity: "high" } },
+      }),
+    }).chat;
+    const assessment = await assess(
+      input({
+        chat,
+        evidence: {
+          ...input().evidence,
+          sheet: new Map([["bug", "gloss"]]),
+          thread: { ...THREAD, type: "pr" },
+        },
+      }),
+    );
+    expect(assessment.dimensions).toMatchObject({
+      quality: undefined,
+      priority: undefined,
+    });
+  });
+
+  it("carries empty dimensions on a no-sheet run", async () => {
+    const chat = world({ content: '{"classification":"a bug","rationale":"r"}' }).chat;
+    const assessment = await assess(
+      input({
+        chat,
+        evidence: { ...input().evidence, sheet: null },
+      }),
+    );
+    expect(assessment.intent).toBe("comment");
+    expect(assessment.dimensions).toMatchObject({ priority: undefined });
   });
 });

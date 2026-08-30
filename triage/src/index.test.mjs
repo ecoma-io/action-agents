@@ -102,6 +102,7 @@ function prEvent(thread = {}) {
  * @param {string} [options.whoamiLogin] the login whoami reports — the identity comments claim by
  * @param {Error} [options.whoamiError] thrown by whoami
  * @param {Error} [options.writeFailure] thrown by every write
+ * @param {(query: string) => { items: { number: number, title: string, state: string, url?: string, created_at?: string }[], totalCount: number }} [options.search] the search page in sheet-mode issue tests
  */
 function fakeForge(options = {}) {
   const files = options.files ?? { ".github/action-agents/triage/triage.json5": CONFIG };
@@ -191,6 +192,27 @@ function fakeForge(options = {}) {
         throw new PastFileCeilingError(number, options.prFiles.length);
       }
       return options.prFiles ?? [];
+    },
+    /**
+     * The bounded duplicate/relationship search. Defaults to an empty page;
+     * sheet-mode issue tests that exercise it override via `options.search`.
+     * @param {string} query
+     * @param {{ limit?: number }} [_options]
+     */
+    async searchIssues(query, _options = {}) {
+      reads.push(`search:${query}`);
+      const page = options.search?.(query) ?? { items: [], totalCount: 0 };
+      return {
+        ...page,
+        items: page.items.map((item) => ({
+          number: item.number,
+          title: item.title,
+          state: item.state,
+          url: item.url ?? "",
+          createdAt: item.created_at ?? "",
+        })),
+        cappedAt: _options.limit ?? 0,
+      };
     },
     /** @param {number} number @param {string[]} names */
     async addLabels(number, names) {

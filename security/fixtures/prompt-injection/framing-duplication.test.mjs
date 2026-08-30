@@ -115,6 +115,10 @@ function fakeForge(options = {}) {
     async listTree() {
       return [];
     },
+    /** @param {string} _query */
+    async searchIssues(_query) {
+      return { items: [], totalCount: 0, cappedAt: 5 };
+    },
     /** @param {string} path */
     async getContents(path) {
       const content = files[path];

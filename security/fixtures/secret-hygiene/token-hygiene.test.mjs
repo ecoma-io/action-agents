@@ -181,6 +181,14 @@ function scriptedWorld({ withConfig, chatAnswer }) {
         if (path === "/repos/ecoma-io/action-agents/git/ref/heads/main") {
           return json({ ref: "refs/heads/main", object: { type: "commit", sha: SHA, url: "" } });
         }
+        if (path.startsWith("/repos/ecoma-io/action-agents/git/trees/")) {
+          // The issue-form read: an empty tree means no issue forms exist.
+          return json({ tree: [] });
+        }
+        if (path === "/search/issues") {
+          // The bounded duplicate/relationship read: no open issues match.
+          return json({ total_count: 0, items: [] });
+        }
         if (path.startsWith("/repos/ecoma-io/action-agents/contents/")) {
           const file = path.slice("/repos/ecoma-io/action-agents/contents/".length);
           if (withConfig && file === CONFIG_PATH) {
