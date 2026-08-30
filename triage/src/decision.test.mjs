@@ -183,6 +183,37 @@ describe("signalBody", () => {
     expect(body).toContain("The following required fields are empty: Steps, Logs.");
   });
 
+  it("neutralises a mention-shaped template field label in the fixed sentence", () => {
+    const body = signalBody(
+      {
+        needsMoreInfo: ["Reporter @alice", "Steps", "Logs"],
+        modelJudgedQuality: false,
+        related: null,
+      },
+      "<!-- action-agents:triage -->",
+    );
+    // Field names are untrusted repository data (a template's
+    // attributes.label): an @handle must never survive as a live mention,
+    // and the sentence the composer owns stays intact around the broken one.
+    expect(body).not.toContain("@alice");
+    expect(body).toContain(
+      "The following required fields are empty: Reporter @\u200calice, Steps, Logs.",
+    );
+    expect(body).not.toMatch(/@\w+/);
+  });
+
+  it("marks the cap when a template pads the field list past the byte limit", () => {
+    const body = signalBody(
+      {
+        needsMoreInfo: ["Field ".repeat(30).trim()],
+        modelJudgedQuality: false,
+        related: null,
+      },
+      "<!-- action-agents:triage -->",
+    );
+    expect(body).toContain("…[truncated]");
+  });
+
   it("collapses blank lines so the marker, copy and footnote stay tight", () => {
     const body = signalBody(
       { needsMoreInfo: [], modelJudgedQuality: false, related: null },

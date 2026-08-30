@@ -116,6 +116,18 @@ export function commentBody(answer, marker) {
 export function signalBody(signal, marker) {
   /** @type {string[]} */
   const lines = [marker];
+  // The field names enter `signal.needsMoreInfo` from the repository's own
+  // `.github/ISSUE_TEMPLATE/*.yml` `attributes.label` entries — untrusted
+  // repository data on its way into a comment. They get the same treatment
+  // as the related-candidate title below: one line, mention-broken, tags
+  // escaped, capped, and the action's own marker stripped.
+  const missingFields =
+    signal.needsMoreInfo.length > 0
+      ? sanitiseCommentText(oneLine(signal.needsMoreInfo.join(", ")), {
+          maxChars: 80,
+          forbidden: [marker],
+        }).text
+      : "";
   if (signal.needsMoreInfo.length > 0 || signal.modelJudgedQuality) {
     lines.push(
       "",
@@ -125,7 +137,7 @@ export function signalBody(signal, marker) {
         ? "The report cannot be followed as written; adding steps to reproduce, expected-versus-actual, environment details or the run log would help."
         : `The following required field${signal.needsMoreInfo.length === 1 ? "" : "s"} ${
             signal.needsMoreInfo.length === 1 ? "is" : "are"
-          } empty: ${signal.needsMoreInfo.join(", ")}.`,
+          } empty: ${missingFields}.`,
     );
   }
   if (signal.related !== null) {
