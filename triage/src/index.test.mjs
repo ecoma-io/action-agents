@@ -35,17 +35,23 @@ const runner = {
   GITHUB_EVENT_PATH: "/work/event.json",
 };
 
-/** The repo's own sheet: universal ∪ issues for an issue, universal ∪ pr for a PR. */
+/**
+ * The repo's own policy (schema 2): the usable labels set, each label's
+ * role, and the size ladder. Descriptions are not declared here — GitHub is
+ * the source of truth for a label's words — which is why the sheet the
+ * model sees is built from `listRepositoryLabelsDetailed`, not the config.
+ */
 const CONFIG = JSON.stringify({
   labels: {
-    universal: { bug: "Incorrect behaviour.", docs: "Documentation only." },
-    issues: { question: "Asking, not reporting." },
-    pr: {
-      breaking: "Consumers must act.",
-      "size/xs": "",
-      "size/s": "",
-      "size/xl": "",
+    use: ["bug", "docs", "question", "breaking", "size/xs", "size/s", "size/xl"],
+    roles: {
+      bug: "semantic-classification",
+      docs: "semantic-classification",
+      question: "routing-area",
+      breaking: "semantic-classification",
     },
+    workflowMarkers: [],
+    triageOwned: ["size/xs", "size/s", "size/xl"],
   },
   size: {
     exclude: ["pnpm-lock.yaml"],
@@ -175,6 +181,9 @@ function fakeForge(options = {}) {
     },
     async listRepositoryLabels() {
       return repoLabels ?? [];
+    },
+    async listRepositoryLabelsDetailed() {
+      return (repoLabels ?? []).map((name) => ({ name, description: "", color: "" }));
     },
     /** @param {number} number */
     async listPullRequestFiles(number) {
@@ -404,6 +413,21 @@ describe("run — request-timeout-ms wiring", () => {
 });
 
 describe("run — the sheet half", () => {
+  it("fails the run up front when the policy names a label the repository does not have", async () => {
+    // A label the config declares — use, a workflow marker, or triage-owned —
+    // must exist in GitHub before anything runs; a missing one is a red run,
+    // because offering a label the repository cannot apply would silently
+    // drop classified work.
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      repoLabels: ["docs", "question", "breaking", "size/xs", "size/s", "size/xl"],
+    });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /declares the label 'bug', which the repository does not have/,
+    );
+    expect(world.forge.writes).toEqual([]);
+  });
   it("classifies an issue and applies the on-sheet labels it does not already carry", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const world = io({ event: issueEvent({ labels: ["triage"] }) });
@@ -531,7 +555,7 @@ describe("run — the triage marker", () => {
   // never told the marker's name, because it is on no sheet offered to it.
   const CONFIG_WITH_MARKER = JSON.stringify({
     ...JSON.parse(CONFIG),
-    triageMarker: "needs triage",
+    labels: { ...JSON.parse(CONFIG).labels, workflowMarkers: ["needs triage"] },
   });
   const REPO_LABELS_WITH_MARKER = [...REPO_LABELS, "needs triage"];
 
@@ -622,6 +646,57 @@ describe("issue forms apply only the triage marker", () => {
       expect(form).toContain('labels: ["needs triage"]');
     });
   }
+});
+
+describe("run — a schema 1 config is migrated, then behaves like schema 2", () => {
+  // Backward compatibility: a v1 file (labels.universal/issues/pr sheets,
+  // a triageMarker, size ladder) is migrated to the policy form on load, and
+  // the queue marker still clears when a universal category is classified.
+  const V1 = JSON.stringify({
+    labels: {
+      universal: { bug: "Incorrect behaviour.", docs: "Documentation only." },
+      issues: { question: "Asking, not reporting." },
+      pr: { "size/xs": "", "size/xl": "" },
+    },
+    triageMarker: "needs triage",
+    size: { ladder: [{ upTo: 10, label: "size/xs" }, { label: "size/xl" }] },
+  });
+  const V1_LABELS = ["bug", "docs", "question", "size/xs", "size/xl", "needs triage"];
+
+  it("migrates the sheets and removes the migrated marker on a classification, logging a warning", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: { ".github/action-agents/triage/triage.json5": V1 },
+      repoLabels: V1_LABELS,
+      event: issueEvent({ labels: ["needs triage"] }),
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([
+      { op: "addLabels", args: [7, ["bug"]] },
+      { op: "removeLabel", args: [7, "needs triage"] },
+    ]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toMatch(/schema 1/);
+    expect(lines).toMatch(/migrat/);
+  });
+
+  it("keeps the migrated marker when a v1 issues-only label is classified", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: { ".github/action-agents/triage/triage.json5": V1 },
+      repoLabels: V1_LABELS,
+      event: issueEvent({ labels: ["needs triage"] }),
+      answer: '{"labels":["question"],"rationale":"Asking, not reporting."}',
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    // `question` lived on the issues sheet, not universal, so after migration
+    // it carries no classification role and the marker stays.
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["question"]] }]);
+  });
 });
 
 describe("run — the size half", () => {

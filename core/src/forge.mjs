@@ -215,6 +215,17 @@ function isNotFound(cause) {
   );
 }
 
+/**
+ * One repository label's full metadata — the facts GitHub holds about it.
+ * `description` and `color` are each optional at the API: a label with no
+ * description and a default colour is a normal label, not a broken answer.
+ *
+ * @typedef {object} RepositoryLabel
+ * @property {string} name
+ * @property {string} description the label's gloss on GitHub, "" when it has none
+ * @property {string} color the label's hex colour without the `#`, "" when unset
+ */
+
 const PER_PAGE = 100;
 
 /**
@@ -234,6 +245,7 @@ const PER_PAGE = 100;
  *   listTree: (sha: string) => Promise<TreeEntry[]>,
  *   getContents: (path: string, options?: { ref?: string }) => Promise<{ content: string } | null>,
  *   listRepositoryLabels: () => Promise<string[]>,
+ *   listRepositoryLabelsDetailed: () => Promise<RepositoryLabel[]>,
  *   getPullRequest: (number: number) => Promise<PullRequestSnapshot>,
  *   listPullRequestFiles: (number: number) => Promise<PullRequestFile[]>,
  *   addLabels: (number: number, names: string[]) => Promise<void>,
@@ -430,7 +442,25 @@ export function createForge(config) {
       return { content: decodeBase64(content) };
     },
 
-    /** Every label the repository declares — the set a sheet's names must exist in. */
+    /** Every label the repository declares, with GitHub's own metadata. */
+    async listRepositoryLabelsDetailed() {
+      const pages = await paginate(`listing the repository's labels`, `${root}/labels`);
+      /** @type {RepositoryLabel[]} */
+      const labels = [];
+      for (const page of pages) {
+        if (!Array.isArray(page)) continue;
+        for (const label of page) {
+          const record = asRecord(label);
+          const name = record?.["name"];
+          if (typeof name !== "string" || name === "") continue;
+          const description =
+            typeof record?.["description"] === "string" ? record["description"] : "";
+          const color = typeof record?.["color"] === "string" ? record["color"] : "";
+          labels.push({ name, description, color });
+        }
+      }
+      return labels;
+    },
     async listRepositoryLabels() {
       const pages = await paginate(`listing the repository's labels`, `${root}/labels`);
       /** @type {string[]} */

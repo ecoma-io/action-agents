@@ -15,9 +15,9 @@
  * removed by code, never by the model's choice. Size, because one size label
  * is meaningful at a time and size is measured rather than judged, so a new
  * size replaces the old — including one a human applied by hand. And the
- * `triageMarker` — the queue label the issue forms apply — once a universal
- * category is classified, because a thread carrying a category no longer
- * awaits triage; the model is never told the marker's name.
+ * `labels.workflowMarkers` — the queue label the issue forms apply — once a
+ * semantic-classification category is classified, because a thread carrying a
+ * category no longer awaits triage; the model is never told the marker's name.
  *
  * The shape is the seed's, kept: `readInputs` is pure over an environment;
  * `run` takes its inputs as arguments; and the one place that touches
@@ -47,7 +47,13 @@ import {
 } from "#core/runtime.mjs";
 
 import { matchLabels, parseCommentAnswer, parseLabelsAnswer } from "./answer.mjs";
-import { effectiveSheet, loadConfigFile, loadInstructions, validateConfig } from "./config.mjs";
+import {
+  effectiveSheet,
+  loadConfigFile,
+  loadInstructions,
+  migrateConfig,
+  validateConfig,
+} from "./config.mjs";
 import { buildPrompt } from "./prompt.mjs";
 import { currentSizeLabels, measureSize } from "./size.mjs";
 
@@ -159,18 +165,31 @@ export async function run(inputs, context, io) {
   const policy = { getContents: policyReader(world.forge, source) };
 
   // The config file is fetched once, pinned to the resolved source. A pull
-  // request cannot edit the policy that governs it.
   const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
-  const config = validateConfig(loaded.raw);
+  const migration = migrateConfig(loaded.raw);
+  if (migration.migrated) {
+    warning(
+      `the config file at '${loaded.path}' is schema 1 — migrated to the schema 2 labels.use policy; ` +
+        `descriptions are now read from GitHub, and a top-level triageMarker becomes labels.workflowMarkers`,
+    );
+  }
+  const config = validateConfig(migration.raw);
   info(policySourceAuditLine({ eventName: context.eventName, source, path: loaded.path }));
+  // The repository's label metadata is read once and shared by the name
+  // check and the sheet: what the config declares must exist on GitHub, and
+  // what the sheet offers to the model is each label's own description.
+  let metadata = new Map();
   if (config !== null) {
-    await assertLabelsExist(world.forge, config);
+    const labels = await world.forge.listRepositoryLabelsDetailed();
+    metadata = new Map(labels.map((label) => [label.name, label]));
+    await assertLabelsExist(world.forge, config, metadata);
   }
 
   const { sheet } = effectiveSheet({
     config,
     threadType: thread.type,
     narrowing: inputs.labels,
+    metadata,
   });
   const documents = await loadInstructions({ forge: policy, config, threadType: thread.type });
 
@@ -258,16 +277,17 @@ export async function run(inputs, context, io) {
       ? []
       : currentSizeLabels(thread.labels, config.size.ladder).filter((name) => name !== size.label);
   const sizeAdd = size !== null && !thread.labels.includes(size.label) ? [size.label] : [];
-  // The triage marker (this repository's is `needs triage`) is the queue label
-  // the issue forms apply. It is cleared — code-deterministically, never a
-  // model choice — once a universal category is classified: a thread carrying
-  // a category no longer awaits triage. Absent from the config, nothing is
+  // Workflow markers (the queue label the issue forms apply — this
+  // repository's is `needs triage`) sit in labels.workflowMarkers. A marker
+  // is cleared — code-deterministically, never a model choice — once a
+  // semantic-classification label is classified: a thread carrying a
+  // category no longer awaits triage. Absent from the config, nothing is
   // removed; the model is never told the marker's name, because it is on no
   // sheet offered to it.
-  const marker = config?.triageMarker;
+  const marker = config?.labels.workflowMarkers[0];
   const classifiedCategory =
     marker !== undefined && config !== null
-      ? accepted.some((name) => config.universal.has(name))
+      ? accepted.some((name) => config.labels.roles.get(name) === "semantic-classification")
       : false;
   const clearMarker =
     marker !== undefined && classifiedCategory && thread.labels.includes(marker) ? [marker] : [];
@@ -369,23 +389,26 @@ function repositoryFromEvent(event, context) {
 }
 
 /**
- * A declared label the repository no longer has is refused before the model
- * is called — applying it would be a guaranteed failure after the one
- * request that matters, and a sheet naming ghosts is stale configuration.
+ * A label the policy declares but the repository no longer has is refused
+ * before the model is called — applying it would be a guaranteed failure
+ * after the one request that matters, and a sheet naming ghosts is stale
+ * configuration. The names checked are the whole policy's: what may be
+ * applied (`use`), what is applied by code (`triageOwned`) and what resets
+ * a queue (`workflowMarkers`).
  *
  * @param {ReturnType<typeof createForge>} forge
  * @param {NonNullable<ReturnType<typeof validateConfig>>} config
+ * @param {Map<string, { name: string, description: string, color: string }>} metadata repository label metadata by name
  * @returns {Promise<void>}
  */
-async function assertLabelsExist(forge, config) {
+async function assertLabelsExist(forge, config, metadata) {
   const declared = [
-    ...config.universal.keys(),
-    ...config.issues.keys(),
-    ...config.pr.keys(),
-    ...(config.triageMarker !== undefined ? [config.triageMarker] : []),
+    ...config.labels.use,
+    ...config.labels.workflowMarkers,
+    ...config.labels.triageOwned,
   ];
   if (declared.length === 0) return;
-  const existing = new Set(await forge.listRepositoryLabels());
+  const existing = new Set(metadata.keys());
   for (const name of declared) {
     if (!existing.has(name)) {
       throw new Error(

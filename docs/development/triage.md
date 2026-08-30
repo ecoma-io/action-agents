@@ -9,10 +9,10 @@ prompt and the pipeline.
 ## What `triage` decides
 
 An issue or pull request arrives; `triage` classifies it and applies labels
-drawn from a sheet the repository declared. Size is not asked of the model —
-it is measured from the diff. When no sheet exists at all, the classification
-is written as one marker comment instead. That is the whole of what the action
-may do: labels, and that comment, and nothing else.
+drawn from a set the repository's policy declares. Size is not asked of the
+model — it is measured from the diff. When no policy exists at all, the
+classification is written as one marker comment instead. That is the whole of
+what the action may do: labels, and that comment, and nothing else.
 
 ## Trigger and permissions
 
@@ -52,25 +52,41 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
 
 ```json5
 {
-  // The sheet, split three ways. `universal` applies to every thread; `pr`
-  // and `issues` are added to it according to what is being classified.
-  labels: {
-    universal: {
-      bug: "Reproducible incorrect behaviour — it worked before, or should have.",
-      docs: "Documentation or examples only; no runtime code is affected.",
-    },
-    issues: {
-      "good first issue": "Small, self-contained, needs no prior context.",
-    },
-    pr: {
-      breaking: "Changes the public contract in a way consumers must act on.",
-    },
-  },
+  schemaVersion: 2,
 
-  // The queue marker: the label every issue form applies (and nothing else),
-  // cleared by code — never a model choice — once a universal category is
-  // classified. Optional; omit it and triage applies no marker at all.
-  triageMarker: "needs triage",
+  // The policy, not a registry. `use` is the whole usable set; `roles` says
+  // what each label is FOR. The labels' words (description, colour) come from
+  // GitHub, the source of truth, and are never duplicated here — a description
+  // the model reads is GitHub's own.
+  labels: {
+    use: [
+      "bug",
+      "documentation",
+      "enhancement",
+      "question",
+      "good first issue",
+      "size/xs",
+      "size/s",
+      "size/m",
+      "size/l",
+      "size/xl",
+    ],
+    roles: {
+      bug: "semantic-classification",
+      documentation: "semantic-classification",
+      enhancement: "semantic-classification",
+      question: "semantic-classification",
+      "good first issue": "routing-area",
+    },
+
+    // The queue marker: the label every issue form applies (and nothing else),
+    // cleared by code — never a model choice — once a classification category
+    // is classified. An empty array applies no marker at all.
+    workflowMarkers: ["needs triage"],
+
+    // Labels the action owns and may clear or replace: here, the size rungs.
+    triageOwned: ["size/xs", "size/s", "size/m", "size/l", "size/xl"],
+  },
 
   // Size is measured from the diff — additions plus deletions — never asked
   // of the model. `upTo` is inclusive; rungs ascend; the final rung has no
@@ -78,7 +94,7 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
   // `exclude` drops files from the measurement itself: a lockfile-only pull
   // request is small to review, so it is small here. Matching nothing is fine.
   size: {
-    exclude: ["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "**/*.min.js"],
+    exclude: ["pnpm-lock.yaml", "coverage/**"],
     ladder: [
       { upTo: 10, label: "size/xs" },
       { upTo: 50, label: "size/s" },
@@ -92,32 +108,41 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
   // paths are the defaults, and a missing document is fine.
   instructions: {
     instruction: ".github/action-agents/triage/instruction.md",
-    "issue-instruction": ".github/action-agents/triage/issue-instruction.md",
-    "pr-instruction": ".github/action-agents/triage/pr-instruction.md",
   },
 }
 ```
 
 ### The effective sheet
 
+Schema 2 offers the model the whole `labels.use` set on every thread — there is
+no per-thread-type split. From that set the model is never offered the labels
+it must not choose: the size-ladder rungs (measured, never chosen) and the
+`priority` and `workflow-marker` role labels (applied by code or cleared, never
+picked). What remains is the sheet the model chooses from:
+
 ```text
-issue  →  universal ∪ issues
-PR     →  universal ∪ pr
+use − (size rungs ∪ priority roles ∪ workflow-marker roles)
 ```
 
-The `labels:` input narrows that set for one call site; it never widens it.
+The description GitHub holds for a label is its gloss; where GitHub has no
+description, the label's name is the gloss. The `labels:` input narrows the
+sheet for one call site; it never widens it.
 
 ### Validation, all of it at startup
 
-- a label name declared twice — in `universal` and a type map, or on two
-  rungs — is refused, not reconciled;
-- a declared `triageMarker` must be a non-empty label name — it is the queue
-  label the issue forms apply, and triage clears it once a category is
-  classified;
-- every `size` label must be on the PR sheet (`universal` ∪ `pr`), because a
-  size label is applied like any other;
-- `upTo` values must ascend, and the final rung must be the catch-all;
-- a label the repository no longer has is refused before the model is called.
+- a label name declared twice — in `use`, on two rungs, or in two roles — is
+  refused, not reconciled;
+- every `use` label the policy names must exist in the repository — GitHub is
+  the source of truth, so a policy naming a label the repository does not have
+  is refused before the model is called;
+- a role must be one the action understands, and a label's role must be a label
+  the policy uses;
+- every `size` label must be in `labels.use`, because a size label is applied
+  like any other;
+- a declared workflow marker must be a non-empty label name — it is the queue
+  label the issue forms apply, and triage clears it once a classification
+  category is classified;
+- `upTo` values must ascend, and the final rung must be the catch-all.
 
 ## The prompt
 
@@ -205,9 +230,9 @@ track which labels it applied itself. Two labels are removed by code, never
 by the model's choice. Size is one: one size label is meaningful at a time
 and size is measured rather than judged, so a new size replaces the old one,
 including one a human applied by hand; an out-of-date size label is wrong
-whoever set it. The other is the repository's `triageMarker` — the queue
+whoever set it. The other is the repository's workflow marker — the queue
 label every issue form applies (`needs triage` here) — cleared once a
-universal category is classified, because a thread carrying a category no
+classification category is classified, because a thread carrying a category no
 longer awaits triage. The model is never told the marker's name, because it
 is on no sheet offered to it.
 

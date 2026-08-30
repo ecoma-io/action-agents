@@ -31,13 +31,13 @@ describe("validateSizeConfig", () => {
     expect(config.exclude).toEqual(["pnpm-lock.yaml"]);
   });
 
-  it("refuses a size label that is not on the PR sheet", () => {
+  it("refuses a size label the policy does not use", () => {
     expect(() =>
       validateSizeConfig(
         { ladder: [{ upTo: 10, label: "size/xs" }, { label: "giant" }] },
         PR_SHEET,
       ),
-    ).toThrow(/'giant' is not on the PR sheet/);
+    ).toThrow(/'giant' is not in labels.use/);
   });
 
   it("refuses a label declared on two rungs", () => {

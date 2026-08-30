@@ -134,6 +134,9 @@ function fakeForge(options = {}) {
     async listRepositoryLabels() {
       return REPO_LABELS;
     },
+    async listRepositoryLabelsDetailed() {
+      return REPO_LABELS.map((name) => ({ name, description: "", color: "" }));
+    },
     /** @param {number} number */
     async listPullRequestFiles(number) {
       if (options.prFiles !== undefined && options.prFiles.length >= 3000) {

@@ -14,6 +14,7 @@ import {
   effectiveSheet,
   loadConfigFile,
   loadInstructions,
+  migrateConfig,
   validateConfig,
 } from "./config.mjs";
 
@@ -224,34 +225,68 @@ describe("validateConfig", () => {
     expect(validateConfig(null)).toBeNull();
   });
 
-  it("reads the three label maps with their glosses", () => {
+  it("reads the v2 labels.use set — the policy's usable labels by name", () => {
+    const config = validateConfig({
+      labels: { use: ["bug", "docs", "breaking"] },
+    });
+    expect([...(config?.labels.use ?? [])]).toEqual(["bug", "docs", "breaking"]);
+  });
+
+  it("reads the role each use label carries", () => {
     const config = validateConfig({
       labels: {
-        universal: { bug: "Incorrect behaviour." },
-        issues: { "good first issue": "Small." },
-        pr: { breaking: "Consumers must act." },
+        use: ["bug", "regression", "breaking"],
+        roles: {
+          bug: "semantic-classification",
+          regression: "routing-area",
+          breaking: "priority",
+        },
       },
     });
-    expect(config?.universal.get("bug")).toBe("Incorrect behaviour.");
-    expect(config?.issues.get("good first issue")).toBe("Small.");
-    expect(config?.pr.get("breaking")).toBe("Consumers must act.");
+    expect(config?.labels.roles.get("bug")).toBe("semantic-classification");
+    expect(config?.labels.roles.get("regression")).toBe("routing-area");
+    expect(config?.labels.roles.get("breaking")).toBe("priority");
   });
 
-  it("refuses a label declared in two maps — refused, not reconciled", () => {
-    expect(() =>
-      validateConfig({
-        labels: { universal: { bug: "a" }, issues: { bug: "b" } },
-      }),
-    ).toThrow(/declared twice/);
+  it("refuses a label declared twice in use — refused, not reconciled", () => {
+    expect(() => validateConfig({ labels: { use: ["bug", "bug"] } })).toThrow(/declared twice/);
   });
 
-  it("refuses unknown keys and malformed values, by name", () => {
+  it("refuses unknown top-level keys and malformed policy values, by name", () => {
     expect(() => validateConfig({ label: {} })).toThrow(/unknown config key 'label'/);
-    expect(() => validateConfig({ labels: { universal: { bug: 7 } } })).toThrow(/gloss/);
+    expect(() => validateConfig({ labels: { use: 7 } })).toThrow(/labels.use must be an array/);
+    expect(() => validateConfig({ labels: { roles: { bug: 7 } } })).toThrow(/labels.roles/);
+    expect(() => validateConfig({ labels: { roles: { bug: "made-up-role" } } })).toThrow(
+      /labels.roles/,
+    );
     expect(() => validateConfig({ instructions: { "unknown-key": "x.md" } })).toThrow(
       /unknown instructions key/,
     );
     expect(() => validateConfig({ instructions: { instruction: "" } })).toThrow(/must be a path/);
+  });
+
+  it("refuses a role naming a label the policy does not use", () => {
+    expect(() =>
+      validateConfig({ labels: { use: ["bug"], roles: { ghost: "semantic-classification" } } }),
+    ).toThrow(/labels.use does not declare/);
+  });
+
+  it("refuses an exclusive group no role carries — a group with no members is meaningless", () => {
+    expect(() =>
+      validateConfig({
+        labels: {
+          use: ["bug"],
+          roles: { bug: "semantic-classification" },
+          exclusive: ["routing-area"],
+        },
+      }),
+    ).toThrow(/no labels.roles entry carries/);
+  });
+
+  it("refuses triageOwned naming a label the policy does not use", () => {
+    expect(() => validateConfig({ labels: { use: ["bug"], triageOwned: ["size/xs"] } })).toThrow(
+      /which labels.use does not declare/,
+    );
   });
 
   it("keeps configured instruction paths for the loader to read", () => {
@@ -259,60 +294,151 @@ describe("validateConfig", () => {
     expect(config?.instructions["instruction"]).toBe("docs/triage.md");
   });
 
-  it("carries a declared triageMarker through", () => {
+  it("carries workflowMarkers through and holds the queue label in workflowMarkers", () => {
     const config = validateConfig({
-      labels: { universal: { bug: "Incorrect behaviour." } },
+      labels: { use: ["bug"], workflowMarkers: ["needs triage"] },
+    });
+    expect(config?.labels.workflowMarkers).toEqual(["needs triage"]);
+  });
+
+  it("accepts an empty priority mapping — the pieces are all optional policy", () => {
+    const config = validateConfig({
+      labels: { use: ["bug"], priority: {} },
+    });
+    expect([...(config?.labels.priority.keys() ?? [])]).toEqual([]);
+  });
+
+  it("refuses a workflowMarker that is also a classification label", () => {
+    expect(() =>
+      validateConfig({
+        labels: {
+          use: ["bug"],
+          roles: { bug: "semantic-classification" },
+          workflowMarkers: ["bug"],
+        },
+      }),
+    ).toThrow(/also a classification label/);
+  });
+});
+
+describe("migrateConfig — schema 1 to schema 2", () => {
+  it("folds the v1 sheets into labels.use, drops the glosses, and moves the marker", () => {
+    const { raw, migrated } = migrateConfig({
+      labels: {
+        universal: { bug: "Incorrect behaviour." },
+        issues: { question: "Asking, not reporting." },
+        pr: { breaking: "Consumers must act.", "size/xs": "" },
+      },
       triageMarker: "needs triage",
     });
-    expect(config?.triageMarker).toBe("needs triage");
+    expect(migrated).toBe(true);
+    expect(raw).toEqual({
+      labels: {
+        use: ["bug", "question", "breaking", "size/xs"],
+        roles: { bug: "semantic-classification" },
+        workflowMarkers: ["needs triage"],
+      },
+    });
   });
 
-  it("leaves triageMarker undefined when the config declares none", () => {
-    const config = validateConfig({ labels: { universal: { bug: "Incorrect behaviour." } } });
-    expect(config?.triageMarker).toBeUndefined();
+  it("carries a v1 universal label as the semantic-classification role", () => {
+    // Only `universal` was a category under schema 1; issues/pr labels were
+    // not, so only universal names gain the classification role.
+    const { raw } = migrateConfig(
+      /** @type {any} */ ({
+        labels: {
+          universal: { bug: "a", docs: "b" },
+          issues: { question: "c" },
+          pr: { breaking: "d" },
+        },
+      }),
+    );
+    expect(raw.labels.roles).toEqual({
+      bug: "semantic-classification",
+      docs: "semantic-classification",
+    });
   });
 
-  it("refuses a triageMarker that is not a non-empty label name", () => {
-    expect(() => validateConfig({ labels: { universal: { bug: "a" } }, triageMarker: "" })).toThrow(
-      /triageMarker/,
+  it("union-deduplicates a name declared in two v1 sheets", () => {
+    const { raw } = migrateConfig(
+      /** @type {any} */ ({
+        labels: { universal: { bug: "a" }, issues: { bug: "b" } },
+      }),
     );
-    expect(() => validateConfig({ labels: { universal: { bug: "a" } }, triageMarker: 7 })).toThrow(
-      /triageMarker/,
-    );
+    expect(raw.labels.use).toEqual(["bug"]);
   });
-  it("refuses a triageMarker that is also a classification label", () => {
-    expect(() =>
-      validateConfig({ labels: { universal: { bug: "a" } }, triageMarker: "bug" }),
-    ).toThrow(/also a classification label/);
+
+  it("returns a v2 file untouched — migrateConfig is idempotent, so validate twice is safe", () => {
+    const source = { labels: { use: ["bug"] } };
+    const { raw, migrated } = migrateConfig(source);
+    expect(migrated).toBe(false);
+    expect(raw).toBe(source);
+  });
+
+  it("is a no-op for null and for a markerless v1 file with no sheets", () => {
+    expect(migrateConfig(null).migrated).toBe(false);
+    const empty = migrateConfig({ labels: {} });
+    expect(empty.migrated).toBe(false);
+    expect(empty.raw).toEqual({ labels: {} });
   });
 });
 
 describe("effectiveSheet", () => {
   const CONFIG = validateConfig({
     labels: {
-      universal: { bug: "Incorrect behaviour.", docs: "Documentation only." },
-      issues: { question: "Asking, not reporting." },
-      pr: { breaking: "Consumers must act.", "size/xs": "", "size/xl": "" },
+      use: ["bug", "docs", "question", "breaking", "size/xs", "size/xl"],
+      roles: {
+        breaking: "semantic-classification",
+        "size/xs": "priority",
+      },
+      workflowMarkers: ["needs triage"],
     },
     size: {
       ladder: [{ upTo: 10, label: "size/xs" }, { label: "size/xl" }],
     },
   });
 
-  it("unions universal with the thread type's map", () => {
+  it("offers the whole use set to every thread, minus the size and marker labels", () => {
     const issue = effectiveSheet({ config: CONFIG, threadType: "issue", narrowing: [] });
     const pr = effectiveSheet({ config: CONFIG, threadType: "pr", narrowing: [] });
-    expect([...(issue.sheet?.keys() ?? [])].sort()).toEqual(["bug", "docs", "question"]);
-    expect([...(pr.sheet?.keys() ?? [])].sort()).toEqual(["breaking", "bug", "docs"]);
+    // Schema 2 has no per-thread split: the policy's usable set is the same
+    // whether the thread is an issue or a pull request.
+    const expected = ["breaking", "bug", "docs", "question"];
+    expect([...(issue.sheet?.keys() ?? [])].sort()).toEqual(expected);
+    expect([...(pr.sheet?.keys() ?? [])].sort()).toEqual(expected);
   });
 
-  it("never offers the size labels, however they are configured", () => {
-    // size/xs and size/xl are on the ladder above, so they are applied by
-    // measurement and must not also be offered to the model.
+  it("never offers a label GitHub describes a measurement or a queue reset by", () => {
+    // size/xl is on the ladder and size/xs is on the ladder and carries the
+    // priority role; 'needs triage' is a workflow marker. None reach a model.
     const { sheet } = effectiveSheet({ config: CONFIG, threadType: "pr", narrowing: [] });
     expect(sheet?.has("size/xs")).toBe(false);
     expect(sheet?.has("size/xl")).toBe(false);
+    expect(sheet?.has("needs triage")).toBe(false);
     expect(sheet?.has("breaking")).toBe(true);
+  });
+
+  it("glosses a label with GitHub's own description — a label with none is offered by name", () => {
+    const metadata = new Map([
+      ["bug", { name: "bug", description: "Incorrect behaviour.", color: "d73a4a" }],
+      ["docs", { name: "docs", description: "", color: "" }],
+      ["question", { name: "question", description: "Asking, not reporting.", color: "" }],
+      ["breaking", { name: "breaking", description: "", color: "" }],
+    ]);
+    const { sheet } = effectiveSheet({
+      config: CONFIG,
+      threadType: "issue",
+      narrowing: [],
+      metadata,
+    });
+    expect(sheet?.get("bug")).toBe("Incorrect behaviour.");
+    expect(sheet?.get("docs")).toBe("docs");
+    expect(sheet?.get("question")).toBe("Asking, not reporting.");
+  });
+
+  it("falls back to the label name when no metadata is supplied", () => {
+    const { sheet } = effectiveSheet({ config: CONFIG, threadType: "issue", narrowing: [] });
+    expect(sheet?.get("bug")).toBe("bug");
   });
 
   it("narrows to the workflow's subset, and refuses a name the file does not declare", () => {
@@ -340,7 +466,7 @@ describe("effectiveSheet", () => {
     ).toThrow(/effective sheet is empty/);
   });
 
-  it("treats a file that declares no labels at all as no sheet", () => {
+  it("treats a file that declares no usable labels as no sheet", () => {
     const empty = validateConfig({ instructions: {} });
     const { sheet } = effectiveSheet({ config: empty, threadType: "issue", narrowing: [] });
     expect(sheet).toBeNull();
