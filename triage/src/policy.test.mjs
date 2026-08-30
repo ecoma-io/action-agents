@@ -75,6 +75,8 @@ function input(overrides = {}) {
       forgeSearch: null,
       eventAction: "opened",
       ...(overrides.evidence ?? {}),
+      // Evidence requires `pr` even on an issue thread — absent reads as null.
+      pr: overrides.evidence?.pr ?? null,
     },
     assessment: { intent: "labels", labels: ["bug"], rationale: "Because." },
     ...(overrides.assessment === undefined ? {} : { assessment: overrides.assessment }),

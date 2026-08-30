@@ -44,6 +44,8 @@ function createFakeForge() {
         getPullRequest: fail("getPullRequest"),
         listPullRequestFiles: fail("listPullRequestFiles"),
         searchIssues: fail("searchIssues"),
+        listCheckRuns: fail("listCheckRuns"),
+        listPullRequestReviews: fail("listPullRequestReviews"),
         addLabels: vi.fn(async (number, labels) => {
           writes.push({ op: "addLabels", args: [number, labels] });
         }),
@@ -65,6 +67,7 @@ function createFakeForge() {
         createTree: fail("createTree"),
         createCommit: fail("createCommit"),
         upsertBranch: fail("upsertBranch"),
+        upsertPullRequest: fail("upsertPullRequest"),
       })
     ),
   };

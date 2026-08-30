@@ -52,6 +52,8 @@ function snapshot(over = {}) {
     merged: false,
     title: "the change",
     body: "",
+    mergeable: true,
+    mergeableState: "clean",
     head: { ref: "feature", sha: HEAD },
     base: { ref: "main", sha: BASE },
     ...over,

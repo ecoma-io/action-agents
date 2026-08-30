@@ -88,6 +88,26 @@ async function driveRun({ sheet, answer }) {
     async listPullRequestFiles(_number) {
       return [];
     },
+    async getPullRequest(_number) {
+      return {
+        number: 1,
+        state: "open",
+        draft: false,
+        merged: false,
+        mergeable: true,
+        mergeableState: "clean",
+        title: "",
+        body: "",
+        head: { ref: "h", sha: "a".repeat(40) },
+        base: { ref: BRANCH, sha: "b".repeat(40) },
+      };
+    },
+    async listCheckRuns(_ref) {
+      return { total: 0, byConclusion: {} };
+    },
+    async listPullRequestReviews(_number) {
+      return { requestedReviewers: [], reviewers: [], reviews: [] };
+    },
     async listRepositoryLabels() {
       return repoLabels;
     },

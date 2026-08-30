@@ -227,6 +227,52 @@ export async function run(inputs, context, io) {
   // ceiling is refused rather than guessed at.
   const files = thread.type === "pr" ? await world.forge.listPullRequestFiles(thread.number) : [];
 
+  // PR: the deterministic reads that feed the `pr` dimension — the pull
+  // request snapshot (state, draft/merged, mergeability, prose, both commit
+  // shas), the check-run rollup at the head, and the review routing state.
+  // The snapshot is load-bearing — a run cannot assess a PR it cannot read —
+  // and its failure stays a hard error. The check and review reads are
+  // advisory: a forge that does not answer them degrades those slots to
+  // "no data" rather than failing the whole run, and "no data" is itself a
+  // fact the readiness and routing signals weigh as absent, never as green.
+  let pr = null;
+  if (thread.type === "pr") {
+    const snapshot = await world.forge.getPullRequest(thread.number);
+    /** @type {import("./evidence.mjs").PrEvidence["checks"]} */
+    let checks = null;
+    try {
+      if (typeof snapshot.head?.sha === "string" && snapshot.head.sha !== "") {
+        checks = await world.forge.listCheckRuns(snapshot.head.sha);
+      }
+    } catch {
+      // The check-read is advisory: no rollup reads as "no data", and the
+      // readiness signal weighs absence as absent, never as green.
+      checks = null;
+    }
+    /** @type {{ requestedReviewers: string[], reviews: { state: string, count: number }[] }} */
+    let reviewState;
+    try {
+      reviewState = await world.forge.listPullRequestReviews(thread.number);
+    } catch {
+      // The review read is advisory: missing data reads as "no one
+      // requested, no one reviewed", never as a red run.
+      reviewState = { requestedReviewers: [], reviews: [] };
+    }
+    pr = {
+      state: snapshot.state,
+      draft: snapshot.draft,
+      merged: snapshot.merged,
+      mergeable: snapshot.mergeable,
+      hasConflicts: snapshot.mergeableState === "dirty",
+      base: { ref: snapshot.base.ref, sha: snapshot.base.sha },
+      head: { ref: snapshot.head.ref, sha: snapshot.head.sha },
+      body: snapshot.body ?? "",
+      checks,
+      reviewRequested: reviewState.requestedReviewers,
+      reviews: reviewState.reviews,
+    };
+  }
+
   // Size is measured in the Evidence stage: never offered to the model, and
   // a measured rung stays authoritative (code-derived, always on-sheet).
   const size =
@@ -252,6 +298,7 @@ export async function run(inputs, context, io) {
     quality,
     forgeSearch,
     eventAction: typeof event["action"] === "string" ? event["action"] : "",
+    pr,
   });
 
   const assessment = await assess({

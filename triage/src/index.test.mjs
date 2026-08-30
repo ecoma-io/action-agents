@@ -103,6 +103,10 @@ function prEvent(thread = {}) {
  * @param {Error} [options.whoamiError] thrown by whoami
  * @param {Error} [options.writeFailure] thrown by every write
  * @param {(query: string) => { items: { number: number, title: string, state: string, url?: string, created_at?: string }[], totalCount: number }} [options.search] the search page in sheet-mode issue tests
+ * @param {Error} [options.prReadError] thrown by getPullRequest — the hard read
+ * @param {Partial<import("#core/forge.mjs").PullRequestSnapshot>} [options.prSnapshot] merged over the forge's default getPullRequest snapshot
+ * @param {{ total: number, byConclusion: Partial<import("#core/forge.mjs").CheckRunsSummary["byConclusion"]> } | Error} [options.checkRuns] the head's check-run rollup, or the error the read throws
+ * @param {{ requestedReviewers: string[], reviewers: string[], reviews: { state: string, count: number }[] } | Error} [options.reviewState] the review routing state, or the error the read throws
  */
 function fakeForge(options = {}) {
   const files = options.files ?? { ".github/action-agents/triage/triage.json5": CONFIG };
@@ -133,20 +137,46 @@ function fakeForge(options = {}) {
     },
     /** @param {number} _number */
     async getPullRequest(_number) {
-      return {
+      if (options.prReadError) throw options.prReadError;
+      const snapshot = {
         number: 1,
         state: "open",
         draft: false,
         merged: false,
+        mergeable: true,
+        mergeableState: "clean",
         title: "",
         body: "",
         head: { ref: "x", sha: "0".repeat(40) },
         base: { ref: "main", sha: "0".repeat(40) },
       };
+      return { ...snapshot, ...(options.prSnapshot ?? {}) };
     },
     /** @param {string} _content */
     async createBlob(_content) {
       return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _ref */
+    async listCheckRuns(_ref) {
+      if (options.checkRuns instanceof Error) throw options.checkRuns;
+      return options.checkRuns ?? { total: 0, byConclusion: {} };
+    },
+    /** @param {number} _number */
+    async listPullRequestReviews(_number) {
+      if (options.reviewState instanceof Error) throw options.reviewState;
+      return options.reviewState ?? { requestedReviewers: [], reviewers: [], reviews: [] };
+    },
+    /** @param {string} _branch */
+    async getRef(_branch) {
+      return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _branch */
+    async readRef(_branch) {
+      return { sha: "0".repeat(40) };
+    },
+    /** @param {string} _sha */
+    async listTree(_sha) {
+      return [];
     },
     /** @param {string} _base @param {unknown[]} _changes */
     async createTree(_base, _changes) {
@@ -161,18 +191,6 @@ function fakeForge(options = {}) {
     /** @param {{ base: string, head: string, title: string, body: string }} _input */
     async upsertPullRequest(_input) {
       return { number: 1, created: false };
-    },
-    /** @param {string} _branch */
-    async getRef(_branch) {
-      return { sha: "0".repeat(40) };
-    },
-    /** @param {string} _branch */
-    async readRef(_branch) {
-      return { sha: "0".repeat(40) };
-    },
-    /** @param {string} _sha */
-    async listTree(_sha) {
-      return [];
     },
     /** @param {string} path */
     async getContents(path) {
@@ -1036,6 +1054,173 @@ describe("run — dry run", () => {
     const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
     expect(lines).toMatch(/would add \[bug, size\/xs\]/);
     expect(lines).toMatch(/remove \[size\/xl\]/);
+  });
+});
+
+describe("run — the pr evaluators (PR-D)", () => {
+  /** The whole write surface triage may ever touch — no merge, approve or assign op exists in it. */
+  const WRITE_OPS = new Set([
+    "addLabels",
+    "removeLabel",
+    "createComment",
+    "updateComment",
+    "deleteComment",
+  ]);
+
+  it("a scope mismatch is a signal, never a hook for rejection", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: [{ filename: "src/index.ts", status: "modified", additions: 200, deletions: 5 }],
+      answer:
+        '{"labels":["breaking"],"rationale":"r","pr":{"scope":{"obviousMismatch":true},"readiness":{"descriptionQuality":"poor"},"notes":["Title says docs; the diff rewrites the API."]}}',
+    });
+    // The model judged the PR badly scoped — the run must still finish and
+    // apply the on-sheet labels. The mismatch surfaces as a dimension fact
+    // a human (or a later policy) can weigh; it is not an auto-reject.
+    await run(inputs(), prContext, world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["breaking", "size/xl"]] }]);
+  });
+
+  it("a mergeable, checks-green PR is triaged to labels — there is no merge or approve surface", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: [{ filename: "src/index.test.ts", status: "modified", additions: 2, deletions: 1 }],
+      prSnapshot: { mergeable: true, mergeableState: "clean" },
+      checkRuns: {
+        total: 3,
+        byConclusion: { success: 3 },
+      },
+      answer: '{"labels":["bug"],"rationale":"r"}',
+    });
+
+    await run(inputs(), prContext, world);
+
+    for (const write of world.forge.writes) {
+      expect(WRITE_OPS.has(write.op)).toBe(true);
+    }
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["bug", "size/xs"]] }]);
+  });
+
+  it("a draft PR is still triaged — draftness red-runs nothing, merges nothing", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: [{ filename: "src/a.mjs", status: "modified", additions: 5, deletions: 5 }],
+      prSnapshot: { draft: true, mergeable: true, mergeableState: "clean" },
+    });
+
+    await run(inputs(), prContext, world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["bug", "size/xs"]] }]);
+  });
+
+  it("risk categories from the touched paths never block the run — they are evidence", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: [
+        { filename: "src/api.ts", status: "modified", additions: 4, deletions: 1 },
+        { filename: "db/migrations/0002.sql", status: "added", additions: 9, deletions: 0 },
+        { filename: "src/auth.ts", status: "modified", additions: 1, deletions: 1 },
+        { filename: "package.json", status: "modified", additions: 1, deletions: 1 },
+      ],
+    });
+
+    await run(inputs(), prContext, world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["bug", "size/s"]] }]);
+  });
+
+  it("missing requested reviewers never assign and never @mention", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: [{ filename: "src/a.mjs", status: "modified", additions: 2, deletions: 1 }],
+      reviewState: { requestedReviewers: ["alice"], reviews: [], reviewers: [] },
+      answer: '{"labels":["docs"],"rationale":"r"}',
+    });
+
+    await run(inputs(), prContext, world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["docs", "size/xs"]] }]);
+    const bodies = world.forge.writes
+      .filter((write) => write.op === "createComment" || write.op === "updateComment")
+      .map((write) => String(write.args[1]));
+    for (const body of bodies) expect(body).not.toContain("@");
+  });
+
+  it("refuses an off-policy label on a PR exactly as on an issue — a red run, no write", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      answer: '{"labels":["nope"],"rationale":"r"}',
+    });
+
+    await expect(run(inputs(), prContext, world)).rejects.toThrow(/entirely off-sheet/);
+    expect(world.forge.writes).toEqual([]);
+  });
+
+  it("applies a partly off-sheet PR answer's on-sheet half and logs the refused rest", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      answer: '{"labels":["bug","made-up"],"rationale":"r"}',
+    });
+
+    await run(inputs(), prContext, world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["bug", "size/xs"]] }]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toMatch(/refused the off-sheet label 'made-up'/);
+  });
+
+  it("a dry run with the pr reads decides and logs, writing nothing", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent({ labels: ["size/xl"] }),
+      prFiles: [{ filename: "src/a.mjs", status: "modified", additions: 5, deletions: 5 }],
+      prSnapshot: { mergeable: true, mergeableState: "clean", draft: false },
+      checkRuns: { total: 1, byConclusion: { success: 1 } },
+      reviewState: { requestedReviewers: [], reviews: [], reviewers: [] },
+    });
+
+    await run(inputs({ dryRun: true }), prContext, world);
+
+    expect(world.forge.writes).toEqual([]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toMatch(/would add \[bug, size\/xs\]/);
+    expect(lines).toMatch(/remove \[size\/xl\]/);
+  });
+
+  it("degrades missing check-run and review data to 'no data', not a red run", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prFiles: [{ filename: "src/a.mjs", status: "modified", additions: 2, deletions: 1 }],
+      checkRuns: new Error("checks API unavailable"),
+      reviewState: new Error("reviews API unavailable"),
+    });
+
+    await run(inputs(), prContext, world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [8, ["bug", "size/xs"]] }]);
+  });
+
+  it("treats an unreadable pull-request snapshot as a hard failure, not a guess", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: prEvent(),
+      prReadError: new Error("pulls API unavailable"),
+    });
+
+    // The snapshot is the load-bearing read for a PR: no PR facts, no
+    // assessment. Unlike the advisory check/review reads it is not degraded
+    // to "no data" — the run refuses rather than assessing nothing.
+    await expect(run(inputs(), prContext, world)).rejects.toThrow("pulls API unavailable");
+    expect(world.request()).toBeNull();
   });
 });
 

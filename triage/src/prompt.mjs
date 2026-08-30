@@ -171,6 +171,15 @@ function layerTask(input) {
       ? 'Answer with JSON only, no prose: {"classification": "<one line naming what this is>", "rationale": "<one line saying why"}.'
       : 'Answer with JSON only, no prose: {"labels": ["<name>", …], "rationale": "<one line>"}. Choose labels only from the sheet below; choose none if none fit.',
   ];
+  if (input.thread.type === "pr") {
+    // The bounded semantic judgement only a reader can give: whether the
+    // title/body obviously mismatch the diff's scope, and how well the
+    // description carries the change. Everything else about a PR is computed
+    // deterministically in code and never asked of the model.
+    lines.push(
+      'Also answer, for this pull request only: {"pr": {"scope": {"obviousMismatch": <true|false>}, "readiness": {"descriptionQuality": <"poor"|"good"|null>}, "notes": ["<one caution, or none>"]}}. obviousMismatch: true only when the title or body plainly contradicts what the diff does. descriptionQuality: "poor" when the description is missing, a stub, or does not say what changed and why; "good" otherwise; null when you cannot tell. Keep notes to at most two short sentences.',
+    );
+  }
   return lines.join("\n");
 }
 

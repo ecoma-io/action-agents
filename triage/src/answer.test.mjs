@@ -12,6 +12,7 @@ import {
   parseCommentAnswer,
   parseIssueDimensions,
   parseLabelsAnswer,
+  parsePrDimension,
 } from "./answer.mjs";
 
 const SHEET = new Map([
@@ -85,6 +86,51 @@ describe("parseCommentAnswer", () => {
 
   it("refuses an answer with no classification string", () => {
     expect(() => parseCommentAnswer('{"rationale":"r"}')).toThrow(/no classification/);
+  });
+});
+
+describe("parsePrDimension", () => {
+  it("reads the bounded PR judgement the model answers for a pull request", () => {
+    expect(
+      parsePrDimension(
+        '{"labels":["bug"],"rationale":"r","pr":{"scope":{"obviousMismatch":true},"readiness":{"descriptionQuality":"poor"},"notes":["Title says docs, diff changes auth."]}}',
+      ),
+    ).toEqual({
+      scope: { obviousMismatch: true },
+      readiness: { descriptionQuality: "poor" },
+      notes: ["Title says docs, diff changes auth."],
+    });
+  });
+
+  it("defaults safely when a non-PR answer has no pr field", () => {
+    expect(parsePrDimension('{"labels":["bug"],"rationale":"r"}')).toEqual({
+      scope: { obviousMismatch: false },
+      readiness: { descriptionQuality: null },
+      notes: [],
+    });
+  });
+
+  it("defaults safely on malformed or non-object answers instead of throwing", () => {
+    expect(parsePrDimension("not json at all")).toEqual({
+      scope: { obviousMismatch: false },
+      readiness: { descriptionQuality: null },
+      notes: [],
+    });
+    expect(
+      parsePrDimension(
+        '{"pr":{"scope":{"obviousMismatch":"yes"},"readiness":{"descriptionQuality":7},"notes":[3,"ok"]}}',
+      ),
+    ).toEqual({
+      scope: { obviousMismatch: false },
+      readiness: { descriptionQuality: null },
+      notes: ["ok"],
+    });
+  });
+
+  it("stays false and null on a missing judgement, never a guessed one", () => {
+    const dim = parsePrDimension('{"labels":[],"pr":{}}');
+    expect(dim.scope.obviousMismatch).toBe(false);
+    expect(dim.readiness.descriptionQuality).toBeNull();
   });
 });
 

@@ -166,4 +166,47 @@ describe("gatherEvidence", () => {
     });
     expect(evidence.eventAction).toBe("");
   });
+
+  it("packages the PR-side deterministic facts when the reads are available", () => {
+    /** @type {import("./evidence.mjs").PrEvidence} */
+    const pr = {
+      state: "open",
+      draft: true,
+      merged: false,
+      mergeable: null,
+      hasConflicts: false,
+      base: { ref: "main", sha: "ffff0000ffff0000111122223333444455556666" },
+      head: { ref: "feature", sha: "aaaabbbbccccdddd000011112222333344445555" },
+      body: "",
+      checks: { total: 2, byConclusion: { success: 1, pending: 1 } },
+      reviewRequested: ["alice"],
+      reviews: [{ state: "APPROVED", count: 1 }],
+    };
+    const evidence = gatherEvidence({
+      thread: { ...thread, type: "pr" },
+      repository: { name: "repo", description: "d" },
+      config: null,
+      sheet: null,
+      metadata: new Map(),
+      files: [],
+      size: null,
+      eventAction: "opened",
+      pr,
+    });
+    expect(evidence.pr).toEqual(pr);
+  });
+
+  it("defaults an absent PR read to null — an issue never carries pr facts", () => {
+    const evidence = gatherEvidence({
+      thread,
+      repository: { name: "repo", description: "d" },
+      config: null,
+      sheet: null,
+      metadata: new Map(),
+      files: [],
+      size: null,
+      eventAction: "opened",
+    });
+    expect(evidence.pr).toBeNull();
+  });
 });
