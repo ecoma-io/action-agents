@@ -418,6 +418,19 @@ describe("effectiveSheet", () => {
     expect(sheet?.has("breaking")).toBe(true);
   });
 
+  it("never offers policy-owned labels even when they are not size ladder entries", () => {
+    const config = validateConfig({
+      labels: {
+        use: ["bug", "needs triage", "size/manual"],
+        workflowMarkers: ["needs triage"],
+        triageOwned: ["size/manual"],
+      },
+    });
+    const { sheet } = effectiveSheet({ config, threadType: "issue", narrowing: [] });
+
+    expect([...(sheet?.keys() ?? [])]).toEqual(["bug"]);
+  });
+
   it("glosses a label with GitHub's own description — a label with none is offered by name", () => {
     const metadata = new Map([
       ["bug", { name: "bug", description: "Incorrect behaviour.", color: "d73a4a" }],

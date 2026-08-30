@@ -353,7 +353,11 @@ export function effectiveSheet({
   }
 
   const sizeLabels = config.size?.ladder.map((rung) => rung.label) ?? [];
-  const neverOffered = new Set([...sizeLabels]);
+  const neverOffered = new Set([
+    ...sizeLabels,
+    ...config.labels.workflowMarkers,
+    ...config.labels.triageOwned,
+  ]);
   for (const [name, role] of config.labels.roles) {
     if (role === "priority" || role === "workflow-marker") neverOffered.add(name);
   }
