@@ -361,18 +361,18 @@ and answers in one round.
 
 ## Failure modes
 
-| Symptom                                                      | Cause                                                                 | Resolution                                                                       |
-| ------------------------------------------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| "Label X is not in the sheet"                                | The model chose a label the config does not declare.                  | Declare it in the config, or remove it from the `labels:` input.                 |
-| "No config file at PATH"                                     | `config-path` set to a path that does not exist.                      | Fix the path, or remove `config-path` and use the default locations.             |
-| "schemaVersion Y is not supported"                           | Config file declares a schema version this build does not understand. | Downgrade `schemaVersion` or update the action tag.                              |
-| "Size label X is declared on multiple rungs"                 | A label appears on two ladder entries.                                | Deduplicate.                                                                     |
-| "declares the label 'X', which the repository does not have" | A policy names a label GitHub does not hold.                          | Create the label in GitHub, or remove it from `labels.use`.                      |
-| "Instruction document exceeds 8 KiB"                         | An instruction document is too large.                                 | Shorten it.                                                                      |
-| "Config file exceeds 64 KiB"                                 | The config file is too large.                                         | Reduce it — a 64 KiB policy is already very long prose.                          |
-| Provider unreachable                                         | The `api-url` endpoint did not respond within `request-timeout-ms`.   | Check the endpoint, the network, and the timeout value.                          |
-| HTTP 403 on labels                                           | `pull-requests: write` scope missing.                                 | Add the scope to the workflow's `permissions:` block.                            |
-| Run failed red — the answer was entirely off-sheet           | The model named no label the sheet declares.                          | The sheet is the contract: refine it, or the `labels:` input, never the matcher. |
+| Symptom                                                      | Cause                                                                     | Resolution                                                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| "Label X is not in the sheet"                                | The model chose a label the config does not declare.                      | Declare it in the config, or remove it from the `labels:` input.                 |
+| "No config file at PATH"                                     | `config-path` set to a path that does not exist.                          | Fix the path, or remove `config-path` and use the default locations.             |
+| "schemaVersion Y is not supported"                           | Config file declares a schema version this build does not understand.     | Downgrade `schemaVersion` or update the action tag.                              |
+| "Size label X is declared on multiple rungs"                 | A label appears on two ladder entries.                                    | Deduplicate.                                                                     |
+| "declares the label 'X', which the repository does not have" | A policy names a label GitHub does not hold.                              | Create the label in GitHub, or remove it from `labels.use`.                      |
+| "Instruction document exceeds 8 KiB"                         | An instruction document is too large.                                     | Shorten it.                                                                      |
+| "Config file exceeds 64 KiB"                                 | The config file is too large.                                             | Reduce it — a 64 KiB policy is already very long prose.                          |
+| Provider unreachable                                         | The `api-url` endpoint did not respond within `request-timeout-ms`.       | Check the endpoint, the network, and the timeout value.                          |
+| HTTP 403 on labels                                           | `pull-requests: write` scope missing.                                     | Add the scope to the workflow's `permissions:` block.                            |
+| Run failed red — the answer was entirely off-sheet           | The model named no label the sheet declares, and no PR size rung applies. | The sheet is the contract: refine it, or the `labels:` input, never the matcher. |
 
 ## Recipes
 
