@@ -17,6 +17,7 @@ import {
   migrateConfig,
   validateConfig,
 } from "./config.mjs";
+import { matchLabels } from "./answer.mjs";
 
 /** @typedef {Record<string, { content: string } | null>} Files */
 
@@ -485,6 +486,56 @@ describe("effectiveSheet", () => {
     expect(sheet?.has("size/xl")).toBe(false);
     expect(sheet?.has("needs triage")).toBe(false);
     expect(sheet?.has("breaking")).toBe(true);
+  });
+
+  it("never offers a workflow marker declared in use (bug #230)", () => {
+    // Schema validation requires a workflow marker to sit in labels.use; a
+    // queue marker is cleared by code, never chosen — so once it is declared
+    // in use it must still never reach the offered sheet.
+    const cfg = validateConfig({
+      labels: { use: ["bug", "docs", "needs triage"], workflowMarkers: ["needs triage"] },
+    });
+    const { sheet } = effectiveSheet({ config: cfg, threadType: "issue", narrowing: [] });
+    expect(sheet?.has("needs triage")).toBe(false);
+    expect(sheet?.has("bug")).toBe(true);
+    expect(sheet?.has("docs")).toBe(true);
+  });
+
+  it("never offers a triage-owned label declared in use but off the ladder (bug #230)", () => {
+    // A triage-owned label belongs to the action to derive or replace; the
+    // model must never pick it, even when it is in use and not on the size
+    // ladder (so the ladder alone would not have kept it off the sheet).
+    const cfg = validateConfig({
+      labels: {
+        use: ["bug", "docs", "priority:high"],
+        roles: { "priority:high": "priority" },
+        triageOwned: ["priority:high"],
+      },
+    });
+    const { sheet } = effectiveSheet({ config: cfg, threadType: "issue", narrowing: [] });
+    expect(sheet?.has("priority:high")).toBe(false);
+    expect(sheet?.has("bug")).toBe(true);
+    expect(sheet?.has("docs")).toBe(true);
+  });
+
+  it("keeps a model from selecting a workflow marker or triage-owned label — not offered, so refused", () => {
+    const cfg = validateConfig({
+      labels: {
+        use: ["bug", "docs", "needs triage", "priority:high"],
+        roles: { "priority:high": "priority" },
+        workflowMarkers: ["needs triage"],
+        triageOwned: ["priority:high"],
+      },
+    });
+    const { sheet } = effectiveSheet({ config: cfg, threadType: "issue", narrowing: [] });
+    const sheetMap = /** @type {Map<string, string>} */ (sheet);
+    // Exactly the classification labels are offered; the marker and the
+    // owned label are not, so a model answer naming either fails closed
+    // (matchLabels refuses it against this sheet).
+    expect([...sheetMap.keys()].sort()).toEqual(["bug", "docs"]);
+    const { accepted, refused } = matchLabels(["needs triage", "priority:high", "bug"], sheetMap);
+    expect(accepted).toEqual(["bug"]);
+    expect(refused.sort()).toEqual(["needs triage", "priority:high"]);
   });
 
   it("glosses a label with GitHub's own description — a label with none is offered by name", () => {
