@@ -58,6 +58,29 @@ import { HttpError } from "./transport-errors.mjs";
  */
 
 /**
+ * A check suite's outcome, rolled up to counts by conclusion. Check runs are
+ * deterministic forge facts; required-status semantics come from branch
+ * protection, which the forge does not read here — `required` coverage is
+ * deliberately out of reach rather than guessed at from conclusion counts.
+ *
+ * @typedef {object} CheckRunsSummary
+ * @property {number} total the number of check runs reported at the ref
+ * @property {{ success?: number, failure?: number, pending?: number, cancelled?: number, skipped?: number, stale?: number, neutral?: number, action_required?: number, timed_out?: number, other?: number }} byConclusion counts by the check-run `conclusion` the forge reported; unrecognised or absent conclusions fall into `other`, and a conclusion no run reported is simply absent
+ */
+
+/**
+ * The pull request's review state, read for routing evidence only: the
+ * identities who were asked to review and the submitted review dispositions.
+ * It is metadata a routing signal may rest on — never free-text, and never a
+ * writer (triage reports expected review coverage; it never assigns).
+ *
+ * @typedef {object} PullRequestReviewState
+ * @property {string[]} requestedReviewers logins asked to review and not yet done
+ * @property {{ state: string, count: number }[]} reviews summary of submitted reviews by disposition — "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", or whatever the forge answers
+ * @property {string[]} reviewers logins who submitted a review — the union of all review author identities
+ */
+
+/**
  * What one `GET /pulls/{number}` read fixes about a pull request: its state,
  * its two commits, and the prose a human wrote about it. A snapshot policy —
  * what pins a run to these values, and when they are re-read — lives above
@@ -70,9 +93,26 @@ import { HttpError } from "./transport-errors.mjs";
  * @property {boolean} merged
  * @property {string} title an absent title is normalised to ""
  * @property {string} body an absent description is normalised to ""
+ * @property {boolean | null} mergeable whether the head merges cleanly today — null while the forge is still computing it (GitHub returns null for that window)
+ * @property {string | null} mergeableState the forge's mergeability classification — "clean", "dirty" (a conflict), "blocked", "behind", "draft", "unknown", or null while computing
  * @property {{ ref: string, sha: string }} head
  * @property {{ ref: string, sha: string }} base
  */
+
+/** The check-run conclusions the rollup counts under their own name. */
+export const CHECK_RUN_CONCLUSIONS = [
+  "success",
+  "failure",
+  "cancelled",
+  "skipped",
+  "stale",
+  "neutral",
+  "action_required",
+  "timed_out",
+];
+
+/** A check-run `status` that means the run has not finished: counted as pending. */
+export const CHECK_RUN_PENDING_STATUSES = ["queued", "in_progress"];
 
 /** The listing's own ceiling; a pull request at or past it is unmeasurable. */
 export const MAX_PULL_REQUEST_FILES = 3000;
@@ -296,6 +336,8 @@ const PER_PAGE = 100;
  *   getPullRequest: (number: number) => Promise<PullRequestSnapshot>,
  *   listPullRequestFiles: (number: number) => Promise<PullRequestFile[]>,
  *   searchIssues: (query: string, options?: { limit?: number }) => Promise<SearchResult>,
+ *   listCheckRuns: (ref: string) => Promise<CheckRunsSummary>,
+ *   listPullRequestReviews: (number: number) => Promise<PullRequestReviewState>,
  *   addLabels: (number: number, names: string[]) => Promise<void>,
  *   removeLabel: (number: number, name: string) => Promise<void>,
  *   listComments: (number: number) => Promise<CommentEntry[]>,
@@ -565,6 +607,12 @@ export function createForge(config) {
       }
       // An absent description is a normal pull request, not a broken answer.
       const body = typeof record?.["body"] === "string" ? record["body"] : "";
+      // Mergeability is a forge computation the forge itself may not have
+      // finished — `null` from the API means "still computing", never a
+      // broken answer. `mergeable_state === "dirty"` is the deterministic
+      // conflict signal; triage reads it as evidence, it never merges.
+      const mergeable = record?.["mergeable"];
+      const mergeableState = record?.["mergeable_state"];
       return {
         number,
         state,
@@ -572,6 +620,8 @@ export function createForge(config) {
         merged,
         title,
         body,
+        mergeable: typeof mergeable === "boolean" ? mergeable : null,
+        mergeableState: typeof mergeableState === "string" ? mergeableState : null,
         head: { ref: headRef, sha: headSha },
         base: { ref: baseRef, sha: baseSha },
       };
@@ -696,6 +746,105 @@ export function createForge(config) {
         hits.push({ number, title, state, url, createdAt });
       }
       return { items: hits, totalCount, cappedAt: limit };
+    },
+
+    /**
+     * The check runs reported at a ref, rolled up to conclusion counts.
+     * A ref with no check runs answers `{ total: 0, byConclusion: {} }`
+     * rather than failing: no CI report is a fact, not a broken answer. The
+     * ref is the head commit SHA the snapshot pinned — never the working tree.
+     *
+     * @param {string} ref a commit SHA
+     */
+    async listCheckRuns(ref) {
+      const operation = `reading the check runs at ${ref}`;
+      const pages = await paginate(
+        operation,
+        `${root}/commits/${encodeURIComponent(ref)}/check-runs`,
+      );
+      /** @type {Record<string, number>} */
+      const byConclusion = {};
+      let total = 0;
+      for (const page of pages) {
+        const record = asRecord(page);
+        if (typeof record?.["total_count"] === "number") {
+          total += record["total_count"];
+        }
+        const runs = record?.["check_runs"];
+        if (!Array.isArray(runs)) continue;
+        for (const raw of runs) {
+          // A finished run reports its `conclusion`, which the rollup counts
+          // under its own name when known; an unfinished run reports a
+          // `status` of queued/in-progress and is counted as pending. A run
+          // that reports neither a known conclusion nor a pending status is
+          // counted as `other`, never dropped from the total and never
+          // mislabelled as a success or a failure.
+          const run = asRecord(raw);
+          const conclusion = run?.["conclusion"];
+          if (typeof conclusion === "string" && CHECK_RUN_CONCLUSIONS.includes(conclusion)) {
+            byConclusion[conclusion] = (byConclusion[conclusion] ?? 0) + 1;
+            continue;
+          }
+          const status = run?.["status"];
+          const pending = typeof status === "string" && CHECK_RUN_PENDING_STATUSES.includes(status);
+          const key = pending ? "pending" : "other";
+          byConclusion[key] = (byConclusion[key] ?? 0) + 1;
+        }
+      }
+      return {
+        total,
+        byConclusion: /** @type {CheckRunsSummary["byConclusion"]} */ (byConclusion),
+      };
+    },
+
+    /**
+     * The pull request's review routing state: the identities asked to
+     * review and not yet done, and the submitted review dispositions. Two
+     * reads — requested reviewers and reviews — because GitHub exposes them
+     * separately. Read for evidence only; this primitive never writes.
+     *
+     * @param {number} number
+     */
+    async listPullRequestReviews(number) {
+      const operation = `reading the review state of pull request #${String(number)}`;
+      const requested = await call(operation, () =>
+        http.request(`${root}/pulls/${String(number)}/requested_reviewers`),
+      );
+      const requestedRecord = asRecord(requested);
+      /** @type {string[]} */
+      const requestedReviewers = [];
+      const users = requestedRecord?.["users"];
+      if (Array.isArray(users)) {
+        for (const raw of users) {
+          const login = asRecord(raw)?.["login"];
+          if (typeof login === "string" && login !== "") requestedReviewers.push(login);
+        }
+      }
+      // Teams asked to review are identities too, but triage's routing signal
+      // is a login-level signal; a team name is not a login and is left out
+      // rather than guessed at. This keeps the review state bounded and
+      const pages = await paginate(operation, `${root}/pulls/${String(number)}/reviews`);
+      /** @type {Map<string, number>} */
+      const byState = new Map();
+      /** @type {Set<string>} */
+      const reviewerSet = new Set();
+      for (const page of pages) {
+        if (!Array.isArray(page)) continue;
+        for (const raw of page) {
+          const review = asRecord(raw);
+          const state = review?.["state"];
+          if (typeof state === "string" && state !== "") {
+            byState.set(state, (byState.get(state) ?? 0) + 1);
+          }
+          const login = asRecord(review?.["user"])?.["login"];
+          if (typeof login === "string" && login !== "") reviewerSet.add(login);
+        }
+      }
+      return {
+        requestedReviewers,
+        reviews: [...byState.entries()].map(([state, count]) => ({ state, count })),
+        reviewers: [...reviewerSet],
+      };
     },
 
     /**

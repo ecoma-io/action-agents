@@ -12,7 +12,13 @@
  */
 
 import { buildPrompt } from "./prompt.mjs";
-import { parseCommentAnswer, parseIssueDimensions, parseLabelsAnswer } from "./answer.mjs";
+import { computePrSignals } from "./pr.mjs";
+import {
+  parseCommentAnswer,
+  parseIssueDimensions,
+  parseLabelsAnswer,
+  parsePrDimension,
+} from "./answer.mjs";
 /** @typedef {import("#core/untrusted.mjs").Evidence} EvidenceWrapper */
 
 /** @typedef {import("./evidence.mjs").Evidence} Evidence */
@@ -105,6 +111,19 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
     // contract; an evaluator (PR-C/D) populates it from a rubric judgement.
     confidence: null,
   };
+  // The PR dimension: deterministic signals computed by code (scope, risk,
+  // dependency, readiness, routing) plus the model's bounded semantic
+  // judgement parsed tolerantly. Evidence and note only — everything that
+  // may mutate still flows through the policy engine below. Populated in
+  // the return path (PR-C moved `dimensions` out of the descriptor literal),
+  // present only on a pull-request thread.
+  const prDimension =
+    evidence.thread.type === "pr"
+      ? {
+          facts: computePrSignals(evidence),
+          judgement: parsePrDimension(content),
+        }
+      : undefined;
   if (sheet === null) {
     return {
       intent: "comment",
@@ -115,7 +134,7 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
         quality: undefined,
         relationships: undefined,
         priority: undefined,
-        pr: undefined,
+        pr: prDimension,
       },
     };
   }
@@ -125,7 +144,7 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
     quality: undefined,
     relationships: undefined,
     priority: undefined,
-    pr: undefined,
+    pr: prDimension,
   };
   const isIssue = evidence.thread.type === "issue";
   const dimensions = isIssue

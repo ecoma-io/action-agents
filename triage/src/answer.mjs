@@ -85,6 +85,104 @@ export function matchLabels(chosen, sheet) {
 }
 
 /**
+ * The bounded semantic PR judgement — the parts a deterministic signal
+ * cannot compute: whether the title/body obviously mismatch the diff's
+ * scope, and how well the description carries the change. Parsed tolerantly
+ * like every model answer; defaults are safe when the field is absent or
+ * malformed, because these are advisory notes, never a decision input.
+ *
+ * @typedef {object} PrDimension
+ * @property {{ obviousMismatch: boolean }} scope
+ * @property {{ descriptionQuality: string | null }} readiness "poor", "good", or null when the model did not judge it
+ * @property {string[]} notes
+ */
+
+/**
+ * Parses the model's `pr` judgement out of the answer. Never throws on
+ * absence or drift — a malformed or missing judgement yields safe defaults.
+ *
+ * @param {string} content the model's raw answer
+ * @returns {PrDimension}
+ */
+export function parsePrDimension(content) {
+  let value;
+  try {
+    value = parseJsonish(content);
+  } catch {
+    return defaultPrDimension();
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return defaultPrDimension();
+  }
+  const answer = /** @type {Record<string, unknown>} */ (value);
+  const pr = answer["pr"];
+  const prObject = isRecord(pr) ? /** @type {Record<string, unknown>} */ (pr) : {};
+  return {
+    scope: {
+      obviousMismatch: booleanOf(prObject["scope"], "obviousMismatch"),
+    },
+    readiness: {
+      descriptionQuality: stringOrNull(prObject["readiness"], "descriptionQuality"),
+    },
+    notes: stringArrayOf(prObject["notes"]),
+  };
+}
+
+/**
+ * @returns {PrDimension}
+ */
+function defaultPrDimension() {
+  return {
+    scope: { obviousMismatch: false },
+    readiness: { descriptionQuality: null },
+    notes: [],
+  };
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * @param {unknown} container
+ * @param {string} key
+ * @returns {boolean}
+ */
+function booleanOf(container, key) {
+  if (!isRecord(container)) return false;
+  return container[key] === true;
+}
+
+/**
+ * @param {unknown} container
+ * @param {string} key
+ * @returns {string | null}
+ */
+function stringOrNull(container, key) {
+  if (!isRecord(container)) return null;
+  const value = container[key];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function stringArrayOf(value) {
+  if (!Array.isArray(value)) return [];
+  /** @type {string[]} */
+  const out = [];
+  for (const item of value) {
+    if (typeof item === "string" && item !== "") out.push(item);
+  }
+  return out;
+}
+
+/**
  * @param {Record<string, unknown>} answer
  * @returns {string}
  */

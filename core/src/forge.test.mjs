@@ -973,6 +973,8 @@ describe("getPullRequest", () => {
     state: "open",
     draft: false,
     merged: false,
+    mergeable: true,
+    mergeable_state: "clean",
     title: "the change",
     body: "what and why",
     head: { ref: "feature", sha: "aaaabbbbccccdddd000011112222333344445555" },
@@ -987,11 +989,24 @@ describe("getPullRequest", () => {
       state: "open",
       draft: false,
       merged: false,
+      mergeable: true,
+      mergeableState: "clean",
       title: "the change",
       body: "what and why",
       head: { ref: "feature", sha: "aaaabbbbccccdddd000011112222333344445555" },
       base: { ref: "main", sha: "ffff0000ffff0000111122223333444455556666" },
     });
+  });
+
+  it("normalises a still-computing mergeability to null, never a guess", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/pulls/7": json({ ...PULL, mergeable: null, mergeable_state: null }),
+    });
+
+    const snapshot = await client.getPullRequest(7);
+    expect(snapshot.mergeable).toBeNull();
+    expect(snapshot.mergeableState).toBeNull();
+    expect(snapshot.draft).toBe(false);
   });
 
   it("normalises an absent description to an empty string", async () => {
@@ -1023,6 +1038,99 @@ describe("getPullRequest", () => {
     const error = await client.getPullRequest(404).catch((cause) => cause);
     expect(error).toBeInstanceOf(ForgeError);
     expect(error.message).toMatch(/reading pull request #404/);
+  });
+});
+
+describe("listCheckRuns", () => {
+  const SHA = "aaaabbbbccccdddd000011112222333344445555";
+
+  it("rolls check runs up to conclusion counts", async () => {
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/commits/${SHA}/check-runs?per_page=100`]: page({
+        total_count: 4,
+        check_runs: [
+          { conclusion: "success" },
+          { conclusion: "success" },
+          { conclusion: "failure" },
+          { status: "in_progress" },
+        ],
+      }),
+    });
+
+    await expect(client.listCheckRuns(SHA)).resolves.toEqual({
+      total: 4,
+      byConclusion: { success: 2, failure: 1, pending: 1 },
+    });
+  });
+
+  it("counts an absent or unrecognised conclusion as other, never as success", async () => {
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/commits/${SHA}/check-runs?per_page=100`]: page({
+        total_count: 2,
+        check_runs: [{}, { conclusion: "weird" }],
+      }),
+    });
+
+    const summary = await client.listCheckRuns(SHA);
+    expect(summary.total).toBe(2);
+    expect(summary.byConclusion).toEqual({ other: 2 });
+    expect(summary.byConclusion.success).toBeUndefined();
+  });
+
+  it("answers an empty summary for a ref with no check runs, not a failure", async () => {
+    const client = forge("o", "r", {
+      [`GET /repos/o/r/commits/${SHA}/check-runs?per_page=100`]: page({
+        total_count: 0,
+        check_runs: [],
+      }),
+    });
+
+    await expect(client.listCheckRuns(SHA)).resolves.toEqual({ total: 0, byConclusion: {} });
+  });
+});
+
+describe("listPullRequestReviews", () => {
+  it("reads requested reviewers and submitted reviews", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/pulls/7/requested_reviewers": json({
+        users: [{ login: "alice" }, { login: "bob" }],
+        teams: [],
+      }),
+      "GET /repos/o/r/pulls/7/reviews?per_page=100": page([
+        { state: "APPROVED", user: { login: "alice" } },
+        { state: "APPROVED", user: { login: "alice" } },
+        { state: "CHANGES_REQUESTED", user: { login: "bob" } },
+      ]),
+    });
+
+    await expect(client.listPullRequestReviews(7)).resolves.toEqual({
+      requestedReviewers: ["alice", "bob"],
+      reviews: [
+        { state: "APPROVED", count: 2 },
+        { state: "CHANGES_REQUESTED", count: 1 },
+      ],
+      reviewers: ["alice", "bob"],
+    });
+  });
+
+  it("drops absent logins and empty review states deterministically", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/pulls/7/requested_reviewers": json({
+        users: [{}, { login: null }, { login: "alice" }],
+        teams: [],
+      }),
+      "GET /repos/o/r/pulls/7/reviews?per_page=100": page([
+        { state: "" },
+        {},
+        { state: "COMMENTED", user: { login: "carol" } },
+        { state: "", user: { login: "" } },
+      ]),
+    });
+
+    const state = await client.listPullRequestReviews(7);
+    expect(state.requestedReviewers).toEqual(["alice"]);
+    expect(state.reviews).toEqual([{ state: "COMMENTED", count: 1 }]);
+    expect(state.reviewers).toEqual(["carol"]);
   });
 });
 

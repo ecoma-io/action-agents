@@ -62,6 +62,7 @@ function input(overrides = {}) {
       quality: null,
       forgeSearch: null,
       eventAction: "opened",
+      pr: null,
     },
     documents: {},
     chat: world().chat,
@@ -142,6 +143,46 @@ describe("assess", () => {
       "quality",
       "relationships",
     ]);
+  });
+
+  it("populates the pr dimension for a pull request, keeping it empty for an issue", async () => {
+    const prThread = { ...THREAD, type: "pr" };
+    const prEvidence = {
+      ...input().evidence,
+      thread: prThread,
+      files: [{ filename: "src/index.ts", status: "modified", additions: 4, deletions: 1 }],
+      pr: {
+        state: "open",
+        draft: false,
+        merged: false,
+        mergeable: true,
+        hasConflicts: false,
+        base: { ref: "main", sha: "b" },
+        head: { ref: "h", sha: "a" },
+        checks: { total: 1, byConclusion: { success: 1 } },
+        reviewRequested: [],
+        reviews: [],
+      },
+    };
+    const chat = world({
+      content:
+        '{"classification":"x","rationale":"r","pr":{"scope":{"obviousMismatch":false},"readiness":{"descriptionQuality":"good"},"notes":[]}}',
+    }).chat;
+
+    const prAssessment = await assess(input({ chat, evidence: prEvidence }));
+    const prDimension = /** @type {any} */ (prAssessment.dimensions).pr;
+    expect(prDimension.facts.scope.fileCount).toBe(1);
+    expect(prDimension.facts.readiness.ready).toBe(true);
+    expect(prDimension.judgement.scope.obviousMismatch).toBe(false);
+    expect(prDimension.judgement.readiness.descriptionQuality).toBe("good");
+
+    const issueAssessment = await assess(
+      input({
+        chat: world({ content: '{"classification":"x","rationale":"r"}' }).chat,
+        evidence: input().evidence,
+      }),
+    );
+    expect(/** @type {any} */ (issueAssessment.dimensions).pr).toBeUndefined();
   });
   it("forwards the model, the messages and the configured model name to the chat", async () => {
     const chat = world({ content: '{"labels":[],"rationale":""}' }).chat;

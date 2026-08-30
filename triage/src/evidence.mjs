@@ -72,6 +72,34 @@
  * @property {number} bodyLength
  * @property {number} urlCount
  * @property {boolean} templatesOverflow true when the template read was capped
+ * The deterministic PR-side facts beyond the diff: the pull request's own
+ * flags (draft, merged, state), its mergeability as the forge computes it,
+ * its two commits, the check-run rollup at the head (null when the forge
+ * does not report one), and the review routing state. Everything here is
+ * read by code from the forge — none of it is a model judgement, and none
+ * of it is untrusted semantic content. Present only for a `pr` thread;
+ * `null` on an issue.
+ *
+ * @typedef {object} PrEvidence
+ * @property {string} state "open", "closed", or whatever the forge answers
+ * @property {boolean} draft
+ * @property {boolean} merged
+ * @property {boolean | null} mergeable null while the forge is still computing it
+ * @property {boolean} hasConflicts deterministic conflict signal — the forge classified the merge state as dirty
+ * @property {string} body the pull request's description — presence is a fact
+ * @property {{ ref: string, sha: string }} base
+ * @property {{ ref: string, sha: string }} head
+ * @property {{ total: number, byConclusion: Partial<import("#core/forge.mjs").CheckRunsSummary["byConclusion"]> } | null} checks null when the forge reports no check runs at the head
+ * @property {string[]} reviewRequested logins asked to review and not yet done
+ * @property {{ state: string, count: number }[]} reviews submitted reviews by disposition
+ */
+
+/**
+ * @typedef {object} SizeMeasurement
+ * @property {number} counted
+ * @property {number} excluded
+ * @property {number} files
+ * @property {string} label
  */
 
 /**
@@ -88,6 +116,7 @@
  * @property {QualityFacts | null} quality the issue-form facts, when policy and thread type make them available
  * @property {ForgeSearchFacts | null} forgeSearch the bounded duplicate/relationship search, when it ran
  * @property {string} eventAction the event's `action` field
+ * @property {PrEvidence | null} pr the PR-side deterministic facts — present only for a `pr` thread, null for an issue
  */
 
 /**
@@ -102,14 +131,7 @@
  * @property {QualityFacts | null} [quality] the issue-form facts, when a sheet-mode issue run gathered them
  * @property {ForgeSearchFacts | null} [forgeSearch] the bounded candidate search, when a sheet-mode issue run ran it
  * @property {string} eventAction
- */
-
-/**
- * @typedef {object} SizeMeasurement
- * @property {number} counted
- * @property {number} excluded
- * @property {number} files
- * @property {string} label
+ * @property {PrEvidence | null} [pr] the PR-side deterministic facts — omitted (→ null) for an issue or when the reads are unavailable
  */
 
 /**
@@ -131,6 +153,7 @@ export function gatherEvidence({
   quality,
   forgeSearch,
   eventAction,
+  pr,
 }) {
   return {
     thread: {
@@ -152,5 +175,6 @@ export function gatherEvidence({
     quality: quality ?? null,
     forgeSearch: forgeSearch ?? null,
     eventAction,
+    pr: pr ?? null,
   };
 }
