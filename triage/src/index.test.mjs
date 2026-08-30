@@ -767,7 +767,7 @@ describe("run — the event gate (PR-E)", () => {
     await run(inputs(), prContext, world);
   });
 
-  it.each(["ready_for_review", "synchronized"])(
+  it.each(["ready_for_review", "synchronize"])(
     "re-triages pull_request.%s — new evidence reaches the model",
     async (action) => {
       vi.spyOn(console, "log").mockImplementation(() => undefined);

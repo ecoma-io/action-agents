@@ -309,11 +309,11 @@ decision.
 
 Which actions re-triage, per event:
 
-| Event          | Action re-triaged                                                                         |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| `issues`       | `opened`, `edited`, `reopened`, `labeled` (see below)                                     |
-| `pull_request` | `opened`, `edited`, `synchronized`, `ready_for_review`, `reopened`, `labeled` (see below) |
-| either         | a missing or unlisted action (re-triaged conservatively, never skipped)                   |
+| Event          | Action re-triaged                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| `issues`       | `opened`, `edited`, `reopened`, `labeled` (see below)                                    |
+| `pull_request` | `opened`, `edited`, `synchronize`, `ready_for_review`, `reopened`, `labeled` (see below) |
+| either         | a missing or unlisted action (re-triaged conservatively, never skipped)                  |
 
 Which actions skip, writing nothing:
 

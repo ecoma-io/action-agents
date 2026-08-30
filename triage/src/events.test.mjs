@@ -67,7 +67,7 @@ describe("the event matrix", () => {
   });
 
   describe("pull_request", () => {
-    it.each(["opened", "edited", "synchronized", "ready_for_review", "reopened"])(
+    it.each(["opened", "edited", "synchronize", "ready_for_review", "reopened"])(
       "%s re-triages — content, diff or draft state changed",
       (action) => {
         expect(prDecision({ action }).mode).toBe("retriage");
@@ -271,7 +271,7 @@ describe("the matrix enumerates the events triage understands", () => {
   });
 
   it("lists the pull_request actions the action can receive", () => {
-    expect(PULL_REQUEST_ACTIONS).toContain("synchronized");
+    expect(PULL_REQUEST_ACTIONS).toContain("synchronize");
     expect(PULL_REQUEST_ACTIONS).toContain("ready_for_review");
     expect(PULL_REQUEST_ACTIONS).toContain("review_requested");
     expect(PULL_REQUEST_ACTIONS).toContain("converted_to_draft");

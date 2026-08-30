@@ -46,7 +46,7 @@ export const ISSUE_ACTIONS = [
 export const PULL_REQUEST_ACTIONS = [
   "opened",
   "edited",
-  "synchronized",
+  "synchronize",
   "ready_for_review",
   "reopened",
   "labeled",
@@ -154,7 +154,7 @@ export function decideEvent({
       return skip("a milestone is not triage evidence");
     }
   } else {
-    if (action === "synchronized") return retriage("new commits are new evidence");
+    if (action === "synchronize") return retriage("new commits are new evidence");
     if (action === "ready_for_review") {
       return retriage("a pull request that leaves draft is ready for triage");
     }
