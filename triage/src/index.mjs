@@ -29,10 +29,7 @@ import { readFileSync } from "node:fs";
 import { readSharedInputs } from "#core/inputs.mjs";
 import { createChat } from "#core/chat.mjs";
 import { createForge } from "#core/forge.mjs";
-import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
-import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
-import { oneLine } from "#core/one-line.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import {
   getBooleanInput,
@@ -46,7 +43,6 @@ import {
   warning,
 } from "#core/runtime.mjs";
 
-import { matchLabels, parseCommentAnswer, parseLabelsAnswer } from "./answer.mjs";
 import {
   effectiveSheet,
   loadConfigFile,
@@ -54,18 +50,15 @@ import {
   migrateConfig,
   validateConfig,
 } from "./config.mjs";
-import { buildPrompt } from "./prompt.mjs";
-import { currentSizeLabels, measureSize } from "./size.mjs";
+import { gatherEvidence } from "./evidence.mjs";
+import { assess } from "./assessment.mjs";
+import { decide } from "./policy.mjs";
+import { mutate } from "./mutate.mjs";
+import { measureSize } from "./size.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
-/** @typedef {import("#core/forge.mjs").PullRequestFile} PullRequestFile */
-
-/** @typedef {{ labels: string[], classification: string, rationale: string, files: PullRequestFile[] }} AnswerLog */
-
 export const ACTION = "triage";
-/** The rationale's cap in the marker comment and the run log, in characters. */
-export const RATIONALE_CHARS = 300;
 
 /**
  * @typedef {SharedInputs & { labels: string[], dryRun: boolean, configPath: string, requestTimeoutMs: number }} Inputs
@@ -199,16 +192,8 @@ export async function run(inputs, context, io) {
   // ceiling is refused rather than guessed at.
   const files = thread.type === "pr" ? await world.forge.listPullRequestFiles(thread.number) : [];
 
-  const { messages } = buildPrompt({
-    thread,
-    repository: repositoryFromEvent(event, context),
-    sheet,
-    documents,
-    files,
-    evidence: world.evidence,
-  });
-  const { content } = await world.chat.complete({ model: inputs.model, messages });
-
+  // Size is measured in the Evidence stage: never offered to the model, and
+  // a measured rung stays authoritative (code-derived, always on-sheet).
   const size =
     config?.size !== undefined && thread.type === "pr"
       ? measureSize(files, config.size.exclude, config.size.ladder)
@@ -219,105 +204,38 @@ export async function run(inputs, context, io) {
     );
   }
 
-  if (sheet === null) {
-    const answer = parseCommentAnswer(content);
-    logRationale(answer.rationale);
-    /** @param {string} marker */
-    const body = (marker) => commentBody(answer, marker);
-    if (inputs.dryRun) {
-      info("dry run — the classification would be written as this comment:");
-      info(body("<!-- action-agents:triage:dry-run -->"));
-      return;
-    }
-    // The identity read sits behind every dry-run and label-sheet gate: paid
-    // only by a run about to write a comment.
-    const ownLogins = await resolveOwnLogins(world.forge, info);
-    const outcome = await upsertComment({
-      store: world.forge,
-      action: ACTION,
-      issueNumber: thread.number,
-      buildBody: body,
-      ownLogins,
-      startedAt: world.now(),
-      log: info,
-    });
-    info(`classification comment ${outcome.outcome} (${String(outcome.id)})`);
-    return;
-  }
+  // Evidence → Assessment → Policy → Decision → Controlled Mutation.
+  // The model answers only the one bounded question (assessment); every
+  // mutation decision is the policy engine's, and mutate is the only writer.
+  const evidence = gatherEvidence({
+    thread,
+    repository: repositoryFromEvent(event, context),
+    config,
+    sheet,
+    metadata,
+    files,
+    size,
+    eventAction: typeof event["action"] === "string" ? event["action"] : "",
+  });
 
-  const answer = parseLabelsAnswer(content);
-  const { accepted, refused } = matchLabels(answer.labels, sheet);
-  // A size rung is a measurement, never a model choice: the ladder is never
-  // offered, so a model naming a rung cannot be "on sheet" — but on a PR the
-  // rung's only legitimate role is to echo the measurement the diff already
-  // produced. A rung-named answer therefore never counts as off-sheet and is
-  // never applied raw; the measured rung stays authoritative (code-derived,
-  // always on-sheet, reversible). On an issue there is no measurement, so a
-  // rung name is off-sheet like any other unoffered name.
-  const rungs = config?.size?.ladder.map((rung) => rung.label) ?? [];
-  const offSheet = size === null ? refused : refused.filter((name) => !rungs.includes(name));
-  for (const name of offSheet) {
-    warning(
-      `refused the off-sheet label '${name}' — it is not on the effective sheet; not applied`,
-    );
-  }
-  logRationale(answer.rationale);
-  if (accepted.length === 0 && offSheet.length > 0) {
-    throw new Error(
-      "the model's answer was entirely off-sheet — refusing rather than applying nothing",
-    );
-  }
+  const assessment = await assess({
+    evidence,
+    documents,
+    chat: world.chat,
+    model: inputs.model,
+    evidenceWrapper: world.evidence,
+  });
 
-  // Add-only for the sheet's labels; replacement for size, whichever hand
-  // applied the last one. `sizeLabels` exists only to keep the ladder's
-  // names from ever being offered; the replacement reads the rungs.
-  const add = accepted.filter((name) => !thread.labels.includes(name));
-  const replace =
-    size === null || config?.size === undefined
-      ? []
-      : currentSizeLabels(thread.labels, config.size.ladder).filter((name) => name !== size.label);
-  const sizeAdd = size !== null && !thread.labels.includes(size.label) ? [size.label] : [];
-  // Workflow markers (the queue label the issue forms apply — this
-  // repository's is `needs triage`) sit in labels.workflowMarkers. A marker
-  // is cleared — code-deterministically, never a model choice — once a
-  // semantic-classification label is classified: a thread carrying a
-  // category no longer awaits triage. Absent from the config, nothing is
-  // removed; the model is never told the marker's name, because it is on no
-  // sheet offered to it.
-  const marker = config?.labels.workflowMarkers[0];
-  const classifiedCategory =
-    marker !== undefined && config !== null
-      ? accepted.some((name) => config.labels.roles.get(name) === "semantic-classification")
-      : false;
-  const clearMarker =
-    marker !== undefined && classifiedCategory && thread.labels.includes(marker) ? [marker] : [];
+  const decision = decide({ evidence, assessment });
 
-  // Dedupe the add list: a model answer (or a size rung colliding with an
-  // accepted category) must not send the same label twice, in the dry-run
-  // log or in the write. GitHub would absorb the duplicate, but the dry-run
-  // promise is a faithful preview.
-  const toAdd = [...new Set([...add, ...sizeAdd])];
-  if (inputs.dryRun) {
-    info(
-      `dry run — would add [${toAdd.join(", ")}]` +
-        (replace.length > 0
-          ? ` and remove [${replace.join(", ")}] (size is replaced, not added to)`
-          : "") +
-        (clearMarker.length > 0
-          ? ` and remove [${clearMarker.join(", ")}] (triage marker cleared on classification)`
-          : ""),
-    );
-    return;
-  }
-  if (toAdd.length > 0) {
-    await world.forge.addLabels(thread.number, toAdd);
-  }
-  for (const name of replace) {
-    await world.forge.removeLabel(thread.number, name);
-  }
-  for (const name of clearMarker) {
-    await world.forge.removeLabel(thread.number, name);
-  }
+  await mutate({
+    decision,
+    forge: world.forge,
+    issueNumber: thread.number,
+    dryRun: inputs.dryRun,
+    now: world.now,
+    action: ACTION,
+  });
 }
 
 /**
@@ -417,46 +335,6 @@ async function assertLabelsExist(forge, config, metadata) {
       );
     }
   }
-}
-
-/**
- * The marker comment written when there is no sheet — the whole of what the
- * action can produce in that mode. Model text reaches it only through the
- * sanitiser; the scaffolding around it is the action's own.
- *
- * @param {{ classification: string, rationale: string }} answer
- * @param {string} marker
- * @returns {string}
- */
-function commentBody(answer, marker) {
-  const classification = sanitiseCommentText(oneLine(answer.classification), {
-    maxChars: RATIONALE_CHARS,
-    forbidden: [marker],
-  });
-  const rationale = sanitiseCommentText(oneLine(answer.rationale), {
-    maxChars: RATIONALE_CHARS,
-    forbidden: [marker],
-  });
-  for (const note of [...classification.notes, ...rationale.notes]) {
-    warning(`sanitiser: ${note}`);
-  }
-  return [
-    marker,
-    "",
-    `**${classification.text || "(no classification)"}**`,
-    "",
-    rationale.text === "" ? "" : `> ${rationale.text}`,
-    "",
-    "_Classified by the `triage` action. No label sheet is configured in this repository, so the classification is posted as a comment — configure `.github/action-agents/triage/triage.json5` to apply labels instead._",
-  ]
-    .filter((line, index, all) => !(line === "" && all[index - 1] === ""))
-    .join("\n");
-}
-
-/** @param {string} rationale */
-function logRationale(rationale) {
-  const flat = oneLine(rationale);
-  if (flat !== "") info(`rationale: ${flat.slice(0, RATIONALE_CHARS)}`);
 }
 
 /**
