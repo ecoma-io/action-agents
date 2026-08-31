@@ -15,8 +15,8 @@ importers:
         specifier: ^21.2.2
         version: 21.2.2
       '@ecoma-io/archkeep':
-        specifier: 0.13.0
-        version: 0.13.0(typescript@5.9.3)
+        specifier: 0.18.0
+        version: 0.18.0(typescript@5.9.3)
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.9.1(jiti@2.6.1)(supports-color@7.2.0))
@@ -169,17 +169,20 @@ packages:
     resolution: {integrity: sha512-aalGyl7dbB5PArRebDIX43ZvBlXrYm9uWzGJ26t+4SzJVPsOuvfILGGbw5X4yX7i50YEmJ8zvbiWnqH/AAnZqg==}
     engines: {node: '>=22'}
 
-  '@ecoma-io/archkeep@0.13.0':
-    resolution: {integrity: sha512-8oHl95pzB7stZV7f7hKl0a6l69M28Eyw1BokKl84EZhDF7yQfaClRgNKspTe00b8No0s4SYYlcPMOhwld4Hkdw==}
+  '@ecoma-io/archkeep@0.18.0':
+    resolution: {integrity: sha512-IZ06QJ9qaNgj7kAFTf/9nKxb+kfssCbArl1qcw2RQI2b2fesHiD0pUK5d9G2mDOOv9SdbGf961lJ2bFOQnXWoA==}
     engines: {node: '>=22'}
     hasBin: true
     peerDependencies:
       '@nx/eslint-plugin': '>=21'
+      fast-xml-parser: 5.11.1
       nx: '>=21'
       typescript: '>=5 <7'
       vue: '>=3'
     peerDependenciesMeta:
       '@nx/eslint-plugin':
+        optional: true
+      fast-xml-parser:
         optional: true
       nx:
         optional: true
@@ -1431,7 +1434,7 @@ snapshots:
 
   '@conventional-changelog/template@1.4.0': {}
 
-  '@ecoma-io/archkeep@0.13.0(typescript@5.9.3)':
+  '@ecoma-io/archkeep@0.18.0(typescript@5.9.3)':
     dependencies:
       smol-toml: 1.8.0
       typescript: 5.9.3

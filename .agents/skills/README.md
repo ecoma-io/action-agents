@@ -23,3 +23,4 @@ Both this file and the copies beside it are written by
 `scripts/sync-skills.mjs`, which is the only sanctioned way either changes.
 The reasoning — why copies rather than a symlink, why committed rather than
 generated at install time — is in `scripts/check-skills.mjs`.
+
