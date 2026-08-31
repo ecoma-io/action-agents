@@ -1,0 +1,29 @@
+{
+  "version": "1",
+  "boundaries": [
+    {
+      "name": "core",
+      "match": ["tag:layer:core"]
+    },
+    {
+      "name": "actions",
+      "match": ["tag:scope:triage", "tag:scope:review", "tag:scope:harmonise"]
+    }
+  ],
+  "forbidden": [
+    {
+      "from": "core",
+      "to": "actions",
+      "reason": "core is infrastructure: it may not depend on any action"
+    }
+  ],
+  "projects": {
+    "required": [
+      { "name": "core", "tags": ["layer:core", "scope:shared"] },
+      { "name": "core-transport", "tags": ["layer:core", "scope:transport"] },
+      { "name": "triage", "tags": ["scope:triage"] },
+      { "name": "review", "tags": ["scope:review"] },
+      { "name": "harmonise", "tags": ["scope:harmonise"] }
+    ]
+  }
+}
