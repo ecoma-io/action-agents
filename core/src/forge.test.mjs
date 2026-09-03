@@ -977,6 +977,7 @@ describe("getPullRequest", () => {
     mergeable_state: "clean",
     title: "the change",
     body: "what and why",
+    labels: [{ name: "bug" }, { name: "size/s" }],
     head: { ref: "feature", sha: "aaaabbbbccccdddd000011112222333344445555" },
     base: { ref: "main", sha: "ffff0000ffff0000111122223333444455556666" },
   };
@@ -993,6 +994,7 @@ describe("getPullRequest", () => {
       mergeableState: "clean",
       title: "the change",
       body: "what and why",
+      labels: ["bug", "size/s"],
       head: { ref: "feature", sha: "aaaabbbbccccdddd000011112222333344445555" },
       base: { ref: "main", sha: "ffff0000ffff0000111122223333444455556666" },
     });
@@ -1038,6 +1040,47 @@ describe("getPullRequest", () => {
     const error = await client.getPullRequest(404).catch((cause) => cause);
     expect(error).toBeInstanceOf(ForgeError);
     expect(error.message).toMatch(/reading pull request #404/);
+  });
+});
+
+describe("getIssue — the live label read a mutation is judged against", () => {
+  const ISSUE = {
+    number: 7,
+    state: "open",
+    title: "Import fails on Node 24",
+    labels: [{ name: "bug" }, { name: "needs triage" }],
+  };
+
+  it("reads a thread's labels", async () => {
+    const client = forge("o", "r", { "GET /repos/o/r/issues/7": json(ISSUE) });
+
+    await expect(client.getIssue(7)).resolves.toEqual({ labels: ["bug", "needs triage"] });
+  });
+
+  it("refuses a response with no label list", async () => {
+    const client = forge("o", "r", { "GET /repos/o/r/issues/7": json({ number: 7 }) });
+
+    const error = await client.getIssue(7).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/no label list/);
+  });
+
+  it("refuses a label entry with no name", async () => {
+    const client = forge("o", "r", {
+      "GET /repos/o/r/issues/7": json({ number: 7, labels: [{ color: "ff0000" }] }),
+    });
+
+    const error = await client.getIssue(7).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/label entry has no name/);
+  });
+
+  it("names the operation when the read fails", async () => {
+    const client = forge("o", "r", {});
+
+    const error = await client.getIssue(404).catch((cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(error.message).toMatch(/reading issue #404/);
   });
 });
 

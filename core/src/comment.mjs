@@ -104,7 +104,7 @@ function defaultNewId() {
  * @property {number} issueNumber the thread — an issue number or a pull request's
  * @property {(marker: string) => string} buildBody the action's comment, around the marker it is handed
  * @property {string[]} [ownLogins] the logins this action's own comments carry — defaults to the workflow-token bot; the actions resolve theirs from the token with {@linkcode resolveOwnLogins}, and a caller with other plans says so here
- * @property {string} [head] the commit the comment records, when the action records one
+ * @property {string | undefined} [head] the commit the comment records, when the action records one — an issue thread's upsert passes undefined, and its marker carries no head
  * @property {number} [startedAt] epoch milliseconds, for the newer-head rule
  * @property {() => string} [newId]
  * @property {(message: string) => void} [log]
