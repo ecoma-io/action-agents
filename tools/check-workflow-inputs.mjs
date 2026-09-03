@@ -236,7 +236,8 @@ function unquote(value) {
 /**
  * A manifest's `inputs:` block, with each input's `required` flag. The action's
  * name comes from the path: `./<action>` pins a DIRECTORY, so the directory —
- * the manifest path's first segment — is the contract's owner, not the
+ * the manifest path's first segment, on either separator, because `collect`'s
+ * `join` emits backslashes on win32 — is the contract's owner, not the
  * manifest's display `name:`.
  *
  * @param {string} text
@@ -247,7 +248,7 @@ export function parseManifest(text, path) {
   const { root, errors } = parseStructure(text);
   const inputs = root.children.find((child) => child.key === "inputs");
   return {
-    action: path.split("/")[0] ?? path,
+    action: path.split(/[\\/]/)[0] ?? path,
     path,
     inputs: (inputs?.children ?? []).map((child) => ({
       name: child.key ?? "",

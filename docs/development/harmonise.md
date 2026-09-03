@@ -553,6 +553,25 @@ rather than recreating the deletion. Resolving a refusal is a human decision:
 restore the translation memory or the recorded fingerprint, or adopt or delete
 the file by hand.
 
+**Accepted risk — consistent forgery of the advisory files.** "Verified" is
+exact, and exactly this far: the base is a translation-memory entry keyed by
+the record's source and policy fingerprints and the pair's language whose
+bytes hash to the record's `translationFingerprint` — `recordedMergeBase` in
+`harmonise/src/index.mjs`. That is hash equality joining the two advisory
+files: it proves the state record and the memory entry agree with each other,
+never that harmonise authored either. A hand-edited state record plus a
+hand-edited memory entry that joins it is therefore accepted as a verified
+base, and the merge runs against those bytes. The risk is accepted, not
+overlooked. Both files live in the consumer's repository under one write
+access, so a hand able to forge the pair consistently is a hand with commit
+access — the adversary the protection table exists for is the model
+displacing human edits, not a repository writer — and the same hand could
+delete the pair instead, which fails closed: a `preserve-required` pair with
+no memory entry to verify refuses, the same loud refusal as any unverifiable
+base. And forgery buys only the merge base: the merged result is still
+proposed on the action's own pull request, where a human reads it before it
+lands.
+
 ## The pull request
 
 Real runs write one commit to one branch and maintain one pull request:

@@ -72,6 +72,9 @@
  * @property {number} bodyLength
  * @property {number} urlCount
  * @property {boolean} templatesOverflow true when the template read was capped
+ */
+
+/**
  * The deterministic PR-side facts beyond the diff: the pull request's own
  * flags (draft, merged, state), its mergeability as the forge computes it,
  * its two commits, the check-run rollup at the head (null when the forge

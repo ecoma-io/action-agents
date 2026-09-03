@@ -153,3 +153,14 @@ test("an action no workflow runs is not demanded by this gate", () => {
   });
   assert.deepEqual(result.failures, []);
 });
+
+test("a manifest path carrying the host's backslashes still binds to its ./uses step", () => {
+  // collect() joins the manifest path with the host's separator, so on Windows
+  // the path arrives as `triage\action.yaml`. The action key must still be the
+  // directory — a key of the whole path leaves every local action reported as
+  // manifest-less on win32 (#244).
+  const win32 = manifest(MANIFEST, "triage\\action.yaml");
+  assert.equal(win32.action, "triage");
+  const result = evaluate({ workflows: [workflow(WORKFLOW)], manifests: [win32] });
+  assert.deepEqual(result.failures, []);
+});
