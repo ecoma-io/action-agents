@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.6.0](https://github.com/ecoma-io/action-agents/compare/v0.5.0...v0.6.0) (2026-09-03)
+
+
+### Features
+
+* **core:** resolve the trusted policy source from the execution context ([#195](https://github.com/ecoma-io/action-agents/issues/195)) ([e4f90f6](https://github.com/ecoma-io/action-agents/commit/e4f90f61c09e9efe2f984afb1a4e2f48e1d22546))
+* **harmonise:** language-suffixed advisory files for concurrent language runs ([#202](https://github.com/ecoma-io/action-agents/issues/202)) ([1114455](https://github.com/ecoma-io/action-agents/commit/11144551b1b3532abab0aedfd8973e4347e92cc1))
+* **review:** add the intensity axis ([#200](https://github.com/ecoma-io/action-agents/issues/200)) ([9243e54](https://github.com/ecoma-io/action-agents/commit/9243e54686db89c536882cfc5bc65cf4b29d197d))
+* **review:** add the posture axis ([#198](https://github.com/ecoma-io/action-agents/issues/198)) ([a678457](https://github.com/ecoma-io/action-agents/commit/a678457399846fe98de2c5ceb312d360a4d0334c))
+* **review:** classify the execution context and apply the applicability axis ([#197](https://github.com/ecoma-io/action-agents/issues/197)) ([973e41c](https://github.com/ecoma-io/action-agents/commit/973e41c44349bc8e83cb7904e7ab7bae48985ec5))
+* security adversarial corpus (Phase 1) — full corpus + size-rung hardening ([#217](https://github.com/ecoma-io/action-agents/issues/217)) ([#219](https://github.com/ecoma-io/action-agents/issues/219)) ([1471f37](https://github.com/ecoma-io/action-agents/commit/1471f37efa0f6e25774f1b71626947067ee430f3))
+* security adversarial corpus scaffold — runner, seed fixture, CI gate ([#217](https://github.com/ecoma-io/action-agents/issues/217)) ([#218](https://github.com/ecoma-io/action-agents/issues/218)) ([35eb176](https://github.com/ecoma-io/action-agents/commit/35eb176fecadd7ad813529ed6d47ce01bd2fbdae))
+* **triage:** add PR evaluators — intent/scope, readiness, risk, review signal (PR-D) ([#232](https://github.com/ecoma-io/action-agents/issues/232)) ([f65229d](https://github.com/ecoma-io/action-agents/commit/f65229d6cfa6ee27e77b96e462823066e951a8ee))
+* **triage:** common Evidence→Assessment→Policy→Decision pipeline ([#228](https://github.com/ecoma-io/action-agents/issues/228)) ([0670445](https://github.com/ecoma-io/action-agents/commit/0670445ff302da9f061e459ef940e33dd7019840))
+* **triage:** event-aware + idempotent lifecycle (PR-E) — closes [#224](https://github.com/ecoma-io/action-agents/issues/224) ([#233](https://github.com/ecoma-io/action-agents/issues/233)) ([283bf85](https://github.com/ecoma-io/action-agents/commit/283bf85a03a24c723ce47567929179ea1876c105))
+* **triage:** issue evaluators — quality, relationships, routing, priority (PR-C) ([#229](https://github.com/ecoma-io/action-agents/issues/229)) ([f01267f](https://github.com/ecoma-io/action-agents/commit/f01267fb650a24cff7a5a35cc91d526c3104b88a))
+* **triage:** schema 2 — GitHub as the source of truth for label metadata ([#225](https://github.com/ecoma-io/action-agents/issues/225)) ([23aa91f](https://github.com/ecoma-io/action-agents/commit/23aa91f7c9cbbc566087303ebc5fc2c1bf47fce0))
+* **workspace:** bring the tree under archkeep v0.21 governance (intent, ADRs, run contract) ([#257](https://github.com/ecoma-io/action-agents/issues/257)) ([55c8e2b](https://github.com/ecoma-io/action-agents/commit/55c8e2b84898dec3ae639253f121ef681a2b685d))
+
+
+### Bug Fixes
+
+* **core:** never replay a timed-out DELETE of a label or comment ([#194](https://github.com/ecoma-io/action-agents/issues/194)) ([2ab47bd](https://github.com/ecoma-io/action-agents/commit/2ab47bd1ceaf1d20dfefeb902e90116a3d05f4b0)), closes [#181](https://github.com/ecoma-io/action-agents/issues/181)
+* **review:** batch-1 adversarial review findings ([#213](https://github.com/ecoma-io/action-agents/issues/213)) ([c00fd9c](https://github.com/ecoma-io/action-agents/commit/c00fd9c85c5693a0c19bd6e9613f7428aace4fe0))
+* **review:** catch post-publication artifact write failure ([#188](https://github.com/ecoma-io/action-agents/issues/188)) ([77e0808](https://github.com/ecoma-io/action-agents/commit/77e080876923a635c00a313994e7f88f0e20ab32))
+* **review:** key read ledgers by the resolved-relative path ([#190](https://github.com/ecoma-io/action-agents/issues/190)) ([a6fbc6d](https://github.com/ecoma-io/action-agents/commit/a6fbc6d8277cb6e33d496e3e6d22ecf0a782fdca))
+* **triage:** declare and reconcile the needs-triage label lifecycle ([#191](https://github.com/ecoma-io/action-agents/issues/191)) ([43bfa52](https://github.com/ecoma-io/action-agents/commit/43bfa5215beb8667368a0c652e1dde049b488cbc)), closes [#180](https://github.com/ecoma-io/action-agents/issues/180)
+* **triage:** keep workflow markers and triage-owned labels off the offered sheet ([#224](https://github.com/ecoma-io/action-agents/issues/224), [#230](https://github.com/ecoma-io/action-agents/issues/230)) ([#235](https://github.com/ecoma-io/action-agents/issues/235)) ([f2720e4](https://github.com/ecoma-io/action-agents/commit/f2720e4805686fc98a19e606c5a65d5b402ef7e2))
+* **workspace:** harden the action-agents monorepo toward v1.0.0 ([#223](https://github.com/ecoma-io/action-agents/issues/223)) ([b395199](https://github.com/ecoma-io/action-agents/commit/b3951997c256a0c46a08b038424d93723aaa5e91))
+* **workspace:** measure folded-blank and plain-scalar description length ([#187](https://github.com/ecoma-io/action-agents/issues/187)) ([ff2efdb](https://github.com/ecoma-io/action-agents/commit/ff2efdbe97359a52f220342abb73c8fe23296a10))
+
 ## [Unreleased]
 
 ### Migration notes
