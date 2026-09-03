@@ -362,6 +362,35 @@ only on the events that matter, list them in your workflow's `on:` block; the
 matrix is the action's belt-and-braces guard for whatever your trigger sends
 it.
 
+### Redelivery
+
+GitHub webhooks are at-least-once: the same event can be delivered more than
+once. There is no dedupe, by design — a second delivery is a complete second
+run that pays its own model call and re-derives its plan from the thread's
+live state. It never replays a previous run's plan, because there is no plan
+store anywhere in the pipeline. That makes a redelivery safe rather than
+merely tolerated: removals tolerate a label that is already gone, additions
+are idempotent, and the classification comment is updated in place instead of
+duplicated. Two identical deliveries converge the thread instead of corrupting
+it.
+
+The belt over those suspenders is a workflow `concurrency` group keyed on the
+thread, so redelivered events queue behind the live run instead of running
+beside it:
+
+```yaml
+concurrency:
+  group: triage-${{ github.event.issue.number || github.event.pull_request.number }}
+```
+
+Leave `cancel-in-progress` off: a canceled run stops mid-mutation exactly
+where it stands — a half-applied plan no exception ever reports. Any partial
+state a canceled, failed or redelivered run leaves is repaired by the next
+run, because every run re-derives from live state, and removals now run before
+additions so the half-state a death leaves is the safer one (a thread missing
+an addition, never a stale claim standing beside its replacement). See
+[Failure modes](#failure-modes) for what a partial mutation reports.
+
 ## Cost and budget controls
 
 | Control              | Default | Effect                                                               |
@@ -375,18 +404,20 @@ and answers in one round.
 
 ## Failure modes
 
-| Symptom                                                      | Cause                                                                     | Resolution                                                                       |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| "Label X is not in the sheet"                                | The model chose a label the config does not declare.                      | Declare it in the config, or remove it from the `labels:` input.                 |
-| "No config file at PATH"                                     | `config-path` set to a path that does not exist.                          | Fix the path, or remove `config-path` and use the default locations.             |
-| "schemaVersion Y is not supported"                           | Config file declares a schema version this build does not understand.     | Downgrade `schemaVersion` or update the action tag.                              |
-| "Size label X is declared on multiple rungs"                 | A label appears on two ladder entries.                                    | Deduplicate.                                                                     |
-| "declares the label 'X', which the repository does not have" | A policy names a label GitHub does not hold.                              | Create the label in GitHub, or remove it from `labels.use`.                      |
-| "Instruction document exceeds 8 KiB"                         | An instruction document is too large.                                     | Shorten it.                                                                      |
-| "Config file exceeds 64 KiB"                                 | The config file is too large.                                             | Reduce it — a 64 KiB policy is already very long prose.                          |
-| Provider unreachable                                         | The `api-url` endpoint did not respond within `request-timeout-ms`.       | Check the endpoint, the network, and the timeout value.                          |
-| HTTP 403 on labels                                           | `pull-requests: write` scope missing.                                     | Add the scope to the workflow's `permissions:` block.                            |
-| Run failed red — the answer was entirely off-sheet           | The model named no label the sheet declares, and no PR size rung applies. | The sheet is the contract: refine it, or the `labels:` input, never the matcher. |
+| Symptom                                                      | Cause                                                                                                           | Resolution                                                                                                                                                     |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Label X is not in the sheet"                                | The model chose a label the config does not declare.                                                            | Declare it in the config, or remove it from the `labels:` input.                                                                                               |
+| "No config file at PATH"                                     | `config-path` set to a path that does not exist.                                                                | Fix the path, or remove `config-path` and use the default locations.                                                                                           |
+| "schemaVersion Y is not supported"                           | Config file declares a schema version this build does not understand.                                           | Downgrade `schemaVersion` or update the action tag.                                                                                                            |
+| "Size label X is declared on multiple rungs"                 | A label appears on two ladder entries.                                                                          | Deduplicate.                                                                                                                                                   |
+| "declares the label 'X', which the repository does not have" | A policy names a label GitHub does not hold.                                                                    | Create the label in GitHub, or remove it from `labels.use`.                                                                                                    |
+| "Instruction document exceeds 8 KiB"                         | An instruction document is too large.                                                                           | Shorten it.                                                                                                                                                    |
+| "Config file exceeds 64 KiB"                                 | The config file is too large.                                                                                   | Reduce it — a 64 KiB policy is already very long prose.                                                                                                        |
+| Provider unreachable                                         | The `api-url` endpoint did not respond within `request-timeout-ms`.                                             | Check the endpoint, the network, and the timeout value.                                                                                                        |
+| HTTP 403 on labels                                           | `pull-requests: write` scope missing.                                                                           | Add the scope to the workflow's `permissions:` block.                                                                                                          |
+| Run failed red — the answer was entirely off-sheet           | The model named no label the sheet declares, and no PR size rung applies.                                       | The sheet is the contract: refine it, or the `labels:` input, never the matcher.                                                                               |
+| "the triage mutation stopped part-way: …"                    | A write failed after an earlier one had applied (endpoint timeout, 5xx) — or the run was canceled mid-mutation. | The message names what applied, what failed and what was not attempted. Re-run the action: the next run re-derives from live state and repairs the half-state. |
+| "could not read the token's writing identity …"              | The identity read failed (the API did not answer it), so the run cannot tell which comments are its own.        | Transient — re-run. The run refuses before writing anything rather than guessing an identity and duplicating its own comment.                                  |
 
 ## Recipes
 

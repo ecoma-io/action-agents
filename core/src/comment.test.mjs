@@ -10,7 +10,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "./comment.mjs";
+import {
+  OwnLoginsError,
+  markerLine,
+  parseMarker,
+  resolveOwnLogins,
+  upsertComment,
+} from "./comment.mjs";
+import { ForgeError } from "./forge.mjs";
 
 /** @typedef {import("./forge.mjs").CommentEntry} CommentEntry */
 
@@ -331,31 +338,39 @@ describe("the newer-head rule", () => {
 
 describe("resolveOwnLogins", () => {
   it("resolves the identity the token writes as", async () => {
-    const ownLogins = await resolveOwnLogins(
-      { whoami: async () => ({ login: "docs-bot[bot]" }) },
-      () => undefined,
-    );
+    const ownLogins = await resolveOwnLogins({ whoami: async () => ({ login: "docs-bot[bot]" }) });
     expect(ownLogins).toEqual(["docs-bot[bot]"]);
   });
 
-  it("falls back to the workflow-token bot and says so when the read fails", async () => {
-    /** @type {string[]} */
-    const logged = [];
-    const ownLogins = await resolveOwnLogins(
-      {
-        whoami: async () => {
-          throw new Error("502 behind a proxy");
-        },
+  it("refuses as a typed red run when the read fails — never an assumed identity", async () => {
+    const refused = resolveOwnLogins({
+      whoami: async () => {
+        throw new Error("502 behind a proxy");
       },
-      (message) => logged.push(message),
-    );
-    expect(ownLogins).toEqual(["github-actions[bot]"]);
-    expect(logged.some((line) => line.includes("assuming github-actions[bot]"))).toBe(true);
+    });
+    await expect(refused).rejects.toThrow(OwnLoginsError);
+    await expect(refused).rejects.toThrow(/502 behind a proxy/);
+    await expect(refused).rejects.toThrow(/refusing to guess/);
+  });
+
+  it("still red-runs when whoami rejects with the forge's own typed refusal — the named operation surfaces", async () => {
+    const refused = resolveOwnLogins({
+      whoami: () =>
+        Promise.reject(
+          new ForgeError(
+            "reading the token's identity from the GraphQL viewer",
+            new Error("the answer carries an error: Bad credentials"),
+          ),
+        ),
+    });
+    await expect(refused).rejects.toThrow(OwnLoginsError);
+    await expect(refused).rejects.toThrow(/GraphQL viewer/);
+    await expect(refused).rejects.toThrow(/refusing to guess/);
   });
 
   it("hands the resolution straight to the upsert: a prior comment by the resolved identity is claimed", async () => {
     const forge = { whoami: async () => ({ login: "docs-bot[bot]" }) };
-    const ownLogins = await resolveOwnLogins(forge, () => undefined);
+    const ownLogins = await resolveOwnLogins(forge);
     const prior = comment({
       id: 9,
       body: `${markerLine("triage", "e2e00009")} ours under an App token`,

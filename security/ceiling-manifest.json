@@ -25,6 +25,7 @@
         "github-mutation/mutation-ceiling.test.mjs",
         "github-mutation/comment-scope.test.mjs",
         "adversarial/subject-moved.test.mjs",
+        "adversarial/duplicate-delivery.test.mjs",
         "policy-tampering/deep-policy-parse.test.mjs",
         "policy-tampering/schema-version.test.mjs",
         "policy-tampering/stale-base-fork.test.mjs",
@@ -74,7 +75,8 @@
         "marker-forgery/cross-action-marker.test.mjs",
         "github-mutation/comment-scope.test.mjs",
         "github-mutation/signal-comment-scope.test.mjs",
-        "provider-boundary/control-byte-content.test.mjs"
+        "provider-boundary/control-byte-content.test.mjs",
+        "adversarial/own-logins-failure.test.mjs"
       ]
     },
     {
