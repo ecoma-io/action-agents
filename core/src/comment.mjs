@@ -197,29 +197,42 @@ export async function upsertComment(options) {
   return { outcome: "updated", id: winner.id };
 }
 
+/** The run could not learn which logins carry its own comments, so it refused. */
+export class OwnLoginsError extends Error {
+  /** @param {Error} cause */
+  constructor(cause) {
+    super(
+      `could not read the token's writing identity (${cause.message}) — ` +
+        `refusing to guess which comments on the thread are the action's own`,
+    );
+    this.name = "OwnLoginsError";
+    this.cause = cause;
+  }
+}
+
 /**
  * Resolves the logins a run's own comments carry, from the identity the
  * workflow's token actually writes as — `github-actions[bot]` under a
  * GITHUB_TOKEN, the app's bot login under an App token, the token's user
  * under a PAT — read from the API rather than assumed, so the upsert keeps
- * exactly one of its own whatever token the workflow chose. When the read
- * fails the default bot login stands in: exact under GITHUB_TOKEN, and under
- * anything else it costs one duplicate comment that the next healthy run's
- * upsert claims and collapses.
+ * exactly one of its own whatever token the workflow chose.
+ *
+ * A read that fails is a typed red run, never a silent guess. An assumed
+ * identity silently changes the write surface: under a token that writes as
+ * anything but the assumed login, the upsert reads the action's own prior
+ * comment as somebody else's and duplicates it instead of updating in place —
+ * exactly the defect guessing produced before this refusal existed. A run
+ * that cannot establish which comments are its own must not write at all.
  *
  * @param {{ whoami: () => Promise<{ login: string }> }} forge
- * @param {(message: string) => void} log
  * @returns {Promise<string[]>}
+ * @throws {OwnLoginsError} when the identity read fails
  */
-export async function resolveOwnLogins(forge, log) {
+export async function resolveOwnLogins(forge) {
   try {
     const { login } = await forge.whoami();
     return [login];
   } catch (cause) {
-    log(
-      `could not read the token's writing identity ` +
-        `(${cause instanceof Error ? cause.message : String(cause)}) — assuming ${DEFAULT_OWN_LOGIN}`,
-    );
-    return [...DEFAULT_OWN_LOGINS];
+    throw new OwnLoginsError(cause instanceof Error ? cause : new Error(String(cause)));
   }
 }

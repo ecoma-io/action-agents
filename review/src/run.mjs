@@ -535,7 +535,7 @@ export async function reviewPullRequest({
   }
   // The identity read sits behind every skip and dry-run gate: paid only by
   // a run about to write.
-  const ownLogins = await resolveOwnLogins(io.forge, (message) => io.info(`review: ${message}`));
+  const ownLogins = await resolveOwnLogins(io.forge);
 
   // The artifact is the run's machine-readable record, built from the same
   // final facts the comment renders — BEFORE the comment, so every refusal
@@ -911,7 +911,7 @@ async function nothingToReview({
   }
   // Same gate as the write below: the identity read is paid only when a
   // marker comment may actually be claimed.
-  const ownLogins = await resolveOwnLogins(io.forge, (message) => io.info(`review: ${message}`));
+  const ownLogins = await resolveOwnLogins(io.forge);
   const comments = await io.forge.listComments(pullRequestNumber);
   for (const comment of [...comments].sort((a, b) => b.id - a.id)) {
     const marker = parseMarker(comment.body);

@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { reviewPullRequest } from "./run.mjs";
 import { applicabilityArtifactSchemaVersion, serialiseArtifact } from "./artifact.mjs";
+import { OwnLoginsError } from "#core/comment.mjs";
 import {
   DOGFOOD_CONFIG,
   DOGFOOD_INTENSITY_CONFIG,
@@ -635,9 +636,7 @@ describe("comment identity", () => {
     expect(forge.calls.upserts[0]?.id).toBe(55);
   });
 
-  it("falls back to github-actions[bot] when the identity read fails and leaves the foreign marker alone", async () => {
-    /** @type {string[]} */
-    const logged = [];
+  it("red-runs when the identity read fails — an assumed identity would mis-claim the thread", async () => {
     const forge = forgeStub({ whoamiError: new Error("the token's identity read failed") });
     forge.listComments = async () => [
       {
@@ -649,20 +648,21 @@ describe("comment identity", () => {
       },
     ];
 
-    const result = await reviewPullRequest({
-      inputs: INPUTS,
-      context: CONTEXT,
-      pullRequestNumber: 7,
-      eventName: "pull_request",
-      event: EVENT,
-      io: { forge, chat: chatStub(), now: () => 1_000, info: (m) => logged.push(m) },
-    });
-
-    expect(result.outcome).toBe("published");
-    // Created fresh — the docs-bot comment is foreign under the fallback
-    // identity, and the upsert never claims what it did not author.
-    expect(forge.calls.upserts[0]?.id).toBeUndefined();
-    expect(logged.some((line) => line.includes("assuming github-actions[bot]"))).toBe(true);
+    // A guessed identity silently changes the write surface — under an App
+    // token the fallback read the action's own comment as somebody else's
+    // and duplicated it. The refusal is the bounded outcome, before any
+    // write; nothing is published on an identity the run could not establish.
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: { forge, chat: chatStub(), now: () => 1_000, info: () => undefined },
+      }),
+    ).rejects.toThrow(OwnLoginsError);
+    expect(forge.calls.upserts).toEqual([]);
   });
 });
 
