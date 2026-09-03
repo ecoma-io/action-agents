@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/ecoma-io/action-agents/compare/v0.6.0...v0.7.0) (2026-09-03)
+
+
+### Features
+
+* **ci:** machine-check the HTTP and forge monopolies and the action shape ([#258](https://github.com/ecoma-io/action-agents/issues/258)) ([c06cb15](https://github.com/ecoma-io/action-agents/commit/c06cb15b532f3f148eaa049279e9e009ea5bb4a2))
+
+
+### Bug Fixes
+
+* align review docs with code, repair PrEvidence doc block, fix check-workflow-inputs on Windows ([#256](https://github.com/ecoma-io/action-agents/issues/256)) ([29449b1](https://github.com/ecoma-io/action-agents/commit/29449b10a2a523df39efd7da385bb0359f3c43b3))
+* **triage:** account for partial mutations and pin duplicate-delivery semantics ([#255](https://github.com/ecoma-io/action-agents/issues/255)) ([837ad25](https://github.com/ecoma-io/action-agents/commit/837ad250690a47c136aac7d74d6f439ea6de8717))
+* **triage:** re-read thread state live before mutation and pass head to the comment upsert ([#254](https://github.com/ecoma-io/action-agents/issues/254)) ([2b01d83](https://github.com/ecoma-io/action-agents/commit/2b01d83ddfdb4e831954c83943175e2f958b433b))
+
 ## [0.6.0](https://github.com/ecoma-io/action-agents/compare/v0.5.0...v0.6.0) (2026-09-03)
 
 
