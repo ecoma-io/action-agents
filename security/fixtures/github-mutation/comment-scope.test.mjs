@@ -177,6 +177,70 @@ describe("upsertComment — the action's marker, scoped to the action's own comm
   });
 });
 
+describe("upsertComment — the newer-head guard decides between concurrent runs", () => {
+  const HEAD_A = "a".repeat(40);
+  const HEAD_B = "b".repeat(40);
+  // Before the upsert-created comment's updated_at (2026-03-01), so the
+  // guard's "written after this run started" test engages.
+  const STARTED_AT = Date.parse("2026-02-01T00:00:00Z");
+
+  /**
+   * The upsert the way a run calls it when it records the subject's head.
+   *
+   * @param {ReturnType<typeof commentStore>} store
+   * @param {string} head
+   * @param {number} startedAt
+   */
+  function upsertWithHead(store, head, startedAt) {
+    const logs = [];
+    return upsertComment({
+      store,
+      action: "triage",
+      issueNumber: 7,
+      buildBody,
+      ownLogins: OWN_LOGINS,
+      head,
+      startedAt,
+      newId: () => "face00face00",
+      log: (message) => logs.push(message),
+    }).then((outcome) => ({ outcome, logs }));
+  }
+
+  it("two upserts recording different heads — the second refuses instead of overwriting", async () => {
+    const store = commentStore([]);
+
+    const first = await upsertWithHead(store, HEAD_A, STARTED_AT);
+    assert.equal(first.outcome.outcome, "created");
+    assert.match(store.comments[0].body, /head=a{40}/, "the head is recorded in the marker");
+    const writesAfterFirst = store.calls.length;
+
+    // The subject moved to HEAD_B and a concurrent run recorded it first.
+    const second = await upsertWithHead(store, HEAD_B, STARTED_AT);
+    assert.equal(second.outcome.outcome, "abandoned");
+    assert.equal(store.calls.length, writesAfterFirst, "no write happened in the refusing upsert");
+    assert.match(
+      second.logs.join("\n"),
+      /a concurrent run recorded head a{40} after this one started/,
+    );
+    // The first run's comment stands, byte-identical.
+    assert.equal(store.comments.length, 1);
+  });
+
+  it("two upserts recording the same head — the second updates, exempt by design", async () => {
+    const store = commentStore([]);
+
+    const first = await upsertWithHead(store, HEAD_A, STARTED_AT);
+    assert.equal(first.outcome.outcome, "created");
+
+    const second = await upsertWithHead(store, HEAD_A, STARTED_AT);
+    assert.equal(second.outcome.outcome, "updated");
+    assert.deepEqual(
+      store.calls.slice(-1).map(({ op }) => op),
+      ["updateComment"],
+    );
+  });
+});
+
 describe("triage run — a hostile marker-quoting comment on the live thread", () => {
   /**
    * A complete runner environment — the same fixture the triage unit suite
@@ -230,6 +294,10 @@ describe("triage run — a hostile marker-quoting comment on the live thread", (
         },
         async getPullRequest() {
           return { number: 7, state: "open", draft: false, merged: false, title: "", body: "" };
+        },
+        /** The live label read a mutation is judged against. */
+        async getIssue() {
+          return { labels: [] };
         },
         async getContents() {
           return null; // no config file -> no sheet -> the comment half

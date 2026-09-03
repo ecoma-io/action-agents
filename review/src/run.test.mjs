@@ -54,6 +54,7 @@ function snapshot(over = {}) {
     body: "",
     mergeable: true,
     mergeableState: "clean",
+    labels: [],
     head: { ref: "feature", sha: HEAD },
     base: { ref: "main", sha: BASE },
     ...over,
@@ -286,6 +287,9 @@ describe("the universe and the budget", () => {
     expect(cleared.outcome).toBe("nothing-to-review");
     expect(withMarker.calls.upserts[0]?.id).toBe(55);
     expect(withMarker.calls.upserts[0]?.body).toContain("Nothing to review");
+    // The clearing upsert is a guarded one: it records the head it read so a
+    // concurrent run at a newer head refuses rather than overwrites it.
+    expect(withMarker.calls.upserts[0]?.body).toContain(`head=${HEAD}`);
 
     const bare = forgeStub({ files: [] });
     const skipped = await reviewPullRequest({

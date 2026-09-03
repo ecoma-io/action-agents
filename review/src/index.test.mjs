@@ -223,6 +223,7 @@ describe("run over injected io", () => {
             title: "",
             body: "",
             head: { ref: "x", sha: "a".repeat(40) },
+            labels: [],
             base: { ref: "main", sha: "b".repeat(40) },
           }),
           async getRepository() {
@@ -322,6 +323,7 @@ describe("run over the real forge", () => {
               title: "",
               body: "",
               head: { ref: "x", sha: "a".repeat(40) },
+              labels: [],
               base: { ref: "main", sha: "b".repeat(40) },
             }),
             { status: 200, headers: { "content-type": "application/json" } },
@@ -383,6 +385,7 @@ describe("run — request-timeout-ms wiring", () => {
           title: "",
           body: "",
           head: { ref: "x", sha: "a".repeat(40) },
+          labels: [],
           base: { ref: "main", sha: "b".repeat(40) },
         };
       },
@@ -633,6 +636,7 @@ describe("run writes the artifact only after publication", () => {
             title: "",
             body: "",
             head: { ref: "x", sha: "a".repeat(40) },
+            labels: [],
             base: { ref: "main", sha: "b".repeat(40) },
           }),
           async getRepository() {
@@ -697,6 +701,7 @@ describe("run writes the artifact only after publication", () => {
               title: "Test PR",
               body: "",
               head: { ref: "x", sha: "a".repeat(40) },
+              labels: [],
               base: { ref: "main", sha: "b".repeat(40) },
             };
           },

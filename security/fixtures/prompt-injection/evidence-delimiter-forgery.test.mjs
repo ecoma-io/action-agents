@@ -93,6 +93,10 @@ function fakeForge(options = {}) {
   return {
     reads,
     writes,
+    /** The live label read a mutation is judged against. */
+    async getIssue(_number) {
+      return { labels: [] };
+    },
     async getRepository() {
       return { defaultBranch: "main", name: "action-agents", description: "" };
     },
@@ -102,6 +106,7 @@ function fakeForge(options = {}) {
         state: "open",
         draft: false,
         merged: false,
+        labels: [],
         title: "",
         body: "",
         head: { ref: "x", sha: "0".repeat(40) },

@@ -206,6 +206,11 @@ function scriptedWorld({ withConfig, chatAnswer }) {
         if (path === "/repos/ecoma-io/action-agents/labels") {
           return json([{ name: "bug report" }, { name: "needs docs" }]);
         }
+        if (path === "/repos/ecoma-io/action-agents/issues/7") {
+          // The live re-read a mutation is judged against: the thread's
+          // labels, matching the event's claim.
+          return json({ labels: issueEvent().issue.labels });
+        }
         if (path === "/repos/ecoma-io/action-agents/issues/7/labels") {
           return json([{ name: "bug report" }]);
         }

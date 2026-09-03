@@ -95,6 +95,7 @@ import { HttpError } from "./transport-errors.mjs";
  * @property {string} body an absent description is normalised to ""
  * @property {boolean | null} mergeable whether the head merges cleanly today — null while the forge is still computing it (GitHub returns null for that window)
  * @property {string | null} mergeableState the forge's mergeability classification — "clean", "dirty" (a conflict), "blocked", "behind", "draft", "unknown", or null while computing
+ * @property {string[]} labels the thread's labels — a pull request's number is its issue's number, and these are those labels
  * @property {{ ref: string, sha: string }} head
  * @property {{ ref: string, sha: string }} base
  */
@@ -256,6 +257,31 @@ function isNotFound(cause) {
 }
 
 /**
+ * A response's label array as the name list the actions read. Every entry
+ * must be shaped like a label — a nameless entry is a response this module
+ * refuses, not a list it quietly shrugs off.
+ *
+ * @param {string} operation the read's name, for the refusal text
+ * @param {unknown} raw the response's `labels` value
+ * @returns {string[]}
+ */
+function labelsFrom(operation, raw) {
+  if (!Array.isArray(raw)) {
+    throw new ForgeError(operation, new Error("the response carries no label list"));
+  }
+  /** @type {string[]} */
+  const labels = [];
+  for (const entry of raw) {
+    const name = asRecord(entry)?.["name"];
+    if (typeof name !== "string") {
+      throw new ForgeError(operation, new Error("a label entry has no name"));
+    }
+    labels.push(name);
+  }
+  return labels;
+}
+
+/**
  * One repository label's full metadata — the facts GitHub holds about it.
  * `description` and `color` are each optional at the API: a label with no
  * description and a default colour is a normal label, not a broken answer.
@@ -334,6 +360,7 @@ const PER_PAGE = 100;
  *   listRepositoryLabels: () => Promise<string[]>,
  *   listRepositoryLabelsDetailed: () => Promise<RepositoryLabel[]>,
  *   getPullRequest: (number: number) => Promise<PullRequestSnapshot>,
+ *   getIssue: (number: number) => Promise<{ labels: string[] }>,
  *   listPullRequestFiles: (number: number) => Promise<PullRequestFile[]>,
  *   searchIssues: (query: string, options?: { limit?: number }) => Promise<SearchResult>,
  *   listCheckRuns: (ref: string) => Promise<CheckRunsSummary>,
@@ -567,10 +594,10 @@ export function createForge(config) {
 
     /**
      * The pull request itself, read in one call: state, draft and merged
-     * flags, title, body, and both commits. This is the read a snapshot is
-     * built from and the read repeated immediately before publication — the
-     * pair of reads that makes reviewing commit A while the thread sits at
-     * commit B unreachable in practice.
+     * flags, title, body, the thread's labels, and both commits. This is
+     * the read a snapshot is built from and the read repeated immediately
+     * before publication — the pair of reads that makes reviewing commit A
+     * while the thread sits at commit B unreachable in practice.
      *
      * @param {number} number
      */
@@ -613,6 +640,7 @@ export function createForge(config) {
       // conflict signal; triage reads it as evidence, it never merges.
       const mergeable = record?.["mergeable"];
       const mergeableState = record?.["mergeable_state"];
+      const labels = labelsFrom(operation, record?.["labels"]);
       return {
         number,
         state,
@@ -622,9 +650,26 @@ export function createForge(config) {
         body,
         mergeable: typeof mergeable === "boolean" ? mergeable : null,
         mergeableState: typeof mergeableState === "string" ? mergeableState : null,
+        labels,
         head: { ref: headRef, sha: headSha },
         base: { ref: baseRef, sha: baseSha },
       };
+    },
+
+    /**
+     * A thread's labels, read live — the re-read a mutation is judged
+     * against immediately before it writes, where the event payload's label
+     * list is only a claim. `GET /issues/:n` serves pull requests too, but
+     * a pull request's snapshot read already carries its labels; this is
+     * the issue-thread read.
+     *
+     * @param {number} number
+     */
+    async getIssue(number) {
+      const operation = `reading issue #${String(number)}`;
+      const json = await call(operation, () => http.request(`${root}/issues/${String(number)}`));
+      const labels = labelsFrom(operation, asRecord(json)?.["labels"]);
+      return { labels };
     },
 
     /**

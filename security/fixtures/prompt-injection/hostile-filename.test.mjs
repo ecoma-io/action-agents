@@ -92,6 +92,7 @@ function fakeForge(options = {}) {
         state: "open",
         draft: false,
         merged: false,
+        labels: [],
         title: "",
         body: "",
         head: { ref: "x", sha: "0".repeat(40) },

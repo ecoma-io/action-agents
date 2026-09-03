@@ -62,6 +62,18 @@ means no narrowing — with no file the classification is written as a comment.
 true, the action decides and logs the classification but writes no labels and no
 comment. Flip to `false` after verifying the sheet produces the right results.
 
+**Writing is freshness-gated.** Everything the decision was built from — the
+thread's labels, and for a pull request also its state, merged flag and head
+SHA — is re-read from the API immediately before anything is written, and the
+values the run started from are treated as claims, not authority. If the thread
+moved while the run was in flight (a push replaced the head, the PR was merged
+or closed, the labels changed), the run writes nothing and logs one warning
+naming what moved; it never re-derives a decision from the newer state, because
+that would mean answering a question the model was never asked. This costs one
+extra API read per run — the issue or pull request itself. On a pull request
+the marker records the head the run verified, so two concurrent runs at
+different heads cannot overwrite each other — the newer run's upsert refuses.
+
 ## Config file
 
 The label sheet and behaviour belong to the repository, not to a workflow.

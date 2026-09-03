@@ -103,6 +103,8 @@ function issueEvent(thread = {}) {
  *
  * @param {object} [options]
  * @param {Record<string, string>} [options.files] policy files, default branch
+ * @param {string[]} [options.threadLabels] what the live label read answers with
+ *   — the event's own claim, so an honest run diverges from nothing
  */
 function fakeForge(options = {}) {
   const files = options.files ?? { ".github/action-agents/triage/triage.json5": CONFIG };
@@ -120,11 +122,16 @@ function fakeForge(options = {}) {
         state: "open",
         draft: false,
         merged: false,
+        labels: options.threadLabels ?? [],
         title: "",
         body: "",
         head: { ref: "x", sha: "0".repeat(40) },
         base: { ref: "main", sha: "0".repeat(40) },
       };
+    },
+    /** The live label read a mutation is judged against. */
+    async getIssue(_number) {
+      return { labels: options.threadLabels ?? [] };
     },
     async createBlob() {
       return { sha: "0".repeat(40) };
@@ -216,7 +223,12 @@ function fakeForge(options = {}) {
  * @param {Parameters<typeof fakeForge>[0] & { event?: Record<string, unknown>, answer?: string }} [options]
  */
 function io(options = {}) {
-  const forge = fakeForge(options);
+  const event = options.event ?? issueEvent();
+  const raw = /** @type {{ labels?: { name: string }[] }} */ (
+    event["pull_request"] ?? event["issue"]
+  );
+  const claimed = (raw?.["labels"] ?? []).map(({ name }) => name);
+  const forge = fakeForge({ ...options, threadLabels: claimed });
   return {
     forge,
     chat: {
@@ -226,7 +238,7 @@ function io(options = {}) {
     },
     evidence: createEvidence(() => "aaaabbbb"),
     now: () => Date.parse("2026-07-01T11:00:00Z"),
-    readEvent: async () => options.event ?? issueEvent(),
+    readEvent: async () => event,
   };
 }
 
