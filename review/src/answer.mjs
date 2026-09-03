@@ -136,7 +136,7 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
     const severity = finding["severity"];
     if (severity !== "concern" && severity !== "nit") {
       rejections.push(
-        `severity '${oneLine(String(severity), { maxChars: 120 })}' is outside the vocabulary: ${describe}`,
+        `severity '${oneLine(String(severity), { maxChars: 120, stripControlChars: true })}' is outside the vocabulary: ${describe}`,
       );
       continue;
     }

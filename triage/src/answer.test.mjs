@@ -226,6 +226,15 @@ describe("parseIssueDimensions", () => {
     );
   });
 
+  it("refuses an empty answer by its shape class", () => {
+    // The shape class is the diagnosability contract (#261): an empty
+    // answer is named as such — the release-PR incident's two red runs
+    // started here, indistinguishable from prose before this refusal
+    // existed.
+    expect(() => parseLabelsAnswer("")).toThrow("the model's answer was empty");
+    expect(() => parseCommentAnswer("   ")).toThrow("the model's answer was empty");
+  });
+
   it("treats null members as absent and non-object answers as refused", () => {
     const parsed = parseIssueDimensions('{"dimensions":{"priority":{"severity":null}}}');
     expect(parsed.priority).toEqual({});

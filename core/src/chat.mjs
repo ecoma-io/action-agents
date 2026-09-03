@@ -399,11 +399,12 @@ function excerpt(text) {
 
 /**
  * One line, however hostile the string — provider-controlled ids travel into
- * error text, which travels into logs.
+ * error text, which travels into logs, so control characters are stripped
+ * along the way, not just the length capped.
  *
  * @param {string} text
  * @returns {string}
  */
 function flatten(text) {
-  return oneLine(text, { maxChars: EXCERPT_BYTES });
+  return oneLine(text, { maxChars: EXCERPT_BYTES, stripControlChars: true });
 }

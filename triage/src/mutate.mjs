@@ -20,6 +20,7 @@
  */
 
 import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
+import { oneLine } from "#core/one-line.mjs";
 import { info, warning } from "#core/runtime.mjs";
 
 import { commentBody, renderDryRun, signalBody } from "./decision.mjs";
@@ -112,6 +113,22 @@ function describeOp(op) {
 }
 
 /**
+ * The log line as it may be emitted: control characters become spaces
+ * before the collapse (#259). Decision log lines and the divergence reason
+ * interpolate untrusted fragments — the model's rationale, a refused label
+ * name, the live thread's labels — and `runtime.mjs` wraps a warning in a
+ * workflow-command annotation, so a raw control character is log-forgery
+ * material. `oneLine`'s whitespace collapse alone is not enough: escape and
+ * separator control characters are not whitespace.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function forLog(text) {
+  return oneLine(text, { stripControlChars: true });
+}
+
+/**
  * Emits a decision's log lines, then executes (or dry-run previews) it.
  *
  * @param {MutateInput} input
@@ -127,13 +144,18 @@ export async function mutate({
   threadLabels,
   subject,
 }) {
+  // Every decision log line interpolates untrusted text — the model's
+  // rationale, a refused label name, the live thread's labels — and a
+  // warning is a workflow-command annotation, so an unstripped control
+  // character is log-forgery material (#259). The strip happens here, at
+  // the emission boundary, so a builder that forgets is still covered.
   for (const line of decision.logs) {
-    if (line.level === "warning") warning(line.text);
-    else info(line.text);
+    if (line.level === "warning") warning(forLog(line.text));
+    else info(forLog(line.text));
   }
 
   if (dryRun) {
-    for (const line of renderDryRun(decision)) info(line);
+    for (const line of renderDryRun(decision)) info(forLog(line));
     return;
   }
 
@@ -149,7 +171,9 @@ export async function mutate({
   const reason = divergenceReason(live, threadLabels, subject);
   if (reason !== null) {
     warning(
-      `${action}: nothing written — the thread changed while this run was in flight: ${reason}`,
+      forLog(
+        `${action}: nothing written — the thread changed while this run was in flight: ${reason}`,
+      ),
     );
     return;
   }

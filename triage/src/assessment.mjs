@@ -2,14 +2,21 @@
  * The Assessment — the model's one bounded semantic judgement in the Work
  * Item pipeline.
  *
- * Exactly one chat call happens in a run, and it happens here: the prompt is
+ * The run's chat calls happen here, and nowhere else: the prompt is
  * assembled from the `Evidence` (with the untrusted title/body framed by
- * `core/untrusted.mjs`), one completion is requested, and the answer is
- * parsed into a typed `Assessment`. Parsing tolerates provider drift (the
- * JSON5 parser), matching tolerates none of it — and matching is the policy
- * engine's job, not the model's and not this module's. This module turns
- * bytes into a typed judgement; it never decides what gets mutated.
+ * `core/untrusted.mjs`), a completion is requested, and the answer is
+ * parsed into a typed `Assessment`. An answer that never presented the JSON
+ * object the prompt asked for earns exactly one more ask (#261) — a
+ * provider fumble, not a judgement; an answer that parses is taken as it
+ * stands, off-sheet refusals included, and is never re-asked. Parsing
+ * tolerates provider drift (the JSON5 parser), matching tolerates none of
+ * it — and matching is the policy engine's job, not the model's and not
+ * this module's. This module turns bytes into a typed judgement; it never
+ * decides what gets mutated.
  */
+
+import { AnswerShapeError, parseJsonish } from "#core/answer-json.mjs";
+import { info } from "#core/runtime.mjs";
 
 import { buildPrompt } from "./prompt.mjs";
 import { computePrSignals } from "./pr.mjs";
@@ -103,7 +110,27 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
     quality: evidence.quality,
     policy: evidence.policy,
   });
-  const { content } = await chat.complete({ model, messages });
+  // The one redelivery a fumbled answer earns (#261): a provider that
+  // answers empty or in prose instead of the JSON object the prompt asked
+  // for gets exactly one more ask — the release-PR incident was two such
+  // answers in a row that a third ask cleared. An answer that parses is
+  // taken as it stands: an off-sheet refusal or a missed contract is the
+  // model's decision, and a decision is never retried. The log line names
+  // the shape class, never the answer's bytes.
+  let { content } = await chat.complete({ model, messages });
+  try {
+    parseJsonish(content);
+  } catch (cause) {
+    if (!(cause instanceof AnswerShapeError)) throw cause;
+    info(`triage: the model's answer was unusable (${cause.message}) — asking once more`);
+    ({ content } = await chat.complete({ model, messages }));
+    try {
+      parseJsonish(content);
+    } catch (retryCause) {
+      if (!(retryCause instanceof AnswerShapeError)) throw retryCause;
+      throw new AnswerShapeError(`${retryCause.message} (after 2 attempts)`);
+    }
+  }
   const descriptor = {
     issuedBy: "triage",
     version: ASSESSMENT_VERSION,

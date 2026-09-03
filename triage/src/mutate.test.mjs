@@ -351,7 +351,7 @@ describe("mutate — signal comment on a labels decision", () => {
     expect(
       log.mock.calls.some((call) =>
         String(call[0]).includes(
-          "dry run — would add [bug] and post a signal comment: <!-- action-agents:triage:dry-run -->  Possibly duplicate of #12 — the same crash.",
+          "dry run — would add [bug] and post a signal comment: <!-- action-agents:triage:dry-run --> Possibly duplicate of #12 — the same crash.",
         ),
       ),
     ).toBe(true);
@@ -470,6 +470,28 @@ describe("mutate — the live re-read before any write", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("a hostile label name in the divergence line cannot forge the run log", async () => {
+    // The live read is typed as strings and nothing enforces GitHub's label
+    // charset on it, so the strip happens at the emission boundary: an ESC
+    // or BEL inside a label name becomes a space before the annotation is
+    // written, never a workflow command inside the run log.
+    const fake = createFakeForge({ issueLabels: ["bug", "evil\u001b]2;owned\u0007"] });
+    const log = await runMutation(fake, staleDecision({ remove: [] }), {
+      threadLabels: ["bug"],
+      subject: null,
+    });
+    expect(fake.writes).toEqual([]);
+    const line = log.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("nothing written"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain("\u001b");
+    expect(line).not.toContain("\u0007");
+    expect(line).toContain(
+      "the labels are now [bug, evil ]2;owned ], not the [bug] the event carried",
+    );
   });
 
   it("a label removal whose subject moved on the live thread never fires", async () => {
