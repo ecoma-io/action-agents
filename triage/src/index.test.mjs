@@ -105,6 +105,7 @@ function prEvent(thread = {}) {
  * @param {(query: string) => { items: { number: number, title: string, state: string, url?: string, created_at?: string }[], totalCount: number }} [options.search] the search page in sheet-mode issue tests
  * @param {Error} [options.prReadError] thrown by getPullRequest — the hard read
  * @param {Partial<import("#core/forge.mjs").PullRequestSnapshot>} [options.prSnapshot] merged over the forge's default getPullRequest snapshot
+ * @param {string[]} [options.liveLabels] what the live label read answers — defaults to the event's own labels, so the claim and the live read agree by default
  * @param {{ total: number, byConclusion: Partial<import("#core/forge.mjs").CheckRunsSummary["byConclusion"]> } | Error} [options.checkRuns] the head's check-run rollup, or the error the read throws
  * @param {{ requestedReviewers: string[], reviewers: string[], reviews: { state: string, count: number }[] } | Error} [options.reviewState] the review routing state, or the error the read throws
  */
@@ -147,10 +148,19 @@ function fakeForge(options = {}) {
         mergeableState: "clean",
         title: "",
         body: "",
+        labels: options.liveLabels ?? [],
         head: { ref: "x", sha: "0".repeat(40) },
         base: { ref: "main", sha: "0".repeat(40) },
       };
       return { ...snapshot, ...(options.prSnapshot ?? {}) };
+    },
+    /**
+     * The live label read a mutation is judged against.
+     *
+     * @param {number} _number
+     */
+    async getIssue(_number) {
+      return { labels: options.liveLabels ?? [] };
     },
     /** @param {string} _content */
     async createBlob(_content) {
@@ -292,7 +302,16 @@ function fakeForge(options = {}) {
  * }} [options]
  */
 function io(options = {}) {
-  const forge = fakeForge(options);
+  const event = /** @type {Record<string, unknown>} */ (options.event ?? issueEvent());
+  const raw = /** @type {Record<string, unknown> | undefined} */ (
+    event["issue"] ?? event["pull_request"]
+  );
+  const eventLabels = Array.isArray(raw?.["labels"])
+    ? /** @type {{ name: unknown }[]} */ (raw["labels"]).map((entry) => String(entry["name"]))
+    : [];
+  // The live reads default to the event's own labels, so the claim and the
+  // authority agree unless a test breaks the agreement on purpose.
+  const forge = fakeForge({ ...options, liveLabels: options.liveLabels ?? eventLabels });
   /** @type {{ model: string, messages: import("#core/chat.mjs").ChatMessage[], tools?: import("#core/chat.mjs").ChatTool[] } | null} */
   let request = null;
   return {

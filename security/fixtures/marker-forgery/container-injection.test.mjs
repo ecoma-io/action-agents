@@ -67,6 +67,10 @@ function forge() {
     async getContents(_path) {
       return null;
     },
+    /** The live label read a mutation is judged against. */
+    async getIssue(_number) {
+      return { labels: [] };
+    },
     async whoami() {
       return { login: BOT };
     },

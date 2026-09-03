@@ -19,6 +19,15 @@
  * semantic-classification category is classified, because a thread carrying a
  * category no longer awaits triage; the model is never told the marker's name.
  *
+ * Everything the decision was built from is re-checked against the thread
+ * immediately before any of that lands: the payload's label list is a claim
+ * the live read arbitrates, and a pull request snapshot's state, merged
+ * flag and head are claims too. A thread that moved on while the run was in
+ * flight receives nothing — the decision described a thread that no longer
+ * exists, and the run says so in the log instead of writing (the forge's
+ * read-twice doctrine, `core/src/forge.mjs`; review's pre-publication
+ * re-read is the precedent).
+ *
  * Before any of that, an event gate (item 1 of #224) decides whether the
  * event that fired this run could have changed triage-relevant evidence.
  * An event that cannot — a milestone, a review request, a label change
@@ -346,6 +355,8 @@ export async function run(inputs, context, io) {
     dryRun: inputs.dryRun,
     now: world.now,
     action: ACTION,
+    threadLabels: thread.labels,
+    subject: pr !== null ? { head: pr.head.sha, state: pr.state, merged: pr.merged } : null,
   });
 }
 

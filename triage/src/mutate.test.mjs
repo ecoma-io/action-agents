@@ -12,9 +12,16 @@ import { mutate } from "./mutate.mjs";
 /**
  * A recording forge: the write surface mutate may touch is real and recorded,
  * every other forge method fails loudly, so a regression that reaches beyond
- * the write surface breaks here.
+ * the write surface breaks here. The live reads a write is judged against
+ * answer from `options`: the issue's labels, and — merged over a default —
+ * the pull request snapshot, when the test gives the thread a pull request
+ * subject claim.
+ *
+ * @param {object} [options]
+ * @param {string[]} [options.issueLabels] what the live issue read answers
+ * @param {Partial<import("#core/forge.mjs").PullRequestSnapshot>} [options.prSnapshot] merged over the live pull request read
  */
-function createFakeForge() {
+function createFakeForge(options = {}) {
   /** @type {{ op: string, args: unknown[] }[]} */
   const writes = [];
   let commentId = 100;
@@ -41,7 +48,23 @@ function createFakeForge() {
         getContents: fail("getContents"),
         listRepositoryLabels: fail("listRepositoryLabels"),
         listRepositoryLabelsDetailed: fail("listRepositoryLabelsDetailed"),
-        getPullRequest: fail("getPullRequest"),
+        getPullRequest: options.prSnapshot
+          ? vi.fn(async () => ({
+              number: 7,
+              state: "open",
+              draft: false,
+              merged: false,
+              mergeable: null,
+              mergeableState: null,
+              title: "",
+              body: "",
+              labels: options.prSnapshot?.labels ?? [],
+              head: { ref: "x", sha: "a".repeat(40) },
+              base: { ref: "main", sha: "a".repeat(40) },
+              ...options.prSnapshot,
+            }))
+          : fail("getPullRequest"),
+        getIssue: vi.fn(async () => ({ labels: options.issueLabels ?? [] })),
         listPullRequestFiles: fail("listPullRequestFiles"),
         searchIssues: fail("searchIssues"),
         listCheckRuns: fail("listCheckRuns"),
@@ -99,6 +122,8 @@ describe("mutate — labels decision", () => {
       dryRun: false,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     const [firstLine, secondLine] = /** @type {[unknown[], unknown[]]} */ (log.mock.calls);
     expect(firstLine[0]).toBe("::warning::refused the off-sheet label 'made-up'");
@@ -126,6 +151,8 @@ describe("mutate — labels decision", () => {
       dryRun: false,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     expect(fake.writes).toEqual([
       { op: "addLabels", args: [7, ["bug", "size/xs"]] },
@@ -151,6 +178,8 @@ describe("mutate — labels decision", () => {
       dryRun: false,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     expect(fake.writes).toEqual([]);
   });
@@ -173,6 +202,8 @@ describe("mutate — labels decision", () => {
       dryRun: true,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     expect(fake.writes).toEqual([]);
     expect(
@@ -202,6 +233,8 @@ describe("mutate — comment decision", () => {
       dryRun: false,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     // Identity read first — the paid read only a live comment write needs.
     expect(fake.writes[0]).toEqual({ op: "whoami", args: [] });
@@ -233,6 +266,8 @@ describe("mutate — comment decision", () => {
       dryRun: true,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     expect(fake.writes).toEqual([]);
     expect(
@@ -267,6 +302,8 @@ describe("mutate — signal comment on a labels decision", () => {
       dryRun: false,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     // Order: the labels first, then the identity read a comment write pays
     // for, then the comment itself.
@@ -307,6 +344,8 @@ describe("mutate — signal comment on a labels decision", () => {
       dryRun: true,
       now: () => 1,
       action: "triage",
+      threadLabels: [],
+      subject: null,
     });
     expect(
       log.mock.calls.some((call) =>
@@ -315,5 +354,173 @@ describe("mutate — signal comment on a labels decision", () => {
         ),
       ),
     ).toBe(true);
+  });
+});
+
+describe("mutate — the live re-read before any write", () => {
+  /**
+   * A decision carrying a plan derived from a stale payload view. What the
+   * assertions pin is that the live read — never this plan's premises —
+   * decides what lands.
+   *
+   * @param {Partial<import("./decision.mjs").Decision>} [overrides]
+   * @returns {import("./decision.mjs").Decision}
+   */
+  function staleDecision(overrides = {}) {
+    return {
+      kind: "labels",
+      add: ["size/m"],
+      remove: [],
+      refusals: [],
+      logs: [],
+      rationale: "r",
+      comment: undefined,
+      ...overrides,
+    };
+  }
+
+  /**
+   * Runs mutate with a labels decision against a quiet console.
+   *
+   * @param {ReturnType<typeof createFakeForge>} fake
+   * @param {import("./decision.mjs").Decision} decision
+   * @param {{ threadLabels: string[], subject: import("./mutate.mjs").SubjectClaim | null }} claims
+   */
+  async function runMutation(fake, decision, claims) {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await mutate({
+      decision,
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      ...claims,
+    });
+    return log;
+  }
+
+  it("claims matched on a pull request — the writes proceed and the marker records the head", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fake = createFakeForge({ prSnapshot: { labels: ["bug"] } });
+    await mutate({
+      decision: {
+        kind: "comment",
+        add: [],
+        remove: [],
+        refusals: [],
+        logs: [],
+        rationale: "Because.",
+        comment: { classification: "a bug", rationale: "Because." },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: ["bug"],
+      subject: { head: "a".repeat(40), state: "open", merged: false },
+    });
+    const commentWrite = /** @type {{ op: string, args: unknown[] }} */ (fake.writes[1]);
+    expect(commentWrite.op).toBe("createComment");
+    expect(String(commentWrite.args[1])).toContain(`<!-- action-agents:triage:`);
+    expect(String(commentWrite.args[1])).toContain(":head=" + "a".repeat(40));
+    expect(log.mock.calls.some((call) => String(call[0]).includes("nothing written"))).toBe(false);
+  });
+
+  it("claims matched on an issue — the marker records no head", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fake = createFakeForge({ issueLabels: ["bug"] });
+    await mutate({
+      decision: {
+        kind: "comment",
+        add: [],
+        remove: [],
+        refusals: [],
+        logs: [],
+        rationale: "Because.",
+        comment: { classification: "a bug", rationale: "Because." },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: ["bug"],
+      subject: null,
+    });
+    const commentWrite = /** @type {{ op: string, args: unknown[] }} */ (fake.writes[1]);
+    expect(String(commentWrite.args[1])).not.toContain(":head=");
+    expect(log.mock.calls.some((call) => String(call[0]).includes("nothing written"))).toBe(false);
+  });
+
+  it("a label the live thread carries but the payload view does not is never removed", async () => {
+    const fake = createFakeForge({ issueLabels: ["bug", "size/l"] });
+    const log = await runMutation(fake, staleDecision({ remove: [] }), {
+      threadLabels: ["bug"],
+      subject: null,
+    });
+    expect(fake.writes).toEqual([]);
+    expect(
+      log.mock.calls.some((call) =>
+        String(call[0]).includes(
+          "nothing written — the thread changed while this run was in flight: " +
+            "the labels are now [bug, size/l], not the [bug] the event carried",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("a label removal whose subject moved on the live thread never fires", async () => {
+    const fake = createFakeForge({ issueLabels: ["bug"] });
+    const log = await runMutation(fake, staleDecision(), {
+      threadLabels: ["bug", "needs triage"],
+      subject: null,
+    });
+    expect(fake.writes).toEqual([]);
+    expect(
+      log.mock.calls.some((call) =>
+        String(call[0]).includes("the labels are now [bug], not the [bug, needs triage]"),
+      ),
+    ).toBe(true);
+  });
+
+  it("a pull request that moved on while the run was in flight receives nothing", async () => {
+    const fake = createFakeForge({
+      prSnapshot: { head: { ref: "x", sha: "b".repeat(40) }, labels: ["bug"] },
+    });
+    const log = await runMutation(fake, staleDecision(), {
+      threadLabels: ["bug"],
+      subject: { head: "a".repeat(40), state: "open", merged: false },
+    });
+    expect(fake.writes).toEqual([]);
+    expect(
+      log.mock.calls.some((call) =>
+        String(call[0]).includes(
+          "the head is now " + "b".repeat(12) + ", not the " + "a".repeat(12) + " this run read",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("a merged or closed pull request receives nothing", async () => {
+    for (const live of [
+      { merged: true, state: "open" },
+      { merged: false, state: "closed" },
+    ]) {
+      const fake = createFakeForge({ prSnapshot: { labels: ["bug"], ...live } });
+      const log = await runMutation(fake, staleDecision(), {
+        threadLabels: ["bug"],
+        subject: { head: "a".repeat(40), state: "open", merged: false },
+      });
+      expect(fake.writes).toEqual([]);
+      expect(
+        log.mock.calls.some(
+          (call) =>
+            String(call[0]).includes("the pull request is now merged") ||
+            String(call[0]).includes("the pull request is now closed"),
+        ),
+      ).toBe(true);
+    }
   });
 });

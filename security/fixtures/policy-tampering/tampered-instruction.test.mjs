@@ -94,6 +94,7 @@ async function driveRun({ sheet, answer }) {
         state: "open",
         draft: false,
         merged: false,
+        labels: [],
         mergeable: true,
         mergeableState: "clean",
         title: "",
