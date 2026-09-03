@@ -1,0 +1,4 @@
+{
+  "invariant": "I3",
+  "ops": ["whoami", "createComment"]
+}

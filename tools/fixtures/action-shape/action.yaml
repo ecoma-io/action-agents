@@ -1,0 +1,6 @@
+# A child-action manifest running on the wrong runtime.
+name: "Shape canary"
+description: "Judged only when the shape gate is pointed at this fixture"
+runs:
+  using: node20
+  main: src/index.mjs
