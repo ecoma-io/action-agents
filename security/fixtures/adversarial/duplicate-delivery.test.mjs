@@ -10,14 +10,19 @@
 // plan store anywhere in the pipeline; the only state a run reads is the
 // redelivered payload and the thread's live state.
 //
-// Bounded outcome: the second run completes green and the thread converges
-// to the state the identical decisions describe — label sets converge
-// because removals tolerate an absent label (the forge reads GitHub's 404 as
-// already-absent, `core/src/forge.mjs`) and additions are idempotent; and a
-// redelivery that follows a partial mutation (a run that died part-way —
-// cancellation is its no-throw producer, `triage/src/mutate.mjs`) repairs
-// the half-state. Consumer guidance: set a `concurrency` group (see
-// `docs/guides/triage.md`) — the belt over these suspenders.
+// Bounded outcome, in two layers. The live re-read before any write
+// (`triage/src/mutate.mjs`) compares the payload's claims against the
+// thread's state right now — so a literal stale redelivery is a complete
+// second run that writes nothing and finishes green with a warning: the
+// thread moved on while the event sat in the queue. Convergence and repair
+// arrive with a fresh payload — a real later event whose claims match live
+// state: label sets converge because removals tolerate an absent label (the
+// forge reads GitHub's 404 as already-absent, `core/src/forge.mjs`) and
+// additions are idempotent; and a fresh delivery that follows a partial
+// mutation (a run that died part-way — cancellation is its no-throw
+// producer, `triage/src/mutate.mjs`) repairs the half-state. Consumer
+// guidance: set a `concurrency` group (see `docs/guides/triage.md`) — the
+// belt over these suspenders.
 //
 // Deterministic and offline: a stateful recording forge, a scripted model
 // answer.
@@ -136,6 +141,10 @@ function forge(options = {}) {
     liveLabels() {
       return [...labels].sort();
     },
+    /** The same live state as the pipeline's own pre-write read sees it. */
+    async getIssue(_number) {
+      return { labels: [...labels].sort() };
+    },
   };
   return world;
 }
@@ -147,8 +156,9 @@ function forge(options = {}) {
  *
  * @param {ReturnType<typeof forge>} worldForge
  * @param {string} [answer] the scripted model answer; identical across deliveries unless a test overrides it
+ * @param {{ name: string }[]} [payloadLabels] the label set the delivered payload claims — stale on a literal redelivery, fresh on a later event
  */
-function deliver(worldForge, answer = ANSWER) {
+function deliver(worldForge, answer = ANSWER, payloadLabels = [{ name: "needs triage" }]) {
   return run(
     { model: "fake", labels: [], dryRun: false, configPath: "" },
     { eventName: "issues", repo: "action-agents", owner: "ecoma-io", apiUrl: "", eventPath: "" },
@@ -169,7 +179,7 @@ function deliver(worldForge, answer = ANSWER) {
           number: 7,
           title: "Import fails",
           body: "Op body.",
-          labels: [{ name: "needs triage" }],
+          labels: payloadLabels,
         },
         repository: { name: "action-agents", description: "" },
       }),
@@ -178,31 +188,32 @@ function deliver(worldForge, answer = ANSWER) {
 }
 
 describe("triage — the same event redelivered", () => {
-  it("the second run re-derives from live state and the thread converges", async () => {
+  it("a stale redelivery writes nothing; a fresh one converges the thread", async () => {
     const worldForge = forge();
     await deliver(worldForge);
     assert.deepEqual(worldForge.liveLabels(), ["bug"]);
     assert.equal(worldForge.modelCalls.count, 1, "run one paid its own model call");
+    const afterRunOne = worldForge.writes.slice();
 
-    // The redelivered payload still claims `needs triage`; run two re-derives
-    // from that claim plus its own reads — its own model call, its own
-    // policy decision.
+    // The redelivered payload still claims `needs triage`, but the thread
+    // moved on while the event sat in the queue — the live re-read trips the
+    // freshness guard. Run two is still a complete run: its own model call,
+    // its own reads, its own decision — and not one write.
     await deliver(worldForge);
-    assert.equal(worldForge.modelCalls.count, 2, "run two paid its own model call");
+    assert.equal(worldForge.modelCalls.count, 2, "run two still paid its own model call");
+    assert.deepEqual(worldForge.writes, afterRunOne, "the stale redelivery wrote nothing");
 
-    // Converged: the thread ends in the state the identical decisions
-    // describe, and every write across both deliveries stayed within the
-    // sheet's reversible surface.
+    // Convergence comes from a delivery whose payload matches live state —
+    // a real later event, not the stale replay. Its payload already agrees
+    // with the model's judgement, so the re-derived plan is empty: not one
+    // further write, and the thread sits where the decisions describe it.
+    await deliver(worldForge, ANSWER, [{ name: "bug" }]);
+    assert.equal(worldForge.modelCalls.count, 3);
     assert.deepEqual(worldForge.liveLabels(), ["bug"]);
-    assert.deepEqual(worldForge.writes, [
-      { op: "removeLabel", args: ["needs triage"] },
-      { op: "addLabels", args: [["bug"]] },
-      { op: "removeLabel", args: ["needs triage"] },
-      { op: "addLabels", args: [["bug"]] },
-    ]);
+    assert.deepEqual(worldForge.writes, afterRunOne);
   });
 
-  it("a redelivery that follows a partial mutation repairs the half-state", async () => {
+  it("a fresh delivery after a partial mutation repairs the half-state", async () => {
     // Run one dies part-way: the marker removal lands, the addition fails —
     // the typed accounting error leaves the run red.
     const worldForge = forge({ failFirstAdd: true });
@@ -210,13 +221,21 @@ describe("triage — the same event redelivered", () => {
     // The half-state a maintainer (or a cancellation) inherits: the queue
     // marker is gone, the category was never applied.
     assert.deepEqual(worldForge.liveLabels(), []);
-    // The redelivery re-derives from the half-state — the tolerant removal
-    // no-ops (the label is already absent), the addition lands, and the
-    // thread converges. Run two wrote nothing run one's plan would not have.
+    const afterRunOne = worldForge.writes.slice();
+
+    // The literal redelivery still claims `needs triage`; the live re-read
+    // sees the half-state instead — the guard trips and writes nothing.
     await deliver(worldForge);
+    assert.equal(worldForge.modelCalls.count, 2);
+    assert.deepEqual(worldForge.writes, afterRunOne, "the stale redelivery wrote nothing");
+
+    // A fresh delivery — a payload whose claims match the half-state —
+    // re-derives the remainder and repairs it: the addition lands, and the
+    // thread converges.
+    await deliver(worldForge, ANSWER, []);
+    assert.equal(worldForge.modelCalls.count, 3);
     assert.deepEqual(worldForge.liveLabels(), ["bug"]);
     assert.deepEqual(worldForge.writes, [
-      { op: "removeLabel", args: ["needs triage"] },
       { op: "removeLabel", args: ["needs triage"] },
       { op: "addLabels", args: [["bug"]] },
     ]);

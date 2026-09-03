@@ -105,6 +105,10 @@ function forge(comments = []) {
     async getContents(_path) {
       return null;
     },
+    /** The thread's live label state, as the pre-write re-read sees it. */
+    async getIssue(_number) {
+      return { labels: [] };
+    },
     async whoami() {
       throw new Error("the identity endpoint answered 503");
     },
