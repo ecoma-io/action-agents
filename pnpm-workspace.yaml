@@ -1,2 +1,2 @@
 minimumReleaseAgeExclude:
-  - "@ecoma-io/archkeep@0.13.0 || 0.18.1"
+  - "@ecoma-io/archkeep@0.13.0 || 0.18.1 || 0.21.0"
