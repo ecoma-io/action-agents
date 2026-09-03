@@ -88,25 +88,88 @@ describe("whoami", () => {
     await expect(client.whoami()).resolves.toEqual({ login: "docs-bot[bot]" });
   });
 
-  it("resolves github-actions[bot] under GITHUB_TOKEN semantics — GITHUB_ACTOR is never consulted", async () => {
-    const originalActor = process.env.GITHUB_ACTOR;
-    process.env.GITHUB_ACTOR = "whoever-triggered-the-run";
-    try {
-      const client = forge("o", "r", { "GET /user": json({ login: "github-actions[bot]" }) });
-      await expect(client.whoami()).resolves.toEqual({ login: "github-actions[bot]" });
-    } finally {
-      process.env.GITHUB_ACTOR = originalActor;
-    }
+  it("never asks twice when the REST read answers — one identity, one source", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge("o", "r", { "GET /user": json({ login: "docs-bot[bot]" }) }, recorder);
+    await expect(client.whoami()).resolves.toEqual({ login: "docs-bot[bot]" });
+    expect(
+      recorder.calls?.map((call) => `${call.method ?? "GET"} ${new URL(call.url).pathname}`),
+    ).toEqual(["GET /user"]);
   });
 
-  it("names the operation when /user fails", async () => {
-    const client = forge("o", "r", { "GET /user": () => new Response("boom", { status: 500 }) });
-    await expect(client.whoami()).rejects.toThrow(ForgeError);
+  it("reads an installation token's identity from the GraphQL viewer once the REST read is refused", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      {
+        "GET /user": () => new Response("Resource not accessible by integration", { status: 403 }),
+        "POST /graphql": json({ data: { viewer: { login: "github-actions[bot]" } } }),
+      },
+      recorder,
+    );
+    // GITHUB_TOKEN is an installation token: /user refuses it, and the
+    // viewer names the principal the token acts as — the app's bot login.
+    await expect(client.whoami()).resolves.toEqual({ login: "github-actions[bot]" });
+    expect(
+      recorder.calls?.map((call) => `${call.method ?? "GET"} ${new URL(call.url).pathname}`),
+    ).toEqual(["GET /user", "POST /graphql"]);
   });
 
-  it("refuses a response that names no login", async () => {
-    const client = forge("o", "r", { "GET /user": json({ type: "Bot" }) });
-    await expect(client.whoami()).rejects.toThrow(ForgeError);
+  it("answers an App installation token's bot login the same way — read, never assembled", async () => {
+    const client = forge("o", "r", {
+      "GET /user": () => new Response("Resource not accessible by integration", { status: 403 }),
+      "POST /graphql": json({ data: { viewer: { login: "ecoma-bot[bot]" } } }),
+    });
+    await expect(client.whoami()).resolves.toEqual({ login: "ecoma-bot[bot]" });
+  });
+
+  it("derives the Enterprise Server viewer endpoint from the REST apiUrl — one origin, configured once", async () => {
+    const client = createForge({
+      owner: "o",
+      repo: "r",
+      token: "ghs_x",
+      apiUrl: "https://ghe.example.com/api/v3",
+      fetchImpl: routed({
+        "GET /user": () => new Response("Resource not accessible by integration", { status: 403 }),
+        "POST /api/graphql": json({ data: { viewer: { login: "ghe-bot[bot]" } } }),
+      }),
+      ...FAST,
+    });
+    await expect(client.whoami()).resolves.toEqual({ login: "ghe-bot[bot]" });
+  });
+
+  it("reads the viewer when the REST read fails transiently too — the fallback is not 403-specific", async () => {
+    const client = forge("o", "r", {
+      "GET /user": () => new Response("boom", { status: 500 }),
+      "POST /graphql": json({ data: { viewer: { login: "retry-bot[bot]" } } }),
+    });
+    await expect(client.whoami()).resolves.toEqual({ login: "retry-bot[bot]" });
+  });
+
+  it("refuses when both identity reads fail — no assumed login survives", async () => {
+    const client = forge("o", "r", {
+      "GET /user": () => new Response("Refused", { status: 403 }),
+      "POST /graphql": () => new Response("Bad credentials", { status: 401 }),
+    });
+    const refused = client.whoami();
+    await expect(refused).rejects.toThrow(ForgeError);
+    await expect(refused).rejects.toThrow(/GraphQL viewer/);
+  });
+
+  it("refuses a viewer answer that names no login, quoting the provider's error", async () => {
+    const client = forge("o", "r", {
+      "GET /user": () => new Response("Refused", { status: 403 }),
+      "POST /graphql": json({
+        data: { viewer: null },
+        errors: [{ message: "API rate limit exceeded" }],
+      }),
+    });
+    const refused = client.whoami();
+    await expect(refused).rejects.toThrow(ForgeError);
+    await expect(refused).rejects.toThrow(/API rate limit exceeded/);
   });
 });
 

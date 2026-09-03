@@ -396,22 +396,44 @@ export function createForge(config) {
   });
   const root = `/repos/${config.owner}/${config.repo}`;
 
+  // The identity read's second source is the GraphQL viewer. The endpoint
+  // shares the REST origin on github.com; Enterprise Server and the data
+  // residency hosts answer REST under `/api/v3` and GraphQL under
+  // `/api/graphql`. The viewer's URL is derived from the same `apiUrl` every
+  // REST read uses, so a deployment configures one GitHub origin, not two.
+  const restOrigin = new URL(config.apiUrl ?? "https://api.github.com");
+  const graphqlEndpoint = new URL(restOrigin.origin);
+  graphqlEndpoint.pathname = /\/api\/v3\/?$/.test(restOrigin.pathname)
+    ? "/api/graphql"
+    : `${restOrigin.pathname.replace(/\/+$/, "")}/graphql`;
+
   return {
     /**
      * The login the token writes as — the marker upsert finds its own
-     * comments by it. `GET /user` answers with the token's authenticated
-     * principal: `github-actions[bot]` under the workflow's GITHUB_TOKEN,
-     * the app's bot login under an App installation token, the user under a
-     * PAT — the same identity that authors whatever the token writes.
+     * comments by it. The identity is read from what the forge answers about
+     * the token, never guessed. `GET /user` answers with the token's
+     * authenticated principal for a token that has one (the user under a
+     * PAT, a fine-grained token); the workflow's GITHUB_TOKEN and every App
+     * installation token has none, and the endpoint refuses them as an
+     * integration — so the read then falls to the GraphQL viewer, which
+     * names the principal any token acts as: `github-actions[bot]` under
+     * GITHUB_TOKEN, the app's bot login under an App installation token.
+     * When both reads fail, both failures travel: the run is red rather
+     * than writing under an assumed login.
      */
     async whoami() {
       const operation = "reading the token's identity";
-      const record = asRecord(await call(operation, () => http.request("/user")));
-      const login = record?.["login"];
-      if (typeof login !== "string" || login === "") {
-        throw new ForgeError(operation, new Error("the response names no login"));
+      try {
+        const record = asRecord(await call(operation, () => http.request("/user")));
+        const login = record?.["login"];
+        if (typeof login === "string" && login !== "") return { login };
+      } catch {
+        // A refusal or a malformed answer is not an identity — it is the
+        // reason to ask the viewer. That read is the last source: when it
+        // fails too, its failure is the run's answer, and no assumed login
+        // stands in for the one nobody would name.
       }
-      return { login };
+      return viewerLogin();
     },
 
     /** The repository's own facts — the default branch name is what a run reads first. */
@@ -1286,6 +1308,43 @@ export function createForge(config) {
       url = next;
     }
   }
+
+  /**
+   * The GraphQL half of the token identity read: the viewer, which names the
+   * principal any token acts as — the app's bot login under an installation
+   * token, the user under a PAT. Carried on an HTTP POST only because the
+   * GraphQL endpoint speaks no other verb; the query reads, it never
+   * mutates. GitHub answers some refusals on this endpoint with HTTP 200 and
+   * an `errors` list instead of a status code, so an answer whose viewer
+   * names no login is refused with the provider's own first error, when it
+   * carries one — never processed as if it were an identity.
+   *
+   * @returns {Promise<{ login: string }>}
+   */
+  async function viewerLogin() {
+    const operation = "reading the token's identity from the GraphQL viewer";
+    const json = await call(operation, () =>
+      http.request(graphqlEndpoint.toString(), {
+        method: "POST",
+        body: { query: "query { viewer { login } }" },
+      }),
+    );
+    const record = asRecord(json);
+    const viewer = asRecord(asRecord(record?.["data"])?.["viewer"]);
+    const login = viewer?.["login"];
+    if (typeof login !== "string" || login === "") {
+      const detail = firstErrorDetail(record?.["errors"]);
+      throw new ForgeError(
+        operation,
+        new Error(
+          detail === undefined
+            ? "the response names no login"
+            : `the answer carries an error: ${detail}`,
+        ),
+      );
+    }
+    return { login };
+  }
 }
 
 /**
@@ -1323,6 +1382,22 @@ function asRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? /** @type {Record<string, unknown>} */ (value)
     : null;
+}
+
+/**
+ * The first readable message in a GraphQL `errors` list, or undefined — the
+ * provider's own words for why an answer carries no identity.
+ *
+ * @param {unknown} errors
+ * @returns {string | undefined}
+ */
+function firstErrorDetail(errors) {
+  if (!Array.isArray(errors)) return undefined;
+  for (const entry of errors) {
+    const message = asRecord(entry)?.["message"];
+    if (typeof message === "string" && message !== "") return message;
+  }
+  return undefined;
 }
 
 /**

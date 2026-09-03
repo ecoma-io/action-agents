@@ -1,5 +1,6 @@
 // Own-logins resolution failure — the identity half of the marker upsert,
-// attacked by GitHub itself: the API does not answer the identity read.
+// attacked by GitHub itself: the API does not answer the identity read from
+// either of its derived sources (REST /user, then the GraphQL viewer).
 //
 // Attack (a reliability attack, not a prompt one): the run holds a token
 // whose writing identity cannot be read — the `whoami` call fails. Under a
@@ -22,6 +23,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { ForgeError } from "#core/forge.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 
 import { run } from "../../../triage/src/index.mjs";
@@ -177,6 +179,52 @@ describe("triage — a failed identity read refuses, it never guesses", () => {
       [],
       "a run that cannot establish its identity wrote anyway",
     );
+  });
+
+  it("a typed refusal of both identity sources is the same red run, naming the read that failed", async () => {
+    // The realistic shape after the two-source identity read: both the REST
+    // read and the viewer read refuse, and the forge reports the last
+    // failure as a typed error. The run-level contract is unchanged — the
+    // refusal is the answer, and the write surface is never touched.
+    const worldForge = forge();
+    worldForge.whoami = async () => {
+      throw new ForgeError(
+        "reading the token's identity from the GraphQL viewer",
+        new Error("the answer carries an error: Bad credentials"),
+      );
+    };
+    const io = {
+      forge: worldForge,
+      chat: {
+        complete: async () => ({
+          content: JSON.stringify({ classification: "a bug", rationale: "r" }),
+        }),
+      },
+      evidence: createEvidence(() => "aaaabbbb"),
+      now: () => Date.parse(NOW),
+      readEvent: async () => ({
+        issue: { number: 7, title: "Import fails", body: "Steps.", labels: [] },
+        repository: { name: "action-agents", description: "" },
+      }),
+    };
+    const rejection = await run(
+      { model: "fake", labels: [], dryRun: false, configPath: "" },
+      { eventName: "issues", repo: "action-agents", owner: "ecoma-io", apiUrl: "", eventPath: "" },
+      io,
+    ).then(
+      () => null,
+      (cause) => cause,
+    );
+
+    assert.ok(rejection instanceof Error);
+    assert.equal(
+      /** @type {Error} */ (rejection).name,
+      "OwnLoginsError",
+      "the run did not refuse as OwnLoginsError",
+    );
+    assert.match(/** @type {Error} */ (rejection).message, /GraphQL viewer/);
+    assert.match(/** @type {Error} */ (rejection).message, /refusing to guess/);
+    assert.deepEqual(worldForge.writes, [], "a typed identity refusal still never wrote");
   });
 
   it("a dry run never pays for the identity read, so a failed one still refuses nothing", async () => {

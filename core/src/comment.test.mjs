@@ -17,6 +17,7 @@ import {
   resolveOwnLogins,
   upsertComment,
 } from "./comment.mjs";
+import { ForgeError } from "./forge.mjs";
 
 /** @typedef {import("./forge.mjs").CommentEntry} CommentEntry */
 
@@ -349,6 +350,21 @@ describe("resolveOwnLogins", () => {
     });
     await expect(refused).rejects.toThrow(OwnLoginsError);
     await expect(refused).rejects.toThrow(/502 behind a proxy/);
+    await expect(refused).rejects.toThrow(/refusing to guess/);
+  });
+
+  it("still red-runs when whoami rejects with the forge's own typed refusal — the named operation surfaces", async () => {
+    const refused = resolveOwnLogins({
+      whoami: () =>
+        Promise.reject(
+          new ForgeError(
+            "reading the token's identity from the GraphQL viewer",
+            new Error("the answer carries an error: Bad credentials"),
+          ),
+        ),
+    });
+    await expect(refused).rejects.toThrow(OwnLoginsError);
+    await expect(refused).rejects.toThrow(/GraphQL viewer/);
     await expect(refused).rejects.toThrow(/refusing to guess/);
   });
 
