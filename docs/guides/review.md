@@ -156,8 +156,11 @@ maxDiffLines: 10000,
 #### `rules`
 
 An array of per-file-group instruction documents. Each rule has an `include`
-glob list and an `instruction` path. Rules are evaluated in order; the first
-matching rule's instruction is used for that file.
+glob list and an `instruction` path. Rules are additive, not first-match:
+every rule whose `include` matches at least one reviewed file is active, in
+config order, and each contributes its instruction document — several rules
+may apply at once, and none overrides another. A rule matching nothing is
+dormancy, not an error.
 
 ```json5
 rules: [

@@ -78,8 +78,16 @@ The review target is a pair of commits: the pull request's head SHA and its
 base SHA, both taken from a single `GET /pulls/{number}` read at the start of
 the run. Everything the review consumes belongs to that snapshot: the pull
 request's metadata, the changed-file inventory, the per-file diff patches, and
-every workspace read. Nothing is re-read from a moving branch; the head SHA is
-pinned once and compared again once, before publication (see
+every workspace read. Evidence is never re-read from a moving branch — but the
+pinned head is never trusted to still be the head. Publication is guarded by
+three live re-reads of the pull request. The first, before anything is
+written, must still find the pull request open, not a draft, and at the pinned
+head SHA, or the run abandons with nothing written. The second is taken before
+the comment exists, and the built artifact is validated against it — a refusal
+there refuses a run that has written nothing. The third is taken at the write
+itself, after the comment exists, so a push landing inside the publication
+window ends in no artifact — the comment left standing — never in an artifact
+describing a head the pull request has already left (see
 [Pull request state](#pull-request-state)).
 
 Under `pull_request` the checked-out tree is the merge preview — head merged
