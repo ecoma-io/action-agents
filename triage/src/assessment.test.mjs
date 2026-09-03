@@ -306,3 +306,66 @@ describe("assess", () => {
     expect(assessment.dimensions).toMatchObject({ priority: undefined });
   });
 });
+
+describe("assess — the one retry a fumbled answer earns (#261)", () => {
+  /**
+   * A chat stub that answers from a scripted sequence: attempt one, then
+   * attempt two. What is pinned is how many times the question was asked.
+   *
+   * @param {string[]} answers the answer for each attempt, in order
+   */
+  function scriptedChat(answers) {
+    let attempt = 0;
+    return {
+      complete: vi.fn(async () => {
+        const content = answers[Math.min(attempt, answers.length - 1)];
+        attempt += 1;
+        return { content, toolCalls: [], finishReason: "stop" };
+      }),
+    };
+  }
+
+  it("asks once more after an empty answer and proceeds on the retry", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chat = scriptedChat(["", '{"labels":["bug"],"rationale":"the retry answered"}']);
+    const assessment = await assess(
+      input({ chat, evidence: { ...input().evidence, sheet: new Map([["bug", "a bug"]]) } }),
+    );
+    expect(assessment).toMatchObject({ intent: "labels", labels: ["bug"] });
+    expect(chat.complete).toHaveBeenCalledTimes(2);
+    expect(
+      log.mock.calls.some((call) =>
+        String(call[0]).includes(
+          "triage: the model's answer was unusable (the model's answer was empty) — asking once more",
+        ),
+      ),
+    ).toBe(true);
+    log.mockRestore();
+  });
+
+  it("asks once more after a prose answer; a second fumble names both attempts", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chat = scriptedChat(["just prose, twice", "still just prose"]);
+    await expect(
+      assess(
+        input({ chat, evidence: { ...input().evidence, sheet: new Map([["bug", "a bug"]]) } }),
+      ),
+    ).rejects.toThrow("the model's answer holds no JSON object (after 2 attempts)");
+    expect(chat.complete).toHaveBeenCalledTimes(2);
+    vi.restoreAllMocks();
+  });
+
+  it("never re-asks an answer that parsed but missed its contract", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const chat = scriptedChat(['{"labels":"not-an-array"}']);
+    await expect(
+      assess(
+        input({ chat, evidence: { ...input().evidence, sheet: new Map([["bug", "a bug"]]) } }),
+      ),
+    ).rejects.toThrow("the model's answer has no labels array");
+    // A contract miss is a decision, not a fumble: one ask, no retry.
+    expect(chat.complete).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.some((call) => String(call[0]).includes("asking once more"))).toBe(false);
+    log.mockRestore();
+  });
+});

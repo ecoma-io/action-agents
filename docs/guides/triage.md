@@ -323,7 +323,8 @@ matching size label.
 ## Events
 
 `triage` decides exactly which events re-run its pipeline. Its expensive work
-is one model call plus the evidence reads that feed it, so it only pays for
+is one model call (at most two asks — an unusable answer earns one retry)
+plus the evidence reads that feed it, so it only pays for
 them when the event could have changed triage-relevant evidence: the thread's
 content, its diff, its draft state, or the queue state the
 `labels.workflowMarkers` lifecycle keys on. Everything else logs one audit
@@ -398,9 +399,16 @@ an addition, never a stale claim standing beside its replacement). See
 | `dry-run`            | `true`  | No API calls to GitHub for writing. Model calls still count.         |
 | `request-timeout-ms` | `30000` | Per-attempt timeout. Raise for endpoints that are legitimately slow. |
 
-The action makes exactly one model call per thread per run. There is no agent
-loop — the model reads the thread body, the config sheet, and the instructions,
-and answers in one round.
+The action asks the model once per thread per run. An answer that never
+presented the JSON object the prompt asked for — empty, or prose instead of
+the object — earns exactly one more ask: a provider fumble gets a second
+chance, and a second fumble fails the run with the shape class named
+(_empty_, _no JSON object_, _does not parse_). An answer that parses is
+taken as it stands: an off-sheet refusal or a missed contract is the model's
+decision, and a decision is never retried. Model text is never logged — the
+refusal names the shape, not the bytes. There is no agent loop — the model
+reads the thread body, the config sheet, and the instructions, and answers
+in one round (or two asks, in the worst case).
 
 ## Failure modes
 
