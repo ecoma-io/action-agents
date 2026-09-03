@@ -9,10 +9,16 @@
  *   the identity a sync-state record pins a source or translation to.
  * - `policyFingerprint` hashes the translation policy that produced a given
  *   translation: the glossary, the all-pairs instruction, the per-language
- *   instruction prose, and the transformation pipeline's version. A
- *   translation whose source text is unchanged but whose policy moved is stale
- *   and must be re-run; the fingerprint is how that is known without diffing
- *   prose by hand.
+ *   instruction prose, the transformation pipeline's version, and the model
+ *   identity that produced the recorded wording (the model id and the
+ *   endpoint). A translation whose source text is unchanged but whose policy
+ *   moved is stale and must be re-run; the fingerprint is how that is known
+ *   without diffing prose by hand. The model identity is part of the policy
+ *   since #252: a state record proves "these source bytes under this policy
+ *   under this model", and a model swap classifies every affected pair stale
+ *   rather than silently inheriting wording the old model produced.
+ *   Consequence, accepted: upgrading, or changing model or endpoint, is a
+ *   one-time full re-translation.
  *
  * Canonicalization (for `policyFingerprint`):
  *   - `null` and `undefined` are both `"null"` — an absent field and an
@@ -55,6 +61,12 @@ export const TRANSFORMATION_VERSION = 1;
  * @property {number} transformationVersion the pipeline version that produced
  *   the translation. Folded in so a `TRANSFORMATION_VERSION` bump invalidates
  *   every prior translation.
+ * @property {string | undefined} [model] the model id the translation was
+ *   asked of. Part of the identity: the model that produced the recorded
+ *   wording is what a consumer needs to reproduce it (#252).
+ * @property {string | undefined} [apiUrl] the OpenAI-compatible endpoint the
+ *   ask went to, canonicalized to a trailing-slash-free string — the same
+ *   endpoint spelled with and without a final `/` hashes the same.
  */
 
 /**
@@ -68,8 +80,9 @@ export function contentFingerprint(text) {
 /**
  * Hash of the canonical JSON of the policy inputs. Every input must move the
  * hash: changing the glossary, the instruction, any language's instruction
- * prose, or the transformation version produces a different digest, because
- * each is a distinct byte sequence in the canonical form.
+ * prose, the transformation version, the model id, or the endpoint produces
+ * a different digest, because each is a distinct byte sequence in the
+ * canonical form.
  *
  * @param {PolicyInputs} inputs
  * @returns {string} sha-256 hex digest over the canonical JSON.
@@ -79,12 +92,16 @@ export function policyFingerprint({
   instruction,
   languageInstructions,
   transformationVersion,
+  model,
+  apiUrl,
 }) {
   const canonical = canonicalize({
     glossary,
     instruction,
     languageInstructions,
     transformationVersion,
+    model,
+    apiUrl: apiUrl === undefined ? undefined : apiUrl.replace(/\/+$/, ""),
   });
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }

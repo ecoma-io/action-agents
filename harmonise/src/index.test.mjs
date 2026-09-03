@@ -28,7 +28,7 @@ import {
   TransportError,
 } from "#core/transport-errors.mjs";
 
-import { ACTION, DELAY_MS, main, readInputs, run } from "./index.mjs";
+import { ACTION, assertOwnedBranch, DELAY_MS, main, readInputs, run } from "./index.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
 import { LEGACY_STATE_PATH, renderState, statePath, STATE_SCHEMA_VERSION } from "./state.mjs";
 import {
@@ -80,12 +80,16 @@ const TM_PATH = tmPath("en");
 /**
  * The policy digest every default-fixture config hashes to: an empty
  * glossary, no instruction prose, no per-language instructions, the current
- * pipeline version — exactly what `run` folds into its own policy digest.
+ * pipeline version, and the model identity the suite's inputs carry
+ * (`gpt-x` at `https://api.example/v1`) — exactly what `run` folds into its
+ * own policy digest, model identity included (#252).
  */
 const POLICY = policyFingerprint({
   glossary: [],
   languageInstructions: {},
   transformationVersion: TRANSFORMATION_VERSION,
+  model: "gpt-x",
+  apiUrl: "https://api.example/v1",
 });
 
 /**
@@ -3022,5 +3026,22 @@ describe("main", () => {
 
   it("names itself", () => {
     expect(ACTION).toBe("harmonise");
+  });
+});
+
+describe("the owned-branch guard (#253)", () => {
+  it("accepts exactly the branch the config derives", () => {
+    expect(() => assertOwnedBranch("harmonise/vi", "vi")).not.toThrow();
+  });
+
+  it("refuses a foreign ref name at the write site", () => {
+    expect(() => assertOwnedBranch("translate/vi", "vi")).toThrow(
+      "refusing to publish to a ref outside the owned namespace: 'translate/vi' is not 'harmonise/vi'",
+    );
+  });
+
+  it("the bound is exact, not a prefix — lookalike names are refused", () => {
+    expect(() => assertOwnedBranch("harmonise/en-vi", "vi")).toThrow(/outside the owned namespace/);
+    expect(() => assertOwnedBranch("harmonise/", "vi")).toThrow(/outside the owned namespace/);
   });
 });
