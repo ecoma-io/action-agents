@@ -304,6 +304,16 @@ recovery action taken.
 5. The pull request runs CI like any contributor's, if `github-token` is an App
    token.
 
+### When a pair is re-translated
+
+A pair is re-translated when its source bytes changed, when the translation
+policy moved — the glossary, any instruction document, the transformation
+version — or when the **model identity** changed: the model id and the
+endpoint the ask went to are part of the policy digest every state record
+carries, so switching model or provider re-runs every affected pair instead
+of silently carrying over wording the old model produced. The same force
+applies once on upgrade, when the digest gains the identity fields.
+
 ## Manual-edit protection
 
 A target document that was edited by hand outside the action's own history is

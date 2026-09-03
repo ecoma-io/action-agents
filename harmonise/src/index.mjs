@@ -338,7 +338,10 @@ export async function run(inputs, context, io) {
   });
 
   // The translation policy as one digest: the same inputs the prompts are
-  // built from, hashed once and shared by every pair this run classifies.
+  // built from, hashed once and shared by every pair this run classifies —
+  // plus the model identity (#252): a record must prove the model that
+  // produced the wording it carries, so a model or endpoint swap re-runs
+  // every affected pair instead of silently inheriting it.
   const policyDigest = policyFingerprint({
     glossary: config.glossary,
     // Absent and explicit `undefined` hash identically, so the key can be
@@ -346,6 +349,8 @@ export async function run(inputs, context, io) {
     instruction: documents.instruction,
     languageInstructions: documents.languages,
     transformationVersion: TRANSFORMATION_VERSION,
+    model: inputs.model,
+    apiUrl: inputs.apiUrl,
   });
 
   // Completeness is a contract: a listing GitHub had to truncate throws
@@ -803,6 +808,7 @@ export async function run(inputs, context, io) {
   }
 
   const branch = branchName(config.sourceLanguage);
+  assertOwnedBranch(branch, config.sourceLanguage);
   // One title for the commit subject and the pull request alike: the
   // repository's own convention when its config names one, the built-in
   // conventional-commits shape otherwise — "harmonise" is a scope there,
@@ -913,6 +919,31 @@ export async function run(inputs, context, io) {
 /** @param {string} sourceLanguage @returns {string} */
 function branchName(sourceLanguage) {
   return `harmonise/${sourceLanguage}`;
+}
+
+/**
+ * The owned-branch bound, code-checked where the ref is written (#253):
+ * harmonise writes exactly one branch of its own and its name is
+ * `harmonise/<validated source language>` — never a derived or refactored
+ * variant. The bound held by call-site proximity before this guard existed:
+ * the name was derived from validated config two lines above, and nothing
+ * but prose tied the ref about to be written to it. A second write site, a
+ * rename, or a refactor that drops the derivation now fails here instead of
+ * publishing a foreign ref — the comparison is against the config's
+ * validated value, and a mismatch is a refusal, not a correction.
+ *
+ * @param {string} branch the ref name about to be written
+ * @param {string} sourceLanguage the config's validated source language
+ * @returns {void}
+ * @throws {Error} when the ref is outside the owned namespace
+ */
+export function assertOwnedBranch(branch, sourceLanguage) {
+  const expected = branchName(sourceLanguage);
+  if (branch !== expected) {
+    throw new Error(
+      `refusing to publish to a ref outside the owned namespace: '${branch}' is not '${expected}'`,
+    );
+  }
 }
 
 /**
