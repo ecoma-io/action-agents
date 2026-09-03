@@ -135,7 +135,7 @@ export function createTools({ workspace, evidence, ignore, limits = {}, recorded
     execute(name, argumentsJson) {
       if (name !== "read_file" && name !== "list_files" && name !== "search") {
         return fail(
-          `unknown tool '${oneLine(name, { maxChars: 200 })}' — the fixed registry offers read_file, list_files, search`,
+          `unknown tool '${oneLine(name, { maxChars: 200, stripControlChars: true })}' — the fixed registry offers read_file, list_files, search`,
         );
       }
 

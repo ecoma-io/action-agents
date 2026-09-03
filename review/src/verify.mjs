@@ -341,7 +341,7 @@ export function parseVerdict(text) {
   if (verdict !== "confirmed" && verdict !== "refuted" && verdict !== "uncertain") {
     return {
       ok: false,
-      defect: `'${oneLine(String(verdict), { maxChars: 120 })}' is outside the verdict vocabulary`,
+      defect: `'${oneLine(String(verdict), { maxChars: 120, stripControlChars: true })}' is outside the verdict vocabulary`,
     };
   }
   const rawReason = record["reason"];
@@ -379,7 +379,7 @@ export function applyVerdicts(findings, verdicts, plan) {
   for (const entry of verdicts) {
     if (typeof entry?.id !== "string" || !byId.has(entry.id)) {
       refusals.push(
-        `a verdict names finding id '${oneLine(String(entry?.id), { maxChars: 120 })}', which is not in the plan — ` +
+        `a verdict names finding id '${oneLine(String(entry?.id), { maxChars: 120, stripControlChars: true })}', which is not in the plan — ` +
           `refused, never mapped by guess`,
       );
       continue;
