@@ -155,6 +155,31 @@ jobs:
       - name: Check the transport seam stays closed
         run: pnpm arch:transport-seam
 
+      # Three structural monopolies, each judged by its own house gate with a
+      # canary fixture under tools/fixtures/ that proves the gate still
+      # refuses the tree it exists to refuse:
+      #
+      #   raw HTTP (I2) — `fetch` and the Request/Headers constructors exist
+      #   only in core/transport/, and no module imports a *.test.mjs. The
+      #   scan is lexical (tools/code-scan.mjs), so a comment naming fetch is
+      #   not a call and a regex containing :// is not a comment.
+      - name: Check the raw-HTTP monopoly
+        run: pnpm arch:http-monopoly
+
+      #   GitHub writes (I3) — non-GET verbs only in the forge, the provider
+      #   chat POST and the seam, and the forge's write surface frozen in
+      #   security/forge-ops.json, diffed in both directions in declaration
+      #   order. A new forge op without a manifest declaration fails here.
+      - name: Check the forge monopoly and its frozen surface
+        run: pnpm arch:forge-monopoly
+
+      #   action shape (I8) — no `dependencies` block in any package.json at
+      #   any depth, no dist/ directory anywhere, every action.yaml on
+      #   exactly node24. The no-build, no-runtime-dependencies law the
+      #   release gate does not see at this strictness.
+      - name: Check the action shape holds
+        run: pnpm arch:action-shape
+
       - run: pnpm test
 
       # `pnpm test` runs the vitest suite, which discovers only `*/src/**`. The
