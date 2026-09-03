@@ -7,7 +7,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { mutate } from "./mutate.mjs";
+import { OwnLoginsError } from "#core/comment.mjs";
+import { PartialMutationError, mutate } from "./mutate.mjs";
 
 /**
  * A recording forge: the write surface mutate may touch is real and recorded,
@@ -131,7 +132,7 @@ describe("mutate — labels decision", () => {
     expect(forge.addLabels).toHaveBeenCalledWith(7, ["bug"]);
   });
 
-  it("adds labels then removes them in decision order", async () => {
+  it("removes first, then adds — a part-way death leaves the safer half-state", async () => {
     const fake = createFakeForge();
     await mutate({
       decision: {
@@ -155,9 +156,9 @@ describe("mutate — labels decision", () => {
       subject: null,
     });
     expect(fake.writes).toEqual([
-      { op: "addLabels", args: [7, ["bug", "size/xs"]] },
       { op: "removeLabel", args: [7, "size/xl"] },
       { op: "removeLabel", args: [7, "needs triage"] },
+      { op: "addLabels", args: [7, ["bug", "size/xs"]] },
     ]);
   });
 
@@ -522,5 +523,174 @@ describe("mutate — the live re-read before any write", () => {
         ),
       ).toBe(true);
     }
+  });
+});
+
+describe("mutate — partial-mutation accounting", () => {
+  it("a failure part-way raises the accounting: what applied, what failed, what was never attempted", async () => {
+    const fake = createFakeForge({ issueLabels: ["size/xl", "needs triage"] });
+    // The first removal lands; the second fails — a classic half-applied
+    // plan with a signal comment still queued behind it.
+    fake.forge.removeLabel = vi.fn(
+      async (/** @type {number} */ number, /** @type {string} */ name) => {
+        if (name === "needs triage") {
+          throw new Error("the label endpoint timed out");
+        }
+        fake.writes.push({ op: "removeLabel", args: [number, name] });
+      },
+    );
+    const run = mutate({
+      decision: {
+        kind: "labels",
+        add: ["bug"],
+        remove: [
+          { name: "size/xl", reason: "size" },
+          { name: "needs triage", reason: "marker" },
+        ],
+        refusals: [],
+        logs: [],
+        rationale: "reason",
+        comment: undefined,
+        signal: { needsMoreInfo: [], modelJudgedQuality: false, related: null },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: ["size/xl", "needs triage"],
+      subject: null,
+    });
+    await expect(run).rejects.toThrow(PartialMutationError);
+    await expect(run).rejects.toThrow(/applied \[removeLabel size\/xl\]/);
+    await expect(run).rejects.toThrow(/removeLabel needs triage failed/);
+    await expect(run).rejects.toThrow(
+      /not attempted: \[addLabels \[bug\], upsertComment signal comment\]/,
+    );
+    // The recorded surface: exactly what applied — nothing after the
+    // failure was attempted.
+    expect(fake.writes).toEqual([{ op: "removeLabel", args: [7, "size/xl"] }]);
+  });
+
+  it("a failure on the first operation reports that nothing had applied", async () => {
+    const fake = createFakeForge({ issueLabels: ["size/xl"] });
+    fake.forge.removeLabel = vi.fn(async () => {
+      throw new Error("the label endpoint timed out");
+    });
+    const run = mutate({
+      decision: {
+        kind: "labels",
+        add: ["bug"],
+        remove: [{ name: "size/xl", reason: "size" }],
+        refusals: [],
+        logs: [],
+        rationale: "reason",
+        comment: undefined,
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: ["size/xl"],
+      subject: null,
+    });
+    await expect(run).rejects.toThrow(PartialMutationError);
+    await expect(run).rejects.toThrow(/no operation had applied/);
+    await expect(run).rejects.toThrow(/removeLabel size\/xl failed/);
+    await expect(run).rejects.toThrow(/not attempted: \[addLabels \[bug\]\]/);
+    expect(fake.writes).toEqual([]);
+  });
+
+  it("an identity-read failure red-runs before any comment write", async () => {
+    const fake = createFakeForge();
+    fake.forge.whoami = vi.fn(async () => {
+      throw new Error("the token's identity read failed");
+    });
+    const run = mutate({
+      decision: {
+        kind: "comment",
+        add: [],
+        remove: [],
+        refusals: [],
+        logs: [],
+        rationale: "Because.",
+        comment: { classification: "a bug", rationale: "Because." },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: [],
+      subject: null,
+    });
+    await expect(run).rejects.toThrow(OwnLoginsError);
+    // Nothing written: a run that cannot establish its identity does not
+    // write at all — the upsert never runs on a guessed own-set.
+    expect(fake.writes.filter((write) => write.op !== "whoami")).toEqual([]);
+  });
+});
+
+describe("mutate — the re-run re-derives, it never replays a plan", () => {
+  it("executes only the decision handed to it — there is no plan store to replay", async () => {
+    const fake = createFakeForge({ issueLabels: ["size/xl"] });
+
+    // Run one — a size swap that dies after its removal. Cancellation is the
+    // no-throw producer of a partial mutation (the dogfood workflows run
+    // `cancel-in-progress: true`): the removal landed, the addition did not,
+    // and a dead process raises nothing — no catch boundary fires, nothing is
+    // logged. There is no accounting line for a canceled run; the invariant
+    // that covers it is the re-run's, pinned below.
+    await mutate({
+      decision: {
+        kind: "labels",
+        add: ["size/s"],
+        remove: [{ name: "size/xl", reason: "size" }],
+        refusals: [],
+        logs: [],
+        rationale: "r",
+        comment: undefined,
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: ["size/xl"],
+      subject: null,
+    });
+
+    // The live thread now answers with what run one left behind;
+    fake.forge.getIssue = vi.fn(async () => ({ labels: ["size/s"] }));
+
+    // Run two — the re-run. The policy engine derives its plan fresh from
+    // the state the run reads; the live thread no longer carries `size/xl`,
+    // so this plan removes nothing. mutate itself holds no plan across
+    // calls: there is no persisted plan anywhere to replay.
+    await mutate({
+      decision: {
+        kind: "labels",
+        add: ["size/s"],
+        remove: [],
+        refusals: [],
+        logs: [],
+        rationale: "r",
+        comment: undefined,
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 2,
+      action: "triage",
+      threadLabels: ["size/s"],
+      subject: null,
+    });
+
+    // Run one completes in this test (a fake cannot kill a process); its
+    // writes stand. The pinned fact is run two's segment: exactly its own
+    // plan — one addition, and the removal run one already applied is not
+    // repeated, because there is no plan store to replay it from.
+    expect(fake.writes.slice(2)).toEqual([{ op: "addLabels", args: [7, ["size/s"]] }]);
   });
 });

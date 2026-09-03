@@ -9,17 +9,14 @@
  * names them (SECURITY ceiling #2). Dry run renders the decision and writes
  * nothing: absolute zero mutation means zero.
  *
- * Before any write, the thread is read live and the views the decision was
- * built from — the event payload's labels, and for a pull request the
- * snapshot's state, merged flag and head — are checked against it. The
- * payload and the snapshot are claims; the live read is the authority. A
- * thread that changed while the run was in flight is skipped with the
- * reason in the log: a decision derived from the old view is never applied
- * to a thread it no longer describes (the forge's read-twice doctrine,
- * `core/src/forge.mjs`; review does the same before publishing). The
- * comment upserts record the live head, which arms the marker upsert's
- * newer-head guard — a concurrent run that got there first is never
- * overwritten last-writer-wins.
+ * The plan is executed remove-then-add with per-operation outcome capture:
+ * the run log states what each operation did, and a run that dies part-way
+ * raises a typed error naming exactly what applied, what failed, and what
+ * was never attempted (failure class partial-mutation). A run cancelled
+ * mid-mutation is the same class without the throw: it leaves the same
+ * half-state behind, and there is no code to report it — the invariant that
+ * covers both is the next run's: every run derives its plan from the state
+ * it reads, and none ever replays a previous run's plan.
  */
 
 import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
@@ -62,6 +59,57 @@ import { commentBody, renderDryRun, signalBody } from "./decision.mjs";
  * @property {boolean | null} merged null for an issue read
  * @property {string | null} head the head SHA; null for an issue, which has none
  */
+
+/**
+ * One operation in a mutation plan, in execution order. `removeLabel` is
+ * one write per name; `addLabels` is one batched write for the whole add
+ * list; `upsertComment` is the signal comment's one marker upsert.
+ *
+ * @typedef {object} MutationOp
+ * @property {"removeLabel" | "addLabels" | "upsertComment"} op the forge operation, as the accounting names it
+ * @property {string} target what the operation acts on — the label names, or the comment's role
+ * @property {() => Promise<void>} apply the call itself
+ */
+
+/**
+ * A mutation stopped part-way. The message is the accounting: what applied,
+ * what failed, what was never attempted — the run log states the thread's
+ * state instead of leaving it to be reconstructed from timestamps. The
+ * `cause` is the original operation's error.
+ */
+export class PartialMutationError extends Error {
+  /**
+   * @param {{ applied: string[], failed: string, notAttempted: string[] }} accounting
+   * @param {Error} cause
+   */
+  constructor(accounting, cause) {
+    super(
+      `the triage mutation stopped part-way: ` +
+        (accounting.applied.length > 0
+          ? `applied [${accounting.applied.join(", ")}]`
+          : `no operation had applied`) +
+        `; ${accounting.failed} failed (${cause.message})` +
+        (accounting.notAttempted.length > 0
+          ? `; not attempted: [${accounting.notAttempted.join(", ")}]`
+          : `; nothing further was planned`) +
+        ` — the thread is left in a partial state; ` +
+        `the next run re-derives from live state, it never replays this plan`,
+    );
+    this.name = "PartialMutationError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * The forge operation's name in the run log and the accounting — the target
+ * carried so a failure names its write, not just its endpoint.
+ *
+ * @param {MutationOp} op
+ * @returns {string}
+ */
+function describeOp(op) {
+  return `${op.op} ${op.target}`;
+}
 
 /**
  * Emits a decision's log lines, then executes (or dry-run previews) it.
@@ -113,7 +161,7 @@ export async function mutate({
 
   if (decision.kind === "comment") {
     const answer = /** @type {{ classification: string, rationale: string }} */ (decision.comment);
-    const ownLogins = await resolveOwnLogins(forge, info);
+    const ownLogins = await resolveOwnLogins(forge);
     const outcome = await upsertComment({
       store: forge,
       action,
@@ -128,32 +176,83 @@ export async function mutate({
     return;
   }
 
-  if (decision.add.length > 0) {
-    await forge.addLabels(issueNumber, decision.add);
-  }
+  // Remove-then-add, never add-then-remove. The order decides which
+  // half-state a run that dies part-way leaves behind: an addition lost
+  // leaves the thread without a label the decision was about to place — a
+  // state the next run re-derives and repairs. A removal lost leaves the
+  // stale claim standing — the previous size rung beside the new one, the
+  // queue marker beside its category — and a thread that claims what the
+  // decision was withdrawing is the less safe half.
+  /** @type {MutationOp[]} */
+  const ops = [];
   for (const removal of decision.remove) {
-    await forge.removeLabel(issueNumber, removal.name);
+    ops.push({
+      op: "removeLabel",
+      target: removal.name,
+      apply: async () => {
+        await forge.removeLabel(issueNumber, removal.name);
+      },
+    });
   }
-
-  // A sheet-mode issue run may carry a code-composed signal: needs-more-info
-  // or a best relationship. It is a comment in the same marker namespace as
-  // the no-sheet classification, so the upsert keeps exactly one of the
-  // action's comments on the thread whichever mode the last run used. The
-  // signal is composed entirely by code — model text never reaches it.
+  if (decision.add.length > 0) {
+    const adds = decision.add;
+    ops.push({
+      op: "addLabels",
+      target: `[${adds.join(", ")}]`,
+      apply: async () => {
+        await forge.addLabels(issueNumber, adds);
+      },
+    });
+  }
   if (decision.signal != null) {
     const signal = decision.signal;
-    const ownLogins = await resolveOwnLogins(forge, info);
-    const outcome = await upsertComment({
-      store: forge,
-      action,
-      issueNumber,
-      buildBody: (marker) => signalBody(signal, marker),
-      ownLogins,
-      head,
-      startedAt: now(),
-      log: info,
+    ops.push({
+      op: "upsertComment",
+      target: "signal comment",
+      apply: async () => {
+        // A sheet-mode issue run may carry a code-composed signal:
+        // needs-more-info or a best relationship. It is a comment in the
+        // same marker namespace as the no-sheet classification, so the
+        // upsert keeps exactly one of the action's comments on the thread
+        // whichever mode the last run used. The signal is composed entirely
+        // by code — model text never reaches it.
+        const ownLogins = await resolveOwnLogins(forge);
+        const outcome = await upsertComment({
+          store: forge,
+          action,
+          issueNumber,
+          buildBody: (marker) => signalBody(signal, marker),
+          ownLogins,
+          head,
+          startedAt: now(),
+          log: info,
+        });
+        info(`signal comment ${outcome.outcome} (${String(outcome.id)})`);
+      },
     });
-    info(`signal comment ${outcome.outcome} (${String(outcome.id)})`);
+  }
+
+  // Per-operation outcome capture. Each operation is attempted in order and
+  // its landing is logged; the first failure raises the accounting as a
+  // typed error and abandons everything after it — a write is never
+  // attempted after one has already failed in the same plan.
+  /** @type {string[]} */
+  const applied = [];
+  for (const [index, op] of ops.entries()) {
+    try {
+      await op.apply();
+    } catch (cause) {
+      throw new PartialMutationError(
+        {
+          applied: [...applied],
+          failed: describeOp(op),
+          notAttempted: ops.slice(index + 1).map(describeOp),
+        },
+        cause instanceof Error ? cause : new Error(String(cause)),
+      );
+    }
+    info(`applied ${describeOp(op)}`);
+    applied.push(describeOp(op));
   }
 }
 

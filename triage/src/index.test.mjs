@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 
 import { createEvidence } from "#core/untrusted.mjs";
+import { OwnLoginsError } from "#core/comment.mjs";
 import { PastFileCeilingError } from "#core/forge.mjs";
 import { TransportError } from "#core/transport-errors.mjs";
 import { readContext } from "#core/runtime.mjs";
@@ -628,9 +629,12 @@ describe("run — the triage marker", () => {
 
     await run(inputs(), readContext(runner), world);
 
+    // Removals land before additions: a run that dies part-way leaves the
+    // thread missing its category, not missing its queue marker — the
+    // re-derivable half of the plan.
     expect(world.forge.writes).toEqual([
-      { op: "addLabels", args: [7, ["bug"]] },
       { op: "removeLabel", args: [7, "needs triage"] },
+      { op: "addLabels", args: [7, ["bug"]] },
     ]);
   });
 
@@ -726,8 +730,8 @@ describe("run — the event gate (PR-E)", () => {
 
     expect(world.request()).not.toBeNull();
     expect(world.forge.writes).toEqual([
-      { op: "addLabels", args: [7, ["bug"]] },
       { op: "removeLabel", args: [7, "needs triage"] },
+      { op: "addLabels", args: [7, ["bug"]] },
     ]);
   });
 
@@ -912,8 +916,8 @@ describe("run — a schema 1 config is migrated, then behaves like schema 2", ()
     await run(inputs(), readContext(runner), world);
 
     expect(world.forge.writes).toEqual([
-      { op: "addLabels", args: [7, ["bug"]] },
       { op: "removeLabel", args: [7, "needs triage"] },
+      { op: "addLabels", args: [7, ["bug"]] },
     ]);
     const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
     expect(lines).toMatch(/schema 1/);
@@ -967,9 +971,12 @@ describe("run — the size half", () => {
 
     await run(inputs(), prContext, world);
 
+    // Removal first here too: the superseded rung comes off before the
+    // measured one lands, so a part-way death never leaves two size rungs
+    // standing — the exact stale-claim state the ordering exists to prevent.
     expect(world.forge.writes).toEqual([
-      { op: "addLabels", args: [8, ["bug", "size/xs"]] },
       { op: "removeLabel", args: [8, "size/xl"] },
+      { op: "addLabels", args: [8, ["bug", "size/xs"]] },
     ]);
   });
 
@@ -1216,8 +1223,7 @@ describe("run — no sheet, the comment half", () => {
     expect(world.forge.writes.map((write) => write.op)).toEqual(["createComment"]);
   });
 
-  it("falls back to github-actions[bot] when the identity read fails", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+  it("red-runs when the identity read fails — it never guesses an identity to write under", async () => {
     const world = io({
       files: {},
       answer: COMMENT_ANSWER,
@@ -1230,11 +1236,13 @@ describe("run — no sheet, the comment half", () => {
       ],
     });
 
-    await run(inputs(), readContext(runner), world);
-
-    // The fallback login is the identity the prior comment carries, so the
-    // upsert still claims it instead of duplicating.
-    expect(world.forge.writes.map((write) => write.op)).toEqual(["updateComment"]);
+    // Intentional behavior change (#249): the old github-actions[bot] fallback
+    // was safe only while the token was a GITHUB_TOKEN. Under any other
+    // identity the guessed set mis-reads the action's own prior comment as a
+    // stranger's and the upsert duplicates it. A run that cannot establish
+    // which comments are its own does not write at all.
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(OwnLoginsError);
+    expect(world.forge.writes.map((write) => write.op)).toEqual([]);
   });
 });
 
