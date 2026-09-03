@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/ecoma-io/action-agents/compare/v0.7.0...v0.7.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* **harmonise:** assert the owned branch name, fold model identity into the policy fingerprint ([#264](https://github.com/ecoma-io/action-agents/issues/264)) ([ee2595c](https://github.com/ecoma-io/action-agents/commit/ee2595c21d04785e46467cb0b9fb7008cec0e307))
+* strip control characters from untrusted log lines; retry a fumbled model answer once ([#263](https://github.com/ecoma-io/action-agents/issues/263)) ([851cb54](https://github.com/ecoma-io/action-agents/commit/851cb54483839639bf972391ad5589e12640be36))
+
 ## [0.7.0](https://github.com/ecoma-io/action-agents/compare/v0.6.0...v0.7.0) (2026-09-03)
 
 
