@@ -1,0 +1,30 @@
+{
+  "invariant": "I3",
+  "note": "The frozen declaration of the forge's GitHub-write surface, in createForge declaration order. Diffed in both directions against core/src/forge.mjs by tools/check-forge-monopoly.mjs (invariant I3): an op not declared here, a declaration the surface does not have, and a reordering are all findings. Regenerate only with a deliberate surface change, in the PR that makes it.",
+  "ops": [
+    "whoami",
+    "getRepository",
+    "getRef",
+    "readRef",
+    "listTree",
+    "getContents",
+    "listRepositoryLabelsDetailed",
+    "listRepositoryLabels",
+    "getPullRequest",
+    "listPullRequestFiles",
+    "searchIssues",
+    "listCheckRuns",
+    "listPullRequestReviews",
+    "addLabels",
+    "removeLabel",
+    "listComments",
+    "createComment",
+    "updateComment",
+    "deleteComment",
+    "createBlob",
+    "createTree",
+    "createCommit",
+    "upsertBranch",
+    "upsertPullRequest"
+  ]
+}
