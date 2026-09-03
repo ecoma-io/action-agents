@@ -11,6 +11,7 @@
     "listRepositoryLabelsDetailed",
     "listRepositoryLabels",
     "getPullRequest",
+    "getIssue",
     "listPullRequestFiles",
     "searchIssues",
     "listCheckRuns",
