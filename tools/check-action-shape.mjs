@@ -32,7 +32,8 @@ import { fileURLToPath } from "node:url";
 const SKIP_DIRS = new Set(["node_modules", ".git", "coverage"]);
 
 /** The real-tree walk also skips this subtree: fixtures are judged by name. */
-const FIXTURES_DIR = "tools/fixtures";
+const TOOLS_DIR = "tools";
+const FIXTURES_DIR = "fixtures";
 
 /** The only runtime a child action.yaml may declare. */
 const ONLY_RUNTIME = "node24";
@@ -116,7 +117,7 @@ export function evaluate(tree) {
 export function walkTree(dir, prefix, tree, fixtureMode) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(entry.name)) continue;
-    if (fixtureMode && prefix === "" && entry.name === FIXTURES_DIR) continue;
+    if (!fixtureMode && prefix === TOOLS_DIR && entry.name === FIXTURES_DIR) continue;
     const at = join(dir, entry.name);
     const path = prefix === "" ? entry.name : prefix + "/" + entry.name;
     if (entry.isDirectory()) {
