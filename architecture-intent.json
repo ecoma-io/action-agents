@@ -1,0 +1,84 @@
+{
+  "version": "1",
+  "boundaries": [
+    { "name": "actions", "match": ["tag:layer:action"] },
+    { "name": "shared", "match": ["tag:layer:core"] },
+    { "name": "transport", "match": ["tag:scope:transport"] }
+  ],
+  "projects": {
+    "required": [
+      {
+        "name": "core",
+        "tags": ["layer:core", "scope:shared"],
+        "rationale": "the shared layer exists and keeps its tags — deleting or retagging it would shrink the architecture with nothing naming the loss",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "name": "triage",
+        "tags": ["layer:action", "scope:triage"],
+        "rationale": "the action exists and keeps its tags — renaming an action is a consumer-visible break the gate must name",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "name": "review",
+        "tags": ["layer:action", "scope:review"],
+        "rationale": "the action exists and keeps its tags — renaming an action is a consumer-visible break the gate must name",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "name": "harmonise",
+        "tags": ["layer:action", "scope:harmonise"],
+        "rationale": "the action exists and keeps its tags — renaming an action is a consumer-visible break the gate must name",
+        "decisionRef": "adr:001-core-boundary"
+      }
+    ]
+  },
+  "dependencies": {
+    "forbidden": [
+      {
+        "source": "triage",
+        "target": "review",
+        "rationale": "no action reaches another action, at any distance — a consumer adopting one action never pulls another in",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "source": "triage",
+        "target": "harmonise",
+        "rationale": "no action reaches another action, at any distance — a consumer adopting one action never pulls another in",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "source": "review",
+        "target": "triage",
+        "rationale": "no action reaches another action, at any distance — a consumer adopting one action never pulls another in",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "source": "review",
+        "target": "harmonise",
+        "rationale": "no action reaches another action, at any distance — a consumer adopting one action never pulls another in",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "source": "harmonise",
+        "target": "triage",
+        "rationale": "no action reaches another action, at any distance — a consumer adopting one action never pulls another in",
+        "decisionRef": "adr:001-core-boundary"
+      },
+      {
+        "source": "harmonise",
+        "target": "review",
+        "rationale": "no action reaches another action, at any distance — a consumer adopting one action never pulls another in",
+        "decisionRef": "adr:001-core-boundary"
+      }
+    ]
+  },
+  "forbiddenTags": [
+    {
+      "from": "layer:core",
+      "to": "layer:action",
+      "rationale": "core is infrastructure: an edge from core to an action makes the shared layer a consumer of what it exists to serve",
+      "decisionRef": "adr:001-core-boundary"
+    }
+  ]
+}

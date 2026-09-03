@@ -183,12 +183,19 @@ been the model's is the code's, and the answer is data the code rules on:
 A rule nobody can run is not a rule. Where a constraint on this page can be
 mechanised it has been, and the gate is named so the claim can be checked:
 
-| Constraint                                               | What runs it                                   |
-| -------------------------------------------------------- | ---------------------------------------------- |
-| `core/` imports no action; no action imports another     | `pnpm arch`                                    |
-| Every `action.yaml` and its code agree on the input list | `pnpm check-action-inputs`                     |
-| No build output, no runtime dependency                   | The absence of both, and a review that says so |
-| The `core/` content rule on this page                    | **Nothing — a reviewer**                       |
+| Constraint                                                                                                                                                        | What runs it                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `core/` imports no action; no action imports another — at any distance, over the transitively closed graph — and the four required projects exist with their tags | `pnpm arch`                                    |
+| Every `action.yaml` and its code agree on the input list                                                                                                          | `pnpm check-action-inputs`                     |
+| No build output, no runtime dependency                                                                                                                            | The absence of both, and a review that says so |
+| The `core/` content rule on this page                                                                                                                             | **Nothing — a reviewer**                       |
+
+The boundary row is the whole of what `pnpm arch` enforces, stated once here
+and once in `docs/adr/001-core-boundary.md`: the direction rule over the
+transitively closed import graph, and the existence of the four projects with
+their tags. The boundary rows and the intent rows carry `decisionRef` to that
+record, so a run whose citations do not resolve has no verdict at all — an
+unbound gate is never mistaken for a passing one.
 
 That last row is honest rather than aspirational. Protocol-or-ceiling is a
 judgement, and a judgement is what a reviewer is for. It earns its place by

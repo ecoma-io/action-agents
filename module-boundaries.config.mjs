@@ -11,6 +11,12 @@
 // The tags come from `archkeep.json`. Adding an action means adding its project
 // there and its `scope:` row here; there is no third place to remember.
 //
+// Each row cites the decision that gives it authority — `decisionRef` names
+// `docs/adr/001-core-boundary.md` in the ADR registry archkeep resolves
+// against, and a citation that does not resolve is a run without a verdict,
+// never a pass. `architecture-intent.json` states the same rule a second way,
+// as forbidden tag reachability over the transitive closure.
+//
 // `archkeep.json` also sets `"tsConfig": "tsconfig.json"`, and that line is
 // load-bearing rather than decorative. Archkeep defaults to
 // `tsconfig.base.json` — an Nx convention, and a file this repository does not
@@ -43,6 +49,7 @@ function actionRow(name) {
     description: `${name} may use core and nothing else`,
     remediation:
       "Duplicate the few lines you need, or promote them into core once a second action genuinely needs them",
+    decisionRef: "adr:001-core-boundary",
   };
 }
 
@@ -57,6 +64,7 @@ export const depConstraints = [
     description: "core is infrastructure: it may not depend on any action",
     remediation:
       "Invert the call — pass what core needs in as an argument, or move the logic into the action that owns it",
+    decisionRef: "adr:001-core-boundary",
   },
   actionRow("triage"),
   actionRow("review"),
