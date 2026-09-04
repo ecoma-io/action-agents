@@ -942,10 +942,12 @@ export function createForge(config) {
       // timed-out delete would 404 on the now-absent label and fail the run.
       // A 404 is the end state already reached: a replayed event or a
       // concurrent run can remove the label between the run's snapshot and
-      // this call, and GitHub answers that with 404. The thread existing is
-      // never in doubt here — every removal in these actions is preceded by
-      // an addLabels call on the same thread that would have failed first —
-      // so a 404 can only mean the label is already gone.
+      // this call, and GitHub answers that with 404. Under triage's
+      // remove-then-add ordering, this call can be the first write of the
+      // run, preceded only by the live-thread read — so a 404 here could
+      // mean the thread is gone. F-07's rule covers that inference: the
+      // label-absent end state holds either way, and F-07 names the
+      // thread-existence inference separately.
       try {
         await call(`removing '${name}' from #${String(number)}`, () =>
           http.request(`${root}/issues/${String(number)}/labels/${encodeURIComponent(name)}`, {
