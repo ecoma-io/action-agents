@@ -1185,13 +1185,42 @@ describe("run", () => {
     );
   });
 
-  it("refuses a documents filter that narrows everything away", async () => {
+  it("refuses a positive documents glob that matches nothing, naming it", async () => {
     const ioDouble = io(forge(makeRepo()));
     const inputs = { ...readInputs(runner), documents: ["nope/**/*.md"] };
 
+    // A positive glob is a selection claim; when nothing on the branch can
+    // match it the entry is dead, and the refusal names it instead of the
+    // run silently keeping fewer documents in step than the workflow named.
     await expect(run(inputs, context(), ioDouble)).rejects.toThrow(
-      /narrows 1 source documents to none/,
+      /'nope\/\*\*\/\*\.md', which matches none/,
     );
+  });
+
+  it("refuses the one dead glob among live ones, naming the dead one", async () => {
+    const ioDouble = io(forge(makeRepo(), makeInventory(["manual/dev.md"])));
+    const inputs = { ...readInputs(runner), documents: ["manual/dev.md", "manual/lost.md"] };
+
+    await expect(run(inputs, context(), ioDouble)).rejects.toThrow(
+      /'manual\/lost\.md', which matches none/,
+    );
+  });
+
+  it("lets a negated glob match nothing — excluding an empty set is vacuous", async () => {
+    const ioDouble = io(forge(makeRepo(), makeInventory(["manual/dev.md"])));
+    const inputs = { ...readInputs(runner), documents: ["!manual/absent.md"] };
+
+    // The negation passes the alive check and the net selection is empty, so
+    // the run ends at the nothing-selected refusal — the narrow gate's own
+    // word, never the positive-glob one.
+    await expect(run(inputs, context(), ioDouble)).rejects.toThrow(/narrows .* to none/);
+  });
+
+  it("lets a positive glob negated away later reach the nothing-selected refusal", async () => {
+    const ioDouble = io(forge(makeRepo(), makeInventory(["manual/dev.md"])));
+    const inputs = { ...readInputs(runner), documents: ["manual/dev.md", "!manual/**"] };
+
+    await expect(run(inputs, context(), ioDouble)).rejects.toThrow(/narrows .* to none/);
   });
 
   it("goes red when every pair fails preparation, naming the defect", async () => {

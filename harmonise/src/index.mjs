@@ -383,6 +383,27 @@ export async function run(inputs, context, io) {
     );
   }
 
+  // A positive glob is a selection claim: this run keeps in step the
+  // documents like this one. When nothing in the listed tree can match it,
+  // the entry is dead — a typo or a path the branch no longer has — and
+  // refusing here beats silently keeping fewer documents in step than the
+  // workflow named, the same posture the labels input's narrowing gate holds
+  // one action over. A negated entry is exempt: excluding from an empty set
+  // is vacuous, not a mistake, and an entry negated away later still passes
+  // here to fall into the nothing-selected refusal below when the net
+  // selection is empty.
+  for (const entry of inputs.documents) {
+    if (entry === "" || entry.startsWith("!")) continue;
+    const alive = inventory.pairs.some((pair) => matchGlob([entry], pair.sourcePath));
+    if (!alive) {
+      throw new Error(
+        `the documents input names '${entry}', which matches none of the ` +
+          `${String(inventory.pairs.length)} source documents on '${source.branch}' — ` +
+          `a positive glob must name at least one document`,
+      );
+    }
+  }
+
   const selected =
     inputs.documents.length === 0
       ? inventory.pairs
