@@ -424,7 +424,15 @@ export async function run(inputs, context, io) {
   for (const pair of selected) {
     const file = await readAtBase(pair.sourcePath);
     if (file === null) {
-      failedLines.push(`${pair.sourcePath}: gone from the branch since the tree was listed`);
+      // Every read is pinned to the listed tree, so this is defence, not the
+      // ordinary path — but the pair accounting counts pair-targets, one
+      // line per source-and-language, so the source's every language fails
+      // here, exactly as any other failed pair is reported.
+      for (const target of pair.targets) {
+        failedLines.push(
+          `${target.lang} ${pair.sourcePath}: gone from the branch since the tree was listed`,
+        );
+      }
       continue;
     }
     // Eligibility is a property of the source, judged once: every language's
@@ -806,14 +814,18 @@ export async function run(inputs, context, io) {
       ? `${String(failedLines.length)} pair(s) failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`
       : "";
 
-  // The run's pair accounting, as the record carries it: the four counts
-  // total the selected schedule, and the record validator refuses a record
-  // that does not. `unchanged` gathers both noop verdicts — a proven-in-step
+  // The run's pair accounting, as the record carries it. The unit is the
+  // pair-target — one source document against one language — the unit every
+  // path above lands a pair in, and `selected` is that schedule's size for
+  // this run. `proposed`, `unchanged`, `skipped` and `failed` partition it,
+  // totalling it exactly, and the record validator refuses a record where
+  // they do not. `unchanged` gathers both noop verdicts — a proven-in-step
   // skip and a model's endorsement — the two faces of "already in step".
   const unchangedCount = outcomes.filter(
     (entry) => entry.outcome === "unchanged" || entry.outcome === "unchanged-skipped",
   ).length;
   const pairCounts = {
+    selected: selected.reduce((total, pair) => total + pair.targets.length, 0),
     proposed: proposed.length,
     unchanged: unchangedCount,
     skipped: skippedLines.length,

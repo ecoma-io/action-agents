@@ -13,8 +13,8 @@
  * failed — and nothing model-composed enters the record.
  */
 
-/** The harmonise run record's schema version. Additive changes bump it. */
-export const harmoniseRecordSchemaVersion = 1;
+/** The harmonise run record's schema version. Any shape change bumps it. */
+export const harmoniseRecordSchemaVersion = 2;
 
 /**
  * The vocabulary a record's `outcome` may carry: the run contract's terminal
@@ -36,12 +36,16 @@ export const HARMONISE_OUTCOMES = /** @type {readonly HarmoniseOutcome[]} */ ([
 ]);
 
 /**
- * The pair accounting the record carries: how many pairs the run proposed,
- * how many it found already in step, how many skipped and how many failed.
- * The four together total the selected schedule — the run's whole universe —
- * and the validator refuses a record that does not.
+ * The pair accounting the record carries. The unit is the pair-target — one
+ * source document against one language — the unit every path a pair can take
+ * is judged in, so a source with three languages is three pairs here. The
+ * record names `selected`, the size of the schedule the run walked, and the
+ * four counts under it — what was proposed, what was found already in step,
+ * what skipped and what failed — partition it: they total `selected` exactly,
+ * and the validator refuses a record where they do not.
  *
  * @typedef {object} RecordPairs
+ * @property {number} selected the selected schedule's size in pair-targets, recorded so the partition's both sides are in the record
  * @property {number} proposed pairs whose translation was published
  * @property {number} unchanged pairs proven in step, no model call made
  * @property {number} skipped pairs the preparation refused before the model
@@ -100,6 +104,7 @@ export function buildHarmoniseRecord({
     outcome,
     reason,
     pairs: {
+      selected: pairs.selected,
       proposed: pairs.proposed,
       unchanged: pairs.unchanged,
       skipped: pairs.skipped,
@@ -124,7 +129,7 @@ const RECORD_KEYS = new Set([
   "pullRequest",
   "headSha",
 ]);
-const PAIRS_KEYS = new Set(["proposed", "unchanged", "skipped", "failed"]);
+const PAIRS_KEYS = new Set(["selected", "proposed", "unchanged", "skipped", "failed"]);
 const PULL_REQUEST_KEYS = new Set(["number", "created"]);
 
 /** A commit sha is exactly 40 hex characters; anything else is not a pin. */
@@ -174,11 +179,23 @@ export function validateHarmoniseRecord(value) {
 function asPairs(value) {
   const pairs = asRecord(value, "the harmonise record's 'pairs'");
   assertExactKeys(pairs, "the harmonise record's 'pairs'", PAIRS_KEYS);
-  for (const key of ["proposed", "unchanged", "skipped", "failed"]) {
+  for (const key of ["selected", "proposed", "unchanged", "skipped", "failed"]) {
     const n = pairs[key];
     if (typeof n !== "number" || !Number.isInteger(n) || n < 0) {
       throw new TypeError(`the harmonise record's 'pairs.${key}' is not a non-negative integer`);
     }
+  }
+  const total =
+    /** @type {number} */ (pairs["proposed"]) +
+    /** @type {number} */ (pairs["unchanged"]) +
+    /** @type {number} */ (pairs["skipped"]) +
+    /** @type {number} */ (pairs["failed"]);
+  if (total !== pairs["selected"]) {
+    throw new TypeError(
+      `the harmonise record's 'pairs' does not partition the selected schedule: ` +
+        `proposed + unchanged + skipped + failed is ${String(total)}, ` +
+        `'selected' is ${String(pairs["selected"])}`,
+    );
   }
 }
 

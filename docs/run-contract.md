@@ -102,7 +102,7 @@ Three families exist today:
 | ------------------ | ------------------------------ | --------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | review's artifact  | `review/src/artifact.mjs`      | 4; 5 (applicability family) | `review-artifact-*.json`  | a published comment writes the full artifact; abandonment and a dry run write their reduced artifacts; a draft run writes its skip |
 | triage's record    | `triage/src/run-record.mjs`    | 1                           | `triage-record-*.json`    | every terminal point                                                                                                               |
-| harmonise's record | `harmonise/src/run-record.mjs` | 1                           | `harmonise-record-*.json` | every terminal point: publication, partial exit, all-in-step skip, dry run                                                         |
+| harmonise's record | `harmonise/src/run-record.mjs` | 2                           | `harmonise-record-*.json` | every terminal point: publication, partial exit, all-in-step skip, dry run                                                         |
 
 Triage's record fields, version 1: `schemaVersion`, `repository`, `event`
 (`eventName`, `action`), `thread` (`type`, `number`, or `null` for a run that
@@ -110,15 +110,16 @@ died before the payload parsed), `dryRun`, `model`, `policy` (`basis`,
 `branch`, `sha`, or `null` before the source resolved), `decision` (present
 iff the run reached one: `kind`, `add`, `remove` with their code-owned
 reasons, `refusals`, sanitised capped `rationale`, `signal` with its
-sanitised related title), `outcome`, `reason`, `verification` (the block
+sanitised related title and its capped, sanitised missing-required names),
+`outcome`, `reason`, `verification` (the block
 issue #274 froze — present, typed, validated; filled by the opt-in
 verification pass when it ran, the empty block otherwise).
 
-Harmonise's record fields, version 1: `schemaVersion`, `repository`,
+Harmonise's record fields, version 2: `schemaVersion`, `repository`,
 `eventName`, `sourceLanguage`, `dryRun`, `outcome`, `reason`, `pairs`
-(`proposed`, `unchanged`, `skipped`, `failed` — the four total the selected
-schedule), `pullRequest` (`number`, `created`, or `null` when the run wrote
-none), `headSha` (the base commit every read pinned to).
+(`selected`, `proposed`, `unchanged`, `skipped`, `failed` — the five total
+the selected schedule), `pullRequest` (`number`, `created`, or `null` when
+the run wrote none), `headSha` (the base commit every read pinned to).
 
 Review's artifact shapes, version 4 (the applicability family's shapes are
 version 5): the full published shape carries the twelve-fact body the
