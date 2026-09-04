@@ -34,6 +34,12 @@ export const REASON_CHARS = 300;
 /** The cap `signalBody` sanitises a related thread's title under, carried here so the record's copy cannot drift from it. */
 const RELATED_TITLE_CHARS = 80;
 
+/** The per-entry cap `decision.refusals` sanitises each model-chosen word under — the same width as the rationale's. */
+export const REFUSAL_ENTRY_CHARS = 300;
+
+/** The most refusals a record carries, so a junk answer's off-sheet list cannot bloat the record. */
+export const REFUSAL_MAX_ENTRIES = 20;
+
 /**
  * The vocabulary a record's `outcome` may carry: the run contract's terminal
  * states (`docs/run-contract.md`), whole and in its own order. A word outside
@@ -308,7 +314,7 @@ function decisionSection(decision) {
     kind: decision.kind,
     add: [...decision.add],
     remove: decision.remove.map((removal) => ({ name: removal.name, reason: removal.reason })),
-    refusals: [...decision.refusals],
+    refusals: cappedRefusals(decision.refusals),
     rationale: cappedLine(decision.rationale, RATIONALE_CHARS),
     signal:
       signal === null
@@ -344,6 +350,35 @@ function cappedLine(text, maxChars) {
     warning(`sanitiser: ${note}`);
   }
   return result.text;
+}
+
+/**
+ * The record's copy of the model's off-sheet words. Each entry passes the
+ * same boundary its sibling model-text fields pass — one line, sanitiser,
+ * declared per-entry cap — and the array itself is bounded by a declared
+ * count, so a junk answer's off-sheet list cannot bloat the record. Both
+ * truncations are visible: the sanitiser's notes and the dropped count land
+ * in the run log, never in the record's bytes.
+ *
+ * ADR 003's triage row keeps `refusals` persist-class on exactly these
+ * terms ("untrusted text enters only through the sanitiser at a declared
+ * cap"); before this helper those terms were declared but not met.
+ *
+ * @param {string[]} refusals
+ * @returns {string[]}
+ */
+function cappedRefusals(refusals) {
+  const capped = refusals
+    .slice(0, REFUSAL_MAX_ENTRIES)
+    .map((refusal) => cappedLine(refusal, REFUSAL_ENTRY_CHARS));
+  const dropped = refusals.length - capped.length;
+  if (dropped > 0) {
+    warning(
+      `sanitiser: decision.refusals capped at ${String(REFUSAL_MAX_ENTRIES)} entries; ` +
+        `${String(dropped)} dropped`,
+    );
+  }
+  return capped;
 }
 
 /** The keys a record serialises with; `decision` is the one a record may omit. */
@@ -499,6 +534,23 @@ function asDecision(value) {
     }
   }
   asStringList(decision["refusals"], "the triage record's 'decision.refusals'");
+  {
+    const refusals = /** @type {string[]} */ (decision["refusals"]);
+    if (refusals.length > REFUSAL_MAX_ENTRIES) {
+      throw new TypeError(
+        `the triage record's 'decision.refusals' carries ${String(refusals.length)} entries, ` +
+          `past its ${String(REFUSAL_MAX_ENTRIES)}-entry cap`,
+      );
+    }
+    for (const entry of refusals) {
+      if (entry.length > REFUSAL_ENTRY_CHARS) {
+        throw new TypeError(
+          `the triage record's 'decision.refusals' carries an entry past its ` +
+            `${String(REFUSAL_ENTRY_CHARS)}-character cap`,
+        );
+      }
+    }
+  }
   asBoundedString(
     decision["rationale"],
     "the triage record's 'decision.rationale'",
