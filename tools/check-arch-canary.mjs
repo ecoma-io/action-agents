@@ -19,8 +19,9 @@
 //   merely exist.
 //
 //   boundary-canary-unresolved — the same import over a subpath specifier no
-//   compiler options can resolve. Measured reality at this pin (0.22.0,
-//   which carries the upstream fix for ecoma-io/archkeep#595): archkeep
+//   compiler options can resolve. Measured reality at this pin (0.22.1,
+//   re-measured at the bump from 0.22.0 — the release closing ten
+//   organization-filed issues, #612/#619/#620 among them): archkeep
 //   REFUSES the tree — exit 3, verdict "unknown", run status "no-verdict",
 //   `coverage.complete: false` — and still names the import site in
 //   `coverage.blindSpots`. The blind spot no longer passes silently: the
@@ -139,7 +140,8 @@ if (judged === null) {
 
 // ── 2. The unresolvable illegal edge must be REFUSED, and still named ────
 //
-// Measured at this pin (0.22.0, the #595 fix): the run refuses — exit 3,
+// Measured at this pin (0.22.1, re-measured at the 0.22.0 → 0.22.1 bump —
+// the ten-fix patch release): the run refuses — exit 3,
 // verdict "unknown", run status "no-verdict", coverage.complete false — and
 // the site stays named in coverage.blindSpots. Both halves matter: a refusal
 // without a name is undiagnosable; a name without a refusal is the old
