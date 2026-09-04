@@ -25,8 +25,11 @@ export const RATIONALE_CHARS = 300;
  *
  * @typedef {object} Removal
  * @property {string} name
- * @property {"size" | "marker" | "owned"} reason
+ * @property {typeof REMOVAL_REASONS[number]} reason
  */
+
+/** The vocabulary a removal's `reason` may carry, frozen; the run record's validator holds its copy from here so the two cannot drift. */
+export const REMOVAL_REASONS = /** @type {const} */ (["size", "marker", "owned"]);
 
 /**
  * A code-derived signal a sheet-mode issue run posts as a comment: the
