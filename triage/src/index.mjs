@@ -481,6 +481,23 @@ export async function run(inputs, context, io) {
       return;
     }
 
+    // A deterministic off-sheet refusal (F-09): nothing on-sheet to act on.
+    // The ceilings refused the whole plan, the mutate never happens, and the
+    // run stays green — a refusal is the ceilings working, not a failure. The
+    // record write here is the run's whole outcome, so its failure is the red
+    // run, the same tier the event-gate skip and the withheld write sit in.
+    if (acted.add.length === 0 && acted.remove.length === 0 && acted.refusals.length > 0) {
+      writeRunRecord({
+        workspace: context.workspace,
+        directory: inputs.recordPath,
+        record: buildRecord(
+          "refused",
+          "the model's answer was entirely off-sheet — refusing rather than applying nothing",
+        ),
+      });
+      return;
+    }
+
     try {
       await mutate({
         decision: acted,
