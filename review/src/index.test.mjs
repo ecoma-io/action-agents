@@ -30,7 +30,13 @@ import {
   run,
   writeRunArtifact,
 } from "./index.mjs";
-import { buildArtifact, buildSkipRecord, serialiseArtifact } from "./artifact.mjs";
+import {
+  buildAbandonedArtifact,
+  buildArtifact,
+  buildDryRunArtifact,
+  buildSkipRecord,
+  serialiseArtifact,
+} from "./artifact.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 
@@ -590,6 +596,76 @@ describe("writeRunArtifact", () => {
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(record));
     expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 5, kind: "state", headRef: SHA });
+  });
+
+  it("names an abandoned run's reduced artifact inside the upload glob, comment id included", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    const artifact = buildAbandonedArtifact({
+      repository: "acme/widgets",
+      pullRequest: 7,
+      headRef: SHA,
+      reason: "the head moved while the run was in flight",
+      commentId: 101,
+    });
+    const file = writeRunArtifact({
+      workspace: root,
+      directory: ".review-artifact",
+      artifact,
+    });
+    expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-abandoned-${SHA}.json`));
+    expect(p.basename(file)).toMatch(/^review-artifact-.*\.json$/);
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).toBe(serialiseArtifact(artifact));
+    expect(JSON.parse(bytes)).toMatchObject({
+      schemaVersion: 4,
+      outcome: { classification: "abandoned" },
+      provenance: { commentId: 101 },
+      headRef: SHA,
+    });
+  });
+
+  it("names a dry run's reduced artifact inside the upload glob", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    const artifact = buildDryRunArtifact({
+      repository: "acme/widgets",
+      pullRequest: 7,
+      headRef: SHA,
+      reason: "dry run — the model was called, nothing was written",
+    });
+    const file = writeRunArtifact({
+      workspace: root,
+      directory: ".review-artifact",
+      artifact,
+    });
+    expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-dry-run-${SHA}.json`));
+    expect(p.basename(file)).toMatch(/^review-artifact-.*\.json$/);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({
+      schemaVersion: 4,
+      outcome: { classification: "dry-run" },
+    });
+  });
+
+  it("clears a planted file matching the upload glob before writing — every shape's name included", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-clear-"));
+    const dir = p.join(root, ".review-artifact");
+    mkdirSync(dir, { recursive: true });
+    // A PR-author-writable checkout plants files under the names every shape
+    // writes; the write clears the namespace before it lays down its own.
+    for (const planted of [
+      `review-artifact-${SHA}.json`,
+      `review-artifact-skip-${SHA}.json`,
+      `review-artifact-abandoned-${SHA}.json`,
+      `review-artifact-dry-run-${SHA}.json`,
+    ]) {
+      writeFileSync(p.join(dir, planted), "{}", "utf8");
+    }
+    writeFileSync(p.join(dir, "notes.txt"), "not the upload glob", "utf8");
+    writeRunArtifact({
+      workspace: root,
+      directory: ".review-artifact",
+      artifact: artifactFixture(),
+    });
+    expect(readdirSync(dir).sort()).toEqual(["notes.txt", `review-artifact-${SHA}.json`]);
   });
 
   it("creates a nested custom directory", () => {

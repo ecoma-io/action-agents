@@ -319,7 +319,7 @@ describe("the universe and the budget", () => {
     expect(skippedRecord.outcome.classification).toBe("skip");
   });
 
-  it("suppresses a nothing-to-review record under dry-run — nothing written, nothing delivered", async () => {
+  it("suppresses a nothing-to-review record under dry-run — the dry-run artifact is the record", async () => {
     const withMarker = forgeStub({ files: [] });
     withMarker.listComments = async () => [
       {
@@ -339,7 +339,14 @@ describe("the universe and the budget", () => {
       io: io(withMarker),
     });
     expect(dryCleared.outcome).toBe("dry-run");
-    expect(dryCleared.artifact).toBeUndefined();
+    // The skip record is suppressed — the clearing update never happens —
+    // but the dry-run artifact is the run's whole record: it names the head
+    // and the outcome without the skip record's kind.
+    const dryClearedRecord = JSON.parse(
+      serialiseArtifact(/** @type {any} */ (dryCleared.artifact)),
+    );
+    expect(dryClearedRecord.outcome.classification).toBe("dry-run");
+    expect(dryClearedRecord.kind).toBeUndefined();
 
     const bare = forgeStub({ files: [] });
     const drySkipped = await reviewPullRequest({
@@ -2310,7 +2317,7 @@ describe("the run artifact", () => {
     expect(record.outcome.classification).toBe("skip");
   });
 
-  it("a run abandoned for a moved head writes no artifact", async () => {
+  it("a run abandoned for a moved head writes its abandonment artifact", async () => {
     let reads = 0;
     const forge = forgeStub();
     forge.getPullRequest = async () => {
@@ -2326,10 +2333,15 @@ describe("the run artifact", () => {
       io: io(forge),
     });
     expect(result.outcome).toBe("abandoned");
-    expect(result.artifact).toBeUndefined();
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.outcome.classification).toBe("abandoned");
+    // Nothing was written before the head moved: no comment id, no policy.
+    expect(record.provenance).toBeUndefined();
+    expect(record.policy).toBeUndefined();
+    expect(record.findings).toBeUndefined();
   });
 
-  it("a dry run writes no artifact", async () => {
+  it("a dry run writes its dry-run artifact", async () => {
     const forge = forgeStub();
     const result = await reviewPullRequest({
       inputs: { ...INPUTS, dryRun: true },
@@ -2340,7 +2352,10 @@ describe("the run artifact", () => {
       io: io(forge),
     });
     expect(result.outcome).toBe("dry-run");
-    expect(result.artifact).toBeUndefined();
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.outcome.classification).toBe("dry-run");
+    expect(record.policy).toBeUndefined();
+    expect(record.findings).toBeUndefined();
   });
 });
 
@@ -2423,7 +2438,7 @@ describe("artifact freshness around publication", () => {
     expect(forge.calls.upserts).toHaveLength(1);
   });
 
-  it("a head moved after publication abandons with the comment standing and no artifact", async () => {
+  it("a head moved after publication abandons with the comment standing and its artifact naming the comment", async () => {
     const forge = sequencedForge({ movedAt: 4 });
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2434,9 +2449,15 @@ describe("artifact freshness around publication", () => {
       io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
     });
     expect(result.outcome).toBe("abandoned");
-    expect(result.artifact).toBeUndefined();
     expect(result.commentId).toBeUndefined();
     expect(result.reason).toContain("not written");
+    // The artifact IS written — it is the only pointer to the comment the
+    // run left standing, so an auditor can find the orphaned comment from
+    // the record alone.
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.outcome.classification).toBe("abandoned");
+    expect(record.provenance).toEqual({ commentId: 101 });
+    expect(record.policy).toBeUndefined();
     expect(forge.calls.upserts).toHaveLength(1); // the comment stands
     expect(forge.timeline.at(-1)).toBe(`read:${MOVED.slice(0, 6)}`);
   });
@@ -2452,9 +2473,13 @@ describe("artifact freshness around publication", () => {
       io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
     });
     expect(result.outcome).toBe("abandoned");
-    expect(result.artifact).toBeUndefined();
     expect(result.commentId).toBeUndefined();
     expect(result.reason).toContain("nothing written");
+    // The abandonment record still leaves the run — nothing was written to
+    // the forge, so the record is the run's whole outcome.
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.outcome.classification).toBe("abandoned");
+    expect(record.provenance).toBeUndefined();
     expect(forge.calls.upserts).toHaveLength(0); // nothing irreversible happened
     expect(forge.timeline.at(-1)).toBe(`read:${MOVED.slice(0, 6)}`);
   });
@@ -2878,7 +2903,7 @@ describe("the applicability axis", () => {
     expect(bareRecord.applicability).toBeUndefined();
   });
 
-  it("keeps zero-config runs byte-for-byte on schema version 3, no applicability anywhere", async () => {
+  it("keeps zero-config runs byte-for-byte on schema version 4, no applicability anywhere", async () => {
     const forge = forgeStub({ snapshotOverride: snapshotFor(MAINTAINER_DOCS) });
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2945,7 +2970,7 @@ describe("the applicability axis", () => {
     });
   });
 
-  it("suppresses every skip record under dry-run — nothing written means nothing", async () => {
+  it("suppresses skip records under dry-run — the rule-matched dry run writes its dry-run artifact", async () => {
     const draft = forgeStub({
       config: DOGFOOD_CONFIG,
       snapshotOverride: snapshot({ draft: true }),
@@ -2975,7 +3000,13 @@ describe("the applicability axis", () => {
     });
     expect(ruledResult.outcome).toBe("dry-run");
     expect(ruledResult.reason).toContain("release-prs");
-    expect(ruledResult.artifact).toBeUndefined();
+    // A state skip under dry-run still writes nothing (the record is the
+    // policy's skip story and the policy never spoke) — but the rule-matched
+    // dry run's artifact is its whole outcome.
+    expect(draftResult.artifact).toBeUndefined();
+    const ruledRecord = JSON.parse(serialiseArtifact(/** @type {any} */ (ruledResult.artifact)));
+    expect(ruledRecord.outcome.classification).toBe("dry-run");
+    expect(ruledRecord.applicability).toBe("automation");
   });
 
   it("skips on a paths rule before the budget refusal, fetching the listing exactly once", async () => {

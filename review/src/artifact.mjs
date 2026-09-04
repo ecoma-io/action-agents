@@ -57,7 +57,7 @@ export const applicabilityArtifactSchemaVersion = 5;
 /** @typedef {import("./gates.mjs").GateName} GateName */
 /** @typedef {import("./verify.mjs").PublishedLifecycle} PublishedLifecycle */
 
-const CLASSIFICATIONS = /** @type {const} */ (["published", "abandoned", "refused"]);
+const CLASSIFICATIONS = /** @type {const} */ (["published", "abandoned", "refused", "dry-run"]);
 const RISKS = /** @type {const} */ (["low", "medium", "high", "critical"]);
 const ATTENTION_LANES = /** @type {const} */ (["deep", "standard", "skim"]);
 const HEAD_REF = /^[0-9a-f]{40}$/;
@@ -128,6 +128,59 @@ const SKIP_RECORD_KEYS = new Set([
   "outcome",
   "policy",
 ]);
+/** The exact key set an abandonment artifact without provenance or applicability — the record for a subject that moved before any write — serialises with. */
+const ABANDONED_CORE_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+]);
+/** The exact key set an abandonment artifact with provenance but no applicability — a comment was published before the head moved, no policy was active. */
+const ABANDONED_WITH_PROVENANCE_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "provenance",
+]);
+/** The exact key set an abandonment artifact with applicability but no provenance — no comment was published, a policy was active. */
+const ABANDONED_WITH_APPLICABILITY_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "applicability",
+]);
+/** The exact key set an abandonment artifact with both provenance and applicability — a comment was published before the head moved and a policy was active. */
+const ABANDONED_FULL_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "provenance",
+  "applicability",
+]);
+/** The exact key set a dry-run artifact without applicability serialises with. */
+const DRY_RUN_CORE_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+]);
+/** The exact key set a dry-run artifact with applicability serialises with. */
+const DRY_RUN_WITH_APPLICABILITY_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "applicability",
+]);
 const APPLICABILITY_SECTION_KEYS = new Set([
   "context",
   "applicable",
@@ -149,7 +202,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * The outcome the code already classified for this run.
  *
  * @typedef {object} RunOutcome
- * @property {"published" | "abandoned" | "refused"} classification published wrote the comment; abandoned the subject moved mid-run; refused a code-owned guard fired (budget, prompt overflow, output contract)
+ * @property {"published" | "abandoned" | "refused" | "dry-run"} classification published wrote the comment; abandoned the subject moved mid-run; refused a code-owned guard fired (budget, prompt overflow, output contract); dry-run the run was under the dry-run flag
  * @property {string} reason the code-composed sentence, uncapped — it is logged, not rendered
  */
 
@@ -409,8 +462,38 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 /** The full-shape artifact, with or without an applicability fact. */
 /** @typedef {RunArtifact | RunArtifactWithApplicability} PublishedRunArtifact */
 
+/**
+ * The reduced artifact an abandoned run writes — the subject moved mid-run, so
+ * the record names the identity and the outcome. No policy, risk, findings or
+ * coverage: nothing was read beyond the classification. `provenance` carries the
+ * comment id when the run wrote a comment before the head moved.
+ *
+ * @typedef {object} AbandonedRunArtifact
+ * @property {typeof reviewArtifactSchemaVersion} schemaVersion
+ * @property {string} repository
+ * @property {number} pullRequest
+ * @property {string} headRef
+ * @property {{ classification: "abandoned", reason: string }} outcome
+ * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability fact's context, when the policy is on
+ * @property {{ commentId?: number }} [provenance] the comment identity when the run wrote one before the abandonment
+ */
+
+/**
+ * The reduced artifact a dry-run writes — the record names the identity and the
+ * outcome. No policy, risk, findings or coverage: nothing was read beyond the
+ * classification.
+ *
+ * @typedef {object} DryRunRunArtifact
+ * @property {typeof reviewArtifactSchemaVersion} schemaVersion
+ * @property {string} repository
+ * @property {number} pullRequest
+ * @property {string} headRef
+ * @property {{ classification: "dry-run", reason: string }} outcome
+ * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability fact's context, when the policy is on
+ */
+
 /** Every serialisable shape this module emits. */
-/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord} AnyRunArtifact */
+/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord | AbandonedRunArtifact | DryRunRunArtifact} AnyRunArtifact */
 
 /**
  * The typed refusal. Every refusal this module raises is one of these, so a
@@ -1147,6 +1230,94 @@ export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind
 }
 
 /**
+ * Builds the reduced artifact an abandoned run writes — the subject moved
+ * mid-run, so the record names only the identity and the outcome. No policy,
+ * risk, findings or coverage: nothing was read beyond the classification.
+ * When a comment was published before the head moved, `commentId` names the
+ * orphaned comment so an auditor can find it.
+ *
+ * @param {object} abandoned
+ * @param {string} abandoned.repository "owner/repo", as the forge names it
+ * @param {number} abandoned.pullRequest the pull request number
+ * @param {string} abandoned.headRef the head the abandoned run describes, full 40 hex chars
+ * @param {string} abandoned.reason the code-composed sentence, uncapped
+ * @param {number} [abandoned.commentId] the published comment's id, when a comment was written before the abandonment
+ * @param {import("./applicability.mjs").ExecutionContext} [abandoned.applicability] the applicability context, when the policy was active
+ * @throws {ArtifactError} on any malformed field
+ * @returns {AbandonedRunArtifact}
+ */
+export function buildAbandonedArtifact({
+  repository,
+  pullRequest,
+  headRef,
+  reason,
+  commentId,
+  applicability,
+}) {
+  const repo = asNonEmptyString(repository, "abandoned run.repository");
+  const number = asPositiveInt(pullRequest, "abandoned run.pullRequest");
+  const ref = asNonEmptyString(headRef, "abandoned run.headRef");
+  if (!HEAD_REF.test(ref)) {
+    throw new ArtifactError("abandoned run.headRef must be a 40-char hex commit sha — refused");
+  }
+  asNonEmptyString(reason, "abandoned run.reason");
+  /** @type {{ commentId?: number }} */
+  const provenance = {};
+  if (commentId !== undefined) {
+    provenance.commentId = asPositiveInt(commentId, "abandoned run.commentId");
+  }
+  const context =
+    applicability !== undefined
+      ? asEnum(applicability, EXECUTION_CONTEXTS, "abandoned run.applicability")
+      : undefined;
+  return deepFreeze({
+    schemaVersion: reviewArtifactSchemaVersion,
+    repository: repo,
+    pullRequest: number,
+    headRef: ref,
+    outcome: { classification: "abandoned", reason },
+    ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
+    ...(context !== undefined ? { applicability: context } : {}),
+  });
+}
+
+/**
+ * Builds the reduced artifact a dry-run writes — the record names only the
+ * identity and the outcome. No policy, risk, findings or coverage: nothing was
+ * read beyond the classification.
+ *
+ * @param {object} dry
+ * @param {string} dry.repository "owner/repo", as the forge names it
+ * @param {number} dry.pullRequest the pull request number
+ * @param {string} dry.headRef the head the dry run describes, full 40 hex chars
+ * @param {string} dry.reason the code-composed sentence, uncapped
+ * @param {import("./applicability.mjs").ExecutionContext} [dry.applicability] the applicability context, when the policy was active
+ * @throws {ArtifactError} on any malformed field
+ * @returns {DryRunRunArtifact}
+ */
+export function buildDryRunArtifact({ repository, pullRequest, headRef, reason, applicability }) {
+  const repo = asNonEmptyString(repository, "dry run.repository");
+  const number = asPositiveInt(pullRequest, "dry run.pullRequest");
+  const ref = asNonEmptyString(headRef, "dry run.headRef");
+  if (!HEAD_REF.test(ref)) {
+    throw new ArtifactError("dry run.headRef must be a 40-char hex commit sha — refused");
+  }
+  asNonEmptyString(reason, "dry run.reason");
+  const context =
+    applicability !== undefined
+      ? asEnum(applicability, EXECUTION_CONTEXTS, "dry run.applicability")
+      : undefined;
+  return deepFreeze({
+    schemaVersion: reviewArtifactSchemaVersion,
+    repository: repo,
+    pullRequest: number,
+    headRef: ref,
+    outcome: { classification: "dry-run", reason },
+    ...(context !== undefined ? { applicability: context } : {}),
+  });
+}
+
+/**
  * Validates one applicability section, fail-closed. Beyond per-field
  * vocabulary it enforces the cross-field law: basis 'rule' names a rule and
  * only a rule decision does; a full-shape artifact refuses the state basis
@@ -1319,7 +1490,19 @@ function hasExactKeys(obj, keys) {
 export function serialiseArtifact(artifact) {
   const record = asRecord(artifact, "artifact");
   if (record.schemaVersion === reviewArtifactSchemaVersion) {
-    assertExactKeys(record, "artifact", ARTIFACT_KEYS);
+    // The review-artifact family's shapes: the full published shape, the
+    // reduced abandonment shapes, and the reduced dry-run shapes.
+    if (
+      !hasExactKeys(record, ARTIFACT_KEYS) &&
+      !hasExactKeys(record, ABANDONED_CORE_KEYS) &&
+      !hasExactKeys(record, ABANDONED_WITH_PROVENANCE_KEYS) &&
+      !hasExactKeys(record, ABANDONED_WITH_APPLICABILITY_KEYS) &&
+      !hasExactKeys(record, ABANDONED_FULL_KEYS) &&
+      !hasExactKeys(record, DRY_RUN_CORE_KEYS) &&
+      !hasExactKeys(record, DRY_RUN_WITH_APPLICABILITY_KEYS)
+    ) {
+      throw new ArtifactError("artifact keys fit no schema of this version — refused");
+    }
   } else if (record.schemaVersion === applicabilityArtifactSchemaVersion) {
     // The applicability family's shapes: the full shape carrying an
     // applicability fact, the reduced shape a skipped run writes, and the

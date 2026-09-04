@@ -13,7 +13,7 @@
 //      under the declared policy, an unknown failure once, and an auth
 //      failure never.
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,7 @@ import {
 } from "./tm.mjs";
 import { DEFAULT_POLICY, DELAY_CLASSES } from "./recovery.mjs";
 import { MAX_SOURCE_BYTES } from "./plan.mjs";
+import { harmoniseRecordSchemaVersion, serialiseHarmoniseRecord } from "./run-record.mjs";
 
 /**
  * A real event payload file on disk: the default `readEvent` in the entry
@@ -345,17 +346,31 @@ const evidence = {
 
 /**
  * An Io whose forge is given and whose chat echoes by default; explicit
- * answers replace the echo.
+ * answers replace the echo. The record write is a spy collecting every
+ * record the run composed — the file's path is a fact of the wiring, not
+ * of the pipeline under test here.
  *
  * @param {ReturnType<typeof forge>} forgeDouble
  * @param {(string | Error)[]} [answers]
+ * @returns {{ forge: any, chat: any, evidence: any, sleep: (ms: number) => Promise<void>, writeRecord: (input: { record: any }) => string, records: any[] }}
  */
 function io(forgeDouble, answers = []) {
   const chatDouble =
     answers.length > 0
       ? chat(answers)
       : /** @type {any} */ ({ calls: () => 0, ...{}, ...echoingChat() });
-  return /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+  /** @type {any[]} */
+  const records = [];
+  return /** @type {any} */ ({
+    forge: forgeDouble,
+    chat: chatDouble,
+    evidence,
+    writeRecord: (/** @type {{ record: any }} */ { record }) => {
+      records.push(record);
+      return `harmonise-record-${record.headSha}.json`;
+    },
+    records,
+  });
 }
 
 /** @returns {ReturnType<typeof import("#core/runtime.mjs").readContext>} */
@@ -365,7 +380,9 @@ function context() {
     repo: "action-agents",
     eventName: "workflow_dispatch",
     eventPath: EVENT_PATH,
-    workspace: "/work",
+    // A real directory: the run record's write is confined to the workspace
+    // root, so the ceiling must resolve against somewhere that exists.
+    workspace: mkdtempSync(join(tmpdir(), "harmonise-workspace-")),
     apiUrl: "https://api.github.com",
   };
 }
@@ -2982,6 +2999,171 @@ describe("run with a bounded-concurrency pool", () => {
     // Every pair degraded to the model path; the pool ran at the bound.
     expect(chatDouble.calls()).toBe(4);
     expect(chatDouble.peak()).toBe(2);
+  });
+});
+
+describe("the run record (#297)", () => {
+  it("a published run writes its record — the terminal state, the pair accounting and the pull request", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = io(forgeDouble);
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(ioDouble.records).toHaveLength(1);
+    expect(ioDouble.records[0]).toEqual({
+      schemaVersion: harmoniseRecordSchemaVersion,
+      repository: "ecoma-io/action-agents",
+      eventName: "workflow_dispatch",
+      sourceLanguage: "en",
+      dryRun: false,
+      outcome: "published",
+      reason: "opened pull request #42 (harmonise/en → main)",
+      pairs: { proposed: 1, unchanged: 0, skipped: 0, failed: 0 },
+      pullRequest: { number: 42, created: true },
+      headSha: forgeDouble.baseSha,
+    });
+  });
+
+  it("a dry run records skip — a null pull request and the counts the schedule held", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = io(forgeDouble);
+
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+
+    expect(ioDouble.records).toHaveLength(1);
+    expect(ioDouble.records[0].outcome).toBe("skip");
+    expect(ioDouble.records[0].dryRun).toBe(true);
+    expect(ioDouble.records[0].pullRequest).toBeNull();
+    expect(ioDouble.records[0].reason).toBe("dry run — nothing was written");
+    expect(ioDouble.records[0].pairs).toEqual({ proposed: 1, unchanged: 0, skipped: 0, failed: 0 });
+  });
+
+  it("a run that published some pairs and lost others records the partial exit", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(
+      makeRepo({ documents: { "manual/dev.md": "# Dev\n\nFine.\n" } }),
+      makeInventory(["manual/dev.md", "manual/lost.md"]),
+    );
+    const ioDouble = io(forgeDouble);
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).rejects.toThrow(/1 pair\(s\) failed/);
+
+    expect(ioDouble.records).toHaveLength(1);
+    expect(ioDouble.records[0].outcome).toBe("partial");
+    expect(ioDouble.records[0].pullRequest).toEqual({ number: 42, created: true });
+    expect(ioDouble.records[0].pairs).toEqual({ proposed: 1, unchanged: 0, skipped: 0, failed: 1 });
+    expect(ioDouble.records[0].reason).toMatch(/^opened pull request #42; 1 pair\(s\) failed/);
+  });
+
+  it("a run with nothing to propose records skip — the unchanged pairs are counted, none proposed", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const published = "# Dev\n\nTraduit.\n";
+    // The record is current — this run's source, policy and version — so the
+    // deterministic gate proves the pair unchanged at zero model calls and
+    // there is nothing to re-pin: no branch, no commit, no pull request.
+    const currentRecord = {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      sourcePath: "manual/dev.md",
+      destinationPath: "manual/vi/dev.md",
+      language: "vi",
+      sourceFingerprint: contentFingerprint("# Dev\n\nProse.\n"),
+      translationFingerprint: contentFingerprint(published),
+      policyFingerprint: POLICY,
+      transformationVersion: TRANSFORMATION_VERSION,
+    };
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/vi/dev.md": published },
+        state: renderState([currentRecord]),
+      }),
+      makeInventory(["manual/dev.md", "manual/vi/dev.md"]),
+    );
+    const ioDouble = io(forgeDouble);
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(ioDouble.records[0].outcome).toBe("skip");
+    expect(ioDouble.records[0].pullRequest).toBeNull();
+    expect(ioDouble.records[0].reason).toBe(
+      "nothing to propose — no branch, no commit, no pull request",
+    );
+    expect(ioDouble.records[0].pairs).toEqual({ proposed: 0, unchanged: 1, skipped: 0, failed: 0 });
+  });
+
+  it("a record-write failure before anything is published is the red run", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = io(forgeDouble);
+    ioDouble.writeRecord = () => {
+      throw new Error("the disk is full");
+    };
+
+    // The dry run writes its record before it exits, so the loss is the run's
+    // own outcome — a green run with no record is an unauditable green.
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(/the disk is full/);
+  });
+
+  it("a record-write failure after publication is a logged loss, and the run keeps its verdict", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = io(forgeDouble);
+    ioDouble.writeRecord = () => {
+      throw new Error("the disk is full");
+    };
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+    expect(logged(log)).toMatch(/the run record was not written: the disk is full/);
+    expect(logged(log)).toMatch(/opened pull request #42/);
+  });
+
+  it("the real record write lands one file in the workspace, byte-deterministic (I15)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const ctx = context();
+    const forgeDouble = forge(makeRepo());
+    // No writeRecord double: the run's default write is the real one, and
+    // this is the confinement and naming it actually performs.
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: echoingChat(), evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, ctx, ioDouble),
+    ).resolves.toBeUndefined();
+
+    const file = join(
+      ctx.workspace,
+      ".harmonise-record",
+      `harmonise-record-${forgeDouble.baseSha}.json`,
+    );
+    const bytes = readFileSync(file, "utf8");
+    const record = JSON.parse(bytes);
+    expect(record.outcome).toBe("published");
+    expect(record.headSha).toBe(forgeDouble.baseSha);
+    // Sorted keys, no whitespace, no trailing newline — the serialiser's own
+    // output, and nothing else.
+    expect(bytes).toBe(serialiseHarmoniseRecord(record));
+    expect(bytes).not.toMatch(/\n$/);
+  });
+
+  it("a record-path that escapes the workspace is refused — the ceiling holds for writes too (I7)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const ctx = context();
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: echoingChat(), evidence });
+
+    await expect(
+      run(readInputs({ ...runner, "INPUT_RECORD-PATH": "../outside" }), ctx, ioDouble),
+    ).rejects.toThrow(/resolves outside the workspace/);
+    // A dry run, so the refusal fires before anything was published.
+    expect(forgeDouble.writes.map((/** @type {{ op: string }} */ w) => w.op)).toHaveLength(0);
   });
 });
 
