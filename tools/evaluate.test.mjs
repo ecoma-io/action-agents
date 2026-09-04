@@ -455,6 +455,21 @@ test("loadCorpus accepts a minimal valid corpus directory", async () => {
   }
 });
 
+test("loadCorpus treats an absent answers/ directory as the zero-ask case, not a defect", async () => {
+  // git does not track empty directories: a zero-ask entry (an event skip,
+  // a nothing-to-review) commits no answers/ at all, and a fresh clone must
+  // load it. This is the CI failure that pinned the rule (PR #284).
+  const root = writeTempCorpus("triage-entry");
+  rmSync(p.join(root, "triage-entry", "answers"), { recursive: true, force: true });
+  try {
+    const entries = await loadCorpus(root, { floor: { triage: 1, review: 0 } });
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0]["answers"], []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("loadCorpus refuses a corpus below the seed floor", async () => {
   const root = writeTempCorpus("triage-entry");
   try {

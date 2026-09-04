@@ -104,6 +104,7 @@
  */
 
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -574,7 +575,11 @@ export async function loadCorpus(corpusRoot, options = {}) {
     }
 
     const answerDir = p.join(dir, "answers");
-    const answerFiles = readdirSync(answerDir).sort();
+    // A zero-ask entry records an EMPTY answers/ directory — and git does
+    // not track empty directories, so a fresh clone has no answers/ at all.
+    // An absent directory is the zero-ask case, not a defect; the answer
+    // files that DO exist are still validated below, name-shape and JSON.
+    const answerFiles = existsSync(answerDir) ? readdirSync(answerDir).sort() : [];
     /** @type {Array<Record<string, unknown>>} */
     const answers = [];
     for (const file of answerFiles) {
