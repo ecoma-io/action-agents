@@ -1,0 +1,5 @@
+{
+  "content": "{\"labels\":[\"bug\"],\"rationale\":\"The reporter gives a reproduction and a clear wrong-result symptom after a completed reindex, which is a defect in behaviour rather than a usage question.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

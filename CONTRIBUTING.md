@@ -285,11 +285,13 @@ commitlint.
 the layer under them, and the things around both:
 
 `core`, `triage`, `review`, `harmonise`, `docs`, `workspace`,
-`deps`, `ci`.
+`evaluation`, `deps`, `ci`.
 
 `deps` and `ci` are on that list because Renovate writes them, and a scope list
 without them would fail commitlint on every dependency update. `workspace` is on
-it because release-please's release pull request uses it.
+it because release-please's release pull request uses it. `evaluation` covers
+the offline corpus and evaluator under `evaluation/`, which serve every action
+and none in particular.
 
 ```text
 feat(review): read the diff one file at a time instead of seeding all of it

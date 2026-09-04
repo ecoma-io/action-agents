@@ -1,0 +1,16 @@
+{
+  "content": "",
+  "toolCalls": [
+    {
+      "id": "call-1",
+      "name": "read_file",
+      "arguments": "{\"path\":\"src/exporter.js\"}"
+    },
+    {
+      "id": "call-2",
+      "name": "read_file",
+      "arguments": "{\"path\":\"src/summary.js\"}"
+    }
+  ],
+  "finishReason": "tool_calls"
+}

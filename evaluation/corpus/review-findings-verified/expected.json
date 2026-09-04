@@ -1,0 +1,56 @@
+{
+  "outcome": "published",
+  "findings": [
+    {
+      "file": "src/exporter.js",
+      "line": 7,
+      "severity": "concern",
+      "valid": true
+    },
+    {
+      "file": "src/exporter.js",
+      "line": 14,
+      "severity": "concern",
+      "valid": true
+    },
+    {
+      "file": "src/exporter.js",
+      "line": 22,
+      "severity": "concern",
+      "valid": true
+    },
+    {
+      "file": "src/summary.js",
+      "line": 8,
+      "severity": "concern",
+      "valid": true
+    },
+    {
+      "file": "src/summary.js",
+      "line": 12,
+      "severity": "concern",
+      "valid": true
+    },
+    {
+      "file": "src/exporter.js",
+      "line": 2,
+      "severity": "nit",
+      "valid": false,
+      "note": "a blank line carries no defect; a finding here would be invented"
+    },
+    {
+      "file": "src/summary.js",
+      "line": 4,
+      "severity": "concern",
+      "valid": false,
+      "note": "the import line is ordinary; a finding here would be invented"
+    }
+  ],
+  "verdicts": {
+    "src/exporter.js:7": "confirmed",
+    "src/exporter.js:14": "confirmed",
+    "src/exporter.js:22": "refuted",
+    "src/summary.js:8": "confirmed",
+    "src/summary.js:12": "uncertain"
+  }
+}

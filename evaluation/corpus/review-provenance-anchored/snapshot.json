@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": ""
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "opened",
+    "payload": {
+      "action": "opened",
+      "pull_request": {
+        "number": 4123,
+        "base": {
+          "ref": "main",
+          "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 4123,
+    "title": "Memoise lookups",
+    "body": "Adds a small lookup cache. Synthetic description.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": null,
+      ".github/action-agents/review/instruction.md": null
+    }
+  },
+  "headFiles": {
+    "src/cache.js": "\"use strict\";\n\nconst entries = new Map();\n\nexport function remember(key, value) {\n  if (entries.has(key)) {\n    return entries.get(key);\n  }\n  const created = { key, value };\n  entries.set(key, value);\n  return created;\n}"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": {
+      "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a"
+    },
+    "getPullRequest": {
+      "number": 4123,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "Memoise lookups",
+      "body": "Adds a small lookup cache. Synthetic description.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "feat/synthetic-4123",
+        "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+      }
+    },
+    "listPullRequestFiles": [
+      {
+        "filename": "src/cache.js",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 0,
+        "patch": "@@ -4,6 +4,8 @@\n export function remember(key, value) {\n   if (entries.has(key)) {\n     return entries.get(key);\n+    }\n+  const created = { key, value };"
+      }
+    ],
+    "listComments": [],
+    "whoami": {
+      "login": "github-actions[bot]"
+    }
+  }
+}

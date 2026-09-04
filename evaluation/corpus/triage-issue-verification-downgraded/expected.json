@@ -1,0 +1,12 @@
+{
+  "outcome": "published",
+  "adds": ["bug"],
+  "removes": [],
+  "refusals": ["docs"],
+  "commentExpected": false,
+  "signalExpected": false,
+  "verification": {
+    "requested": true,
+    "downgraded": ["add:docs"]
+  }
+}
