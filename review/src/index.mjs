@@ -8,7 +8,7 @@
  * that is neither issue nor pull request is in `triage`.
  */
 
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 
 import * as p from "node:path";
 
@@ -214,6 +214,18 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
     }
   }
   mkdirSync(target, { recursive: true });
+  // Clear any previously-written file matching the upload glob inside the
+  // target directory. A PR-author-writable checkout can plant a file under a
+  // matching name; the run clears its own namespace before writing, so a
+  // planted file cannot ride the `review-artifact-*.json` upload glob on a
+  // path the action itself wrote nothing to. The glob is deliberately narrow
+  // (`if-no-files-found: ignore`), but clearing at write time removes the
+  // planted file even when the run ends on a path that writes no artifact.
+  for (const old of readdirSync(target)) {
+    if (/^review-artifact-.*\.json$/u.test(old)) {
+      rmSync(p.join(target, old), { force: true });
+    }
+  }
   // A directory on the way may be a symlink pointing outside the workspace
   // or into the git metadata; resolve the real location and hold it to the
   // same ceiling and the same .git rule before a single byte is written.
