@@ -239,11 +239,19 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
     }
   }
   // A skip record names its kind so a durable skip never reads as a reviewed
-  // run; both names sit inside the upload glob `review-artifact-*.json`.
-  const name =
+  // run; abandonment and dry-run artifacts are similarly distinguished so a
+  // consumer reading the file name knows the outcome before opening it.
+  // All names sit inside the upload glob `review-artifact-*.json`.
+  const classification = /** @type {Record<string, unknown>} */ (artifact.outcome).classification;
+  const prefix =
     "kind" in artifact
-      ? `review-artifact-skip-${artifact.headRef}.json`
-      : `review-artifact-${artifact.headRef}.json`;
+      ? "review-artifact-skip"
+      : classification === "abandoned"
+        ? "review-artifact-abandoned"
+        : classification === "dry-run"
+          ? "review-artifact-dry-run"
+          : "review-artifact";
+  const name = `${prefix}-${artifact.headRef}.json`;
   const file = p.join(real, name);
   writeFileSync(file, serialiseArtifact(artifact), "utf8");
   return file;

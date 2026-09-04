@@ -12,7 +12,9 @@ import {
   applicabilityArtifactSchemaVersion,
   applicabilitySection,
   assertFreshArtifact,
+  buildAbandonedArtifact,
   buildArtifact,
+  buildDryRunArtifact,
   buildSkippedArtifact,
   buildSkipRecord,
   reviewArtifactSchemaVersion,
@@ -1457,6 +1459,75 @@ describe("serialiseArtifact", () => {
     withUndefined.findings[0].message = undefined;
     expect(() => serialiseArtifact(withUndefined)).toThrow(ArtifactError);
   });
+
+  it("serialises every reduced shape this version declares", () => {
+    const withProvenance = buildAbandonedArtifact({
+      repository: "ecoma-io/ecoma",
+      pullRequest: 12,
+      headRef: HEAD,
+      reason: "the head moved while the run was in flight",
+      commentId: 101,
+    });
+    const withApplicability = buildDryRunArtifact({
+      repository: "ecoma-io/ecoma",
+      pullRequest: 12,
+      headRef: HEAD,
+      reason: "dry run — the model was called, nothing was written",
+      applicability: "automation",
+    });
+    expect(() => serialiseArtifact(withProvenance)).not.toThrow();
+    expect(() => serialiseArtifact(withApplicability)).not.toThrow();
+    expect(JSON.parse(serialiseArtifact(withProvenance))).toStrictEqual(withProvenance);
+    expect(JSON.parse(serialiseArtifact(withApplicability))).toStrictEqual(withApplicability);
+  });
+
+  it("refuses a reduced shape that grew an unknown key — the exact sets are closed", () => {
+    for (const built of [
+      buildAbandonedArtifact({
+        repository: "ecoma-io/ecoma",
+        pullRequest: 12,
+        headRef: HEAD,
+        reason: "the head moved while the run was in flight",
+      }),
+      buildDryRunArtifact({
+        repository: "ecoma-io/ecoma",
+        pullRequest: 12,
+        headRef: HEAD,
+        reason: "dry run — the model was called, nothing was written",
+      }),
+    ]) {
+      for (const grownKey of ["policy", "findings", "risk", "kind"]) {
+        const grown = /** @type {any} */ (structuredClone(built));
+        grown[grownKey] = grownKey === "findings" || grownKey === "risk" ? [] : {};
+        expect(() => serialiseArtifact(grown)).toThrow(ArtifactError);
+      }
+    }
+  });
+
+  it("refuses a record stamped with a schema version either family has retired", () => {
+    // The bare family moved 3 → 4 and the applicability family 4 → 5. A
+    // full-shape record still wearing the retired bare-family number 3 names
+    // no schema this module emits; the applicability family's shape wearing
+    // its own retired 4 fails its version's key sets instead — both refused.
+    expect(() =>
+      serialiseArtifact(/** @type {any} */ ({ ...buildArtifact(facts()), schemaVersion: 3 })),
+    ).toThrow(/does not match a schema this module emits/);
+    const withApplicability = buildArtifact(
+      facts({
+        applicability: applicabilitySection({
+          context: "automation",
+          applicable: true,
+          posture: "automation",
+          matchedRule: "release-prs",
+          basis: "rule",
+          inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+        }),
+      }),
+    );
+    expect(() =>
+      serialiseArtifact(/** @type {any} */ ({ ...withApplicability, schemaVersion: 4 })),
+    ).toThrow(/fit no schema of this version/);
+  });
 });
 
 describe("the canonical sort order", () => {
@@ -1899,5 +1970,126 @@ describe("buildSkipRecord", () => {
       expect(name).toMatch(/^review-artifact-.*\.json$/);
       expect(name).toContain(record.kind === "state" ? "skip" : "skip");
     }
+  });
+});
+
+describe("buildAbandonedArtifact", () => {
+  /** A valid abandonment's inputs — the shape run.mjs hands over. */
+  const abandonedInput = (over = {}) => ({
+    repository: "acme/widgets",
+    pullRequest: 7,
+    headRef: HEAD,
+    reason: "#7 moved while it was being reviewed — nothing written",
+    ...over,
+  });
+
+  it("builds the reduced shape — review version, exact keys, no policy or findings", () => {
+    const record = buildAbandonedArtifact(abandonedInput());
+    expect(record.schemaVersion).toBe(reviewArtifactSchemaVersion);
+    expect(record.outcome).toEqual({
+      classification: "abandoned",
+      reason: "#7 moved while it was being reviewed — nothing written",
+    });
+    const round = JSON.parse(serialiseArtifact(record));
+    expect(Object.keys(round).sort()).toEqual(
+      ["headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+    );
+  });
+
+  it("carries the comment id when a comment was published before the head moved", () => {
+    const record = buildAbandonedArtifact(abandonedInput({ commentId: 101 }));
+    const round = JSON.parse(serialiseArtifact(record));
+    expect(round.provenance).toEqual({ commentId: 101 });
+    expect(Object.keys(round).sort()).toEqual(
+      ["headRef", "outcome", "provenance", "pullRequest", "repository", "schemaVersion"].sort(),
+    );
+  });
+
+  it("carries the applicability context when the policy was active", () => {
+    const record = buildAbandonedArtifact(abandonedInput({ applicability: "automation" }));
+    const round = JSON.parse(serialiseArtifact(record));
+    expect(round.applicability).toBe("automation");
+    expect(
+      buildAbandonedArtifact(abandonedInput({ commentId: 101, applicability: "automation" })),
+    ).toBeDefined();
+    const both = JSON.parse(
+      serialiseArtifact(
+        buildAbandonedArtifact(abandonedInput({ commentId: 9, applicability: "maintainer" })),
+      ),
+    );
+    expect(both.provenance).toEqual({ commentId: 9 });
+    expect(both.applicability).toBe("maintainer");
+  });
+
+  it("serialises byte-deterministically — same inputs, identical bytes", () => {
+    const first = serialiseArtifact(buildAbandonedArtifact(abandonedInput()));
+    const second = serialiseArtifact(buildAbandonedArtifact(abandonedInput()));
+    expect(first).toBe(second);
+    const shuffled = buildAbandonedArtifact(abandonedInput({ headRef: HEAD, pullRequest: 7 }));
+    expect(serialiseArtifact(shuffled)).toBe(first);
+  });
+
+  it("refuses a bad head sha and empty text — fail-closed", () => {
+    expect(() => buildAbandonedArtifact(abandonedInput({ headRef: "main" }))).toThrow(
+      /abandoned run\.headRef must be a 40-char hex commit sha/,
+    );
+    expect(() => buildAbandonedArtifact(abandonedInput({ repository: "" }))).toThrow(ArtifactError);
+    expect(() => buildAbandonedArtifact(abandonedInput({ reason: "" }))).toThrow(ArtifactError);
+    expect(() => buildAbandonedArtifact(abandonedInput({ pullRequest: 0 }))).toThrow(ArtifactError);
+    expect(() =>
+      buildAbandonedArtifact(abandonedInput({ commentId: /** @type {any} */ (0) })),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildAbandonedArtifact(abandonedInput({ applicability: /** @type {any} */ ("enterprise") })),
+    ).toThrow(/outside the vocabulary/);
+  });
+});
+
+describe("buildDryRunArtifact", () => {
+  /** A valid dry-run's inputs — the shape run.mjs hands over. */
+  const dryInput = (over = {}) => ({
+    repository: "acme/widgets",
+    pullRequest: 7,
+    headRef: HEAD,
+    reason: "dry run: nothing written",
+    ...over,
+  });
+
+  it("builds the reduced shape — review version, exact keys, no policy or findings", () => {
+    const record = buildDryRunArtifact(dryInput());
+    expect(record.schemaVersion).toBe(reviewArtifactSchemaVersion);
+    expect(record.outcome).toEqual({
+      classification: "dry-run",
+      reason: "dry run: nothing written",
+    });
+    const round = JSON.parse(serialiseArtifact(record));
+    expect(Object.keys(round).sort()).toEqual(
+      ["headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+    );
+  });
+
+  it("carries the applicability context when the policy was active", () => {
+    const round = JSON.parse(
+      serialiseArtifact(buildDryRunArtifact(dryInput({ applicability: "automation" }))),
+    );
+    expect(round.applicability).toBe("automation");
+  });
+
+  it("serialises byte-deterministically — same inputs, identical bytes", () => {
+    const first = serialiseArtifact(buildDryRunArtifact(dryInput()));
+    const second = serialiseArtifact(buildDryRunArtifact(dryInput()));
+    expect(first).toBe(second);
+  });
+
+  it("refuses a bad head sha and empty text — fail-closed", () => {
+    expect(() => buildDryRunArtifact(dryInput({ headRef: "main" }))).toThrow(
+      /dry run\.headRef must be a 40-char hex commit sha/,
+    );
+    expect(() => buildDryRunArtifact(dryInput({ repository: "" }))).toThrow(ArtifactError);
+    expect(() => buildDryRunArtifact(dryInput({ reason: "" }))).toThrow(ArtifactError);
+    expect(() => buildDryRunArtifact(dryInput({ pullRequest: 0 }))).toThrow(ArtifactError);
+    expect(() =>
+      buildDryRunArtifact(dryInput({ applicability: /** @type {any} */ ("enterprise") })),
+    ).toThrow(/outside the vocabulary/);
   });
 });

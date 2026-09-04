@@ -15,7 +15,8 @@
  * process state.
  */
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import * as p from "node:path";
 
 import { createChat } from "#core/chat.mjs";
 import { createForge } from "#core/forge.mjs";
@@ -71,6 +72,11 @@ import {
   delayClass,
   nextAction,
 } from "./recovery.mjs";
+import {
+  buildHarmoniseRecord,
+  harmoniseRecordFilename,
+  serialiseHarmoniseRecord,
+} from "./run-record.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -125,7 +131,7 @@ function classifyPairFailure(cause) {
 }
 
 /**
- * @typedef {SharedInputs & { configPath: string, sourceLanguage: string, documents: string[], dryRun: boolean, requestTimeoutMs: number }} Inputs
+ * @typedef {SharedInputs & { configPath: string, sourceLanguage: string, documents: string[], dryRun: boolean, requestTimeoutMs: number, recordPath: string }} Inputs
  */
 
 /**
@@ -141,6 +147,9 @@ export function readInputs(env = process.env) {
     // default here would silently hide documents the config declared.
     documents: getListInput("documents", { default: [] }, env),
     dryRun: getBooleanInput("dry-run", { default: true }, env),
+    // Where inside the workspace the run record lands. The default agrees
+    // with the manifest; the write is confined below either way.
+    recordPath: getInput("record-path", { default: ".harmonise-record" }, env),
   };
 }
 
@@ -153,6 +162,7 @@ export function readInputs(env = process.env) {
  * @property {ReturnType<typeof createEvidence>} evidence
  * @property {(ms: number) => Promise<void>} sleep
  * @property {() => Promise<Record<string, unknown>>} readEvent
+ * @property {(input: { record: import("./run-record.mjs").HarmoniseRecord }) => string} writeRecord serialises the record into the workspace and returns the file it wrote
  */
 
 /**
@@ -194,6 +204,10 @@ function realIo(inputs, context, overrides = {}) {
           throw error;
         }
       }),
+    writeRecord:
+      overrides.writeRecord ??
+      (({ record }) =>
+        writeRunRecord({ workspace: context.workspace, directory: inputs.recordPath, record })),
   };
 }
 
@@ -792,8 +806,37 @@ export async function run(inputs, context, io) {
       ? `${String(failedLines.length)} pair(s) failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`
       : "";
 
+  // The run's pair accounting, as the record carries it: the four counts
+  // total the selected schedule, and the record validator refuses a record
+  // that does not. `unchanged` gathers both noop verdicts — a proven-in-step
+  // skip and a model's endorsement — the two faces of "already in step".
+  const unchangedCount = outcomes.filter(
+    (entry) => entry.outcome === "unchanged" || entry.outcome === "unchanged-skipped",
+  ).length;
+  const pairCounts = {
+    proposed: proposed.length,
+    unchanged: unchangedCount,
+    skipped: skippedLines.length,
+    failed: failedLines.length,
+  };
+  const recordBase = {
+    repository: `${context.owner}/${context.repo}`,
+    eventName: context.eventName,
+    sourceLanguage: config.sourceLanguage,
+    dryRun: inputs.dryRun,
+    pairs: pairCounts,
+    headSha: source.sha,
+  };
+
   if (inputs.dryRun) {
     info("dry run — nothing was written");
+    const record = buildHarmoniseRecord({
+      ...recordBase,
+      outcome: "skip",
+      reason: "dry run — nothing was written",
+      pullRequest: null,
+    });
+    world.writeRecord({ record });
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -803,6 +846,13 @@ export async function run(inputs, context, io) {
     // on a schedule. No branch, no commit, no pull request. A run that only
     // re-pinned records is not this case: its state write still publishes.
     info("nothing to propose — no branch, no commit, no pull request");
+    const record = buildHarmoniseRecord({
+      ...recordBase,
+      outcome: "skip",
+      reason: "nothing to propose — no branch, no commit, no pull request",
+      pullRequest: null,
+    });
+    world.writeRecord({ record });
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -912,6 +962,28 @@ export async function run(inputs, context, io) {
       : `updated pull request #${String(pullRequest.number)} in place (${branch} → ${source.branch})`,
   );
 
+  // Published first, red second — exactly the specification's ordering. The
+  // record is written here, after the publication landed, so a record-write
+  // failure is a logged loss and the run keeps its verdict (F-14's posture).
+  const record = buildHarmoniseRecord({
+    ...recordBase,
+    outcome: failureReport !== "" ? "partial" : "published",
+    reason:
+      failureReport !== ""
+        ? `${pullRequest.created ? "opened" : "updated"} pull request #${String(pullRequest.number)}; ${failureReport.split("\n")[0]}`
+        : pullRequest.created
+          ? `opened pull request #${String(pullRequest.number)} (${branch} → ${source.branch})`
+          : `updated pull request #${String(pullRequest.number)} in place (${branch} → ${source.branch})`,
+    pullRequest: { number: pullRequest.number, created: pullRequest.created },
+  });
+  try {
+    world.writeRecord({ record });
+  } catch (cause) {
+    info(
+      `harmonise: the run record was not written: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+
   // Published first, red second — exactly the specification's ordering.
   if (failureReport !== "") throw new Error(failureReport);
 }
@@ -919,6 +991,51 @@ export async function run(inputs, context, io) {
 /** @param {string} sourceLanguage @returns {string} */
 function branchName(sourceLanguage) {
   return `harmonise/${sourceLanguage}`;
+}
+
+/**
+ * Writes the serialised run record inside the workspace, under a
+ * deterministic name derived from the base commit the run pinned to. The
+ * ceiling is the same one every read honours, pointed the other way: the
+ * path resolves inside `GITHUB_WORKSPACE` or the run fails loudly — a
+ * symlinked branch of the tree cannot carry the write out, and `.git` is
+ * refused outright, because that is where the checkout's credential lives.
+ *
+ * @param {object} input
+ * @param {string} input.workspace the runner's workspace root
+ * @param {string} input.directory the record-path input, relative to the root
+ * @param {import("./run-record.mjs").HarmoniseRecord} input.record the run's machine-readable record
+ * @returns {string} the file the record was written to
+ */
+export function writeRunRecord({ workspace, directory, record }) {
+  const root = realpathSync(workspace);
+  const target = p.resolve(root, directory);
+  if (target !== root && !target.startsWith(root + p.sep)) {
+    throw new Error(`record-path '${directory}' resolves outside the workspace — refused`);
+  }
+  for (const segment of p.relative(root, target).split(p.sep)) {
+    // Case-insensitive: the hosting filesystem may capitalise the directory
+    // (.Git, .GIT), and the checkout's credential still lives there.
+    if (segment.toLowerCase() === ".git") {
+      throw new Error(`record-path '${directory}' touches .git — refused`);
+    }
+  }
+  mkdirSync(target, { recursive: true });
+  // A directory on the way may be a symlink pointing outside the workspace
+  // or into the git metadata; resolve the real location and hold it to the
+  // same ceiling and the same .git rule before a single byte is written.
+  const real = realpathSync(target);
+  if (real !== root && !real.startsWith(root + p.sep)) {
+    throw new Error(`record-path '${directory}' resolves outside the workspace — refused`);
+  }
+  for (const segment of p.relative(root, real).split(p.sep)) {
+    if (segment.toLowerCase() === ".git") {
+      throw new Error(`record-path '${directory}' resolves inside .git — refused`);
+    }
+  }
+  const file = p.join(real, harmoniseRecordFilename(record));
+  writeFileSync(file, serialiseHarmoniseRecord(record), "utf8");
+  return file;
 }
 
 /**

@@ -82,3 +82,15 @@ jobs:
           model: harmonise
           source-language: en
           dry-run: ${{ inputs.dry-run || 'true' }}
+
+      # The run record — outcome, pair accounting, pull request identity — as
+      # a downloadable file. `always()` keeps the record for runs whose action
+      # step failed; a run that died before any record could be written
+      # produced no file, and `if-no-files-found: ignore` keeps those green.
+      - name: Upload the run record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harmonise-run-record
+          path: .harmonise-record/harmonise-record-*.json
+          if-no-files-found: ignore

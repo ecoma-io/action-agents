@@ -41,6 +41,10 @@ inputs:
     description: Report drift, propose nothing. Defaults to true, because the output of a real run is a pull request against your documentation rather than a comment. A real run writes exactly one ref — its own proposal branch `harmonise/<source-language>`, force-upserted with optimistic locking — and opens one pull request; the model never names the branch, and no other branch or ref is touched.
     required: false
     default: "true"
+  record-path:
+    description: Directory inside the workspace where the run record lands, relative to the workspace root. Every run writes one JSON record — `harmonise-record-<base-sha>.json` — naming the run's outcome, its pair accounting and the pull request it wrote, so a run's account outlives the runner log. The default agrees with the shipped workflow's upload glob.
+    required: false
+    default: ".harmonise-record"
 
 runs:
   using: node24

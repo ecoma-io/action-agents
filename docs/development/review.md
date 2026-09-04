@@ -272,9 +272,9 @@ policy source: event=pull_request basis=base branch=main sha=<sha> path=.github/
 ```
 
 Dry run suppresses every skip record: absolute zero mutation means zero.
-The artifact schema moves to `schemaVersion: 3` only when a run has an
+The artifact schema moves to `schemaVersion: 4` only when a run has an
 applicability fact to carry; skip records ride the applicability family's
-`schemaVersion` (`4`) with a `kind` field, and the three shapes never mix in
+`schemaVersion` (`5`) with a `kind` field, and the three shapes never mix in
 one record.
 
 ## Inputs
@@ -1087,7 +1087,7 @@ contract a human reads; both are projections of the same final facts, and
 neither can drift from the other, because both are built from the same
 values in the same pass.
 
-The schema is versioned (`schemaVersion: 3`; `4` once a run carries an
+The schema is versioned (`schemaVersion: 4`; `5` once a run carries an
 applicability fact, and the shapes never mix in one record) and the builder is
 fail-closed:
 a fact outside the declared key sets, a vocabulary word the code does not
@@ -1122,9 +1122,11 @@ strategy's threshold was never a candidate and publishes without a
 lifecycle, byte for byte as it arrived. A skipped candidate is unresolved
 with no id — the one state a finding can hold without one.
 
-Publication-only, and stale-refusing twice. A run that publishes nothing —
-an abandonment, a dry run — writes no artifact; a skip always leaves a record
-(see [what a skip leaves behind](#what-a-skip-leaves-behind)): the reduced
+Every returning run leaves its record, and the build is stale-refusing twice.
+Publication writes the full artifact; an abandonment and a dry run write
+their reduced artifacts — the run identity and the outcome sentence, plus the
+comment id when a comment stands; a skip always leaves a record (see
+[what a skip leaves behind](#what-a-skip-leaves-behind)): the reduced
 skipped-run record when a policy is present, a `kind`-carrying skip record
 otherwise. The newer-head rule extends to every record:
 `assertFreshArtifact` compares

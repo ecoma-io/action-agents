@@ -48,6 +48,7 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 | `review`    | `abandoned`                                                         | `abandoned`                                           |
 | `harmonise` | commit + pull request                                               | `published`                                           |
 | `harmonise` | some pairs applied, run stopped                                     | `partial`                                             |
+| `harmonise` | dry run, or every pair already in step                              | `skip`                                                |
 | `harmonise` | config-absent or protection refusal                                 | `refused`                                             |
 | `harmonise` | a throw the run did not declare                                     | `failed`                                              |
 
@@ -95,12 +96,13 @@ account outlives the runner log. The contract's rules for every record:
 - **The `outcome` speaks the terminal-state vocabulary above, whole.** A word
   outside it is a word the contract has not defined.
 
-Two families exist today:
+Three families exist today:
 
-| Family            | Module                      | `schemaVersion`             | Delivery glob            | Written at                                             |
-| ----------------- | --------------------------- | --------------------------- | ------------------------ | ------------------------------------------------------ |
-| review's artifact | `review/src/artifact.mjs`   | 3; 4 (applicability family) | `review-artifact-*.json` | after a published comment; a draft run writes its skip |
-| triage's record   | `triage/src/run-record.mjs` | 1                           | `triage-record-*.json`   | every terminal point                                   |
+| Family             | Module                         | `schemaVersion`             | Delivery glob             | Written at                                                                                                                         |
+| ------------------ | ------------------------------ | --------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| review's artifact  | `review/src/artifact.mjs`      | 4; 5 (applicability family) | `review-artifact-*.json`  | a published comment writes the full artifact; abandonment and a dry run write their reduced artifacts; a draft run writes its skip |
+| triage's record    | `triage/src/run-record.mjs`    | 1                           | `triage-record-*.json`    | every terminal point                                                                                                               |
+| harmonise's record | `harmonise/src/run-record.mjs` | 1                           | `harmonise-record-*.json` | every terminal point: publication, partial exit, all-in-step skip, dry run                                                         |
 
 Triage's record fields, version 1: `schemaVersion`, `repository`, `event`
 (`eventName`, `action`), `thread` (`type`, `number`, or `null` for a run that
@@ -112,13 +114,31 @@ sanitised related title), `outcome`, `reason`, `verification` (the block
 issue #274 froze — present, typed, validated; filled by the opt-in
 verification pass when it ran, the empty block otherwise).
 
+Harmonise's record fields, version 1: `schemaVersion`, `repository`,
+`eventName`, `sourceLanguage`, `dryRun`, `outcome`, `reason`, `pairs`
+(`proposed`, `unchanged`, `skipped`, `failed` — the four total the selected
+schedule), `pullRequest` (`number`, `created`, or `null` when the run wrote
+none), `headSha` (the base commit every read pinned to).
+
+Review's artifact shapes, version 4 (the applicability family's shapes are
+version 5): the full published shape carries the twelve-fact body the
+builder validates; the reduced abandonment shape carries the run identity,
+the outcome sentence, and — when a comment was published before the subject
+moved — the comment id under `provenance`; the reduced dry-run shape carries
+the run identity and the outcome sentence only. Both reduced shapes name the
+execution context under `applicability` when the policy was active, and
+neither carries a policy section — nothing was read beyond the
+classification. Every shape's file name names its outcome:
+`review-artifact-`, `review-artifact-abandoned-`, `review-artifact-dry-run-`,
+`review-artifact-skip-`.
+
 The two-tier posture a record write is judged by: after the run's own outcome
-has landed (review's comment published; triage's mutation applied) a failed
-record write is a logged loss, and the run stays green — review's
-`published-without-artifact` maps to `published` with verdict `unknown` on
-the archive (F-14). Everywhere else a record-write failure is the red run:
-a skip's record is the skip's whole outcome, and a failure's record must not
-mask the original error it records.
+has landed (review's comment published; triage's mutation applied; harmonise's
+pull request opened) a failed record write is a logged loss, and the run stays
+green — review's `published-without-artifact` maps to `published` with verdict
+`unknown` on the archive (F-14). Everywhere else a record-write failure is the
+red run: a skip's record is the skip's whole outcome, and a failure's record
+must not mask the original error it records.
 
 ## Concurrency: read-then-write, never compare-and-swap
 
@@ -138,8 +158,9 @@ windows that remain are named, not implied away:
    operation boundary; the re-run re-derives from live state, never replays
    the plan (the F-13 rule).
 
-Records carry the subject head and the policy SHA so a stale record is
-detectable instead of authoritative.
+Records carry the subject head so a stale record is detectable instead of
+authoritative, and every shape that carries a policy section — review's full
+and skip shapes, triage's record — pins its SHA beside it.
 
 ## State separation
 

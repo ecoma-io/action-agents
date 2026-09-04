@@ -40,7 +40,9 @@ import { renderComment, renderNothingToReview } from "./render.mjs";
 import {
   applicabilitySection,
   assertFreshArtifact,
+  buildAbandonedArtifact,
   buildArtifact,
+  buildDryRunArtifact,
   buildSkipRecord,
   buildSkippedArtifact,
   withCommentId,
@@ -93,7 +95,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "published-without-artifact" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
- * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact | import("./artifact.mjs").SkipRecord} [artifact] the machine-readable run record — present when the run published, when a policy recorded a skipped run (the record is the skip's whole outcome), or when a skip path with no applicability fact left its durable record; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
+ * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact | import("./artifact.mjs").SkipRecord | import("./artifact.mjs").AbandonedRunArtifact | import("./artifact.mjs").DryRunRunArtifact} [artifact] the machine-readable run record — present when the run published, when a policy recorded a skipped run (the record is the skip's whole outcome), when a skip path with no applicability fact left its durable record, or when an abandonment or dry-run wrote its reduced artifact; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
  * @property {import("./artifact.mjs").ApplicabilitySection} [applicability] the applicability fact, present when the review policy is active
  */
 /**
@@ -259,6 +261,15 @@ export async function reviewPullRequest({
           reason:
             `dry run: applicability rule '${evaluated.matchedRule}' matched — ` +
             `review intentionally not run; nothing written`,
+          artifact: buildDryRunArtifact({
+            repository: `${context.owner}/${context.repo}`,
+            pullRequest: pullRequestNumber,
+            headRef: headSha,
+            reason: `dry run: applicability rule '${evaluated.matchedRule}' matched — review intentionally not run`,
+            ...(applicabilityFact !== undefined
+              ? { applicability: applicabilityFact.context }
+              : {}),
+          }),
         };
       }
       const skipReason = `#${String(pullRequestNumber)} matched applicability rule '${evaluated.matchedRule}' — review intentionally not run`;
@@ -549,12 +560,29 @@ export async function reviewPullRequest({
       reason:
         `#${String(pullRequestNumber)} moved while it was being reviewed ` +
         `(now ${fresh.state} at ${fresh.head.sha.slice(0, 12)}) — nothing written`,
+      artifact: buildAbandonedArtifact({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequest: pullRequestNumber,
+        headRef: headSha,
+        reason: `#${String(pullRequestNumber)} moved while it was being reviewed (now ${fresh.state}) — nothing written`,
+        ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
+      }),
     };
   }
 
   if (inputs.dryRun) {
     io.info(`review: dry run — the comment that would have been published:\n${body}`);
-    return { outcome: "dry-run", reason: "dry run: nothing written" };
+    return {
+      outcome: "dry-run",
+      reason: "dry run: nothing written",
+      artifact: buildDryRunArtifact({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequest: pullRequestNumber,
+        headRef: headSha,
+        reason: "dry run: nothing written",
+        ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
+      }),
+    };
   }
   // The identity read sits behind every skip and dry-run gate: paid only by
   // a run about to write.
@@ -609,6 +637,13 @@ export async function reviewPullRequest({
       reason:
         `#${String(pullRequestNumber)} moved while it was being reviewed ` +
         `(${cause instanceof Error ? cause.message : String(cause)}) — nothing written`,
+      artifact: buildAbandonedArtifact({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequest: pullRequestNumber,
+        headRef: headSha,
+        reason: `#${String(pullRequestNumber)} moved while it was being reviewed — nothing written`,
+        ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
+      }),
     };
   }
 
@@ -639,6 +674,14 @@ export async function reviewPullRequest({
         `#${String(pullRequestNumber)} moved while its review was being published ` +
         `(comment ${String(upsert.id)} stands) — the artifact is not written: ` +
         (cause instanceof Error ? cause.message : String(cause)),
+      artifact: buildAbandonedArtifact({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequest: pullRequestNumber,
+        headRef: headSha,
+        reason: `#${String(pullRequestNumber)} moved while its review was being published — comment ${String(upsert.id)} stands`,
+        commentId: upsert.id,
+        ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
+      }),
     };
   }
   return {
@@ -935,6 +978,13 @@ async function nothingToReview({
     return {
       outcome: "abandoned",
       reason: `#${String(pullRequestNumber)} moved while it was being reviewed — nothing written`,
+      artifact: buildAbandonedArtifact({
+        repository,
+        pullRequest: pullRequestNumber,
+        headRef: headSha,
+        reason: `#${String(pullRequestNumber)} moved while it was being reviewed — nothing written`,
+        ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
+      }),
     };
   }
   // Same gate as the write below: the identity read is paid only when a
@@ -951,7 +1001,19 @@ async function nothingToReview({
       const body = `${markerLine(ACTION, marker.id ?? "", headSha)}\n${renderNothingToReview(headSha)}`;
       if (dryRun) {
         io.info(`review: dry run — the clearing update that would have been written:\n${body}`);
-        return { outcome: "dry-run", reason: "dry run: universe empty, nothing written" };
+        return {
+          outcome: "dry-run",
+          reason: "dry run: universe empty, nothing written",
+          artifact: buildDryRunArtifact({
+            repository,
+            pullRequest: pullRequestNumber,
+            headRef: headSha,
+            reason: "dry run: universe empty, nothing written",
+            ...(applicabilityFact !== undefined
+              ? { applicability: applicabilityFact.context }
+              : {}),
+          }),
+        };
       }
       await upsertComment({
         store: io.forge,
