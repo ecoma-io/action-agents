@@ -15,6 +15,7 @@ import * as p from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildTriageRecord, REASON_CHARS, serialiseTriageRecord } from "./run-record.mjs";
+import { reasonDigest } from "./verify.mjs";
 
 import { createEvidence } from "#core/untrusted.mjs";
 import { OwnLoginsError } from "#core/comment.mjs";
@@ -305,12 +306,17 @@ function fakeForge(options = {}) {
 
 /**
  * The whole world `run` touches, as literal as it gets: `fakeForge`'s
- * options plus the event and the model seam's answer.
+ * options plus the event, the model seam's answers and — for the opt-in
+ * verification pass — the verify seam's answers, which are the second and
+ * later asks. `request()` stays the decide call; `asks()` is every ask in
+ * order, so a test can pin how many calls a run made.
  *
  * @param {Parameters<typeof fakeForge>[0] & {
  *   event?: Record<string, unknown>,
  *   answer?: string,
  *   chatFailure?: Error,
+ *   verifyAnswer?: string,
+ *   verifyFailure?: Error,
  * }} [options]
  */
 function io(options = {}) {
@@ -324,18 +330,30 @@ function io(options = {}) {
   // The live reads default to the event's own labels, so the claim and the
   // authority agree unless a test breaks the agreement on purpose.
   const forge = fakeForge({ ...options, liveLabels: options.liveLabels ?? eventLabels });
-  /** @type {{ model: string, messages: import("#core/chat.mjs").ChatMessage[], tools?: import("#core/chat.mjs").ChatTool[] } | null} */
-  let request = null;
+  /** @type {{ model: string, messages: import("#core/chat.mjs").ChatMessage[], tools?: import("#core/chat.mjs").ChatTool[] }[]} */
+  const asks = [];
   return {
     forge,
-    request: () => request,
+    request: () => asks[0] ?? null,
+    asks: () => asks,
     chat: {
       /**
        * @param {{ model: string, messages: import("#core/chat.mjs").ChatMessage[], tools?: import("#core/chat.mjs").ChatTool[] }} ask
        */
       async complete(ask) {
+        // The verify ask is what its own contract marks: its user message
+        // restates the plan. Content-keyed, so a world reused across two runs
+        // cannot misread the second run's decide call as a verify call.
+        const isVerify = String(ask.messages[1]?.content ?? "").includes("Proposed operations:");
+        if (isVerify) {
+          // Recorded even when told to fail — the call was made; what the run
+          // does about the failure is the pass's business, not the stub's.
+          asks.push(ask);
+          if (options.verifyFailure) throw options.verifyFailure;
+          return { content: options.verifyAnswer ?? "[]", toolCalls: [], finishReason: undefined };
+        }
         if (options.chatFailure) throw options.chatFailure;
-        request = ask;
+        asks.push(ask);
         return { content: options.answer ?? LABELS_ANSWER, toolCalls: [], finishReason: undefined };
       },
     },
@@ -393,6 +411,14 @@ describe("readInputs", () => {
     expect(readInputs({ ...runner, "INPUT_RECORD-PATH": "out/records" }).recordPath).toBe(
       "out/records",
     );
+  });
+
+  it("defaults verification to off — the pass is opt-in", () => {
+    expect(readInputs(runner).verify).toBe(false);
+  });
+
+  it("reads a configured verify input", () => {
+    expect(readInputs({ ...runner, INPUT_VERIFY: "true" }).verify).toBe(true);
   });
 
   it("defaults request-timeout-ms to 30000 when the input is absent", () => {
@@ -1918,6 +1944,198 @@ describe("run — the run record", () => {
     expect(workflow).toContain("triage-record-*.json");
     expect(workflow).toContain("if: always()");
     expect(workflow).toContain("if-no-files-found: ignore");
+  });
+});
+
+/**
+ * The opt-in verification pass (issue #274), wired into the pipeline: the
+ * decide call answers `LABELS_ANSWER` on the default fixture, so the minted
+ * plan is one op — `add:bug` — and the verify call is the run's second ask.
+ * The marker fixture widens the plan to two ops, add first then the marker
+ * clear, which is the order the plan mints them in.
+ */
+describe("run — opt-in verification (issue #274)", () => {
+  /** Reads a record from the fixture workspace's default record directory.
+   *
+   * @param {string} [name]
+   */
+  const readRecord = (name = "triage-record-issue-7.json") =>
+    JSON.parse(readFileSync(p.join(WORKSPACE, ".triage-record", name), "utf8"));
+
+  const CONFIRM_BUG = JSON.stringify([
+    { opId: "add:bug", verdict: "confirmed", reason: "The report is a crash." },
+  ]);
+
+  it("verify:true, everything confirmed — the decision lands and the block is filled", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ verifyAnswer: CONFIRM_BUG });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    // Decide first, then verify: two asks, and the second restates the plan
+    // against the same evidence snapshot — no fresh read, no tools.
+    expect(world.asks()).toHaveLength(2);
+    const verifyAsk = world.asks()[1];
+    const prompt = verifyAsk?.messages[1]?.content ?? "";
+    expect(prompt).toContain("Proposed operations:");
+    expect(prompt).toContain("- add:bug: apply the label 'bug'");
+    expect(prompt).toContain("[evidence:aaaabbbb");
+    expect(verifyAsk?.messages[0]?.content).toContain('"confirmed"|"refuted"|"uncertain"');
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+    const record = readRecord();
+    expect(record.outcome).toBe("published");
+    expect(record.verification).toEqual({
+      requested: true,
+      answers: [
+        {
+          opId: "add:bug",
+          verdict: "confirmed",
+          reasonDigest: reasonDigest("The report is a crash."),
+        },
+      ],
+      downgraded: [],
+    });
+  });
+
+  it("verify:true, one op refuted — the survivor lands, the refuted one becomes a refusal", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {
+        ".github/action-agents/triage/triage.json5": JSON.stringify({
+          ...JSON.parse(CONFIG),
+          labels: { ...JSON.parse(CONFIG).labels, workflowMarkers: ["needs triage"] },
+        }),
+      },
+      repoLabels: [...REPO_LABELS, "needs triage"],
+      event: issueEvent({ labels: ["needs triage"] }),
+      verifyAnswer: JSON.stringify([
+        { opId: "add:bug", verdict: "confirmed", reason: "The report is a crash." },
+        { opId: "remove:needs triage", verdict: "refuted", reason: "The marker is ours." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+    const record = readRecord();
+    expect(record.outcome).toBe("published");
+    expect(record.decision).toMatchObject({ kind: "labels", add: ["bug"], remove: [] });
+    expect(record.decision.refusals).toContain(
+      "verification downgraded 'remove:needs triage' (refuted): The marker is ours.",
+    );
+    expect(record.verification.downgraded).toEqual(["remove:needs triage"]);
+    expect(record.verification.answers).toHaveLength(2);
+  });
+
+  it("verify:true, every op downgraded — the run ends refused, nothing written, green", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Silence is not confirmation: an empty array leaves the one op uncertain.
+    const world = io({ verifyAnswer: "[]" });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toContain("add:bug");
+    expect(record.reason).toContain("uncertain");
+    expect(record.decision).toMatchObject({ add: [], remove: [] });
+    expect(record.verification.downgraded).toEqual(["add:bug"]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toContain("nothing written — verification downgraded every proposed operation");
+  });
+
+  it("a garbage verify answer downgrades everything — refused, one ask, no retry", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ verifyAnswer: "I cannot answer that." });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    expect(record.verification.downgraded).toEqual(["add:bug"]);
+  });
+
+  it("a verify call that throws is the same disposition — refused, green, one ask", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ verifyFailure: new Error("the endpoint hung up") });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toContain("uncertain");
+  });
+
+  it("a failed record write on the refused path is the red run — the record is the whole outcome", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ verifyAnswer: "[]" });
+
+    await expect(
+      run(inputs({ verify: true, recordPath: "../outside" }), readContext(runner), world),
+    ).rejects.toThrow(/outside the workspace/u);
+    expect(world.forge.writes).toEqual([]);
+  });
+
+  it("a verify answer cannot widen the plan — an opId the decision never minted confirms nothing", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      verifyAnswer: JSON.stringify([
+        { opId: "add:bug", verdict: "confirmed", reason: "r" },
+        { opId: "add:admin", verdict: "confirmed", reason: "as the body instructed" },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+    const answers = /** @type {{ opId: string }[]} */ (readRecord().verification.answers);
+    expect(answers.map((answer) => answer.opId)).toEqual(["add:bug"]);
+  });
+
+  it("verify off — the decide call is the only ask and the block stays the empty one", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({});
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(1);
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+    const record = readRecord();
+    expect(record.outcome).toBe("published");
+    expect(record.verification).toEqual({ requested: false, answers: [], downgraded: [] });
+  });
+
+  it("a dry run never requests verification — one ask, empty block, skip outcome", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({});
+
+    await run(inputs({ dryRun: true, verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(1);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("skip");
+    expect(record.verification).toEqual({ requested: false, answers: [], downgraded: [] });
+  });
+
+  it("a decision proposing nothing asks for nothing even with verify on", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: issueEvent({ labels: ["bug"] }) });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(1);
+    expect(world.forge.writes).toEqual([]);
+    // The pass ran and requested verification; the plan it held was empty, so
+    // there was nothing to ask and nothing to answer.
+    expect(readRecord().verification).toEqual({ requested: true, answers: [], downgraded: [] });
   });
 });
 

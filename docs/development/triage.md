@@ -45,6 +45,7 @@ workflow's choice, and `dry-run` needs no write at all.
 | `labels`             | narrows the sheet the config file declares, for this call site only; a name the file does not declare is a startup error, and so is a `labels:` input with no file at all, because there is nothing to narrow    |
 | `dry-run`            | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                               |
 | `record-path`        | directory inside the workspace where the machine-readable run record is written at every terminal point — see [the run record](#the-run-record)                                                                  |
+| `verify`             | opt-in verification of the decision before anything is written — one bounded model call, downgrade-only, [its own section](#verification-opt-in-issue-274); default `false`, and a dry run never requests it     |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
 backoff, `Retry-After` and the attempt limit are `core/transport/http.mjs` policy, not inputs.
@@ -420,6 +421,62 @@ sanitised candidate title; it states that the thread stays open and nothing
 is closed. A run that judged nothing incomplete and nothing related writes
 no comment at all.
 
+### Verification, opt-in (issue #274)
+
+Between the decision and any write sits an opt-in second look. It is off by
+default (`verify: false`); with `verify: true`, a non-dry-run makes one
+bounded model call after the decision and before any mutation, and a dry run
+never makes it — an operator previewing a decision sees the unverified
+decision, exactly as without the input.
+
+The pass checks operations; it does not propose any. The plan is minted by
+code from the decision — `add:<label>` per entry in `add`, `remove:<label>`
+per entry in `remove`, and the bare `comment` when the decision's kind is the
+comment — so the verifier can neither invent nor merge an operation: a
+verdict naming an id outside the plan confirms nothing. The prompt restates
+that plan against the same evidence snapshot the decision was derived from —
+the thread's title, body and labels, wrapped as untrusted data, never
+re-read — and asks for one JSON array with one entry per operation:
+`{opId, verdict, reason}`. `opId` must quote a plan id the code minted,
+`verdict` must come from the closed vocabulary
+`confirmed | refuted | uncertain`, and `reason` must be a string of at most
+300 characters. (The judgment pair the issue froze is `verdict` + `reason`;
+the `opId` is the quote binding that ties a judgment to a plan operation, and
+the record's frozen `answers: [{opId, verdict, reasonDigest}]` shape requires
+it.)
+
+There is exactly one ask. Any deviation — an answer that does not parse, a
+wrong shape, an entry naming an operation the plan does not hold, an
+off-vocabulary verdict, a reason over its cap — leaves the operations it does
+not validly judge `uncertain`, and a transport failure lands the same way. A
+re-ask would teach the model that ignoring the contract is cheap.
+
+The pass is downgrade-only. A `refuted` or `uncertain` operation becomes a
+typed refusal entry in the decision — naming the operation id, the verdict
+and the verifier's reason, every untrusted fragment sanitised, one line,
+capped — and leaves the plan; a `confirmed` one stands. No verdict can add,
+widen or enable a write, so a hostile or useless verifier can at worst refuse
+a legitimate write. When every operation is downgraded there is nothing left
+to write: the run ends `refused` — a green run, a refusal being the ceilings
+working — with a reason naming the downgraded operations, and the mutate call
+never happens.
+
+The record carries the pass's durable half: `verification.requested`, one
+`answers` entry per verified operation carrying the sha256 digest of the
+reason text the verdict held, and the `downgraded` operation ids in plan
+order. The reason text itself stays out of the record; its digest makes the
+text checkable by whoever holds it. With the input off, on a dry run, or when
+the decision proposed nothing, the block is the empty one.
+
+What the pass does not catch, stated plainly: an answer that is fabricated
+but consistent — a model that confirms every operation regardless of the
+evidence, with well-formed reasons — reads exactly like a verification. The
+pass is a second opinion, not a proof; the ceilings it strengthens are the
+sheet and the sanitiser, which verification cannot weaken. Also by design:
+the code-composed signal comment is not a verified operation (the action's
+own words, no model wording to verify), and verification failure is never
+run failure.
+
 ### The run record
 
 Every run ends in a record, whatever its terminal point: a landed mutation,
@@ -454,6 +511,13 @@ Where it is written, per terminal path:
   to mask the original. A run that dies before the payload parses names no
   thread and no policy pin — the record carries `null`s and the filename
   falls back to the event name.
+- a **downgraded plan** — opt-in verification refused every operation the
+  decision proposed: there is nothing left to write, the mutate call never
+  happens, and the run ends `refused` — green, a refusal being the ceilings
+  working. The record is written before the run returns with the
+  post-filter decision and the filled verification block, and here a failed
+  write is a red run, exactly like the event-gate skip — the record is the
+  run's whole outcome.
 
 The fields, in schema version 1: `schemaVersion`, `repository`, `event`
 (`eventName`, `action`), `thread` (`type`, `number`; `null` when the run died
@@ -462,8 +526,9 @@ before the payload parsed), `dryRun`, `model`, `policy` (`basis`, `branch`,
 reached one: `kind`, `add`, `remove` with their code-owned reasons,
 `refusals`, the sanitised capped `rationale`, and the `signal` with its
 sanitised related title), `outcome`, `reason`, and the `verification` block
-the verification design (issue #274) froze — present, typed, validated, and
-empty until that work fills it. The executor's log lines and the comment body
+issue #274 froze — `requested`, `answers` (`opId`, `verdict`, `reasonDigest`)
+and `downgraded` — filled by the opt-in verification pass when it ran, and
+the empty block otherwise. The executor's log lines and the comment body
 stay out: the log lines are the run log's, and the comment itself is the
 durable form of that path.
 
@@ -472,8 +537,10 @@ durable form of that path.
 validator refuses anything else. Today's paths use `published` (a landed
 mutation), `skip` (a dry run or an event-gate exit), `abandoned` (a write
 the freshness gate withheld — the thread changed while the run was in
-flight) and `failed` (what lands in the catch: a defect or an environment
-break — the ceilings refuse as a decision, not a throw).
+flight), `refused` (opt-in verification downgraded every operation the
+decision proposed — nothing left to write) and `failed` (what lands in the
+catch: a defect or an environment break — the ceilings refuse as a decision,
+not a throw).
 
 Delivery: the file lands under the `record-path` directory (default
 `.triage-record`), named `triage-record-<type>-<number>.json` for a parsed

@@ -3,7 +3,8 @@
  * trivially deterministic and skip everything but an audit line.
  *
  * Triage's expensive work is one model call plus the evidence reads that
- * feed it. Both are only worth paying when the event could have changed
+ * feed it; opt-in verification (issue #274) adds at most one bounded verify
+ * call. Both are only worth paying when the event could have changed
  * triage-relevant evidence: the thread's content, its diff, its draft
  * state, or the queue state the `labels.workflowMarkers` lifecycle keys
  * on. A rerun of an unchanged thread would only re-derive the same decision

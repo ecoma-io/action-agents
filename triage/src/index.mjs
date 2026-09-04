@@ -84,14 +84,20 @@ import { decide } from "./policy.mjs";
 import { mutate, ThreadMovedError } from "./mutate.mjs";
 import { measureSize } from "./size.mjs";
 import { decideEvent, eventAuditLine, eventChangedLabel } from "./events.mjs";
-import { buildTriageRecord, serialiseTriageRecord, triageRecordFilename } from "./run-record.mjs";
+import {
+  buildTriageRecord,
+  buildVerificationBlock,
+  serialiseTriageRecord,
+  triageRecordFilename,
+} from "./run-record.mjs";
+import { applyVerification, mintVerificationPlan, verifyDecision } from "./verify.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
 export const ACTION = "triage";
 
 /**
- * @typedef {SharedInputs & { labels: string[], dryRun: boolean, configPath: string, recordPath: string, requestTimeoutMs: number }} Inputs
+ * @typedef {SharedInputs & { labels: string[], dryRun: boolean, configPath: string, recordPath: string, requestTimeoutMs: number, verify: boolean }} Inputs
  */
 
 /**
@@ -107,6 +113,10 @@ export function readInputs(env = process.env) {
     // Where inside the workspace the run record lands. The default agrees
     // with the manifest; the write is confined below either way.
     recordPath: getInput("record-path", { default: ".triage-record" }, env),
+    // Opt-in verification (issue #274): off by default, and never requested
+    // by a dry run — an operator previewing a decision sees the unverified
+    // decision, exactly as without the input.
+    verify: getBooleanInput("verify", { default: false }, env),
   };
 }
 
@@ -181,8 +191,14 @@ export async function run(inputs, context, io) {
   // anywhere still ends in a record — a run that died before the payload was
   // parsed names no thread and no policy pin, and the record says so by the
   // nulls rather than going unwritten.
-  /** @type {{ eventAction: string, thread: { type: "issue" | "pr", number: number } | null, policy: import("#core/policy.mjs").PolicySource | null, decision: import("./decision.mjs").Decision | null }} */
-  const draft = { eventAction: "", thread: null, policy: null, decision: null };
+  /** @type {{ eventAction: string, thread: { type: "issue" | "pr", number: number } | null, policy: import("#core/policy.mjs").PolicySource | null, decision: import("./decision.mjs").Decision | null, verification: import("./run-record.mjs").VerificationBlock }} */
+  const draft = {
+    eventAction: "",
+    thread: null,
+    policy: null,
+    decision: null,
+    verification: buildVerificationBlock(),
+  };
   /** @param {import("./run-record.mjs").TriageOutcome} outcome @param {string} reason */
   const buildRecord = (outcome, reason) =>
     buildTriageRecord({
@@ -197,6 +213,7 @@ export async function run(inputs, context, io) {
       decision: draft.decision,
       outcome,
       reason,
+      verification: draft.verification,
     });
 
   try {
@@ -399,11 +416,74 @@ export async function run(inputs, context, io) {
     });
 
     const decision = decide({ evidence, assessment });
-    draft.decision = decision;
+
+    // Opt-in verification (issue #274), between the decision and any write:
+    // one bounded call restating the plan — code-minted op ids — against the
+    // same evidence snapshot the decision was derived from. Downgrade-only:
+    // a refuted or uncertain op becomes a refusal entry and leaves the plan,
+    // and a verdict can never add, widen or enable a write. A dry run never
+    // requests it, so an operator previewing a decision sees the unverified
+    // decision; with the input off this whole step is absent and the record's
+    // verification block stays the empty block.
+    /** @type {import("./verify.mjs").VerificationPlan} */
+    const plan = mintVerificationPlan(decision);
+    /** @type {string[]} */
+    let downgraded = [];
+    /** @type {import("./decision.mjs").Decision} */
+    let acted = decision;
+    /** @type {import("./verify.mjs").VerificationOutcome | null} */
+    let outcome = null;
+    if (inputs.verify && !inputs.dryRun) {
+      outcome = await verifyDecision({
+        plan,
+        thread: evidence.thread,
+        chat: world.chat,
+        model: inputs.model,
+        evidenceWrapper: world.evidence,
+      });
+      for (const note of outcome.notes) {
+        warning(oneLine(note, { stripControlChars: true }));
+      }
+      acted = applyVerification(decision, plan, outcome.judged).decision;
+      downgraded = outcome.block.downgraded;
+      draft.verification = outcome.block;
+      info(
+        `triage: verification judged ${String(plan.ops.length)} proposed operation(s) — ` +
+          `${String(plan.ops.length - downgraded.length)} confirmed, ` +
+          `${String(downgraded.length)} downgraded`,
+      );
+    }
+    // The decision the record carries is the post-filter one: what the run
+    // actually acted on. The verification block names what the verifier did
+    // to it.
+    draft.decision = acted;
+
+    // Everything downgraded is nothing to write: the ceilings refused the
+    // whole plan, the mutate call never happens, and the run stays green —
+    // a refusal is the ceilings working, not a failure. The record write
+    // here is the run's whole outcome, so its failure is the red run, the
+    // same tier the event-gate skip and the withheld write sit in.
+    if (plan.ops.length > 0 && downgraded.length === plan.ops.length) {
+      const reason =
+        `verification downgraded every proposed operation: ` +
+        downgraded
+          .map((opId) => {
+            const judged = outcome?.judged.find((op) => op.opId === opId);
+            return `${opId} (${judged?.verdict ?? "uncertain"})`;
+          })
+          .join(", ");
+      warning(oneLine(`triage: nothing written — ${reason}`, { stripControlChars: true }));
+      writeRunRecord({
+        workspace: context.workspace,
+        directory: inputs.recordPath,
+        record: buildRecord("refused", reason),
+      });
+      return;
+    }
 
     try {
       await mutate({
-        decision,
+        decision: acted,
         forge: world.forge,
         issueNumber: thread.number,
         dryRun: inputs.dryRun,
@@ -438,7 +518,7 @@ export async function run(inputs, context, io) {
       const file = writeRunRecord({
         workspace: context.workspace,
         directory: inputs.recordPath,
-        record: buildRecord(inputs.dryRun ? "skip" : "published", decisionSummary(decision)),
+        record: buildRecord(inputs.dryRun ? "skip" : "published", decisionSummary(acted)),
       });
       info(`triage: run record written to ${file}`);
     } catch (recordCause) {
