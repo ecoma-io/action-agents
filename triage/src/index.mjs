@@ -511,9 +511,12 @@ export async function run(inputs, context, io) {
       return;
     }
 
-    // The run's outcome has landed — the mutate. The record write sits one
-    // tier down here: a failed write is a logged loss, not a red run,
-    // because the mutate was the outcome and the record was the loss.
+    // The run's outcome has landed. For a live run that was the mutate, so
+    // the record write sits one tier down: a failed write is a logged loss,
+    // not a red run — the mutate was the outcome and the record was the
+    // loss. A dry run landed nothing: its record IS the run's whole
+    // outcome, the rule the skip and refused paths already run on, so a
+    // failed dry-run write rethrows into the red tier.
     try {
       const file = writeRunRecord({
         workspace: context.workspace,
@@ -522,6 +525,7 @@ export async function run(inputs, context, io) {
       });
       info(`triage: run record written to ${file}`);
     } catch (recordCause) {
+      if (inputs.dryRun) throw recordCause;
       warning(`triage: the run record was not written: ${writeReason(recordCause)}`);
     }
   } catch (cause) {

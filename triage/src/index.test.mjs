@@ -1862,6 +1862,18 @@ describe("run — the run record", () => {
     ).rejects.toThrow(/outside the workspace/u);
   });
 
+  it("goes red when the record write fails on a dry run — the record is the skip's whole outcome", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: issueEvent({ labels: ["triage"] }) });
+
+    await expect(
+      run(inputs({ dryRun: true, recordPath: "../outside" }), readContext(runner), world),
+    ).rejects.toThrow(/outside the workspace/u);
+    // The dry run landed no mutation either way; the lost record was the
+    // whole outcome, so the loss is the red run, not a logged warning.
+    expect(world.forge.writes).toEqual([]);
+  });
+
   it("an abandoned record carries the divergence reason sanitised — a hostile label name's marker does not survive", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     // The divergence reason interpolates the live thread's label names, so a
