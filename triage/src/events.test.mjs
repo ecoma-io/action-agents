@@ -105,7 +105,7 @@ describe("the event matrix", () => {
   });
 
   describe("labeled — moving the queue lifecycle", () => {
-    it("applying the queue marker re-triages (the queue entry)", () => {
+    it("applying a queue marker re-triages (the queue entry)", () => {
       const d = decideEvent({
         eventName: "issues",
         action: "labeled",
@@ -115,7 +115,19 @@ describe("the event matrix", () => {
         threadLabels: [MARKER],
       });
       expect(d.mode).toBe("retriage");
-      expect(d.reason).toContain(MARKER);
+      expect(d.reason).toContain("queue marker");
+    });
+
+    it("applying any marker from multiple markers re-triages", () => {
+      const d = decideEvent({
+        eventName: "issues",
+        action: "labeled",
+        changedLabel: "needs review",
+        markerLabels: ["needs triage", "needs review"],
+        roleOf,
+        threadLabels: [],
+      });
+      expect(d.mode).toBe("retriage");
     });
 
     it("applying a classification category to a still-queued thread re-triages so the marker clears", () => {
@@ -126,6 +138,18 @@ describe("the event matrix", () => {
         markerLabels: [MARKER],
         roleOf,
         threadLabels: [MARKER],
+      });
+      expect(d.mode).toBe("retriage");
+    });
+
+    it("applying a classification category to a thread queued by any marker re-triages", () => {
+      const d = decideEvent({
+        eventName: "issues",
+        action: "labeled",
+        changedLabel: "bug",
+        markerLabels: ["needs triage", "needs review"],
+        roleOf,
+        threadLabels: ["needs review"],
       });
       expect(d.mode).toBe("retriage");
     });
@@ -202,7 +226,7 @@ describe("the event matrix", () => {
       ).toBe("skip");
     });
 
-    it("removing the queue marker is a human dequeue triage respects — skips and never rewrites it", () => {
+    it("removing any queue marker is a human dequeue triage respects — skips and never rewrites it", () => {
       const d = decideEvent({
         eventName: "issues",
         action: "unlabeled",
@@ -212,7 +236,20 @@ describe("the event matrix", () => {
         threadLabels: [],
       });
       expect(d.mode).toBe("skip");
-      expect(d.reason).toContain("by hand");
+      expect(d.reason).toContain("queue marker");
+    });
+
+    it("removing any marker from multiple markers is also a human dequeue", () => {
+      const d = decideEvent({
+        eventName: "issues",
+        action: "unlabeled",
+        changedLabel: "needs review",
+        markerLabels: ["needs triage", "needs review"],
+        roleOf,
+        threadLabels: [],
+      });
+      expect(d.mode).toBe("skip");
+      expect(d.reason).toContain("queue marker");
     });
   });
 
@@ -252,12 +289,11 @@ describe("eventAuditLine", () => {
       action: "labeled",
       decision: {
         mode: "retriage",
-        reason:
-          "the queue marker 'needs triage' was applied — re-triaged so a classified thread leaves the queue",
+        reason: "a queue marker was applied — re-triaged so a classified thread leaves the queue",
       },
     });
     expect(line).toBe(
-      "triage: event issues.labeled → retriage — the queue marker 'needs triage' was applied — re-triaged so a classified thread leaves the queue",
+      "triage: event issues.labeled → retriage — a queue marker was applied — re-triaged so a classified thread leaves the queue",
     );
   });
 });

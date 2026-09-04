@@ -549,6 +549,26 @@ describe("decide — workflow marker semantics", () => {
     );
     expect(decision.remove).toEqual([]);
   });
+
+  it("clears all markers when a classification is accepted and the thread carries multiple", () => {
+    const ev = markerEvidence(["needs triage", "needs review"]);
+    const decision = decide(
+      input({
+        evidence: {
+          ...ev,
+          policy: {
+            ...CONFIG,
+            labels: { ...CONFIG.labels, workflowMarkers: ["needs triage", "needs review"] },
+          },
+        },
+        assessment: { intent: "labels", labels: ["bug"], rationale: "r" },
+      }),
+    );
+    expect(decision.remove).toEqual([
+      { name: "needs triage", reason: "marker" },
+      { name: "needs review", reason: "marker" },
+    ]);
+  });
 });
 
 describe("decide — comment intent", () => {

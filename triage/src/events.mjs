@@ -16,20 +16,20 @@
  *     an event that is not on the matrix may carry evidence this table has
  *     not seen.
  *   - `labeled` re-triages only when the change could move the queue
- *     lifecycle: the queue marker itself was applied, or a classification
- *     category was applied to a thread still carrying the marker (so the
- *     marker clears once the run confirms the classification). Any other
+ *     lifecycle: a queue marker (any of `workflowMarkers`) was applied, or a
+ *     classification category was applied to a thread still carrying a marker
+ *     (so the marker clears once the run confirms the classification). Any other
  *     label change is a skip with a reason — a label the policy does not
  *     own or read cannot change what the model would classify.
  *   - `unlabeled` always skips: removing a label changes no content
- *     evidence, and removing the queue marker is a human dequeue that
+ *     evidence, and removing a queue marker is a human dequeue that
  *     triage must respect rather than rewrite.
  *
  * The decision is a pure function of payload facts (`eventName`, `action`,
- * the changed label) and the policy's own declarations (the first
- * `workflowMarkers` entry, the role map). There is no forge read and no
- * model call in this module — a skip is decided before either exists, and
- * the audit line it produces is the whole trace of a skipped run.
+ * the changed label) and the policy's own declarations (`workflowMarkers`,
+ * the role map). There is no forge read and no model call in this module — a
+ * skip is decided before either exists, and the audit line it produces is the
+ * whole trace of a skipped run.
  */
 
 /** The `issues` event actions triage understands. An unlisted action is re-triaged, not skipped. */
@@ -112,7 +112,7 @@ export function eventChangedLabel(event) {
  * @param {string} input.eventName the `GITHUB_EVENT_NAME`: `issues` or `pull_request`
  * @param {string} input.action the payload's `action` field; "" when the payload has none
  * @param {string | null} input.changedLabel the label a `labeled`/`unlabeled` event names, else null
- * @param {string[]} input.markerLabels the config's `labels.workflowMarkers` entries
+ * @param {string[]} input.markerLabels the config's `labels.workflowMarkers` entries — any of them can move the queue lifecycle
  * @param {(name: string) => string | undefined} [input.roleOf] the config's `labels.roles` lookup
  * @param {string[]} [input.threadLabels] the labels the thread already carries, from the payload
  * @returns {EventDecision}
@@ -147,7 +147,7 @@ export function decideEvent({
     return decideLabelEvent({
       action,
       changedLabel,
-      markerLabel: markerLabels[0] ?? null,
+      markerLabels,
       roleOf,
       threadLabels,
     });
@@ -188,45 +188,45 @@ export function decideEvent({
  * @param {object} input
  * @param {"labeled" | "unlabeled"} input.action
  * @param {string | null} input.changedLabel
- * @param {string | null} input.markerLabel
+ * @param {string[]} input.markerLabels the config's `labels.workflowMarkers` entries
  * @param {(name: string) => string | undefined} [input.roleOf]
  * @param {string[]} input.threadLabels
  * @returns {EventDecision}
  */
-function decideLabelEvent({ action, changedLabel, markerLabel, roleOf, threadLabels }) {
-  const queued =
-    markerLabel !== null && threadLabels !== null && threadLabels.includes(markerLabel);
+function decideLabelEvent({ action, changedLabel, markerLabels, roleOf, threadLabels }) {
+  const queued = markerLabels.some((m) => threadLabels.includes(m));
+  const isMarker = changedLabel !== null && markerLabels.includes(changedLabel);
   if (action === "labeled") {
     if (changedLabel === null) {
       return retriage(
         "the label the event names is unknown — a label event that cannot name its change is re-triaged",
       );
     }
-    if (markerLabel !== null && changedLabel === markerLabel) {
+    if (isMarker) {
       return retriage(
-        `the queue marker '${markerLabel}' was applied — re-triaged so a classified thread leaves the queue`,
+        `a queue marker was applied — re-triaged so a classified thread leaves the queue`,
       );
     }
-    if (markerLabel !== null && queued && roleOf?.(changedLabel) === "semantic-classification") {
+    if (queued && roleOf?.(changedLabel) === "semantic-classification") {
       return retriage(
-        `a classification was applied to a thread still carrying '${markerLabel}' — re-triaged so the marker clears once classified`,
+        `a classification was applied to a still-queued thread — re-triaged so the marker clears once classified`,
       );
     }
     return skip(
-      `'${changedLabel}' is neither the queue marker nor a classification of a queued thread — content evidence is unchanged`,
+      `'${changedLabel}' is neither a queue marker nor a classification of a queued thread — content evidence is unchanged`,
     );
   }
   // unlabeled: removal is a deterministic state change, never new evidence.
-  // Removing the queue marker in particular is a human dequeue; triage
+  // Removing a queue marker in particular is a human dequeue; triage
   // respects it by writing nothing, not by re-adding the marker.
   if (changedLabel === null) {
     return retriage(
       "the label the event names is unknown — a label event that cannot name its change is re-triaged",
     );
   }
-  if (markerLabel !== null && changedLabel === markerLabel) {
+  if (isMarker) {
     return skip(
-      `the queue marker '${markerLabel}' was removed — the thread leaves the queue by hand and triage writes nothing`,
+      `a queue marker was removed — the thread leaves the queue by hand and triage writes nothing`,
     );
   }
   return skip(`removing '${changedLabel}' changes no content evidence — triage writes nothing`);
