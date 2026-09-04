@@ -25,12 +25,15 @@ import {
   loadCorpus,
   makeChat,
   makeForge,
+  pinHarmonise,
   precision,
   refusalRate,
   renderReport,
+  replayHarmonise,
   scoreFindings,
   severityAgreement,
   share,
+  validationRefusalRate,
   validateAnswerFile,
   validateExpected,
   validateSnapshot,
@@ -117,6 +120,12 @@ test("anchoring-integrity subtracts re-derivation failures from the numerator", 
 test("refusal-rate is refusal runs over model-answered runs", () => {
   assert.ok(Math.abs(/** @type {number} */ (refusalRate(2, 3)) - 2 / 3) < 1e-12);
   assert.equal(refusalRate(0, 0), null);
+});
+
+test("validation-refusal-rate is refused harmonise runs over harmonise runs replayed", () => {
+  assert.equal(validationRefusalRate(1, 2), 0.5);
+  assert.equal(validationRefusalRate(0, 3), 0);
+  assert.equal(validationRefusalRate(0, 0), null);
 });
 
 test("mutation-surface counts absolute write ops by action and kind", () => {
@@ -373,7 +382,7 @@ test("makeForge serves the recorded world and defects on an unrecorded read", as
     /called forge\.createPullRequest, which the snapshot does not record/,
   );
   assert.match(
-    defectMessage(() => forge["getContents"]("policy.other.json5")),
+    await defectMessageAsync(() => forge["getContents"]("policy.other.json5")),
     /read policy file 'policy\.other\.json5', which the snapshot does not record/,
   );
   assert.deepEqual(await forge["getContents"]("policy.json5"), { content: "{}" });
@@ -447,7 +456,7 @@ function writeTempCorpus(name, overrides = {}) {
 test("loadCorpus accepts a minimal valid corpus directory", async () => {
   const root = writeTempCorpus("triage-entry");
   try {
-    const entries = await loadCorpus(root, { floor: { triage: 1, review: 0 } });
+    const entries = await loadCorpus(root, { floor: { triage: 1, review: 0, harmonise: 0 } });
     assert.equal(entries.length, 1);
     assert.equal(entries[0]["kind"], "triage");
   } finally {
@@ -462,7 +471,7 @@ test("loadCorpus treats an absent answers/ directory as the zero-ask case, not a
   const root = writeTempCorpus("triage-entry");
   rmSync(p.join(root, "triage-entry", "answers"), { recursive: true, force: true });
   try {
-    const entries = await loadCorpus(root, { floor: { triage: 1, review: 0 } });
+    const entries = await loadCorpus(root, { floor: { triage: 1, review: 0, harmonise: 0 } });
     assert.equal(entries.length, 1);
     assert.deepEqual(entries[0]["answers"], []);
   } finally {
@@ -475,7 +484,9 @@ test("loadCorpus refuses a corpus below the seed floor", async () => {
   try {
     assert.match(await defectMessageAsync(() => loadCorpus(root)), /below its seed/);
     assert.match(
-      await defectMessageAsync(() => loadCorpus(root, { floor: { triage: 2, review: 0 } })),
+      await defectMessageAsync(() =>
+        loadCorpus(root, { floor: { triage: 2, review: 0, harmonise: 0 } }),
+      ),
       /need 2/,
     );
   } finally {
@@ -536,11 +547,19 @@ test("loadCorpus refuses malformed JSON", async () => {
 test("evaluate replays the real corpus and clears every loose threshold", async () => {
   const result = await evaluate({ corpusRoot: CORPUS_ROOT });
   assert.deepEqual(result.defects, []);
-  assert.deepEqual(result.corpusCounts, { triage: 4, review: 3 });
-  assert.deepEqual(result.replayed, { triage: 4, review: 3 });
+  assert.deepEqual(result.corpusCounts, { triage: 4, review: 3, harmonise: 2 });
+  assert.deepEqual(result.replayed, { triage: 4, review: 3, harmonise: 2 });
   const byMetric = new Map(result.rows.map((row) => [row.metric, row]));
   const refusal = byMetric.get("triage refusal-rate");
   assert.ok(refusal && refusal.value !== null && Math.abs(refusal.value - 2 / 3) < 1e-12);
+  const harmoniseRefusal = byMetric.get("harmonise validation-refusal-rate");
+  assert.ok(
+    harmoniseRefusal &&
+      harmoniseRefusal.value !== null &&
+      Math.abs(harmoniseRefusal.value - 0.5) < 1e-12,
+  );
+  assert.equal(harmoniseRefusal.threshold, "unbounded (reported)");
+  assert.equal(harmoniseRefusal.met, true);
   for (const [name, wanted] of [
     ["review precision", 1],
     ["review false-positive-rate", 0],
@@ -554,7 +573,15 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
     assert.equal(row.value, wanted, name);
     assert.equal(row.met, true, `${name} must clear its threshold`);
   }
-  assert.deepEqual(result.mutationCounts, { "review.createComment": 2, "triage.addLabels": 3 });
+  assert.deepEqual(result.mutationCounts, {
+    "harmonise.createBlob": 3,
+    "harmonise.createCommit": 1,
+    "harmonise.createTree": 1,
+    "harmonise.upsertBranch": 1,
+    "harmonise.upsertPullRequest": 1,
+    "review.createComment": 2,
+    "triage.addLabels": 3,
+  });
   assert.equal(result.ok, true);
 });
 
@@ -574,8 +601,8 @@ test("renderReport names every defect and fails the result line", async () => {
     ],
     mutationCounts: { "triage.addLabels": 2 },
     defects: ["entry-x: the replay downgraded [add:docs], expected []"],
-    corpusCounts: { triage: 4, review: 3 },
-    replayed: { triage: 4, review: 2 },
+    corpusCounts: { triage: 4, review: 3, harmonise: 2 },
+    replayed: { triage: 4, review: 2, harmonise: 1 },
     ok: false,
   });
   assert.match(report, /review precision\s+0\.2500\s+>= 0\.5\s+no/);
@@ -584,6 +611,166 @@ test("renderReport names every defect and fails the result line", async () => {
   assert.match(report, /entry-x: the replay downgraded/);
   assert.match(report, /# result: FAIL/);
   assert.match(report, /triage\.addLabels\s+2/);
+});
+
+// ── Harmonise: snapshots, doubles, pins, the seed entries ───────────────
+
+const VALID_HARMONISE_SNAPSHOT = {
+  schemaVersion: 1,
+  kind: "harmonise",
+  repository: "ecoma-io/action-agents",
+  model: "<recorded>",
+  event: { name: "workflow_dispatch", action: "", payload: { ref: "refs/heads/main" } },
+  inputs: { configPath: "", sourceLanguage: "en", documents: [], dryRun: false },
+  files: { [/* sha */ "e".repeat(40)]: { "manual/dev.md": "# Dev\n" } },
+  world: { getRef: { main: "e".repeat(40) }, listTree: [{ path: "manual/dev.md", type: "blob" }] },
+};
+
+test("validateSnapshot accepts a well-formed harmonise snapshot", () => {
+  const snapshot = validateSnapshot(structuredClone(VALID_HARMONISE_SNAPSHOT), "entry");
+  assert.equal(snapshot["kind"], "harmonise");
+});
+
+test("validateSnapshot still requires a non-empty action word outside harmonise", () => {
+  const triageSnapshot = structuredClone(VALID_TRIAGE_SNAPSHOT);
+  triageSnapshot["event"]["action"] = "";
+  assert.match(
+    defectMessage(() => validateSnapshot(triageSnapshot, "entry")),
+    /event\.action/,
+  );
+});
+
+test("validateSnapshot refuses a harmonise files map keyed outside world.getRef", () => {
+  const snapshot = structuredClone(VALID_HARMONISE_SNAPSHOT);
+  snapshot["files"] = { [/* sha */ "a".repeat(40)]: { "manual/dev.md": "# Dev\n" } };
+  assert.match(
+    defectMessage(() => validateSnapshot(snapshot, "entry")),
+    /not a 40-hex sha the snapshot's world\.getRef declares/,
+  );
+});
+
+test("validateSnapshot refuses a harmonise file entry that is neither content nor null", () => {
+  const snapshot = structuredClone(VALID_HARMONISE_SNAPSHOT);
+  snapshot["files"] = { ["e".repeat(40)]: { "manual/dev.md": 7 } };
+  assert.match(
+    defectMessage(() => validateSnapshot(snapshot, "entry")),
+    /neither file content/,
+  );
+});
+
+test("validateSnapshot refuses a harmonise named config path", () => {
+  const snapshot = structuredClone(VALID_HARMONISE_SNAPSHOT);
+  snapshot["inputs"]["configPath"] = "harmonise.custom.json5";
+  assert.match(
+    defectMessage(() => validateSnapshot(snapshot, "entry")),
+    /configPath/,
+  );
+});
+
+test("makeForge serves ref-aware reads from the recorded files map", async () => {
+  const sha = "e".repeat(40);
+  const forge = makeForge({ getRef: { main: sha } }, {}, [], "entry", {
+    files: { [sha]: { "manual/dev.md": "# Dev\n", "state.en.json": null } },
+  });
+  assert.deepEqual(await forge["getContents"]("manual/dev.md", { ref: sha }), {
+    content: "# Dev\n",
+  });
+  assert.equal(await forge["getContents"]("state.en.json", { ref: sha }), null);
+  assert.match(
+    await defectMessageAsync(() => forge["getContents"]("manual/other.md", { ref: sha })),
+    /does not record in that ref's file set/,
+  );
+  assert.match(
+    await defectMessageAsync(() => forge["getContents"]("manual/dev.md", { ref: "a".repeat(40) })),
+    /does not record in files/,
+  );
+});
+
+test("makeForge readRef resolves a declared branch and reads an undeclared one as absent", async () => {
+  const sha = "f".repeat(40);
+  const forge = makeForge(
+    { getRef: { main: "e".repeat(40), "harmonise/en": sha } },
+    {},
+    [],
+    "entry",
+  );
+  assert.deepEqual(await forge["readRef"]("harmonise/en"), { sha });
+  assert.equal(await forge["readRef"]("harmonise/vi"), null);
+});
+
+test("makeForge records the Git Data write ops a publication is made of", async () => {
+  const writes = [];
+  const forge = makeForge({}, {}, writes, "entry");
+  const blob = await forge["createBlob"]("# Dev\n");
+  assert.match(blob.sha, /^blob0*1$/);
+  const tree = await forge["createTree"]("e".repeat(40), [{ path: "p", blobSha: blob.sha }]);
+  const commit = await forge["createCommit"]("title", tree.sha, "e".repeat(40));
+  await forge["upsertBranch"]("harmonise/en", commit.sha, null);
+  const pullRequest = await forge["upsertPullRequest"]({ base: "main", head: "harmonise/en" });
+  assert.deepEqual(pullRequest, { number: 42, created: true });
+  assert.deepEqual(
+    writes.map((op) => op.op),
+    ["createBlob", "createTree", "createCommit", "upsertBranch", "upsertPullRequest"],
+  );
+});
+
+test("pinHarmonise pins the op sequence and a refused run's exact message", () => {
+  const entry = (expected) => ({ name: "entry", expected });
+  pinHarmonise(entry({ outcome: "published", writes: ["createBlob"] }), {
+    outcome: "published",
+    writes: [{ op: "createBlob", args: ["x"] }],
+    asks: 1,
+  });
+  assert.match(
+    defectMessage(() =>
+      pinHarmonise(entry({ outcome: "published", writes: ["createBlob", "createTree"] }), {
+        outcome: "published",
+        writes: [{ op: "createBlob", args: ["x"] }],
+        asks: 1,
+      }),
+    ),
+    /write ops \[createBlob\] diverge from the expectation \[createBlob, createTree\]/,
+  );
+  const refused = {
+    outcome: "refused",
+    refusal: "every pair failed:\n- vi p: manual-edit protection refused: r",
+    writes: [],
+  };
+  pinHarmonise(entry(refused), {
+    outcome: "refused",
+    writes: [],
+    asks: 0,
+    message: refused.refusal,
+  });
+  assert.match(
+    defectMessage(() =>
+      pinHarmonise(entry(refused), {
+        outcome: "refused",
+        writes: [],
+        asks: 0,
+        message: "every pair failed:\n- vi p: a paraphrased refusal",
+      }),
+    ),
+    /refusal message diverges from the expectation/,
+  );
+});
+
+test("the harmonise seed entries replay green and pin their terminal states", async () => {
+  const entries = await loadCorpus(CORPUS_ROOT);
+  const harmoniseEntries = entries.filter((entry) => entry.kind === "harmonise");
+  assert.equal(harmoniseEntries.length, 2);
+  for (const entry of harmoniseEntries) {
+    const replay = await replayHarmonise(entry);
+    pinHarmonise(entry, replay);
+    assert.equal(replay.asks, entry.answers.length);
+    assert.ok(replay.message === null || typeof replay.message === "string");
+  }
+  const refused = harmoniseEntries.find((entry) => entry.expected["outcome"] === "refused");
+  assert.ok(refused, "the seed holds no refused harmonise entry");
+  assert.deepEqual((await replayHarmonise(/** @type {never} */ (refused))).outcome, "refused");
+  const published = harmoniseEntries.find((entry) => entry.expected["outcome"] === "published");
+  assert.ok(published, "the seed holds no published harmonise entry");
+  assert.deepEqual((await replayHarmonise(/** @type {never} */ (published))).outcome, "published");
 });
 
 test("the corpus on disk is the seed the floor demands", () => {

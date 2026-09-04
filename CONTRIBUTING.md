@@ -358,6 +358,16 @@ The root action is a composite stub that fails with guidance — it is not a
 runnable action. Release validation checks its contract: `runs.using: composite`,
 no `main:` entry point, required metadata present.
 
+**The certification bar is the pre-release check.** Cutting a release claims
+the actions did not get worse, and the claim is checked, not remembered:
+archkeep verdicts green (`pnpm arch`), all gates green, the adversarial corpus
+green (`pnpm security`), and the offline thresholds met (`pnpm eval`) — the bar
+stated in full in [docs/evaluation.md](docs/evaluation.md). CI's evaluation job
+is advisory, so the last of the four is verified by hand when the release pull
+request is reviewed: it becomes a required check only after wall-clock is
+measured and the thresholds have calibration history, and it is not mechanically
+enforced until that advisory job has history.
+
 Two things about the release pull request that are not obvious:
 
 - **Its title is pinned** to `chore(workspace): release <version>`.

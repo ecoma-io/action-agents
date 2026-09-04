@@ -1,0 +1,5 @@
+{
+  "outcome": "refused",
+  "refusal": "every pair failed:\n- vi manual/dev.md: manual-edit protection refused: the target changed outside harmonise since the last publication, and no recorded base translation could be verified to merge against — resolve the edit by hand or restore the translation memory",
+  "writes": []
+}

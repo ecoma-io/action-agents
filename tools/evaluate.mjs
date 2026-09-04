@@ -6,8 +6,9 @@
  * WHAT IT DOES
  *
  * It walks `evaluation/corpus/<entry>/` and replays every entry through the
- * real action modules — `triage/src/index.mjs`'s `run` and
- * `review/src/index.mjs`'s `run` — fed from the recorded snapshot: a forge
+ * real action modules — `triage/src/index.mjs`'s `run`,
+ * `review/src/index.mjs`'s `run` and `harmonise/src/index.mjs`'s `run` —
+ * fed from the recorded snapshot: a forge
  * double that serves exactly the reads the snapshot recorded (and raises a
  * `CorpusDefect` the moment a run reaches for anything else), a chat double
  * that serves the recorded answers in ask order (a run that asks for more
@@ -55,7 +56,18 @@
  *  - `mutation-surface` — "total write ops per run by kind" (source: the
  *    writes the replay doubles recorded; drift watch — growth is a design
  *    smell, auto-reported). No threshold: absolute counts, printed so growth
- *    is visible.
+ *    is visible. The harmonise replays join this table with the Git Data
+ *    write ops one publication is made of.
+ *  - harmonise `validation-refusal-rate` — "runs the deterministic
+ *    validation refused / harmonise runs replayed" (source: the replay's
+ *    terminal state — a run the real validators declined: the config-absent
+ *    refusal, the manual-edit and frontmatter protection refusals, or the
+ *    answer contract's tagged validation failures ending the run; informs
+ *    validation strictness calibration). Threshold: reported unbounded —
+ *    the same dial posture as triage refusal-rate. Harmonise has NO offline
+ *    model-quality metric: translation quality is not judgeable without a
+ *    reference translation, so apply-clean-rate stays production-deferred
+ *    (U-8, below).
  *  - `archkeep violation rate` — NOT computed here: the arch gate itself is
  *    its enforcement. Run `pnpm arch`; CI already does.
  *
@@ -127,6 +139,8 @@ import { serialiseArtifact } from "../review/src/artifact.mjs";
 import { contentDigest } from "../review/src/digest.mjs";
 import { normaliseReadPath } from "../review/src/coverage.mjs";
 
+import { run as runHarmonise } from "../harmonise/src/index.mjs";
+
 /** The repository the corpus describes, as the replay's forge context names it. */
 const OWNER = "ecoma-io";
 const REPO_NAME = "action-agents";
@@ -140,6 +154,7 @@ const EVIDENCE_ID = "aaaabbbb";
 /** The corpus floor the seed promises (issue #278): fewer entries is a broken corpus. */
 const MIN_TRIAGE_ENTRIES = 4;
 const MIN_REVIEW_ENTRIES = 3;
+const MIN_HARMONISE_ENTRIES = 2;
 
 /**
  * The initial thresholds, named so a change to one is a change to this
@@ -272,6 +287,16 @@ const TRIAGE_SNAPSHOT_KEYS = Object.freeze([
   "world",
 ]);
 const REVIEW_SNAPSHOT_KEYS = Object.freeze([...TRIAGE_SNAPSHOT_KEYS, "headFiles"]);
+const HARMONISE_SNAPSHOT_KEYS = Object.freeze([
+  "event",
+  "files",
+  "inputs",
+  "kind",
+  "model",
+  "repository",
+  "schemaVersion",
+  "world",
+]);
 
 /**
  * Validates one snapshot against the corpus contract. Policy files, head
@@ -287,7 +312,15 @@ export function validateSnapshot(snapshot, entryName) {
   const where = `snapshot ${entryName}`;
   const record = asRecord(snapshot, where);
   const kind = asText(record["kind"], `${where}.kind`);
-  assertKeys(record, kind === "triage" ? TRIAGE_SNAPSHOT_KEYS : REVIEW_SNAPSHOT_KEYS, where);
+  assertKeys(
+    record,
+    kind === "triage"
+      ? TRIAGE_SNAPSHOT_KEYS
+      : kind === "harmonise"
+        ? HARMONISE_SNAPSHOT_KEYS
+        : REVIEW_SNAPSHOT_KEYS,
+    where,
+  );
   if (record["schemaVersion"] !== 1) {
     throw new CorpusDefect(`${where}.schemaVersion is not 1`);
   }
@@ -302,21 +335,31 @@ export function validateSnapshot(snapshot, entryName) {
   const event = asRecord(record["event"], `${where}.event`);
   assertKeys(event, ["action", "name", "payload"], `${where}.event`);
   asText(event["name"], `${where}.event.name`);
-  asText(event["action"], `${where}.event.action`);
+  // A workflow_dispatch event carries no action word; a harmonise snapshot
+  // records that as the empty string, and only a non-string is a defect.
+  if (kind === "harmonise") {
+    if (typeof event["action"] !== "string") {
+      throw new CorpusDefect(`${where}.event.action is not a string`);
+    }
+  } else {
+    asText(event["action"], `${where}.event.action`);
+  }
   asRecord(event["payload"], `${where}.event.payload`);
 
-  const thread = asRecord(record["thread"], `${where}.thread`);
-  assertKeys(thread, ["body", "labels", "number", "title", "type"], `${where}.thread`);
-  const type = asText(thread["type"], `${where}.thread.type`);
-  if (type !== "issue" && type !== "pr") {
-    throw new CorpusDefect(`${where}.thread.type is neither "issue" nor "pr"`);
+  if (kind !== "harmonise") {
+    const thread = asRecord(record["thread"], `${where}.thread`);
+    assertKeys(thread, ["body", "labels", "number", "title", "type"], `${where}.thread`);
+    const type = asText(thread["type"], `${where}.thread.type`);
+    if (type !== "issue" && type !== "pr") {
+      throw new CorpusDefect(`${where}.thread.type is neither "issue" nor "pr"`);
+    }
+    asLine(thread["number"], `${where}.thread.number`);
+    asText(thread["title"], `${where}.thread.title`);
+    if (typeof thread["body"] !== "string") {
+      throw new CorpusDefect(`${where}.thread.body is not a string`);
+    }
+    asTextList(thread["labels"], `${where}.thread.labels`);
   }
-  asLine(thread["number"], `${where}.thread.number`);
-  asText(thread["title"], `${where}.thread.title`);
-  if (typeof thread["body"] !== "string") {
-    throw new CorpusDefect(`${where}.thread.body is not a string`);
-  }
-  asTextList(thread["labels"], `${where}.thread.labels`);
 
   const inputs = asRecord(record["inputs"], `${where}.inputs`);
   if (kind === "triage") {
@@ -325,6 +368,21 @@ export function validateSnapshot(snapshot, entryName) {
       throw new CorpusDefect(`${where}.inputs.verify is not a boolean`);
     }
     asTextList(inputs["labels"], `${where}.inputs.labels`);
+  } else if (kind === "harmonise") {
+    assertKeys(inputs, ["configPath", "documents", "dryRun", "sourceLanguage"], `${where}.inputs`);
+    const harmoniseConfigPath = inputs["configPath"];
+    if (typeof harmoniseConfigPath !== "string" || harmoniseConfigPath !== "") {
+      throw new CorpusDefect(
+        `${where}.inputs.configPath must be "" — a named config file must be recorded in files at its default location`,
+      );
+    }
+    if (!Array.isArray(inputs["documents"])) {
+      throw new CorpusDefect(`${where}.inputs.documents is not an array of globs`);
+    }
+    const sourceLanguage = inputs["sourceLanguage"];
+    if (typeof sourceLanguage !== "string" || sourceLanguage === "") {
+      throw new CorpusDefect(`${where}.inputs.sourceLanguage is not a non-empty string`);
+    }
   } else {
     assertKeys(inputs, ["configPath", "contextWindow", "dryRun", "maxTurns"], `${where}.inputs`);
     const configPath = inputs["configPath"];
@@ -346,14 +404,16 @@ export function validateSnapshot(snapshot, entryName) {
     throw new CorpusDefect(`${where}.inputs.dryRun must be false — the corpus records real runs`);
   }
 
-  const policy = asRecord(record["policy"], `${where}.policy`);
-  assertKeys(policy, ["files"], `${where}.policy`);
-  const files = asRecord(policy["files"], `${where}.policy.files`);
-  for (const [path, content] of Object.entries(files)) {
-    if (content !== null && typeof content !== "string") {
-      throw new CorpusDefect(
-        `${where}.policy.files['${path}'] is neither file content nor the recorded absence null`,
-      );
+  if (kind !== "harmonise") {
+    const policy = asRecord(record["policy"], `${where}.policy`);
+    assertKeys(policy, ["files"], `${where}.policy`);
+    const files = asRecord(policy["files"], `${where}.policy.files`);
+    for (const [path, content] of Object.entries(files)) {
+      if (content !== null && typeof content !== "string") {
+        throw new CorpusDefect(
+          `${where}.policy.files['${path}'] is neither file content nor the recorded absence null`,
+        );
+      }
     }
   }
 
@@ -373,6 +433,26 @@ export function validateSnapshot(snapshot, entryName) {
       }
     } else if (!isRecord(value) && !Array.isArray(value)) {
       throw new CorpusDefect(`${where}.world.${member} is neither an object nor an array`);
+    }
+  }
+
+  if (kind === "harmonise") {
+    const snapshotFiles = asRecord(record["files"], `${where}.files`);
+    const refValues = Object.values(/** @type {Record<string, string>} */ (world["getRef"]));
+    for (const [sha, paths] of Object.entries(snapshotFiles)) {
+      if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha) || !refValues.includes(sha)) {
+        throw new CorpusDefect(
+          `${where}.files key '${sha}' is not a 40-hex sha the snapshot's world.getRef declares`,
+        );
+      }
+      const pathMap = asRecord(paths, `${where}.files['${sha}']`);
+      for (const [filePath, content] of Object.entries(pathMap)) {
+        if (content !== null && typeof content !== "string") {
+          throw new CorpusDefect(
+            `${where}.files['${sha}']['${filePath}'] is neither file content nor the recorded absence null`,
+          );
+        }
+      }
     }
   }
 
@@ -400,7 +480,7 @@ const ANCHOR_PATTERN = /^[^\s/]+\/[^\s/]+:\d+$/;
  *
  * @param {unknown} expected
  * @param {string} entryName
- * @param {"triage" | "review"} kind
+ * @param {"triage" | "review" | "harmonise"} kind
  * @returns {Record<string, unknown>}
  */
 export function validateExpected(expected, entryName, kind) {
@@ -428,6 +508,26 @@ export function validateExpected(expected, entryName, kind) {
     }
     if (record["signalExpected"] !== true && record["signalExpected"] !== false) {
       throw new CorpusDefect(`${where}.signalExpected is not a boolean`);
+    }
+  } else if (kind === "harmonise") {
+    assertKeys(record, ["outcome", "writes"], where, ["refusal"]);
+    const outcome = asText(record["outcome"], `${where}.outcome`);
+    if (!["published", "partial", "refused", "failed"].includes(outcome)) {
+      throw new CorpusDefect(`${where}.outcome is not a harmonise terminal state`);
+    }
+    if (!Array.isArray(record["writes"])) {
+      throw new CorpusDefect(`${where}.writes is not an array of op names`);
+    }
+    for (const op of record["writes"]) {
+      if (typeof op !== "string") {
+        throw new CorpusDefect(`${where}.writes entries must be strings`);
+      }
+    }
+    if (outcome === "refused" && !("refusal" in record)) {
+      throw new CorpusDefect(`${where}.refused outcome must carry a refusal reason`);
+    }
+    if ("refusal" in record && typeof record["refusal"] !== "string") {
+      throw new CorpusDefect(`${where}.refusal is not a string`);
     }
   } else {
     assertKeys(record, ["findings", "outcome", "verdicts"], where);
@@ -526,15 +626,20 @@ const ANSWER_FILE = /^\d{2}-[a-z0-9-]+\.json$/;
  * the default.
  *
  * @param {string} corpusRoot
- * @param {{floor?: {triage: number, review: number}}} [options]
- * @returns {Promise<Array<{name: string, dir: string, kind: "triage" | "review", snapshot: Record<string, unknown>, expected: Record<string, unknown>, answers: Array<Record<string, unknown>>}>>}
+ * @param {{floor?: {triage: number, review: number, harmonise: number}}} [options]
+ * @returns {Promise<Array<{name: string, dir: string, kind: "triage" | "review" | "harmonise", snapshot: Record<string, unknown>, expected: Record<string, unknown>, answers: Array<Record<string, unknown>>}>>}
  */
 export async function loadCorpus(corpusRoot, options = {}) {
-  const floor = options.floor ?? { triage: MIN_TRIAGE_ENTRIES, review: MIN_REVIEW_ENTRIES };
-  /** @type {Array<{name: string, dir: string, kind: "triage" | "review", snapshot: Record<string, unknown>, expected: Record<string, unknown>, answers: Array<Record<string, unknown>>}>} */
+  const floor = options.floor ?? {
+    triage: MIN_TRIAGE_ENTRIES,
+    review: MIN_REVIEW_ENTRIES,
+    harmonise: MIN_HARMONISE_ENTRIES,
+  };
+  /** @type {Array<{name: string, dir: string, kind: "triage" | "review" | "harmonise", snapshot: Record<string, unknown>, expected: Record<string, unknown>, answers: Array<Record<string, unknown>>}>} */
   const entries = [];
   let triageCount = 0;
   let reviewCount = 0;
+  let harmoniseCount = 0;
   for (const name of readdirSync(corpusRoot).sort()) {
     const dir = p.join(corpusRoot, name);
     if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
@@ -557,10 +662,12 @@ export async function loadCorpus(corpusRoot, options = {}) {
       );
     }
     const snapshot = validateSnapshot(snapshotValue, name);
-    const kind = /** @type {"triage" | "review"} */ (snapshot["kind"]);
+    const kind = /** @type {"triage" | "review" | "harmonise"} */ (snapshot["kind"]);
     const expected = validateExpected(expectedValue, name, kind);
     if (kind === "triage") {
       triageCount += 1;
+    } else if (kind === "harmonise") {
+      harmoniseCount += 1;
     } else {
       reviewCount += 1;
     }
@@ -598,9 +705,13 @@ export async function loadCorpus(corpusRoot, options = {}) {
     }
     entries.push({ name, dir, kind, snapshot, expected, answers });
   }
-  if (triageCount < floor.triage || reviewCount < floor.review) {
+  if (
+    triageCount < floor.triage ||
+    reviewCount < floor.review ||
+    harmoniseCount < floor.harmonise
+  ) {
     throw new CorpusDefect(
-      `corpus is below its seed: ${String(triageCount)} triage entries (need ${String(floor.triage)}), ${String(reviewCount)} review entries (need ${String(floor.review)})`,
+      `corpus is below its seed: ${String(triageCount)} triage entries (need ${String(floor.triage)}), ${String(reviewCount)} review entries (need ${String(floor.review)}), ${String(harmoniseCount)} harmonise entries (need ${String(floor.harmonise)})`,
     );
   }
   return entries;
@@ -629,7 +740,7 @@ export async function loadCorpus(corpusRoot, options = {}) {
  * @param {string} entryName
  * @returns {Record<string, unknown>}
  */
-export function makeForge(world, policyFiles, writes, entryName) {
+export function makeForge(world, policyFiles, writes, entryName, options = {}) {
   return new Proxy(/** @type {Record<string, unknown>} */ ({}), {
     get(_target, member, _receiver) {
       if (typeof member !== "string") {
@@ -638,8 +749,34 @@ export function makeForge(world, policyFiles, writes, entryName) {
       switch (member) {
         case "getContents": {
           /** @param {string} path
+           * @param {{ ref?: string }} [opts]
            * @returns {unknown} */
-          return (path) => {
+          return async (path, opts) => {
+            const ref = opts?.ref;
+            const refFiles =
+              /** @type {Record<string, Record<string, string | null>> | undefined} */ (
+                options["files"]
+              );
+            if (refFiles !== undefined) {
+              // Ref-aware mode: every read resolves against a recorded ref's
+              // file set, so a ref the snapshot does not declare is a defect.
+              if (ref === undefined || !Object.hasOwn(refFiles, ref)) {
+                throw new CorpusDefect(
+                  `${entryName}: the run read '${path}' at ref '${String(ref)}', which the snapshot does not record in files`,
+                );
+              }
+              const atRef = refFiles[ref];
+              if (!Object.hasOwn(atRef, path)) {
+                throw new CorpusDefect(
+                  `${entryName}: the run read file '${path}' at ref '${ref}', which the snapshot does not record in that ref's file set`,
+                );
+              }
+              const refContent = atRef[path];
+              if (refContent === null) {
+                return null;
+              }
+              return { content: refContent };
+            }
             if (!Object.hasOwn(policyFiles, path)) {
               throw new CorpusDefect(
                 `${entryName}: the run read policy file '${path}', which the snapshot does not record`,
@@ -650,6 +787,45 @@ export function makeForge(world, policyFiles, writes, entryName) {
               return null;
             }
             return { content };
+          };
+        }
+        case "readRef": {
+          return (branch) => {
+            const refMap = /** @type {Record<string, string> | undefined} */ (world["getRef"]);
+            if (refMap !== undefined && Object.hasOwn(refMap, branch)) {
+              return { sha: refMap[branch] };
+            }
+            return null;
+          };
+        }
+        case "createBlob": {
+          return (content) => {
+            writes.push({ op: "createBlob", args: [content] });
+            return { sha: `blob${String(writes.length).padStart(38, "0")}` };
+          };
+        }
+        case "createTree": {
+          return (base, changes) => {
+            writes.push({ op: "createTree", args: [base, changes] });
+            return { sha: `tree-${base.slice(0, 4)}` };
+          };
+        }
+        case "createCommit": {
+          return (message, treeSha, parent) => {
+            writes.push({ op: "createCommit", args: [message, treeSha, parent] });
+            return { sha: "c".repeat(40) };
+          };
+        }
+        case "upsertBranch": {
+          return (branch, commitSha, expectedCurrentSha) => {
+            writes.push({ op: "upsertBranch", args: [branch, commitSha, expectedCurrentSha] });
+            return undefined;
+          };
+        }
+        case "upsertPullRequest": {
+          return (input) => {
+            writes.push({ op: "upsertPullRequest", args: [input] });
+            return { number: 42, created: true };
           };
         }
         case "addLabels":
@@ -777,7 +953,7 @@ export async function quietly(work) {
 // provider, the real action module doing the work. A replay that throws is
 // reported as a corpus defect by `evaluate`, never swallowed.
 
-/** @typedef {{name: string, dir: string, kind: "triage" | "review", snapshot: Record<string, unknown>, expected: Record<string, unknown>, answers: Array<Record<string, unknown>>}} CorpusEntry */
+/** @typedef {{name: string, dir: string, kind: "triage" | "review" | "harmonise", snapshot: Record<string, unknown>, expected: Record<string, unknown>, answers: Array<Record<string, unknown>>}} CorpusEntry */
 
 /**
  * Replays one triage entry through `triage/src/index.mjs`.
@@ -938,6 +1114,100 @@ export async function replayReview(entry) {
   }
 }
 
+/**
+ * Replays one harmonise entry through `harmonise/src/index.mjs`. A run that
+ * resolves published; a run that throws is classified against the run
+ * contract's deterministic refusal signatures — the config-absent refusal,
+ * the protection refusals, and the every-pair-failed report — before it is
+ * called `failed`. Every other message is a genuine failure, not a refusal.
+ *
+ * @param {CorpusEntry} entry
+ * @returns {Promise<{outcome: "published" | "refused" | "failed", writes: WriteOp[], asks: number, message: string | null}>}
+ */
+export async function replayHarmonise(entry) {
+  const snapshot = entry.snapshot;
+  const inputs = /** @type {Record<string, unknown>} */ (snapshot["inputs"]);
+  const event = /** @type {Record<string, unknown>} */ (snapshot["event"]);
+  /** @type {WriteOp[]} */
+  const writes = [];
+  const root = mkdtempSync(p.join(tmpdir(), "eval-harmonise-"));
+  try {
+    const workspace = p.join(root, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(p.join(root, "event.json"), JSON.stringify(event["payload"]), "utf8");
+    const chat = makeChat(entry.name, entry.answers);
+    await withoutNetwork(() =>
+      quietly(
+        () =>
+          /** @type {Promise<void>} */ (
+            runHarmonise(
+              {
+                model: /** @type {string} */ (snapshot["model"]),
+                configPath: /** @type {string} */ (inputs["configPath"]),
+                sourceLanguage: /** @type {string} */ (inputs["sourceLanguage"]),
+                documents: /** @type {string[]} */ (inputs["documents"]),
+                dryRun: /** @type {boolean} */ (inputs["dryRun"]),
+                apiUrl: "https://api.github.invalid",
+                apiKey: "sk-eval-placeholder",
+                githubToken: "ghs_eval-placeholder",
+                requestTimeoutMs: 1_000,
+              },
+              {
+                workspace: root,
+                owner: OWNER,
+                repo: REPO_NAME,
+                eventName: event["name"],
+                eventPath: p.join(root, "event.json"),
+                apiUrl: "https://api.github.invalid",
+              },
+              {
+                forge: makeForge(
+                  snapshot["world"],
+                  /** @type {Record<string, string | null>} */ ({}),
+                  writes,
+                  entry.name,
+                  {
+                    files: /** @type {Record<string, Record<string, string | null>>} */ (
+                      snapshot["files"]
+                    ),
+                  },
+                ),
+                chat,
+                evidence: createEvidence(() => EVIDENCE_ID),
+                sleep: () => Promise.resolve(),
+                now: () => FIXED_NOW,
+                readEvent: async () => /** @type {Record<string, unknown>} */ (event["payload"]),
+              },
+            )
+          ),
+      ),
+    );
+    const asks = chat.asks();
+    if (asks !== entry.answers.length) {
+      throw new CorpusDefect(
+        `${entry.name}: the run made ${asks} asks but the recording holds ${entry.answers.length}`,
+      );
+    }
+    return { outcome: "published", writes, asks, message: null };
+  } catch (error) {
+    if (error instanceof CorpusDefect) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const refused =
+      message.startsWith("no config file exists ") ||
+      message.includes("protection refused:") ||
+      message.startsWith("every pair failed:") ||
+      message.startsWith("every pair skipped:");
+    if (refused) {
+      return { outcome: "refused", writes, asks: 0, message };
+    }
+    return { outcome: "failed", writes, asks: 0, message };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // ── Pins and scoring ────────────────────────────────────────────────────
 // Triage is pinned outright (only refusal-rate is its frozen offline metric,
 // so a divergence anywhere else is a broken corpus, not a calibration
@@ -1084,6 +1354,39 @@ export function pinReview(entry, replay) {
   if (replay.outcome !== entry.expected["outcome"]) {
     throw new CorpusDefect(
       `${entry.name}: the replay ended '${replay.outcome}', expected '${String(entry.expected["outcome"])}'`,
+    );
+  }
+}
+
+/**
+ * Pins one harmonise replay against its expectation: the terminal state and
+ * the exact op sequence the publication made. A refused run additionally
+ * pins the refusal reason itself — harmonise's validation is deterministic,
+ * so the message the real validator produced is the corpus's own record of
+ * it, and a paraphrase is a divergence, not a wording preference.
+ *
+ * @param {CorpusEntry} entry
+ * @param {{outcome: string, writes: WriteOp[], asks: number}} replay
+ * @returns {void}
+ */
+export function pinHarmonise(entry, replay) {
+  if (replay.outcome !== entry.expected["outcome"]) {
+    throw new CorpusDefect(
+      `${entry.name}: the replay ended '${replay.outcome}', expected '${String(entry.expected["outcome"])}'`,
+    );
+  }
+  const wanted = /** @type {string[]} */ (entry.expected["writes"]);
+  const made = replay.writes.map((write) => write.op);
+  const same = wanted.length === made.length && wanted.every((op, index) => op === made[index]);
+  if (!same) {
+    throw new CorpusDefect(
+      `${entry.name}: the replay's write ops [${made.join(", ") || "none"}] diverge from the expectation [${wanted.join(", ") || "none"}]`,
+    );
+  }
+  const wantedRefusal = entry.expected["refusal"];
+  if (typeof wantedRefusal === "string" && replay.message !== wantedRefusal) {
+    throw new CorpusDefect(
+      `${entry.name}: the replay's refusal message diverges from the expectation — the validator's deterministic wording changed:\n  expected: ${wantedRefusal}\n  produced: ${String(replay.message)}`,
     );
   }
 }
@@ -1341,6 +1644,20 @@ export function refusalRate(refusedRuns, modelAnsweredRuns) {
 }
 
 /**
+ * The harmonise metric: runs the deterministic validation refused over every
+ * harmonise run replayed. Reported unbounded, like triage's refusal-rate —
+ * a ceiling posture is a dial, not a defect; the number exists so a change
+ * that moves it is visible.
+ *
+ * @param {number} refusedRuns
+ * @param {number} replayedRuns
+ * @returns {number | null}
+ */
+export function validationRefusalRate(refusedRuns, replayedRuns) {
+  return share(refusedRuns, replayedRuns);
+}
+
+/**
  * Absolute write-op counts by kind across the corpus — the drift watch.
  *
  * @param {Array<{kind: string, writes: WriteOp[]}>} observations
@@ -1376,8 +1693,8 @@ const CORPUS_ROOT = p.join(REPO_ROOT, "evaluation", "corpus");
  * @property {MetricRow[]} rows
  * @property {Record<string, number>} mutationCounts
  * @property {string[]} defects
- * @property {{triage: number, review: number}} corpusCounts
- * @property {{triage: number, review: number}} replayed
+ * @property {{triage: number, review: number, harmonise: number}} corpusCounts
+ * @property {{triage: number, review: number, harmonise: number}} replayed
  * @property {boolean} ok
  */
 
@@ -1395,8 +1712,11 @@ export async function evaluate(options = {}) {
   const defects = [];
   let triageEntries = 0;
   let reviewEntries = 0;
+  let harmoniseEntries = 0;
   let triageReplayed = 0;
   let reviewReplayed = 0;
+  let harmoniseReplayed = 0;
+  let harmoniseRefused = 0;
   let modelAnswered = 0;
   let refusedRuns = 0;
   let tp = 0;
@@ -1415,14 +1735,18 @@ export async function evaluate(options = {}) {
   for (const entry of entries) {
     if (entry.kind === "triage") {
       triageEntries += 1;
+    } else if (entry.kind === "harmonise") {
+      harmoniseEntries += 1;
     } else {
       reviewEntries += 1;
     }
-    /** @type {{triage?: ReturnType<typeof replayTriage extends (...args: never[]) => Promise<infer T> ? T : never>, review?: Awaited<ReturnType<typeof replayReview>>}} */
+    /** @type {{triage?: Awaited<ReturnType<typeof replayTriage>>, review?: Awaited<ReturnType<typeof replayReview>>, harmonise?: Awaited<ReturnType<typeof replayHarmonise>>}} */
     const replays = {};
     try {
       if (entry.kind === "triage") {
         replays.triage = await replayTriage(entry);
+      } else if (entry.kind === "harmonise") {
+        replays.harmonise = await replayHarmonise(entry);
       } else {
         replays.review = await replayReview(entry);
       }
@@ -1453,6 +1777,22 @@ export async function evaluate(options = {}) {
         if (refusalNames(replay.record).length > 0) {
           refusedRuns += 1;
         }
+      }
+    } else if (entry.kind === "harmonise") {
+      harmoniseReplayed += 1;
+      const replay = /** @type {NonNullable<typeof replays.harmonise>} */ (replays.harmonise);
+      observations.push({ kind: "harmonise", writes: replay.writes });
+      try {
+        pinHarmonise(entry, replay);
+      } catch (error) {
+        defects.push(
+          error instanceof CorpusDefect
+            ? error.message
+            : `${entry.name}: ${/** @type {Error} */ (error).message}`,
+        );
+      }
+      if (replay.outcome === "refused") {
+        harmoniseRefused += 1;
       }
     } else {
       reviewReplayed += 1;
@@ -1517,6 +1857,7 @@ export async function evaluate(options = {}) {
   const accuracyValue = verificationAccuracyRate({ matches: verdictMatches, total: verdictTotal });
   const integrityValue = anchoringIntegrity(findings, anchorFailures);
   const refusalValue = refusalRate(refusedRuns, modelAnswered);
+  const harmoniseRefusalValue = validationRefusalRate(harmoniseRefused, harmoniseReplayed);
 
   /** @param {number | null} value @param {(value: number) => boolean} meets @returns {boolean} */
   const met = (value, meets) => value !== null && meets(value);
@@ -1564,13 +1905,19 @@ export async function evaluate(options = {}) {
       threshold: `== ${String(THRESHOLDS.anchoringIntegrity)} (pinned)`,
       met: met(integrityValue, (value) => value === THRESHOLDS.anchoringIntegrity),
     },
+    {
+      metric: "harmonise validation-refusal-rate",
+      value: harmoniseRefusalValue,
+      threshold: "unbounded (reported)",
+      met: true,
+    },
   ];
   return {
     rows,
     mutationCounts: countMutationSurface(observations),
     defects,
-    corpusCounts: { triage: triageEntries, review: reviewEntries },
-    replayed: { triage: triageReplayed, review: reviewReplayed },
+    corpusCounts: { triage: triageEntries, review: reviewEntries, harmonise: harmoniseEntries },
+    replayed: { triage: triageReplayed, review: reviewReplayed, harmonise: harmoniseReplayed },
     ok: defects.length === 0 && rows.every((row) => row.met),
   };
 }
@@ -1587,7 +1934,7 @@ export function renderReport(result) {
   /** @param {number | null} value @returns {string} */
   const cell = (value) => (value === null ? "n/a" : value.toFixed(4));
   const lines = [
-    "# pnpm eval — offline evaluation of the triage and review corpus (issue #278, wave W5)",
+    "# pnpm eval — offline evaluation of the triage, review and harmonise corpus (issue #278, wave W5)",
     "#",
     "# Offline-computable metrics, in the wording issue #278 froze:",
     "#   triage refusal-rate — runs with >= 1 refusal entry / model-answered runs",
@@ -1599,6 +1946,7 @@ export function renderReport(result) {
     "#   review precision / false-positive-rate / severity-agreement / verification-accuracy — against labeled corpus entries",
     "#     source: corpus + artifact — informs prompt and verification-pass changes",
     "#   mutation-surface — total write ops per run by kind; source: the replay doubles — drift watch, growth is a design smell",
+    "#   harmonise validation-refusal-rate — refused / harmonise runs replayed; source: the replay's terminal state (a run the real validators declined: a config, protection or contract refusal) — informs validation strictness calibration",
     "#   archkeep violation rate — NOT computed here: the arch gate enforces it; run `pnpm arch`",
     "#",
     "# Defined but production-deferred (U-8), never silently absent:",
@@ -1612,7 +1960,7 @@ export function renderReport(result) {
     "#",
     "# Every initial threshold is deliberately loose — the corpus is the seed; thresholds earn strictness with calibration history.",
     "#",
-    `# corpus: ${String(result.corpusCounts.triage)} triage entries, ${String(result.corpusCounts.review)} review entries; replayed: ${String(result.replayed.triage)} triage, ${String(result.replayed.review)} review`,
+    `# corpus: ${String(result.corpusCounts.triage)} triage entries, ${String(result.corpusCounts.review)} review entries, ${String(result.corpusCounts.harmonise)} harmonise entries; replayed: ${String(result.replayed.triage)} triage, ${String(result.replayed.review)} review, ${String(result.replayed.harmonise)} harmonise`,
     "#",
     "metric".padEnd(32) + "value".padStart(8) + "  " + "threshold".padEnd(24) + "met",
     "".padEnd(70, "-"),
