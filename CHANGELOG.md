@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/ecoma-io/action-agents/compare/v0.7.1...v0.8.0) (2026-09-04)
+
+
+### Features
+
+* **evaluation:** harmonise corpus, the evaluation page, and the U-8 decision ([#285](https://github.com/ecoma-io/action-agents/issues/285)) ([33c1321](https://github.com/ecoma-io/action-agents/commit/33c132163096af4e5e3582b5b86349ce29baedf2))
+* **evaluation:** offline corpus and evaluator for triage and review ([#284](https://github.com/ecoma-io/action-agents/issues/284)) ([4565da5](https://github.com/ecoma-io/action-agents/commit/4565da5965cdc4a095e53b702d42c322dac6b1a9))
+* **review:** content-checkable evidence and durable skip records ([#273](https://github.com/ecoma-io/action-agents/issues/273)) ([505ace9](https://github.com/ecoma-io/action-agents/commit/505ace9461dbb11aa479cd9b6580c7bafbd1fc7a))
+* **triage:** durable run record with a dogfood delivery channel ([#277](https://github.com/ecoma-io/action-agents/issues/277)) ([35eb136](https://github.com/ecoma-io/action-agents/commit/35eb136ad2f529f642047bafed9333ed273333ce))
+* **triage:** opt-in verification — one bounded call, downgrade-only ([#283](https://github.com/ecoma-io/action-agents/issues/283)) ([a1eb6d3](https://github.com/ecoma-io/action-agents/commit/a1eb6d3afa1e643b99efddba0a754b03847a646e))
+
 ## [0.7.1](https://github.com/ecoma-io/action-agents/compare/v0.7.0...v0.7.1) (2026-09-03)
 
 
