@@ -336,7 +336,6 @@ describe("validateTriageRecord refusals", () => {
       ),
     ).toThrow(/carries 21 entries, past its 20-entry cap/u);
   });
-  });
 
   it("refuses a wrong schemaVersion", () => {
     expect(() => validateTriageRecord(malformed((r) => (r["schemaVersion"] = 2)))).toThrow(
