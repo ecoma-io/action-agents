@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { reviewPullRequest } from "./run.mjs";
 import { applicabilityArtifactSchemaVersion, serialiseArtifact } from "./artifact.mjs";
+import { contentDigest } from "./digest.mjs";
 import { OwnLoginsError } from "#core/comment.mjs";
 import {
   DOGFOOD_CONFIG,
@@ -27,6 +28,8 @@ import { VERIFIER_MAX_EVIDENCE_BYTES, VERIFIER_MAX_TOOL_CALLS } from "./verify.m
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
+/** The captured bytes of `src/a.mjs` as the workspace fixture writes them. */
+const A_CONTENT = "line1\nline2\nline3\n";
 
 /** A real checked-out-looking root: anchors count lines against this copy. */
 /** @type {string} */
@@ -35,7 +38,7 @@ let wsRoot;
 beforeAll(() => {
   wsRoot = mkdtempSync(p.join(tmpdir(), "run-test-ws-"));
   mkdirSync(p.join(wsRoot, "src"));
-  writeFileSync(p.join(wsRoot, "src", "a.mjs"), "line1\nline2\nline3\n");
+  writeFileSync(p.join(wsRoot, "src", "a.mjs"), A_CONTENT);
   writeFileSync(p.join(wsRoot, "src", "b.mjs"), "b1\nb2\nb3\n");
   mkdirSync(p.join(wsRoot, "lib"));
   writeFileSync(p.join(wsRoot, "lib", "new.mjs"), "moved\n");
@@ -291,6 +294,13 @@ describe("the universe and the budget", () => {
     // The clearing upsert is a guarded one: it records the head it read so a
     // concurrent run at a newer head refuses rather than overwrites it.
     expect(withMarker.calls.upserts[0]?.body).toContain(`head=${HEAD}`);
+    const clearedRecord = JSON.parse(serialiseArtifact(/** @type {any} */ (cleared.artifact)));
+    expect(clearedRecord.kind).toBe("nothing-to-review");
+    expect(clearedRecord.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(clearedRecord.outcome).toEqual({
+      classification: "skipped",
+      reason: "universe empty — marker cleared",
+    });
 
     const bare = forgeStub({ files: [] });
     const skipped = await reviewPullRequest({
@@ -304,6 +314,44 @@ describe("the universe and the budget", () => {
     expect(skipped.outcome).toBe("skip");
     expect(skipped.reason).toBe("universe empty and no prior review comment — nothing to do");
     expect(bare.calls.upserts).toHaveLength(0);
+    const skippedRecord = JSON.parse(serialiseArtifact(/** @type {any} */ (skipped.artifact)));
+    expect(skippedRecord.kind).toBe("nothing-to-review");
+    expect(skippedRecord.outcome.classification).toBe("skipped");
+  });
+
+  it("suppresses a nothing-to-review record under dry-run — nothing written, nothing delivered", async () => {
+    const withMarker = forgeStub({ files: [] });
+    withMarker.listComments = async () => [
+      {
+        id: 55,
+        body: `<!-- action-agents:review:0badcafe -->old findings`,
+        user: { login: "github-actions[bot]" },
+        created_at: "",
+        updated_at: "",
+      },
+    ];
+    const dryCleared = await reviewPullRequest({
+      inputs: { ...INPUTS, dryRun: true },
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(withMarker),
+    });
+    expect(dryCleared.outcome).toBe("dry-run");
+    expect(dryCleared.artifact).toBeUndefined();
+
+    const bare = forgeStub({ files: [] });
+    const drySkipped = await reviewPullRequest({
+      inputs: { ...INPUTS, dryRun: true },
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(bare),
+    });
+    expect(drySkipped.outcome).toBe("skip");
+    expect(drySkipped.artifact).toBeUndefined();
   });
 
   it("abandons a nothing-to-review run when the pull request moved — no comment written", async () => {
@@ -2109,7 +2157,7 @@ describe("the run artifact", () => {
     expect(result.commentId).toBe(101);
     const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
     if (artifact === undefined) throw new Error("expected an artifact on publication");
-    expect(artifact.schemaVersion).toBe(2);
+    expect(artifact.schemaVersion).toBe(3);
     expect(artifact.repository).toBe("acme/widgets");
     expect(artifact.pullRequest).toBe(7);
     expect(artifact.headRef).toBe(HEAD);
@@ -2129,6 +2177,7 @@ describe("the run artifact", () => {
       path: "src/a.mjs",
       startLine: 1,
       endLine: 4,
+      digest: contentDigest(A_CONTENT),
     });
     expect(artifact.verification.gate).toEqual({ passed: true });
     expect(artifact.verification.verdicts).toEqual([
@@ -2137,6 +2186,10 @@ describe("the run artifact", () => {
         verdict: "confirmed",
         lifecycle: "confirmed",
         reason: "the guard is real",
+        evidence: {
+          digest: contentDigest(A_CONTENT),
+          excerpt: A_CONTENT,
+        },
       },
     ]);
     expect(artifact.gates.map((gate) => gate.gate)).toEqual([
@@ -2213,7 +2266,7 @@ describe("the run artifact", () => {
     expect(artifact.verification.gate).toEqual({ passed: true });
   });
 
-  it("a draft writes no artifact", async () => {
+  it("a draft leaves a state skip record — the skip's whole outcome", async () => {
     const forge = forgeStub({ snapshotOverride: snapshot({ draft: true }) });
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2224,10 +2277,17 @@ describe("the run artifact", () => {
       io: io(forge),
     });
     expect(result.outcome).toBe("skip");
-    expect(result.artifact).toBeUndefined();
+    expect(result.artifact).toBeDefined();
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.kind).toBe("state");
+    expect(record.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(record.outcome).toEqual({
+      classification: "skipped",
+      reason: "#7 is a draft — not ready means not reviewed",
+    });
   });
 
-  it("a closed pull request writes no artifact", async () => {
+  it("a closed pull request leaves a state skip record", async () => {
     const forge = forgeStub({ snapshotOverride: snapshot({ state: "closed" }) });
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2238,7 +2298,10 @@ describe("the run artifact", () => {
       io: io(forge),
     });
     expect(result.outcome).toBe("skip");
-    expect(result.artifact).toBeUndefined();
+    expect(result.artifact).toBeDefined();
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.kind).toBe("state");
+    expect(record.outcome.classification).toBe("skipped");
   });
 
   it("a run abandoned for a moved head writes no artifact", async () => {
@@ -2659,7 +2722,7 @@ describe("the applicability axis", () => {
     expect(listings).toHaveLength(0);
     expect(chatCalls).toHaveLength(0);
     const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
-    expect(record.schemaVersion).toBe(3);
+    expect(record.schemaVersion).toBe(4);
     expect(record.outcome).toEqual({
       classification: "skipped",
       reason: result.reason,
@@ -2781,7 +2844,7 @@ describe("the applicability axis", () => {
     expect(recorded.outcome).toBe("skip");
     expect(chatCalls).toHaveLength(0);
     const record = JSON.parse(serialiseArtifact(/** @type {any} */ (recorded.artifact)));
-    expect(record.schemaVersion).toBe(3);
+    expect(record.schemaVersion).toBe(4);
     expect(record.outcome.classification).toBe("skipped");
     expect(record.applicability).toEqual({
       context: "maintainer",
@@ -2803,10 +2866,13 @@ describe("the applicability axis", () => {
       io: io(withoutPolicy),
     });
     expect(bare.outcome).toBe("skip");
-    expect(bare.artifact).toBeUndefined();
+    const bareRecord = JSON.parse(serialiseArtifact(/** @type {any} */ (bare.artifact)));
+    expect(bareRecord.kind).toBe("state");
+    expect(bareRecord.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(bareRecord.applicability).toBeUndefined();
   });
 
-  it("keeps zero-config runs byte-for-byte on schema version 2, no applicability anywhere", async () => {
+  it("keeps zero-config runs byte-for-byte on schema version 3, no applicability anywhere", async () => {
     const forge = forgeStub({ snapshotOverride: snapshotFor(MAINTAINER_DOCS) });
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2819,7 +2885,7 @@ describe("the applicability axis", () => {
     expect(result.outcome).toBe("published");
     const bytes = serialiseArtifact(/** @type {any} */ (result.artifact));
     const record = JSON.parse(bytes);
-    expect(record.schemaVersion).toBe(2);
+    expect(record.schemaVersion).toBe(3);
     expect(Object.keys(record).sort()).toEqual(
       [
         "coverage",

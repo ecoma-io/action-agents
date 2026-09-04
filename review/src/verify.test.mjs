@@ -12,8 +12,10 @@ import {
   LIFECYCLE_OF_VERDICT,
   PUBLISHED_LIFECYCLE_STATES,
   VERDICT_REASON_CHARS,
+  EVIDENCE_EXCERPT_CHARS,
   EXCERPT_LINE_CHARS,
 } from "./verify.mjs";
+import { contentDigest } from "./digest.mjs";
 import { createEvidence, FRAMING } from "#core/untrusted.mjs";
 
 const READS = { "src/a.mjs": "line1\nline2\nline3\n" };
@@ -122,6 +124,37 @@ describe("planVerification", () => {
     );
     expect(anchorLine?.endsWith("…[truncated]")).toBe(true);
   });
+
+  it("digests the raw window bytes the verifier judged", () => {
+    const lines = Array.from({ length: 10 }, (_, index) => `line${String(index + 1)}`);
+    const content = `${lines.join("\n")}\n`;
+    const plan = planVerification(
+      [finding({ line: 5 })],
+      makePolicy({ reads: { "src/a.mjs": content } }),
+    );
+    const evidence = plan.items[0]?.evidence;
+    if (!evidence) throw new Error("expected the plannable finding to carry evidence");
+    const window = lines.slice(1, 8).join("\n");
+    expect(evidence.digest).toBe(contentDigest(window));
+    expect(evidence.lineStart).toBe(2);
+    expect(evidence.lineEnd).toBe(8);
+  });
+
+  it("bounds the retention excerpt at the declared cap, sanitised — never the numbered prompt excerpt", () => {
+    const lines = ["const first = 1;", "@user look at <b>this</b>", "const third = 3;"];
+    const content = lines.join("\n");
+    const plan = planVerification(
+      [finding({ line: 2 })],
+      makePolicy({ reads: { "src/a.mjs": content } }),
+    );
+    const evidence = plan.items[0]?.evidence;
+    if (!evidence) throw new Error("expected the plannable finding to carry evidence");
+    expect(evidence.retentionExcerpt.length).toBeLessThanOrEqual(EVIDENCE_EXCERPT_CHARS);
+    expect(evidence.retentionExcerpt).toContain("@‌user");
+    expect(evidence.retentionExcerpt).toContain("&lt;b>");
+    expect(evidence.retentionExcerpt).not.toContain("1: ");
+    expect(evidence.retentionExcerpt).not.toBe(evidence.excerpt);
+  });
 });
 
 describe("parseVerdict", () => {
@@ -194,10 +227,39 @@ describe("applyVerdicts", () => {
       [{ id: "1", verdict: "confirmed", reason: "holds" }],
       plan,
     );
+    const evidence = plan.items[0]?.evidence;
+    if (!evidence) throw new Error("expected the planned finding to carry evidence");
     expect(applied.findings).toEqual([
-      { ...plannedFinding, id: "1", lifecycle: "confirmed", verdict: "confirmed", reason: "holds" },
+      {
+        ...plannedFinding,
+        id: "1",
+        lifecycle: "confirmed",
+        verdict: "confirmed",
+        reason: "holds",
+        evidence: { digest: evidence.digest, excerpt: evidence.retentionExcerpt },
+      },
     ]);
     expect(applied.refusals).toHaveLength(0);
+  });
+
+  it("a bound verdict's evidence is the window's digest and its bounded retention excerpt", () => {
+    const applied = applyVerdicts(
+      [plannedFinding],
+      [{ id: "1", verdict: "refuted", reason: "the line is correct" }],
+      plan,
+    );
+    const evidence = plan.items[0]?.evidence;
+    if (!evidence) throw new Error("expected the planned finding to carry evidence");
+    expect(applied.findings[0]?.evidence).toEqual({
+      digest: evidence.digest,
+      excerpt: evidence.retentionExcerpt,
+    });
+    const appliedAgain = applyVerdicts(
+      [plannedFinding],
+      [{ id: "1", verdict: "refuted", reason: "the line is correct" }],
+      plan,
+    );
+    expect(appliedAgain.findings[0]?.evidence).toEqual(applied.findings[0]?.evidence);
   });
 
   it("publishes a refuted finding as refuted, its reason riding along — never deleted", () => {
@@ -206,6 +268,8 @@ describe("applyVerdicts", () => {
       [{ id: "1", verdict: "refuted", reason: "the line is correct" }],
       plan,
     );
+    const evidence = plan.items[0]?.evidence;
+    if (!evidence) throw new Error("expected the planned finding to carry evidence");
     expect(applied.findings).toEqual([
       {
         ...plannedFinding,
@@ -213,6 +277,7 @@ describe("applyVerdicts", () => {
         lifecycle: "refuted",
         verdict: "refuted",
         reason: "the line is correct",
+        evidence: { digest: evidence.digest, excerpt: evidence.retentionExcerpt },
       },
     ]);
   });
@@ -223,6 +288,8 @@ describe("applyVerdicts", () => {
       [{ id: "1", verdict: "uncertain", reason: "cannot decide" }],
       plan,
     );
+    const evidence = plan.items[0]?.evidence;
+    if (!evidence) throw new Error("expected the planned finding to carry evidence");
     expect(applied.findings).toEqual([
       {
         ...plannedFinding,
@@ -230,6 +297,7 @@ describe("applyVerdicts", () => {
         lifecycle: "unresolved",
         verdict: "uncertain",
         reason: "cannot decide",
+        evidence: { digest: evidence.digest, excerpt: evidence.retentionExcerpt },
       },
     ]);
   });
@@ -244,6 +312,7 @@ describe("applyVerdicts", () => {
         reason: "no verdict was recorded for this finding",
       },
     ]);
+    expect(applied.findings[0]).not.toHaveProperty("evidence");
   });
 
   it("a finding the plan could not evidence publishes unresolved with the skip's reason", () => {
@@ -256,6 +325,7 @@ describe("applyVerdicts", () => {
     expect(applied.findings).toEqual([
       { ...unevidenced, lifecycle: "unresolved", reason: skip.reason },
     ]);
+    expect(applied.findings[0]).not.toHaveProperty("evidence");
   });
 
   it("an unplanned finding publishes with no lifecycle at all — verification never applied to it", () => {
@@ -353,6 +423,8 @@ describe("verifierMessages", () => {
         lineStart: 1,
         lineEnd: 3,
         excerpt: "1: line1\n2: line2\n3: line3",
+        digest: contentDigest("line1\nline2\nline3"),
+        retentionExcerpt: "line1\nline2\nline3",
       },
     };
     const messages = verifierMessages(item, evidence);

@@ -14,16 +14,19 @@ import {
   assertFreshArtifact,
   buildArtifact,
   buildSkippedArtifact,
+  buildSkipRecord,
   reviewArtifactSchemaVersion,
   serialiseArtifact,
   withCommentId,
 } from "./artifact.mjs";
 import { utf8Compare } from "./order.mjs";
 import { MESSAGE_CHARS, renderComment } from "./render.mjs";
-import { VERDICT_REASON_CHARS } from "./verify.mjs";
+import { EVIDENCE_EXCERPT_CHARS, VERDICT_REASON_CHARS } from "./verify.mjs";
 
 const HEAD = "0".repeat(40);
 const OTHER_HEAD = "f".repeat(40);
+const DIGEST = "b".repeat(64);
+const BAD_DIGEST = "not-a-digest";
 
 /**
  * @param {Partial<import("./artifact.mjs").RunFacts>} [over]
@@ -50,14 +53,14 @@ function facts(over = {}) {
         file: "src/a.mjs",
         line: 2,
         message: "off-by-one",
-        provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+        provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
       },
       {
         severity: "nit",
         file: "src/b.mjs",
         line: 9,
         message: "typo",
-        provenance: { path: "src/b.mjs", startLine: 9, endLine: 9 },
+        provenance: { path: "src/b.mjs", startLine: 9, endLine: 9, digest: DIGEST },
       },
     ],
     verification: { gate: { passed: true } },
@@ -99,7 +102,7 @@ describe("buildArtifact", () => {
   it("builds the expected artifact from valid facts", () => {
     const artifact = buildArtifact(facts());
     expect(artifact.schemaVersion).toBe(reviewArtifactSchemaVersion);
-    expect(artifact.schemaVersion).toBe(2);
+    expect(artifact.schemaVersion).toBe(3);
     expect(artifact.repository).toBe("octocat/example");
     expect(artifact.pullRequest).toBe(7);
     expect(artifact.headRef).toBe(HEAD);
@@ -127,7 +130,7 @@ describe("buildArtifact", () => {
       lifecycle: "confirmed",
       verdict: "confirmed",
       reason: "the captured bounds check the index",
-      provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+      provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
     });
     expect(second.identity).toBe(
       findingIdentity({ severity: "nit", file: "src/b.mjs", line: 9, message: "typo" }),
@@ -179,7 +182,7 @@ describe("buildArtifact", () => {
           file: "src/a.mjs",
           line: 2,
           message: "off-by-one",
-          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
         },
       ],
       verification: { gate: { passed: true } },
@@ -202,7 +205,7 @@ describe("buildArtifact", () => {
           file: "src/a.mjs",
           line: 2,
           message: "off-by-one",
-          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
         },
       ],
     });
@@ -240,14 +243,14 @@ describe("buildArtifact", () => {
           file: "src/z.mjs",
           line: 1,
           message: "zzz",
-          provenance: { path: "src/z.mjs", startLine: 1, endLine: 1 },
+          provenance: { path: "src/z.mjs", startLine: 1, endLine: 1, digest: DIGEST },
         },
         {
           severity: "concern",
           file: "src/a.mjs",
           line: 1,
           message: "aaa",
-          provenance: { path: "src/a.mjs", startLine: 1, endLine: 2 },
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 2, digest: DIGEST },
         },
       ],
     });
@@ -571,7 +574,7 @@ describe("buildArtifact refusals", () => {
           file: "src/a.mjs",
           line: 2,
           message: "x".repeat(MESSAGE_CHARS + 1),
-          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
         },
       ],
     });
@@ -587,7 +590,7 @@ describe("buildArtifact refusals", () => {
           file: "src/a.mjs",
           line: 2,
           message: "x".repeat(MESSAGE_CHARS),
-          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
         },
       ],
     });
@@ -606,7 +609,7 @@ describe("buildArtifact refusals", () => {
           file: "src/a.mjs",
           line: 2,
           message: "off-by-one",
-          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
         },
       ],
     });
@@ -707,6 +710,30 @@ describe("buildArtifact refusals", () => {
     ).toThrow(ArtifactError);
   });
 
+  it("refuses a finding provenance whose digest is missing or not sha256 hex", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          delete f.findings[0].provenance.digest;
+        }),
+      ),
+    ).toThrow(/provenance is missing 'digest'/);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].provenance.digest = BAD_DIGEST;
+        }),
+      ),
+    ).toThrow(/provenance\.digest is not a well-formed sha256 hex string/);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].provenance.digest = "B".repeat(64);
+        }),
+      ),
+    ).toThrow(/provenance\.digest is not a well-formed sha256 hex string/);
+  });
+
   it("refuses a lifecycle without its reason, or a reason without a lifecycle", () => {
     expect(() =>
       buildArtifact(
@@ -798,6 +825,97 @@ describe("buildArtifact refusals", () => {
     ).toThrow(ArtifactError);
   });
 
+  it("carries a bound verdict's evidence onto the finding and its verdict entry", () => {
+    const evidence = { digest: DIGEST, excerpt: "if (i > length) throw" };
+    const artifact = buildArtifact(
+      facts({
+        findings: [
+          {
+            id: "1",
+            lifecycle: "confirmed",
+            verdict: "confirmed",
+            reason: "the captured bounds check the index",
+            severity: "concern",
+            file: "src/a.mjs",
+            line: 2,
+            message: "off-by-one",
+            provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
+            evidence,
+          },
+        ],
+      }),
+    );
+    expect(artifact.findings[0]?.evidence).toEqual(evidence);
+    expect(artifact.verification.verdicts[0]?.evidence).toEqual(evidence);
+  });
+
+  it("leaves a finding with no bound verdict carrying no evidence — even if it could", () => {
+    const artifact = buildArtifact(facts());
+    expect(artifact.findings[1]).not.toHaveProperty("evidence");
+    expect(artifact.verification.verdicts).toHaveLength(1);
+  });
+
+  it("validates a bound verdict's evidence fail-closed", () => {
+    /** @param {(f: any) => void} mutate */
+    const withEvidence = (mutate) => {
+      const f = tampered((fact) => {
+        fact.findings[0].evidence = { digest: DIGEST, excerpt: "if (i > length) throw" };
+      });
+      mutate(f);
+      return f;
+    };
+    expect(() =>
+      buildArtifact(
+        withEvidence((f) => {
+          f.findings[0].evidence.digest = BAD_DIGEST;
+        }),
+      ),
+    ).toThrow(/evidence\.digest is not a well-formed sha256 hex string/);
+    expect(() =>
+      buildArtifact(
+        withEvidence((f) => {
+          f.findings[0].evidence.excerpt = "";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        withEvidence((f) => {
+          f.findings[0].evidence.excerpt = "x".repeat(EVIDENCE_EXCERPT_CHARS + 1);
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        withEvidence((f) => {
+          f.findings[0].evidence.excerpt = "x".repeat(EVIDENCE_EXCERPT_CHARS);
+        }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      buildArtifact(
+        withEvidence((f) => {
+          f.findings[0].evidence.source = "the model's own words";
+        }),
+      ),
+    ).toThrow(/evidence has an unknown key/);
+    expect(() =>
+      buildArtifact(
+        withEvidence((f) => {
+          delete f.findings[0].evidence.digest;
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.findings[0].evidence = { digest: DIGEST, excerpt: "bounded" };
+          f.findings[1].evidence = { digest: DIGEST, excerpt: "bounded" };
+        }),
+      ),
+    ).toThrow(/carries evidence without a bound verdict/);
+  });
+
   it("refuses a non-planned lifecycle above unresolved — only a skip survives without an id", () => {
     expect(() =>
       buildArtifact(
@@ -818,7 +936,7 @@ describe("buildArtifact refusals", () => {
           file: "src/gone.mjs",
           line: 4,
           message: "unreachable",
-          provenance: { path: "src/gone.mjs", startLine: 1, endLine: 4 },
+          provenance: { path: "src/gone.mjs", startLine: 1, endLine: 4, digest: DIGEST },
         },
       ],
     });
@@ -836,7 +954,7 @@ describe("buildArtifact refusals", () => {
           file: "src/b.mjs",
           line: 9,
           message: "typo",
-          provenance: { path: "src/b.mjs", startLine: 9, endLine: 9 },
+          provenance: { path: "src/b.mjs", startLine: 9, endLine: 9, digest: DIGEST },
         },
       ],
     });
@@ -1176,7 +1294,7 @@ describe("serialiseArtifact", () => {
   });
 
   it("includes the schema version", () => {
-    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":2');
+    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":3');
   });
 
   it("serialises to valid JSON that parses back to the artifact", () => {
@@ -1212,6 +1330,7 @@ describe("serialiseArtifact", () => {
           endLine: f.provenance.endLine,
           startLine: f.provenance.startLine,
           path: f.provenance.path,
+          digest: f.provenance.digest,
         },
         ...(f.id === undefined ? {} : { id: f.id }),
         ...(f.lifecycle === undefined ? {} : { lifecycle: f.lifecycle }),
@@ -1582,5 +1701,62 @@ describe("the applicability fact and the skipped-run record", () => {
         inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
       }),
     ).toThrow(/outside the vocabulary/);
+  });
+});
+
+describe("buildSkipRecord", () => {
+  /** A valid state-skip record's inputs — the shape run.mjs hands over. */
+  const recordInput = (over = {}) => ({
+    repository: "acme/widgets",
+    pullRequest: 7,
+    headRef: HEAD,
+    reason: "#7 is a draft — not ready means not reviewed",
+    kind: /** @type {"state" | "nothing-to-review"} */ ("state"),
+    ...over,
+  });
+
+  it("builds the reduced record for both skip kinds — applicability version, exact keys", () => {
+    for (const kind of /** @type {const} */ (["state", "nothing-to-review"])) {
+      const record = buildSkipRecord(recordInput({ kind }));
+      expect(record.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+      expect(record.kind).toBe(kind);
+      expect(record.outcome).toEqual({
+        classification: "skipped",
+        reason: "#7 is a draft — not ready means not reviewed",
+      });
+      const round = JSON.parse(serialiseArtifact(record));
+      expect(Object.keys(round).sort()).toEqual(
+        ["headRef", "kind", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+      );
+    }
+  });
+
+  it("serialises byte-deterministically — same inputs, identical bytes", () => {
+    const first = serialiseArtifact(buildSkipRecord(recordInput()));
+    const second = serialiseArtifact(buildSkipRecord(recordInput()));
+    expect(first).toBe(second);
+    const shuffled = buildSkipRecord(recordInput({ headRef: HEAD, kind: "state", pullRequest: 7 }));
+    expect(serialiseArtifact(shuffled)).toBe(first);
+  });
+
+  it("refuses an unknown kind, a bad head sha and empty text — fail-closed", () => {
+    expect(() => buildSkipRecord(recordInput({ kind: /** @type {any} */ ("other") }))).toThrow(
+      /outside the vocabulary/,
+    );
+    expect(() => buildSkipRecord(recordInput({ headRef: "main" }))).toThrow(
+      /skip record\.headRef must be a 40-char hex commit sha/,
+    );
+    expect(() => buildSkipRecord(recordInput({ repository: "" }))).toThrow(ArtifactError);
+    expect(() => buildSkipRecord(recordInput({ reason: "" }))).toThrow(ArtifactError);
+    expect(() => buildSkipRecord(recordInput({ pullRequest: 0 }))).toThrow(ArtifactError);
+  });
+
+  it("names a delivery file inside the artifact upload glob", () => {
+    for (const kind of /** @type {const} */ (["state", "nothing-to-review"])) {
+      const record = buildSkipRecord(recordInput({ kind }));
+      const name = `review-artifact-skip-${record.headRef}.json`;
+      expect(name).toMatch(/^review-artifact-.*\.json$/);
+      expect(name).toContain(record.kind === "state" ? "skip" : "skip");
+    }
   });
 });

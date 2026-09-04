@@ -317,8 +317,12 @@ and the phase log.
 
 **Run artifact** (when `dry-run` is `false`): a machine-readable JSON file
 written inside the workspace at `artifact-path`, named after the reviewed commit.
-The file carries the same facts the comment renders. Upload it as a workflow
-artifact to keep the record across runs:
+The file carries the same facts the comment renders; every bound verdict also
+records the sha256 of the exact evidence window it judged plus a bounded
+retention excerpt of it, so a consumer can re-check the content behind the
+verdict. Skipped runs leave a record too — a skip record naming which skip
+path wrote it, under the same upload glob. Upload the records as a workflow
+artifact to keep them across runs:
 
 ```yaml
 - name: Upload the run artifact

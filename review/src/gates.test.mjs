@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 
+import { contentDigest } from "./digest.mjs";
 import { GATES, GateFactsError, evaluateGate, evaluateGates } from "./gates.mjs";
+
+/** The digest every fixture read and its finding's provenance share — parity by construction. */
+const READ_DIGEST = contentDigest("the captured bytes the ledger holds for src/a.mjs");
+const OTHER_DIGEST = contentDigest("the captured bytes the ledger holds for src/b.mjs");
 
 /** @returns {import("./gates.mjs").ConclusionFacts} */
 function conclusionFacts() {
@@ -79,14 +84,14 @@ function anchored(over = {}) {
     file: "src/a.mjs",
     line: 2,
     message: "off-by-one",
-    provenance: { path: "src/a.mjs", startLine: 1, endLine: 40 },
+    provenance: { path: "src/a.mjs", startLine: 1, endLine: 40, digest: READ_DIGEST },
     ...over,
   };
 }
 
 /** The recorded read `anchored()`'s provenance names — ledger data, not the finding's claim. */
 function ledgerRead(over = {}) {
-  return { path: "src/a.mjs", startLine: 1, endLine: 40, ...over };
+  return { path: "src/a.mjs", startLine: 1, endLine: 40, digest: READ_DIGEST, ...over };
 }
 
 /** A quarantined finding — the #84 mechanism working as declared. */
@@ -272,7 +277,11 @@ describe("gate provenance", () => {
     const result = evaluateGate(
       "provenance",
       provenanceFacts({
-        published: [anchored({ provenance: { path: "./src/a.mjs", startLine: 1, endLine: 40 } })],
+        published: [
+          anchored({
+            provenance: { path: "./src/a.mjs", startLine: 1, endLine: 40, digest: READ_DIGEST },
+          }),
+        ],
         quarantined: [],
       }),
     );
@@ -340,6 +349,40 @@ describe("gate provenance", () => {
     expect(result.reason).toContain("provenance does not match any recorded read");
   });
 
+  it("passes when a matching read's digest agrees with the reference's — parity holds", () => {
+    const result = evaluateGate(
+      "provenance",
+      provenanceFacts({
+        published: [
+          anchored({
+            provenance: { path: "./src/a.mjs", startLine: 1, endLine: 40, digest: READ_DIGEST },
+          }),
+        ],
+        quarantined: [],
+      }),
+    );
+    expect(result).toEqual({ gate: "provenance", passed: true });
+  });
+
+  it("fails when the reference's digest disagrees with the covering read — a content mismatch", () => {
+    const result = evaluateGate(
+      "provenance",
+      provenanceFacts({
+        published: [
+          anchored({
+            provenance: { path: "src/a.mjs", startLine: 1, endLine: 40, digest: "f".repeat(64) },
+          }),
+        ],
+        quarantined: [],
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(result.reason).toBe(
+      "an unanchored finding remains in the publication set: " +
+        "src/a.mjs:2 off-by-one — provenance digest does not match the covering read's content",
+    );
+  });
+
   it("judges the published list it receives — a finding the strictness drop removed is no longer its business", () => {
     // The anchored set held a nit on src/drop.mjs too; the strictness drop
     // removed it before publication. The gate judges the final set: the
@@ -368,14 +411,14 @@ describe("gate provenance", () => {
           file: "src/b.mjs",
           line: 3,
           message: "unresolved claim",
-          provenance: { path: "src/b.mjs", startLine: 1, endLine: 30 },
+          provenance: { path: "src/b.mjs", startLine: 1, endLine: 30, digest: OTHER_DIGEST },
           id: "2",
           lifecycle: "unresolved",
           verdict: "uncertain",
           reason: "the evidence ran out",
         }),
       ],
-      ledger: [ledgerRead(), ledgerRead({ path: "src/b.mjs", endLine: 30 })],
+      ledger: [ledgerRead(), ledgerRead({ path: "src/b.mjs", endLine: 30, digest: OTHER_DIGEST })],
       quarantined: [],
     });
     expect(evaluateGate("provenance", backed)).toEqual({ gate: "provenance", passed: true });

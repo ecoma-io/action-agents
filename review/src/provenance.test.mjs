@@ -5,7 +5,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { attachProvenance, evidenceRef, readsFromRecordedReads } from "./provenance.mjs";
+import { contentDigest, isDigest } from "./digest.mjs";
+import {
+  attachProvenance,
+  evidenceRef,
+  readsFromRecordedReads,
+  validatedLedger,
+} from "./provenance.mjs";
 
 /**
  * @param {Partial<import("./answer.mjs").Finding>} [over]
@@ -15,16 +21,25 @@ function finding(over = {}) {
   return { severity: "concern", file: "src/a.mjs", line: 2, message: "off-by-one", ...over };
 }
 
+/** The captured content behind the default read fixture — four lines, hence endLine 4. */
+const READ_CONTENT = "a\nb\nc\nd";
+
 /**
  * @param {Partial<import("./provenance.mjs").LedgerRead>} [over]
  * @returns {import("./provenance.mjs").LedgerRead}
  */
 function read(over = {}) {
-  return { path: "src/a.mjs", startLine: 1, endLine: 4, ...over };
+  return {
+    path: "src/a.mjs",
+    startLine: 1,
+    endLine: 4,
+    digest: contentDigest(READ_CONTENT),
+    ...over,
+  };
 }
 
 describe("attachProvenance", () => {
-  it("anchors a finding to the read that covers its path and line", () => {
+  it("anchors a finding to the read that covers its path and line, digest and all", () => {
     const result = attachProvenance([finding({ line: 3 })], [read()]);
     expect(result.quarantined).toHaveLength(0);
     expect(result.published).toHaveLength(1);
@@ -32,6 +47,7 @@ describe("attachProvenance", () => {
       path: "src/a.mjs",
       startLine: 1,
       endLine: 4,
+      digest: contentDigest(READ_CONTENT),
     });
   });
 
@@ -44,6 +60,7 @@ describe("attachProvenance", () => {
       path: "src/a.mjs",
       startLine: 1,
       endLine: 10,
+      digest: contentDigest(READ_CONTENT),
     });
   });
 
@@ -54,6 +71,7 @@ describe("attachProvenance", () => {
       path: "src/a.mjs",
       startLine: 1,
       endLine: 20,
+      digest: contentDigest(READ_CONTENT),
     });
   });
 
@@ -93,7 +111,12 @@ describe("attachProvenance", () => {
     expect(anchored).toBeDefined();
     const { provenance, ...content } = /** @type {Record<string, unknown>} */ (anchored);
     expect(JSON.stringify(content)).toBe(JSON.stringify(original));
-    expect(provenance).toEqual({ path: "src/a.mjs", startLine: 1, endLine: 4 });
+    expect(provenance).toEqual({
+      path: "src/a.mjs",
+      startLine: 1,
+      endLine: 4,
+      digest: contentDigest(READ_CONTENT),
+    });
     expect(original).not.toHaveProperty("provenance");
     expect(ledger).toEqual([read()]);
   });
@@ -134,12 +157,27 @@ describe("attachProvenance", () => {
       read({ startLine: 0 }),
       read({ endLine: 0.5 }),
       read({ startLine: 5, endLine: 4 }),
+      read(/** @type {any} */ ({ digest: undefined })),
+      read({ digest: "z".repeat(64) }),
     ]) {
       expect(() => attachProvenance([finding()], [/** @type {any} */ (malformed)])).toThrow(
         TypeError,
       );
     }
     expect(() => attachProvenance([], /** @type {any} */ ("ledger"))).toThrow(TypeError);
+  });
+
+  it("refuses a ledger entry with no digest, or a malformed one — even with no finding consulting it", () => {
+    expect(() => validatedLedger([read(/** @type {any} */ ({ digest: undefined }))])).toThrow(
+      /has no well-formed content digest/,
+    );
+    expect(() => validatedLedger([read({ digest: "not-a-digest" })])).toThrow(
+      /has no well-formed content digest/,
+    );
+    expect(() => validatedLedger([read({ digest: "A".repeat(64) })])).toThrow(
+      /has no well-formed content digest/,
+    );
+    expect(() => validatedLedger([read()])).not.toThrow();
   });
 
   it("refuses a malformed ledger entry even when no finding consults it", () => {
@@ -151,18 +189,20 @@ describe("attachProvenance", () => {
 
 describe("readsFromRecordedReads", () => {
   it("maps one capture to its full line range, verify's counting", () => {
-    const reads = readsFromRecordedReads(new Map([["src/a.mjs", "line1\nline2\nline3\n"]]));
-    expect(reads).toEqual([{ path: "src/a.mjs", startLine: 1, endLine: 4 }]);
+    const content = "line1\nline2\nline3\n";
+    const reads = readsFromRecordedReads(new Map([["src/a.mjs", content]]));
+    expect(reads).toEqual([
+      { path: "src/a.mjs", startLine: 1, endLine: 4, digest: contentDigest(content) },
+    ]);
   });
 
-  it("keeps recording order and one entry per path", () => {
-    const recorded = new Map([
-      ["src/b.mjs", "b"],
-      ["src/a.mjs", "a\nb"],
-    ]);
-    const reads = readsFromRecordedReads(recorded);
-    expect(reads.map((entry) => entry.path)).toEqual(["src/b.mjs", "src/a.mjs"]);
-    expect(reads[1]?.endLine).toBe(2);
+  it("digests the captured bytes, not a re-render of them", () => {
+    const content = "alpha\nbeta\ngamma";
+    const reads = readsFromRecordedReads(new Map([["src/x.mjs", content]]));
+    expect(reads[0]?.digest).toBe(contentDigest(content));
+    expect(isDigest(reads[0]?.digest ?? "")).toBe(true);
+    const again = readsFromRecordedReads(new Map([["src/x.mjs", content]]));
+    expect(again).toEqual(reads);
   });
 
   it("refuses non-map ledgers and malformed entries fail-closed", () => {
@@ -189,12 +229,28 @@ describe("evidence-ceiling contract", () => {
 
 describe("evidenceRef", () => {
   it("renders a range collapsed to one number for a single-line read", () => {
-    expect(evidenceRef({ path: "src/a.mjs", startLine: 3, endLine: 3 })).toBe("src/a.mjs:3");
-    expect(evidenceRef({ path: "src/a.mjs", startLine: 1, endLine: 4 })).toBe("src/a.mjs:1-4");
+    const digest = contentDigest("x\ny\nz");
+    expect(evidenceRef({ path: "src/a.mjs", startLine: 3, endLine: 3, digest })).toBe(
+      "src/a.mjs:3",
+    );
+    expect(evidenceRef({ path: "src/a.mjs", startLine: 1, endLine: 4, digest })).toBe(
+      "src/a.mjs:1-4",
+    );
   });
 
   it("refuses malformed provenance fail-closed", () => {
     expect(() => evidenceRef(/** @type {any} */ ({}))).toThrow(TypeError);
     expect(() => evidenceRef(/** @type {any} */ (null))).toThrow(TypeError);
+    expect(() =>
+      evidenceRef({ path: "src/a.mjs", startLine: 1, endLine: 4, digest: "short" }),
+    ).toThrow(/has no well-formed content digest/);
+    expect(() =>
+      evidenceRef({
+        path: "src/a.mjs",
+        startLine: 1,
+        endLine: 4,
+        digest: contentDigest("x\ny\nz"),
+      }),
+    ).not.toThrow();
   });
 });

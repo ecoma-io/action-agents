@@ -30,6 +30,7 @@
 import { oneLine } from "#core/one-line.mjs";
 import { extractObject, findingIdentity, stripFences } from "./answer.mjs";
 import { normaliseReadPath } from "./coverage.mjs";
+import { contentDigest } from "./digest.mjs";
 import { json5Parse } from "#core/json5-parse.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
@@ -47,6 +48,9 @@ export const EXCERPT_LINE_CHARS = 200;
 
 /** The verdict reason's cap, in the sanitiser's own marking posture. */
 export const VERDICT_REASON_CHARS = 300;
+
+/** The artifact-retention cap for a bound verdict's evidence excerpt — issue #271's ≤300-char retention. */
+export const EVIDENCE_EXCERPT_CHARS = 300;
 
 /** The verifier's own tool-call ceiling, per finding — fixed in code, not an input. */
 export const VERIFIER_MAX_TOOL_CALLS = 40;
@@ -76,13 +80,18 @@ export const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertai
 
 /**
  * The captured evidence one planned finding is judged against — cut by code
- * from the recorded read, never composed by a model.
+ * from the recorded read, never composed by a model. The digest makes the
+ * window content-checkable: sha256 over the window's raw lines (uncapped,
+ * unnumbered) joined with "\n" — the bytes the run judged, restatable by
+ * whoever re-reads the path at the recorded head.
  *
  * @typedef {object} VerificationEvidence
  * @property {string} path the recorded read's path, inventory spelling
  * @property {number} lineStart first excerpt line, 1-based, inclusive
  * @property {number} lineEnd last excerpt line, 1-based, inclusive
  * @property {string} excerpt the captured lines, numbered and capped
+ * @property {string} digest sha256 (lowercase hex) of the window's raw lines joined with "\n"
+ * @property {string} retentionExcerpt the window's raw text, sanitiser-stripped and capped at EVIDENCE_EXCERPT_CHARS — the artifact's evidence.excerpt
  */
 
 /**
@@ -162,13 +171,16 @@ export const PUBLISHED_LIFECYCLE_STATES = /** @type {const} */ ([
  * verification outcome attached flat, the way provenance attaches. `id` and
  * `lifecycle` are present iff the plan scheduled the finding; a finding
  * below the strategy's threshold was never a verification candidate and
- * publishes without them, byte for byte as it arrived.
+ * publishes without them, byte for byte as it arrived. A bound verdict
+ * carries `evidence`: the content-checkable digest and bounded retention
+ * excerpt of the window the verifier judged.
  *
  * @typedef {Finding & {
  *   id?: string,
  *   lifecycle?: PublishedLifecycle,
  *   verdict?: Verdict,
  *   reason?: string,
+ *   evidence?: { digest: string, excerpt: string },
  * }} VerifiedFinding
  */
 
@@ -236,8 +248,11 @@ export function planVerification(findings, policy) {
  * Cuts the captured window around one anchor line. The window is the anchor
  * plus `EXCERPT_CONTEXT_LINES` on each side, clamped to what the read
  * actually captured; each line is numbered and capped so a hostile long line
- * cannot flood the verifier's prompt. `null` when the capture ends before
- * the anchor — evidence that does not exist is not shown.
+ * cannot flood the verifier's prompt. The window's raw lines (uncapped,
+ * unnumbered, joined with "\n") are digest-hashed as the content check — the
+ * bytes the run judged, restatable from the file at the recorded head.
+ * `null` when the capture ends before the anchor — evidence that does not
+ * exist is not shown.
  *
  * @param {string} content the recorded read's raw bytes
  * @param {number} line the finding's 1-based anchor
@@ -249,6 +264,7 @@ function excerptAround(content, line) {
   if (line > lines.length) return null;
   const lineStart = Math.max(1, line - EXCERPT_CONTEXT_LINES);
   const lineEnd = Math.min(lines.length, line + EXCERPT_CONTEXT_LINES);
+  const window = lines.slice(lineStart - 1, lineEnd).join("\n");
   /** @type {string[]} */
   const excerpt = [];
   for (let n = lineStart; n <= lineEnd; n++) {
@@ -256,7 +272,13 @@ function excerptAround(content, line) {
     if (text.length > EXCERPT_LINE_CHARS) text = text.slice(0, EXCERPT_LINE_CHARS) + EXCERPT_CUT;
     excerpt.push(`${String(n)}: ${text}`);
   }
-  return { lineStart, lineEnd, excerpt: excerpt.join("\n") };
+  return {
+    lineStart,
+    lineEnd,
+    excerpt: excerpt.join("\n"),
+    digest: contentDigest(window),
+    retentionExcerpt: sanitiseCommentText(window, { maxChars: EVIDENCE_EXCERPT_CHARS }).text,
+  };
 }
 
 /**
@@ -414,6 +436,12 @@ export function applyVerdicts(findings, verdicts, plan) {
         lifecycle: LIFECYCLE_OF_VERDICT[entry.verdict],
         verdict: entry.verdict,
         reason: entry.reason,
+        evidence: {
+          digest: /** @type {import("./verify.mjs").VerificationItem} */ (byId.get(id)).evidence
+            .digest,
+          excerpt: /** @type {import("./verify.mjs").VerificationItem} */ (byId.get(id)).evidence
+            .retentionExcerpt,
+        },
       });
       continue;
     }

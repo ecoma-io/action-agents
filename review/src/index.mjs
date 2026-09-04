@@ -226,7 +226,13 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
       throw new Error(`artifact-path '${directory}' resolves inside .git — refused`);
     }
   }
-  const file = p.join(real, `review-artifact-${artifact.headRef}.json`);
+  // A skip record names its kind so a durable skip never reads as a reviewed
+  // run; both names sit inside the upload glob `review-artifact-*.json`.
+  const name =
+    "kind" in artifact
+      ? `review-artifact-skip-${artifact.headRef}.json`
+      : `review-artifact-${artifact.headRef}.json`;
+  const file = p.join(real, name);
   writeFileSync(file, serialiseArtifact(artifact), "utf8");
   return file;
 }

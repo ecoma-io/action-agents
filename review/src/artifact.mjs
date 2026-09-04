@@ -38,17 +38,19 @@ import { STRATEGY } from "./vocabulary.mjs";
 import { VERDICTS } from "./verify.mjs";
 import { utf8Compare } from "./order.mjs";
 import { MESSAGE_CHARS } from "./render.mjs";
+import { isDigest } from "./digest.mjs";
 import {
+  EVIDENCE_EXCERPT_CHARS,
   LIFECYCLE_OF_VERDICT,
   PUBLISHED_LIFECYCLE_STATES,
   VERDICT_REASON_CHARS,
 } from "./verify.mjs";
 
 /** The artifact schema a run without an applicability fact emits. Bumped only on a breaking shape change. */
-export const reviewArtifactSchemaVersion = 2;
+export const reviewArtifactSchemaVersion = 3;
 
 /** The schema version once a run records an applicability fact — the full shape and the skipped shape alike. */
-export const applicabilityArtifactSchemaVersion = 3;
+export const applicabilityArtifactSchemaVersion = 4;
 
 /** @typedef {import("./risk.mjs").RiskLevel} RiskLevel */
 /** @typedef {import("./lanes.mjs").AttentionLane} AttentionLane */
@@ -87,9 +89,14 @@ const FINDING_KEYS = new Set([
   "verdict",
   "reason",
   "provenance",
+  "evidence",
 ]);
 const FINDING_MANDATORY = new Set(["severity", "file", "line", "message", "provenance"]);
-const READ_KEYS = new Set(["path", "startLine", "endLine"]);
+const READ_KEYS = new Set(["path", "startLine", "endLine", "digest"]);
+/** The evidence a bound verdict carries — exactly the digest and the bounded retention excerpt. */
+const EVIDENCE_KEYS = new Set(["digest", "excerpt"]);
+/** The skip-record vocabulary — which skip path wrote the record. */
+const SKIP_KINDS = /** @type {const} */ (["state", "nothing-to-review"]);
 const VERIFICATION_KEYS = new Set(["gate"]);
 const GATE_OUTCOME_KEYS = new Set(["passed", "reason"]);
 const GATE_OUTCOME_MANDATORY = new Set(["passed"]);
@@ -109,6 +116,15 @@ const SKIPPED_ARTIFACT_KEYS = new Set([
   "headRef",
   "outcome",
   "applicability",
+]);
+/** The exact key set a skip record — the durable record for a path with no applicability fact — serialises with. */
+const SKIP_RECORD_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
 ]);
 const APPLICABILITY_SECTION_KEYS = new Set([
   "context",
@@ -158,12 +174,15 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 
 /**
  * The resolved read reference behind a finding's evidence — ledger data only,
- * never model text. The same record the provenance gate re-derives.
+ * never model text. The same record the provenance gate re-derives. The
+ * digest makes the anchoring content-checkable: sha256 of the covering read's
+ * content, fail-closed to isDigest shape.
  *
  * @typedef {object} FindingProvenance
  * @property {string} path the covering read's normalised path
  * @property {number} startLine the covering read's first captured line
  * @property {number} endLine the covering read's last captured line, inclusive
+ * @property {string} digest sha256 (lowercase hex) of the covering read's content
  */
 
 /**
@@ -185,6 +204,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {number} line 1-based line in the new file
  * @property {string} message sanitised upstream, capped at MESSAGE_CHARS
  * @property {FindingProvenance} provenance the recorded read the finding anchors into
+ * @property {{ digest: string, excerpt: string }} [evidence] a bound verdict's content-checkable evidence — digest and bounded retention excerpt
  */
 
 /**
@@ -197,13 +217,15 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 
 /**
  * One verdict, bound to its finding by the finding's durable identity — the
- * binding the code owns, never read out of the model's answer.
+ * binding the code owns, never read out of the model's answer. A bound verdict
+ * may carry the evidence the verifier judged: the digest and bounded excerpt.
  *
  * @typedef {object} RunArtifactVerdict
  * @property {string} findingIdentity the finding's durable identity
  * @property {"confirmed" | "refuted" | "uncertain"} verdict
  * @property {PublishedLifecycle} lifecycle
  * @property {string} reason
+ * @property {{ digest: string, excerpt: string }} [evidence] the content-checkable digest and bounded retention excerpt
  */
 
 /**
@@ -286,6 +308,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {number} line
  * @property {string} message
  * @property {FindingProvenance} provenance
+ * @property {{ digest: string, excerpt: string }} [evidence] present iff a bound verdict carried the evidence it judged
  */
 
 /**
@@ -351,6 +374,23 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {ApplicabilitySection} applicability
  */
 
+/**
+ * The durable record for a skip path that leaves no applicability fact — the
+ * code-owned state skip under no policy, and the empty universe. It rides the
+ * applicability family's version constant (the ledger: skip records ride the
+ * applicability family), names its kind, and carries the run identity plus the
+ * outcome sentence. No findings, coverage or policy: nothing was read beyond
+ * the classification — the same posture buildSkippedArtifact takes.
+ *
+ * @typedef {object} SkipRecord
+ * @property {typeof applicabilityArtifactSchemaVersion} schemaVersion
+ * @property {"state" | "nothing-to-review"} kind which skip path wrote the record
+ * @property {string} repository
+ * @property {number} pullRequest
+ * @property {string} headRef
+ * @property {{ classification: "skipped", reason: string }} outcome
+ */
+
 /** The schema-version-agnostic body the full shapes share. */
 /** @typedef {Omit<RunArtifact, "schemaVersion">} PublishedArtifactBody */
 
@@ -361,7 +401,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 /** @typedef {RunArtifact | RunArtifactWithApplicability} PublishedRunArtifact */
 
 /** Every serialisable shape this module emits. */
-/** @typedef {RunArtifact | RunArtifactWithApplicability | SkippedRunArtifact} AnyRunArtifact */
+/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord} AnyRunArtifact */
 
 /**
  * The typed refusal. Every refusal this module raises is one of these, so a
@@ -538,6 +578,26 @@ function asBoolean(v, label) {
 }
 
 /**
+ * Validates one verdict evidence record: exactly the keys `digest` and
+ * `excerpt`, `isDigest(digest)`, a non-empty excerpt ≤ EVIDENCE_EXCERPT_CHARS
+ * chars. Anything else is refused fail-closed.
+ *
+ * @param {unknown} v
+ * @param {string} label
+ * @returns {{ digest: string, excerpt: string }}
+ */
+function asVerdictEvidence(v, label) {
+  const record = asRecord(v, label);
+  assertExactKeys(record, label, EVIDENCE_KEYS);
+  const digest = asNonEmptyString(record.digest, `${label}.digest`);
+  if (!isDigest(digest)) {
+    throw new ArtifactError(`${label}.digest is not a well-formed sha256 hex string — refused`);
+  }
+  const excerpt = asBoundedString(record.excerpt, `${label}.excerpt`, EVIDENCE_EXCERPT_CHARS);
+  return { digest, excerpt };
+}
+
+/**
  * Validates one gate outcome — the shape both the verification slice and the
  * gate table's entries reduce to. A pass carries no reason; a refusal is
  * never silent.
@@ -661,7 +721,13 @@ export function buildArtifact(runFacts) {
       path: asNonEmptyString(provenanceRec.path, `${label}.provenance.path`),
       startLine,
       endLine,
+      digest: asNonEmptyString(provenanceRec.digest, `${label}.provenance.digest`),
     };
+    if (!isDigest(provenance.digest)) {
+      throw new ArtifactError(
+        `${label}.provenance.digest is not a well-formed sha256 hex string — refused`,
+      );
+    }
     const lifecycle =
       "lifecycle" in finding
         ? asEnum(finding.lifecycle, PUBLISHED_LIFECYCLE_STATES, `${label}.lifecycle`)
@@ -713,6 +779,15 @@ export function buildArtifact(runFacts) {
         `${label} carries lifecycle '${lifecycle}' with no verdict — refused`,
       );
     }
+    let evidence;
+    if ("evidence" in finding) {
+      if (verdict === undefined) {
+        throw new ArtifactError(
+          `${label} carries evidence without a bound verdict — only a bound verdict records what it judged — refused`,
+        );
+      }
+      evidence = asVerdictEvidence(finding.evidence, `${label}.evidence`);
+    }
 
     const validated = { severity, file, line, message };
     const identity = findingIdentity(validated);
@@ -727,6 +802,7 @@ export function buildArtifact(runFacts) {
       ...(lifecycle !== undefined ? { lifecycle } : {}),
       ...(verdict !== undefined ? { verdict } : {}),
       ...(verdictReason !== undefined ? { reason: verdictReason } : {}),
+      ...(evidence !== undefined ? { evidence } : {}),
     });
   }
 
@@ -803,6 +879,7 @@ export function buildArtifact(runFacts) {
       verdict: finding.verdict,
       lifecycle: /** @type {PublishedLifecycle} */ (finding.lifecycle),
       reason: /** @type {string} */ (finding.reason),
+      ...(finding.evidence !== undefined ? { evidence: finding.evidence } : {}),
     });
   }
 
@@ -950,6 +1027,42 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
     headRef: ref,
     outcome: { classification: "skipped", reason },
     applicability: section,
+  });
+}
+
+/**
+ * Builds the durable record for a skip path that leaves no applicability fact
+ * — the code-owned state skip under no policy, and the empty universe. It
+ * mirrors buildSkippedArtifact's validation posture: exact keys, a closed kind
+ * vocabulary, the run identity fail-closed, and the code-composed reason
+ * uncapped. Byte-deterministic: the same inputs yield the same object and the
+ * same serialised bytes.
+ *
+ * @param {object} skip
+ * @param {string} skip.repository "owner/repo", as the forge names it
+ * @param {number} skip.pullRequest the pull request number
+ * @param {string} skip.headRef the head the skip describes, full 40 hex chars
+ * @param {string} skip.reason the code-composed sentence, uncapped
+ * @param {"state" | "nothing-to-review"} skip.kind which skip path wrote the record
+ * @throws {ArtifactError} on any malformed field
+ * @returns {SkipRecord}
+ */
+export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind }) {
+  const repo = asNonEmptyString(repository, "skip record.repository");
+  const number = asPositiveInt(pullRequest, "skip record.pullRequest");
+  const ref = asNonEmptyString(headRef, "skip record.headRef");
+  if (!HEAD_REF.test(ref)) {
+    throw new ArtifactError("skip record.headRef must be a 40-char hex commit sha — refused");
+  }
+  asNonEmptyString(reason, "skip record.reason");
+  const skipKind = asEnum(kind, SKIP_KINDS, "skip record.kind");
+  return deepFreeze({
+    schemaVersion: applicabilityArtifactSchemaVersion,
+    kind: skipKind,
+    repository: repo,
+    pullRequest: number,
+    headRef: ref,
+    outcome: { classification: "skipped", reason },
   });
 }
 
@@ -1128,11 +1241,13 @@ export function serialiseArtifact(artifact) {
   if (record.schemaVersion === reviewArtifactSchemaVersion) {
     assertExactKeys(record, "artifact", ARTIFACT_KEYS);
   } else if (record.schemaVersion === applicabilityArtifactSchemaVersion) {
-    // Both v3 shapes: the full shape carrying an applicability fact, and
-    // the reduced shape a skipped run writes.
+    // The applicability family's shapes: the full shape carrying an
+    // applicability fact, the reduced shape a skipped run writes, and the
+    // skip record a path with no applicability fact writes.
     if (
       !hasExactKeys(record, SKIPPED_ARTIFACT_KEYS) &&
-      !hasExactKeys(record, APPLICABILITY_ARTIFACT_KEYS)
+      !hasExactKeys(record, APPLICABILITY_ARTIFACT_KEYS) &&
+      !hasExactKeys(record, SKIP_RECORD_KEYS)
     ) {
       throw new ArtifactError("artifact keys fit no schema of this version — refused");
     }
