@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.1](https://github.com/ecoma-io/action-agents/compare/v0.8.0...v0.8.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **review:** clear stale artifact files matching the upload glob before writing ([#306](https://github.com/ecoma-io/action-agents/issues/306)) ([c096968](https://github.com/ecoma-io/action-agents/commit/c096968afee0909b808c99e5387d37541ef5dfc6)), closes [#296](https://github.com/ecoma-io/action-agents/issues/296)
+* **triage:** a failed dry-run record write is the red run, not a warning ([#302](https://github.com/ecoma-io/action-agents/issues/302)) ([1accfca](https://github.com/ecoma-io/action-agents/commit/1accfcad747d5fb64bd9f014fb53770adbf229f9))
+* **triage:** enforce the removal-reason vocabulary in the record validator ([#300](https://github.com/ecoma-io/action-agents/issues/300)) ([d9a0990](https://github.com/ecoma-io/action-agents/commit/d9a09905b415dc30cc3a8538e8a012fe71f978d9)), closes [#295](https://github.com/ecoma-io/action-agents/issues/295)
+* **triage:** entirely-off-sheet answers write refused + green, not failed + red ([#304](https://github.com/ecoma-io/action-agents/issues/304)) ([b675bab](https://github.com/ecoma-io/action-agents/commit/b675babcdab378c5e433a2642bec2a1240e6fd42)), closes [#288](https://github.com/ecoma-io/action-agents/issues/288)
+* **triage:** honour all workflow markers, not only the first ([#305](https://github.com/ecoma-io/action-agents/issues/305)) ([15e2f1a](https://github.com/ecoma-io/action-agents/commit/15e2f1a42b43219955df850a2c2664460095a188))
+* **triage:** sanitise and cap decision.refusals at the record's build site ([#301](https://github.com/ecoma-io/action-agents/issues/301)) ([c675642](https://github.com/ecoma-io/action-agents/commit/c67564201ed85e17c61014f2a85fb06dcadf6a5a))
+
 ## [0.8.0](https://github.com/ecoma-io/action-agents/compare/v0.7.1...v0.8.0) (2026-09-04)
 
 
