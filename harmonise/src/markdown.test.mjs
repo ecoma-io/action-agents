@@ -324,10 +324,16 @@ describe("structuralProfile and raw HTML", () => {
 });
 
 describe("structuralProfile bounds on pathological documents", () => {
-  // Each bounds test asserts a generous wall-clock ceiling (observed runtime
-  // is well under 100 ms) so a regression toward superlinear work fails CI
-  // instead of hanging it; the 30 s vitest timeout is the backstop. Memory
-  // is pinned via the profile's exact counts, not RSS.
+  // Each bounds test asserts a generous wall-clock ceiling so a regression
+  // toward superlinear work fails CI instead of hanging it; the 30 s vitest
+  // timeout is the backstop. Calibrated against #286: the profile runs in
+  // ~90–100 ms unloaded, but a full-suite coverage run inflated the
+  // multi-megabyte fixture to 5.07 s (~50x) through instrumentation and
+  // machine load, and a 5 s ceiling flaked a green tree. The 15 s ceiling
+  // keeps ~150x unloaded headroom and ~3x the observed loaded worst case,
+  // while a genuine superlinear regression lands minutes high — far above
+  // the ceiling, at or beyond the backstop. Memory is pinned via the
+  // profile's exact counts, not RSS.
 
   it("terminates with exact counts on a ten-thousand-deep blockquote chain", () => {
     const started = performance.now();
@@ -335,7 +341,7 @@ describe("structuralProfile bounds on pathological documents", () => {
     const elapsed = performance.now() - started;
 
     expect(profile.blockquoteBlocks).toEqual({ count: 1, maxDepths: [10_000] });
-    expect(elapsed).toBeLessThan(5_000);
+    expect(elapsed).toBeLessThan(15_000);
   }, 30_000);
 
   it("terminates with an exact profile on a multi-megabyte 2,500-deep nested list", () => {
@@ -355,7 +361,7 @@ describe("structuralProfile bounds on pathological documents", () => {
     expect(profile.listBlocks).toEqual([
       { ordered: false, marker: "-", items: 2_500, maxDepth: 2_500 },
     ]);
-    expect(elapsed).toBeLessThan(5_000);
+    expect(elapsed).toBeLessThan(15_000);
   }, 30_000);
 
   it("terminates with an exact full profile on a multi-megabyte document", () => {
@@ -388,7 +394,7 @@ describe("structuralProfile bounds on pathological documents", () => {
       images: 25_000,
       autolinks: 0,
     });
-    expect(elapsed).toBeLessThan(5_000);
+    expect(elapsed).toBeLessThan(15_000);
   }, 30_000);
 
   it("scans a single multi-megabyte line without superlinear work", () => {
@@ -401,7 +407,7 @@ describe("structuralProfile bounds on pathological documents", () => {
 
     expect(profile.headingLevels).toEqual([1]);
     expect(profile.brokenInlineCount).toBe(1);
-    expect(elapsed).toBeLessThan(5_000);
+    expect(elapsed).toBeLessThan(15_000);
   }, 30_000);
 });
 
