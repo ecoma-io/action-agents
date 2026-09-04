@@ -14,7 +14,11 @@
 // repository does not otherwise hold.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["config:recommended"],
+  extends: [
+    "config:recommended",
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    "helpers:pinGitHubActionDigests",
+  ],
   // Every update waits three days after publish before Renovate offers it —
   // every manager, every dependency type. Malware shipped in a compromised
   // release is usually detected and yanked within the first days, so the
