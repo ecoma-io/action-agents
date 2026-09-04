@@ -23,6 +23,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as p from "node:path";
+
 import { ForgeError } from "#core/forge.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 
@@ -30,6 +34,14 @@ import { run } from "../../../triage/src/index.mjs";
 
 const BOT = "action-agents[bot]";
 const NOW = "2026-07-01T11:00:00Z";
+
+/**
+ * The run's record write is confined below `GITHUB_WORKSPACE`, so the
+ * fixture mounts a real directory: a run that reaches a terminal point
+ * leaves its record there, and the dry run's skip record is that run's
+ * whole outcome — its write failing is the red run, not a logged loss.
+ */
+const WORKSPACE = mkdtempSync(p.join(tmpdir(), "triage-corpus-"));
 
 /**
  * @param {Partial<import("#core/forge.mjs").CommentEntry>} [overrides]
@@ -140,9 +152,10 @@ async function triageRun(worldForge, answer) {
     owner: "ecoma-io",
     apiUrl: "",
     eventPath: "",
+    workspace: WORKSPACE,
   };
   const rejection = await run(
-    { model: "fake", labels: [], dryRun: false, configPath: "" },
+    { model: "fake", labels: [], dryRun: false, configPath: "", recordPath: ".triage-record" },
     context,
     io,
   ).then(
@@ -212,8 +225,15 @@ describe("triage — a failed identity read refuses, it never guesses", () => {
       }),
     };
     const rejection = await run(
-      { model: "fake", labels: [], dryRun: false, configPath: "" },
-      { eventName: "issues", repo: "action-agents", owner: "ecoma-io", apiUrl: "", eventPath: "" },
+      { model: "fake", labels: [], dryRun: false, configPath: "", recordPath: ".triage-record" },
+      {
+        eventName: "issues",
+        repo: "action-agents",
+        owner: "ecoma-io",
+        apiUrl: "",
+        eventPath: "",
+        workspace: WORKSPACE,
+      },
       io,
     ).then(
       () => null,
@@ -251,8 +271,15 @@ describe("triage — a failed identity read refuses, it never guesses", () => {
       }),
     };
     await run(
-      { model: "fake", labels: [], dryRun: true, configPath: "" },
-      { eventName: "issues", repo: "action-agents", owner: "ecoma-io", apiUrl: "", eventPath: "" },
+      { model: "fake", labels: [], dryRun: true, configPath: "", recordPath: ".triage-record" },
+      {
+        eventName: "issues",
+        repo: "action-agents",
+        owner: "ecoma-io",
+        apiUrl: "",
+        eventPath: "",
+        workspace: WORKSPACE,
+      },
       io,
     );
     assert.deepEqual(worldForge.writes, []);
