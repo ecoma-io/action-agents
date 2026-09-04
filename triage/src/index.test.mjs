@@ -15,10 +15,11 @@ import * as p from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildTriageRecord, REASON_CHARS, serialiseTriageRecord } from "./run-record.mjs";
+import { decisionWriteOps } from "./decision.mjs";
 import { reasonDigest } from "./verify.mjs";
 
 import { createEvidence } from "#core/untrusted.mjs";
-import { OwnLoginsError } from "#core/comment.mjs";
+import { PartialMutationError } from "./mutate.mjs";
 import { PastFileCeilingError } from "#core/forge.mjs";
 import { TransportError } from "#core/transport-errors.mjs";
 import { readContext } from "#core/runtime.mjs";
@@ -1285,10 +1286,13 @@ describe("run — no sheet, the comment half", () => {
 
     // Intentional behavior change (#249): the old github-actions[bot] fallback
     // was safe only while the token was a GITHUB_TOKEN. Under any other
-    // identity the guessed set mis-reads the action's own prior comment as a
-    // stranger's and the upsert duplicates it. A run that cannot establish
-    // which comments are its own does not write at all.
-    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(OwnLoginsError);
+    // identity the guessed set mis-reads the action's own prior comment write
+    // as a stranger's and the upsert duplicates it. A run that cannot
+    // establish which comments are its own does not write at all — the write
+    // now flows through the executor's accounting loop, so the identity-read
+    // failure surfaces as the partial-mutation accounting with the identity
+    // read as its cause.
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(PartialMutationError);
     expect(world.forge.writes.map((write) => write.op)).toEqual([]);
   });
 });
@@ -1963,8 +1967,8 @@ describe("run — the run record", () => {
  * The opt-in verification pass (issue #274), wired into the pipeline: the
  * decide call answers `LABELS_ANSWER` on the default fixture, so the minted
  * plan is one op — `add:bug` — and the verify call is the run's second ask.
- * The marker fixture widens the plan to two ops, add first then the marker
- * clear, which is the order the plan mints them in.
+ * The marker fixture widens the plan to two ops — the marker clear first,
+ * then the add — which is the order the plan mints them in.
  */
 describe("run — opt-in verification (issue #274)", () => {
   /** Reads a record from the fixture workspace's default record directory.
@@ -1977,6 +1981,16 @@ describe("run — opt-in verification (issue #274)", () => {
   const CONFIRM_BUG = JSON.stringify([
     { opId: "add:bug", verdict: "confirmed", reason: "The report is a crash." },
   ]);
+
+  /** A labels answer that also triggers the code-composed signal (model-judged incomplete). */
+  const SIGNAL_ANSWER =
+    '{"labels":["bug"],"rationale":"Fails on import.","dimensions":{"quality":{"completeness":"missing-evidence"}}}';
+  /** The same judgement on an empty verdict: a labels decision carrying only the signal. */
+  const SIGNAL_ONLY_ANSWER =
+    '{"labels":[],"rationale":"Fails on import.","dimensions":{"quality":{"completeness":"missing-evidence"}}}';
+  /** A labels+marker answer that also triggers the signal, for the executor-alignment test. */
+  const SIGNAL_MARKER_ANSWER =
+    '{"labels":["bug","docs"],"rationale":"Fails on import.","dimensions":{"quality":{"completeness":"missing-evidence"}}}';
 
   it("verify:true, everything confirmed — the decision lands and the block is filled", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -2148,6 +2162,256 @@ describe("run — opt-in verification (issue #274)", () => {
     // The pass ran and requested verification; the plan it held was empty, so
     // there was nothing to ask and nothing to answer.
     expect(readRecord().verification).toEqual({ requested: true, answers: [], downgraded: [] });
+  });
+
+  it("verify:true on a labels+signal decision, signal refuted — only the labels write lands", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      answer: SIGNAL_ANSWER,
+      verifyAnswer: JSON.stringify([
+        { opId: "add:bug", verdict: "confirmed", reason: "The report is a crash." },
+        { opId: "signal", verdict: "refuted", reason: "The report is complete." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+    const record = readRecord();
+    expect(record.outcome).toBe("published");
+    // The signal is code-composed, so its downgrade has no model voice to
+    // preserve: it is dropped from the acted-on decision outright.
+    expect(record.decision.signal).toBeNull();
+    expect(record.decision.refusals).toContainEqual(
+      expect.stringMatching(/^verification downgraded 'signal' \(refuted\)/u),
+    );
+    expect(record.verification.downgraded).toEqual(["signal"]);
+    // Plan order: the label op mints before the signal.
+    const answers = /** @type {{ opId: string }[]} */ (record.verification.answers);
+    expect(answers.map((answer) => answer.opId)).toEqual(["add:bug", "signal"]);
+  });
+
+  it("verify:true on a labels+signal decision, verifier silent on the signal — dropped as uncertain", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // CONFIRM_BUG names add:bug only: silence is not confirmation, so the
+    // signal the answer never judged is unjudged and dropped with the typed
+    // uncertain refusal.
+    const world = io({ answer: SIGNAL_ANSWER, verifyAnswer: CONFIRM_BUG });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+    const record = readRecord();
+    expect(record.outcome).toBe("published");
+    expect(record.decision.signal).toBeNull();
+    const refusals = /** @type {string[]} */ (record.decision.refusals);
+    const refusal = refusals.find((line) =>
+      line.startsWith("verification downgraded 'signal' (uncertain):"),
+    );
+    expect(refusal).toContain("no valid entry in the verification answer judged this operation");
+    expect(record.verification.downgraded).toEqual(["signal"]);
+  });
+
+  it("verify:true on a signal-only decision, signal confirmed — the one comment write lands", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      answer: SIGNAL_ONLY_ANSWER,
+      verifyAnswer: JSON.stringify([
+        { opId: "signal", verdict: "confirmed", reason: "The report is missing steps." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([
+      { op: "createComment", args: [7, expect.stringContaining("This issue looks incomplete")] },
+    ]);
+    const record = readRecord();
+    expect(record.outcome).toBe("published");
+    expect(record.decision).toMatchObject({
+      kind: "labels",
+      add: [],
+      remove: [],
+      signal: { needsMoreInfo: [], modelJudgedQuality: true, related: null },
+    });
+    const confirmed = /** @type {{ opId: string }[]} */ (record.verification.answers);
+    expect(confirmed.map((answer) => answer.opId)).toEqual(["signal"]);
+    expect(record.verification.downgraded).toEqual([]);
+  });
+
+  it("verify:true on a signal-only decision, signal refuted — everything downgraded, refused, green", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      answer: SIGNAL_ONLY_ANSWER,
+      verifyAnswer: JSON.stringify([
+        { opId: "signal", verdict: "refuted", reason: "The report is complete." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toContain(
+      "verification downgraded every proposed operation: signal (refuted)",
+    );
+    expect(record.verification.downgraded).toEqual(["signal"]);
+  });
+
+  it("a garbage verify answer downgrades a signal plan too — refused, one ask, no retry", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ answer: SIGNAL_ANSWER, verifyAnswer: "I cannot answer that." });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    expect(record.verification.downgraded).toEqual(["add:bug", "signal"]);
+    const judged = /** @type {{ opId: string }[]} */ (record.verification.answers);
+    expect(judged.map((answer) => answer.opId)).toEqual(["add:bug", "signal"]);
+  });
+
+  it("a verify call that throws downgrades a signal plan the same way — refused, green, one ask", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ answer: SIGNAL_ANSWER, verifyFailure: new Error("the endpoint hung up") });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toContain("uncertain");
+    expect(record.verification.downgraded).toEqual(["add:bug", "signal"]);
+  });
+
+  it("a refuted label empties the label set behind a confirmed signal — withheld, refused", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      answer: SIGNAL_ANSWER,
+      verifyAnswer: JSON.stringify([
+        { opId: "add:bug", verdict: "refuted", reason: "Not a bug." },
+        { opId: "signal", verdict: "confirmed", reason: "Steps are missing." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    // The F-09 gate is labels-shaped and fails closed: the label op's refusal
+    // empties it, the confirmed signal stands in the record but is never
+    // written, and the reason names verification as the voice that emptied
+    // the plan.
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toContain("verification downgraded every on-sheet operation");
+    expect(record.decision.signal).not.toBeNull();
+    expect(record.decision.refusals).toContain(
+      "verification downgraded 'add:bug' (refuted): Not a bug.",
+    );
+  });
+
+  it("a classification comment the verifier refuses reduces the run to a no-write plan — refused", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {},
+      answer: COMMENT_ANSWER,
+      verifyAnswer: JSON.stringify([
+        { opId: "comment", verdict: "refuted", reason: "The thread answers itself." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord();
+    expect(record.outcome).toBe("refused");
+    // The reduction is visible in the record: the comment decision became a
+    // no-write labels decision, the record carries no comment, and the
+    // refusal line names the downgraded comment.
+    expect(record.decision).toMatchObject({ kind: "labels", add: [], remove: [] });
+    expect(record.decision).not.toHaveProperty("comment");
+    expect(record.decision.refusals).toContain(
+      "verification downgraded 'comment' (refuted): The thread answers itself.",
+    );
+    expect(record.verification.downgraded).toEqual(["comment"]);
+    expect(record.reason).toContain("verification downgraded");
+  });
+
+  it("a classification comment the verifier confirms — the comment write lands", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {},
+      answer: COMMENT_ANSWER,
+      verifyAnswer: JSON.stringify([
+        { opId: "comment", verdict: "confirmed", reason: "The classification is fair." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([
+      { op: "createComment", args: [7, expect.stringContaining("<!-- action-agents:triage:")] },
+    ]);
+    const record = readRecord();
+    expect(record.outcome).toBe("published");
+    expect(record.decision.kind).toBe("comment");
+    const commentAnswer = /** @type {{ opId: string }[]} */ (record.verification.answers);
+    expect(commentAnswer.map((answer) => answer.opId)).toEqual(["comment"]);
+    expect(record.verification.downgraded).toEqual([]);
+  });
+
+  it("the executor's writes are the plan's ids, in plan order — remove, batched add, signal", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      files: {
+        ".github/action-agents/triage/triage.json5": JSON.stringify({
+          ...JSON.parse(CONFIG),
+          labels: { ...JSON.parse(CONFIG).labels, workflowMarkers: ["needs triage"] },
+        }),
+      },
+      repoLabels: [...REPO_LABELS, "needs triage"],
+      event: issueEvent({ labels: ["needs triage"] }),
+      answer: SIGNAL_MARKER_ANSWER,
+      verifyAnswer: JSON.stringify([
+        { opId: "remove:needs triage", verdict: "confirmed", reason: "Classified." },
+        { opId: "add:bug", verdict: "confirmed", reason: "The report is a crash." },
+        { opId: "add:docs", verdict: "confirmed", reason: "The docs need updating." },
+        { opId: "signal", verdict: "confirmed", reason: "The steps are missing." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    // The executor's write sequence is the plan read the other way: one
+    // removeLabel per removal, the adds batched into one call, the signal
+    // comment last — and the ids those writes execute are exactly
+    // `decisionWriteOps`' ids.
+    expect(world.forge.writes.map((write) => write.op)).toEqual([
+      "removeLabel",
+      "addLabels",
+      "createComment",
+    ]);
+    const record = readRecord();
+    const executedIds = world.forge.writes.flatMap((write) => {
+      if (write.op === "removeLabel") return [`remove:${String(write.args[1])}`];
+      if (write.op === "addLabels") {
+        return /** @type {string[]} */ (write.args[1]).map((label) => `add:${label}`);
+      }
+      return [record.decision.signal === null ? "comment" : "signal"];
+    });
+    expect(executedIds.sort()).toEqual(
+      decisionWriteOps(record.decision)
+        .map((op) => op.opId)
+        .sort(),
+    );
   });
 });
 

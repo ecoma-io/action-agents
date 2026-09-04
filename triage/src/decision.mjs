@@ -54,8 +54,9 @@ export const REMOVAL_REASONS = /** @type {const} */ (["size", "marker", "owned"]
  */
 
 /**
- * The mutation plan. `mutate.mjs` executes exactly its `add`, `remove` and
- * `comment` — nothing else, so a decision can never reach assign, close,
+ * The mutation plan. `mutate.mjs` executes exactly the operations
+ * `decisionWriteOps` derives from it — its `add`, `remove`, `comment` and
+ * `signal` — nothing else, so a decision can never reach assign, close,
  * merge, review or any surface `SECURITY.md` forbids.
  *
  * @typedef {object} Decision
@@ -64,12 +65,84 @@ export const REMOVAL_REASONS = /** @type {const} */ (["size", "marker", "owned"]
  *   `comment` → no sheet; upsert the classification comment
  * @property {string[]} add labels to add — idempotent, deduped
  * @property {Removal[]} remove labels to remove, each with its reason
- * @property {string[]} refusals off-sheet names refused, for the audit trail
+ * @property {string[]} refusals refused operations, for the audit trail — the off-sheet label names the policy refused, and the `verification downgraded '…'` lines the verification pass refused
  * @property {DecisionLog[]} logs lines the executor emits verbatim
  * @property {string} rationale the model's one-line rationale, for the run log
  * @property {{ classification: string, rationale: string } | undefined} comment present only when `kind === "comment"`
  * @property {Signal | null} [signal] a code-composed signal comment a sheet-mode issue run may post; absent for runs that post none
  */
+
+/**
+ * One concrete write operation a decision names: the forge primitive, the
+ * code-minted id the verification plan and the record quote, what the write
+ * acts on (the run log's name for it), and the op in the action's own words
+ * (what the verifier is told).
+ *
+ * @typedef {object} DecisionWriteOp
+ * @property {"removeLabel" | "addLabels" | "upsertComment"} write the forge primitive the executor issues
+ * @property {string} opId `remove:<label>`, `add:<label>`, the bare `comment` or the bare `signal`
+ * @property {string} target what the operation acts on
+ * @property {string} description
+ */
+
+/** The code-minted id of the signal comment's one write. */
+export const SIGNAL_OP_ID = "signal";
+
+/**
+ * The concrete write operations a decision names, in the order the executor
+ * applies them: removals first, then the adds, then the one comment a
+ * decision may carry — the classification or the signal. This function is
+ * the single source of a decision's write surface: the verification plan is
+ * minted from it (`verify.mjs`) and the executor builds its forge calls from
+ * it (`mutate.mjs`), so the two cannot diverge — a write that exists for one
+ * exists for the other, under the same code-minted id. Pure: a decision and
+ * its rendered plan always agree.
+ *
+ * The adds are one entry per label even though the executor batches them
+ * into a single write: each label is judged — and confirmed or downgraded —
+ * on its own, and the batch the executor sends is built from exactly the
+ * entries that survived.
+ *
+ * @param {Decision} decision
+ * @returns {DecisionWriteOp[]}
+ */
+export function decisionWriteOps(decision) {
+  /** @type {DecisionWriteOp[]} */
+  const ops = [];
+  for (const removal of decision.remove) {
+    ops.push({
+      write: "removeLabel",
+      opId: `remove:${removal.name}`,
+      target: removal.name,
+      description: `remove the label '${removal.name}' (${removal.reason})`,
+    });
+  }
+  for (const label of decision.add) {
+    ops.push({
+      write: "addLabels",
+      opId: `add:${label}`,
+      target: label,
+      description: `apply the label '${label}'`,
+    });
+  }
+  if (decision.kind === "comment") {
+    ops.push({
+      write: "upsertComment",
+      opId: "comment",
+      target: "classification comment",
+      description: "upsert the classification comment the decision composed",
+    });
+  }
+  if (decision.signal != null) {
+    ops.push({
+      write: "upsertComment",
+      opId: SIGNAL_OP_ID,
+      target: "signal comment",
+      description: "upsert the code-composed signal comment the decision composed",
+    });
+  }
+  return ops;
+}
 
 /**
  * The marker comment written when there is no sheet — the whole of what the

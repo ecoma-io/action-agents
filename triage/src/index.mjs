@@ -417,14 +417,15 @@ export async function run(inputs, context, io) {
 
     const decision = decide({ evidence, assessment });
 
-    // Opt-in verification (issue #274), between the decision and any write:
-    // one bounded call restating the plan — code-minted op ids — against the
-    // same evidence snapshot the decision was derived from. Downgrade-only:
-    // a refuted or uncertain op becomes a refusal entry and leaves the plan,
-    // and a verdict can never add, widen or enable a write. A dry run never
-    // requests it, so an operator previewing a decision sees the unverified
-    // decision; with the input off this whole step is absent and the record's
-    // verification block stays the empty block.
+    // Opt-in verification (issue #274), between the decision and any write.
+    // The plan is minted from `decisionWriteOps` — the same list the executor
+    // builds its forge calls from, so every concrete write the run could
+    // issue is in the plan — and checked in one bounded call against the
+    // same evidence snapshot the decision was derived from: no fresh read,
+    // no tools. Downgrade-only: a refuted or uncertain op becomes a refusal
+    // entry and leaves the plan, and a verdict can never add, widen or
+    // enable a write. A dry run never requests the pass, and with the input
+    // off the record's verification block stays the empty one.
     /** @type {import("./verify.mjs").VerificationPlan} */
     const plan = mintVerificationPlan(decision);
     /** @type {string[]} */
@@ -481,19 +482,36 @@ export async function run(inputs, context, io) {
       return;
     }
 
-    // A deterministic off-sheet refusal (F-09): nothing on-sheet to act on.
-    // The ceilings refused the whole plan, the mutate never happens, and the
-    // run stays green — a refusal is the ceilings working, not a failure. The
-    // record write here is the run's whole outcome, so its failure is the red
-    // run, the same tier the event-gate skip and the withheld write sit in.
+    // A deterministic refusal with nothing label-shaped left to act on
+    // (F-09). The `refusals` array carries two voices — the off-sheet names
+    // the policy refused, and the `verification downgraded '…'` lines the
+    // pass refused — so the reason names the voice that actually emptied the
+    // plan: pinning "off-sheet" on a plan that verification emptied would
+    // record a cause that did not happen. A confirmed comment or signal
+    // standing behind an emptied label set is withheld here too — the gate
+    // is labels-shaped and fails closed, and the refusal lines in the record
+    // say exactly why. The ceilings refused the whole plan, the mutate never
+    // happens, and the run stays green — a refusal is the ceilings working,
+    // not a failure. The record write here is the run's whole outcome, so
+    // its failure is the red run, the same tier the event-gate skip and the
+    // withheld write sit in.
     if (acted.add.length === 0 && acted.remove.length === 0 && acted.refusals.length > 0) {
+      const downgradedCount = acted.refusals.filter((line) =>
+        line.startsWith("verification downgraded '"),
+      ).length;
+      const offSheetCount = acted.refusals.length - downgradedCount;
+      let cause;
+      if (downgradedCount === 0) {
+        cause = "the model's answer was entirely off-sheet";
+      } else if (offSheetCount === 0) {
+        cause = "verification downgraded every on-sheet operation";
+      } else {
+        cause = "the model's answer was entirely off-sheet and verification downgraded the rest";
+      }
       writeRunRecord({
         workspace: context.workspace,
         directory: inputs.recordPath,
-        record: buildRecord(
-          "refused",
-          "the model's answer was entirely off-sheet — refusing rather than applying nothing",
-        ),
+        record: buildRecord("refused", `${cause} — refusing rather than applying nothing`),
       });
       return;
     }
