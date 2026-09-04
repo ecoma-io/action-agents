@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.2](https://github.com/ecoma-io/action-agents/compare/v0.8.1...v0.8.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **review,harmonise:** record abandonment, dry-run and every harmonise run ([#297](https://github.com/ecoma-io/action-agents/issues/297)) ([#310](https://github.com/ecoma-io/action-agents/issues/310)) ([1227cf9](https://github.com/ecoma-io/action-agents/commit/1227cf94f4dadbcbbdeaada663dd45e19194bb44))
+* **review:** carry the policy SHA in artifacts and skip records ([#291](https://github.com/ecoma-io/action-agents/issues/291)) ([#311](https://github.com/ecoma-io/action-agents/issues/311)) ([f770bfd](https://github.com/ecoma-io/action-agents/commit/f770bfdb8db4d14c1e2b37d20595f62931985c07))
+* **review:** rename skip-record classification 'skipped' -&gt; 'skip' ([#309](https://github.com/ecoma-io/action-agents/issues/309)) ([991b74b](https://github.com/ecoma-io/action-agents/commit/991b74bf7dc5d89019a8d937b143075951e03566))
+
 ## [0.8.1](https://github.com/ecoma-io/action-agents/compare/v0.8.0...v0.8.1) (2026-09-04)
 
 
