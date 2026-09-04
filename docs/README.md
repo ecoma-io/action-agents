@@ -8,6 +8,7 @@ a link that goes nowhere.
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | [Doctrine](doctrine.md)                                                  | Where a new piece of code goes, and what an action may become                                                   |
 | [Run contract](run-contract.md)                                          | The frozen vocabulary every run is judged on — terminal states, verdicts, failure classes, invariants           |
+| [Archkeep integration](archkeep-integration.md)                          | The boundary of the boundary — what the pinned gate proves, what stays runtime, and the measured contract       |
 | [ADR 001 — core boundary](adr/001-core-boundary.md)                      | The decision the boundary rows cite: core is protocol and ceiling, and archkeep judges the tree against the law |
 | [ADR 002 — no intelligence layer](adr/002-no-intelligence-layer.md)      | The dissolved shared-intelligence workstream, as permanent non-goals                                            |
 | [ADR 003 — evidence retention](adr/003-evidence-retention.md)            | What a record may keep, per record kind — persist, fingerprint, never                                           |
