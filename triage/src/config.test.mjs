@@ -580,10 +580,23 @@ describe("effectiveSheet", () => {
     );
   });
 
-  it("refuses narrowing that leaves nothing to offer", () => {
+  it("refuses narrowing to a declared label the sheet never offers", () => {
+    // `size/xs` sits in `use` and is therefore declared, but it is a size
+    // rung with the priority role — never offered to the model. Before the
+    // declared-but-never-offered gate this narrowed the sheet to nothing with
+    // a generic message; the gate names the entry instead.
     expect(() =>
       effectiveSheet({ config: CONFIG, threadType: "pr", narrowing: ["size/xs"] }),
-    ).toThrow(/effective sheet is empty/);
+    ).toThrow(/'size\/xs', which the config file declares but never offers/);
+  });
+
+  it("refuses narrowing that mixes an offered label with one the sheet never offers", () => {
+    // A partial honour would be worse than a refusal: the run would proceed
+    // with fewer labels than the workflow named, and nothing in the log would
+    // say so.
+    expect(() =>
+      effectiveSheet({ config: CONFIG, threadType: "issue", narrowing: ["bug", "size/xl"] }),
+    ).toThrow(/'size\/xl', which the config file declares but never offers/);
   });
 
   it("treats a file that declares no usable labels as no sheet", () => {
