@@ -179,21 +179,23 @@ Paths to instruction documents on the resolved policy source.
 ```json5
 instructions: {
   instruction: ".github/action-agents/harmonise/instruction.md",
-  languages: {
+  "language-instructions": {
     vi: ".github/action-agents/harmonise/vi-instruction.md",
     de: ".github/action-agents/harmonise/de-instruction.md",
   },
 }
 ```
 
-| Sub-key           | Default path                                     |
-| ----------------- | ------------------------------------------------ |
-| `instruction`     | `.github/action-agents/harmonise/instruction.md` |
-| `languages.<tag>` | Not set — optional per-language instructions.    |
+| Sub-key                       | Default path                                     |
+| ----------------------------- | ------------------------------------------------ |
+| `instruction`                 | `.github/action-agents/harmonise/instruction.md` |
+| `language-instructions.<tag>` | Not set — optional per-language instructions.    |
 
-The `instruction` document applies to all pairs. A `languages`-specific
-document, when present, is appended after the general instruction for that
-target language.
+The `instruction` document applies to every pair. A `language-instructions`
+entry applies to one language's pairs, and every tag it names must be a key of
+`languages`. Both are optional. The prompt carries the general instruction as
+its custom layer and this language's instruction, if one exists, as the layer
+after it. Only these two sub-keys exist — any other key is refused at startup.
 
 #### `concurrency`
 
@@ -341,19 +343,29 @@ algorithm.
 
 ## Skip directives
 
-A source document can opt out of translation for a specific language by adding a
-directive to its frontmatter or body. The directive syntax is language-agnostic
-and parsed before any model call:
+A source document can protect its own lines from translation with HTML-comment
+directives in the body. A protected region survives the translate step
+byte-for-byte: it is replaced by a placeholder before the model call and
+restored afterwards, by the same mechanism the glossary uses. There are three
+forms, each a whole line whose only content is the comment:
 
 ```markdown
----
-harmonise:
-  skip: [vi, de]
----
+<!-- harmonise:skip -->
+<!-- harmonise:skip-start -->
+<!-- harmonise:skip-end -->
 ```
 
-A document with a `skip` directive for every target language is excluded from
-the source set entirely — it is not read and not counted as a noop pair.
+`<!-- harmonise:skip -->` protects the next non-blank line. The `skip-start`
+and `skip-end` directives bracket a region — markers included — that is
+preserved whole.
+
+Directives are honored from the source document only; the model cannot
+introduce one. A malformed directive fails the run — an unclosed or nested
+region, a `skip-end` with no open `skip-start`, or any other whole-line
+`<!-- harmonise:… -->` comment is refused, never silently ignored. Comment-like
+text inside a fenced code block or mid-line is content, not a directive, and is
+never validated as one. The full validation rules are on the
+[development page](../development/harmonise.md#skip-directives).
 
 ## Cost and budget controls
 
@@ -415,7 +427,7 @@ English source, three targets, per-language instructions.
   glossary: ["action-agents", "ecoma-io", "SECURITY.md"],
   instructions: {
     instruction: ".github/action-agents/harmonise/instruction.md",
-    languages: {
+    "language-instructions": {
       vi: ".github/action-agents/harmonise/vi-instruction.md",
     },
   },
