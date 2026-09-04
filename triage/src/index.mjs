@@ -24,9 +24,9 @@
  * the live read arbitrates, and a pull request snapshot's state, merged
  * flag and head are claims too. A thread that moved on while the run was in
  * flight receives nothing — the decision described a thread that no longer
- * exists, and the run says so in the log instead of writing (the forge's
- * read-twice doctrine, `core/src/forge.mjs`; review's pre-publication
- * re-read is the precedent).
+ * exists, so the run ends `abandoned` with the divergence reason in the log
+ * and the run record (the forge's read-twice doctrine, `core/src/forge.mjs`;
+ * review's pre-publication re-read is the precedent).
  *
  * Before any of that, an event gate (item 1 of #224) decides whether the
  * event that fired this run could have changed triage-relevant evidence.
@@ -55,6 +55,7 @@ import * as p from "node:path";
 import { readSharedInputs } from "#core/inputs.mjs";
 import { createChat } from "#core/chat.mjs";
 import { MAX_SEARCH_CANDIDATES, createForge } from "#core/forge.mjs";
+import { oneLine } from "#core/one-line.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
 import {
@@ -80,7 +81,7 @@ import { assessIssueForm, loadIssueForms } from "./issue-forms.mjs";
 import { gatherEvidence } from "./evidence.mjs";
 import { assess } from "./assessment.mjs";
 import { decide } from "./policy.mjs";
-import { mutate } from "./mutate.mjs";
+import { mutate, ThreadMovedError } from "./mutate.mjs";
 import { measureSize } from "./size.mjs";
 import { decideEvent, eventAuditLine, eventChangedLabel } from "./events.mjs";
 import { buildTriageRecord, serialiseTriageRecord, triageRecordFilename } from "./run-record.mjs";
@@ -400,16 +401,35 @@ export async function run(inputs, context, io) {
     const decision = decide({ evidence, assessment });
     draft.decision = decision;
 
-    await mutate({
-      decision,
-      forge: world.forge,
-      issueNumber: thread.number,
-      dryRun: inputs.dryRun,
-      now: world.now,
-      action: ACTION,
-      threadLabels: thread.labels,
-      subject: pr !== null ? { head: pr.head.sha, state: pr.state, merged: pr.merged } : null,
-    });
+    try {
+      await mutate({
+        decision,
+        forge: world.forge,
+        issueNumber: thread.number,
+        dryRun: inputs.dryRun,
+        now: world.now,
+        action: ACTION,
+        threadLabels: thread.labels,
+        subject: pr !== null ? { head: pr.head.sha, state: pr.state, merged: pr.merged } : null,
+      });
+    } catch (cause) {
+      // A freshness divergence is not a failure: nothing landed and a newer
+      // state superseded the decision, so the run stays green — but this
+      // record IS the run's whole outcome, which is why the write sits in
+      // the red tier (a failed record write here goes red), the same tier
+      // the event-gate skip sits in. The reason is thread-controlled text
+      // (it interpolates the live labels), so it enters the record through
+      // the sanitiser boundary: control characters stripped here (#259's
+      // rule for this same warning line), the record builder's comment
+      // sanitiser and reason cap doing the rest.
+      if (!(cause instanceof ThreadMovedError)) throw cause;
+      writeRunRecord({
+        workspace: context.workspace,
+        directory: inputs.recordPath,
+        record: buildRecord("abandoned", oneLine(cause.message, { stripControlChars: true })),
+      });
+      return;
+    }
 
     // The run's outcome has landed — the mutate. The record write sits one
     // tier down here: a failed write is a logged loss, not a red run,

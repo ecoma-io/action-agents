@@ -423,7 +423,8 @@ no comment at all.
 ### The run record
 
 Every run ends in a record, whatever its terminal point: a landed mutation,
-a dry run, an event-gate skip, a failure. `triage/src/run-record.mjs` builds
+a dry run, an event-gate skip, a write the freshness gate withheld, a
+failure. `triage/src/run-record.mjs` builds
 it, validates it fail-closed and serialises it byte-deterministically; the
 write itself is `writeRunRecord` in `triage/src/index.mjs`, under the same
 workspace ceiling every read honours — the path must resolve inside
@@ -442,6 +443,12 @@ Where it is written, per terminal path:
 - an **event-gate skip** — the record is written before the run returns, with
   the gate's reason verbatim and no `decision` key. Here a failed write is a
   red run: a skip's record is the skip's whole outcome.
+- a **withheld write** — the freshness gate found the thread changed while
+  the run was in flight: nothing lands, the warning still names what moved,
+  and the record is written with `outcome: "abandoned"` and the divergence
+  reason as its `reason`, the superseded decision still carried. The run
+  stays green; here a failed write is a red run, exactly like the event-gate
+  skip — nothing else landed, so the record is the run's whole outcome.
 - a **failure** — the record is written in `run`'s catch, then the original
   error is rethrown; the record's own write failure is logged, never allowed
   to mask the original. A run that dies before the payload parses names no
@@ -463,9 +470,10 @@ durable form of that path.
 `outcome` speaks the run contract's terminal-state vocabulary only —
 `published`, `partial`, `refused`, `abandoned`, `skip`, `failed` — and the
 validator refuses anything else. Today's paths use `published` (a landed
-mutation), `skip` (a dry run or an event-gate exit) and `failed` (what lands
-in the catch: a defect or an environment break — the ceilings refuse as a
-decision, not a throw).
+mutation), `skip` (a dry run or an event-gate exit), `abandoned` (a write
+the freshness gate withheld — the thread changed while the run was in
+flight) and `failed` (what lands in the catch: a defect or an environment
+break — the ceilings refuse as a decision, not a throw).
 
 Delivery: the file lands under the `record-path` directory (default
 `.triage-record`), named `triage-record-<type>-<number>.json` for a parsed

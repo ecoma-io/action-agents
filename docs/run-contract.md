@@ -13,14 +13,14 @@ action's outcome vocabulary, gate set, or write surface changes.
 
 Every run ends in exactly one terminal state:
 
-| State       | What it means                                                                                    |
-| ----------- | ------------------------------------------------------------------------------------------------ |
-| `published` | the run did what it set out to do and its writes landed                                          |
-| `partial`   | some of the run's operations applied before the run stopped — recorded, never replayed           |
-| `refused`   | the action's own ceilings declined to act — off-sheet answer, config absent, unsupported event   |
-| `abandoned` | a fresher run superseded this one; abandonment can follow a write, so state alone proves nothing |
-| `skip`      | the run had nothing to do — event out of scope, dry-run, nothing to review                       |
-| `failed`    | a defect or an environment break; the class below names which                                    |
+| State       | What it means                                                                                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `published` | the run did what it set out to do and its writes landed                                                                                                              |
+| `partial`   | some of the run's operations applied before the run stopped — recorded, never replayed                                                                               |
+| `refused`   | the action's own ceilings declined to act — off-sheet answer, config absent, unsupported event                                                                       |
+| `abandoned` | a fresher state superseded this one — a newer run, or the thread changed while this run was in flight; abandonment can follow a write, so state alone proves nothing |
+| `skip`      | the run had nothing to do — event out of scope, dry-run, nothing to review                                                                                           |
+| `failed`    | a defect or an environment break; the class below names which                                                                                                        |
 
 And every run carries a verdict: `pass`, `fail`, or `unknown`.
 
@@ -35,20 +35,21 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 
 ## What today's outcomes map to
 
-| Action      | Today's outcome                     | Contract state                                        |
-| ----------- | ----------------------------------- | ----------------------------------------------------- |
-| `triage`    | green run with writes               | `published`                                           |
-| `triage`    | dry-run, event-gate exit            | `skip`                                                |
-| `triage`    | red run                             | `failed` or `refused` per the class                   |
-| `review`    | `nothing-to-review`                 | `published` (the marker-clearing write still happens) |
-| `review`    | `published`                         | `published`                                           |
-| `review`    | `published-without-artifact`        | `published` with verdict `unknown` on the archive     |
-| `review`    | `dry-run`                           | `skip`                                                |
-| `review`    | `abandoned`                         | `abandoned`                                           |
-| `harmonise` | commit + pull request               | `published`                                           |
-| `harmonise` | some pairs applied, run stopped     | `partial`                                             |
-| `harmonise` | config-absent or protection refusal | `refused`                                             |
-| `harmonise` | a throw the run did not declare     | `failed`                                              |
+| Action      | Today's outcome                                                     | Contract state                                        |
+| ----------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
+| `triage`    | green run with writes                                               | `published`                                           |
+| `triage`    | dry-run, event-gate exit                                            | `skip`                                                |
+| `triage`    | red run                                                             | `failed` or `refused` per the class                   |
+| `triage`    | the write withheld — the thread changed while the run was in flight | `abandoned`                                           |
+| `review`    | `nothing-to-review`                                                 | `published` (the marker-clearing write still happens) |
+| `review`    | `published`                                                         | `published`                                           |
+| `review`    | `published-without-artifact`                                        | `published` with verdict `unknown` on the archive     |
+| `review`    | `dry-run`                                                           | `skip`                                                |
+| `review`    | `abandoned`                                                         | `abandoned`                                           |
+| `harmonise` | commit + pull request                                               | `published`                                           |
+| `harmonise` | some pairs applied, run stopped                                     | `partial`                                             |
+| `harmonise` | config-absent or protection refusal                                 | `refused`                                             |
+| `harmonise` | a throw the run did not declare                                     | `failed`                                              |
 
 ## Failure taxonomy
 

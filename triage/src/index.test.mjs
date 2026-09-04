@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "n
 import * as p from "node:path";
 import { tmpdir } from "node:os";
 
-import { buildTriageRecord, serialiseTriageRecord } from "./run-record.mjs";
+import { buildTriageRecord, REASON_CHARS, serialiseTriageRecord } from "./run-record.mjs";
 
 import { createEvidence } from "#core/untrusted.mjs";
 import { OwnLoginsError } from "#core/comment.mjs";
@@ -1834,6 +1834,68 @@ describe("run — the run record", () => {
     await expect(
       run(inputs({ recordPath: "../outside" }), readContext(runner), world),
     ).rejects.toThrow(/outside the workspace/u);
+  });
+
+  it("an abandoned record carries the divergence reason sanitised — a hostile label name's marker does not survive", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The divergence reason interpolates the live thread's label names, so a
+    // hostile name rides it exactly as in the #259 corpus. The record build
+    // site sanitises: control characters flattened, length under the cap.
+    const world = io({
+      event: issueEvent({ labels: ["triage"] }),
+      liveLabels: ["bug", "evil\u001b]2;owned\u0007"],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("abandoned");
+    // No raw control character survives into the record; the stripped form
+    // is what carries.
+    expect(record.reason).not.toContain("\u001b");
+    expect(record.reason).not.toContain("\u0007");
+    expect(record.reason).toContain("evil ]2;owned");
+    expect(record.reason.length).toBeLessThanOrEqual(REASON_CHARS);
+    expect(record.decision).toBeDefined();
+  });
+
+  it("writes an abandoned record when the freshness gate withheld the write", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The live re-read disagrees with the payload's label claim — the same
+    // fixture shape the mutate-level divergence tests pin.
+    const world = io({
+      event: issueEvent({ labels: ["triage"] }),
+      liveLabels: ["bug", "size/l"],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    // The run resolves green, nothing landed, the warning still logged.
+    expect(world.forge.writes).toEqual([]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toContain("nothing written — the thread changed while this run was in flight");
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("abandoned");
+    expect(record.reason).toBe(
+      "the labels are now [bug, size/l], not the [triage] the event carried",
+    );
+    // The superseded decision stays carried: the record shows what was
+    // decided and that a fresher state superseded it.
+    expect(record.decision).toMatchObject({ kind: "labels", add: ["bug"] });
+  });
+
+  it("goes red when the record write fails on the abandoned path — the record is the run's whole outcome", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: issueEvent({ labels: ["triage"] }),
+      liveLabels: ["bug", "size/l"],
+    });
+
+    await expect(
+      run(inputs({ recordPath: "../outside" }), readContext(runner), world),
+    ).rejects.toThrow(/outside the workspace/u);
+    expect(world.forge.writes).toEqual([]);
   });
 
   it("delivers under the record-path input, inside the upload glob", async () => {

@@ -59,7 +59,8 @@ file. A name the file does not declare is a startup error. Setting this with no
 file at all is also a startup error, because there is nothing to narrow. Empty
 means no narrowing — with no file the classification is written as a comment.
 
-**`record-path`**: every run — landed mutation, dry run, gate skip, failure —
+**`record-path`**: every run — landed mutation, dry run, gate skip, withheld
+write, failure —
 writes one machine-readable record here: event, thread, policy pin, the
 decision when one was made, the terminal state in the run contract's
 vocabulary, and the reason. The write is confined to the workspace and `.git`
@@ -75,8 +76,9 @@ thread's labels, and for a pull request also its state, merged flag and head
 SHA — is re-read from the API immediately before anything is written, and the
 values the run started from are treated as claims, not authority. If the thread
 moved while the run was in flight (a push replaced the head, the PR was merged
-or closed, the labels changed), the run writes nothing and logs one warning
-naming what moved; it never re-derives a decision from the newer state, because
+or closed, the labels changed), the run writes nothing, logs one warning
+naming what moved, and its record ends as `abandoned` carrying that reason —
+the run itself stays green; it never re-derives a decision from the newer state, because
 that would mean answering a question the model was never asked. This costs one
 extra API read per run — the issue or pull request itself. On a pull request
 the marker records the head the run verified, so two concurrent runs at

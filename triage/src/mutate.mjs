@@ -102,6 +102,25 @@ export class PartialMutationError extends Error {
 }
 
 /**
+ * The freshness gate's typed signal (issue #279): the thread the decision was
+ * built from is no longer the thread GitHub holds — the world moved between
+ * the run's read and its write. The message is the divergence reason itself,
+ * raw: the control-character strip stays at the log's emission boundary and
+ * at the record's build site, never inside the error. The pipeline catches
+ * this at the mutate call site, keeps the run green, and writes the run
+ * record as `abandoned` with the reason carried.
+ */
+export class ThreadMovedError extends Error {
+  /**
+   * @param {string} reason the divergence reason, in the gate's own words
+   */
+  constructor(reason) {
+    super(reason);
+    this.name = "ThreadMovedError";
+  }
+}
+
+/**
  * The forge operation's name in the run log and the accounting — the target
  * carried so a failure names its write, not just its endpoint.
  *
@@ -164,9 +183,11 @@ export async function mutate({
   // unreachable in practice. The payload's labels and the Evidence-stage
   // snapshot are claims; the thread itself is the authority, and a thread
   // that has moved on receives nothing: the decision was derived from a
-  // view it no longer matches, and re-deriving it would mean another model
-  // call, so the run skips with the reason in the log instead. Dry runs
-  // render only, and pay for no read.
+  // view the thread no longer matches, and re-deriving it would mean another
+  // model call, so the run ends `abandoned` — a newer state superseded it —
+  // with the divergence reason carried in both the log line and the run
+  // record. The throw is the typed signal the pipeline catches at the call
+  // site. Dry runs render only, and pay for no read.
   const live = await readLiveThread(forge, issueNumber, subject !== null);
   const reason = divergenceReason(live, threadLabels, subject);
   if (reason !== null) {
@@ -175,7 +196,7 @@ export async function mutate({
         `${action}: nothing written — the thread changed while this run was in flight: ${reason}`,
       ),
     );
-    return;
+    throw new ThreadMovedError(reason);
   }
 
   // The head the upserts record — the live one, which the guard above has

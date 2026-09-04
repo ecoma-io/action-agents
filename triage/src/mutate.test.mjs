@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OwnLoginsError } from "#core/comment.mjs";
-import { PartialMutationError, mutate } from "./mutate.mjs";
+import { PartialMutationError, ThreadMovedError, mutate } from "./mutate.mjs";
 
 /**
  * A recording forge: the write surface mutate may touch is real and recorded,
@@ -381,24 +381,29 @@ describe("mutate — the live re-read before any write", () => {
   }
 
   /**
-   * Runs mutate with a labels decision against a quiet console.
+   * Starts mutate with a labels decision against a quiet console. The
+   * freshness gate rejects instead of returning, so the promise is returned
+   * un-awaited: a divergence test asserts the `ThreadMovedError` with
+   * `.rejects` and reads the log and the writes once it has settled.
    *
    * @param {ReturnType<typeof createFakeForge>} fake
    * @param {import("./decision.mjs").Decision} decision
    * @param {{ threadLabels: string[], subject: import("./mutate.mjs").SubjectClaim | null }} claims
    */
-  async function runMutation(fake, decision, claims) {
+  function runMutation(fake, decision, claims) {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    await mutate({
-      decision,
-      forge: fake.forge,
-      issueNumber: 7,
-      dryRun: false,
-      now: () => 1,
-      action: "triage",
-      ...claims,
-    });
-    return log;
+    return {
+      run: mutate({
+        decision,
+        forge: fake.forge,
+        issueNumber: 7,
+        dryRun: false,
+        now: () => 1,
+        action: "triage",
+        ...claims,
+      }),
+      log,
+    };
   }
 
   it("claims matched on a pull request — the writes proceed and the marker records the head", async () => {
@@ -457,10 +462,14 @@ describe("mutate — the live re-read before any write", () => {
 
   it("a label the live thread carries but the payload view does not is never removed", async () => {
     const fake = createFakeForge({ issueLabels: ["bug", "size/l"] });
-    const log = await runMutation(fake, staleDecision({ remove: [] }), {
+    const { run, log } = runMutation(fake, staleDecision({ remove: [] }), {
       threadLabels: ["bug"],
       subject: null,
     });
+    await expect(run).rejects.toThrow(ThreadMovedError);
+    await expect(run).rejects.toThrow(
+      "the labels are now [bug, size/l], not the [bug] the event carried",
+    );
     expect(fake.writes).toEqual([]);
     expect(
       log.mock.calls.some((call) =>
@@ -476,12 +485,18 @@ describe("mutate — the live re-read before any write", () => {
     // The live read is typed as strings and nothing enforces GitHub's label
     // charset on it, so the strip happens at the emission boundary: an ESC
     // or BEL inside a label name becomes a space before the annotation is
-    // written, never a workflow command inside the run log.
+    // written, never a workflow command inside the run log. The thrown
+    // error carries the raw reason — the strip stays at the emission
+    // boundary and at the record build site; mutate never strips inside.
     const fake = createFakeForge({ issueLabels: ["bug", "evil\u001b]2;owned\u0007"] });
-    const log = await runMutation(fake, staleDecision({ remove: [] }), {
+    const { run, log } = runMutation(fake, staleDecision({ remove: [] }), {
       threadLabels: ["bug"],
       subject: null,
     });
+    await expect(run).rejects.toThrow(ThreadMovedError);
+    await expect(run).rejects.toThrow(
+      "the labels are now [bug, evil\u001b]2;owned\u0007], not the [bug] the event carried",
+    );
     expect(fake.writes).toEqual([]);
     const line = log.mock.calls
       .map((call) => String(call[0]))
@@ -496,10 +511,14 @@ describe("mutate — the live re-read before any write", () => {
 
   it("a label removal whose subject moved on the live thread never fires", async () => {
     const fake = createFakeForge({ issueLabels: ["bug"] });
-    const log = await runMutation(fake, staleDecision(), {
+    const { run, log } = runMutation(fake, staleDecision(), {
       threadLabels: ["bug", "needs triage"],
       subject: null,
     });
+    await expect(run).rejects.toThrow(ThreadMovedError);
+    await expect(run).rejects.toThrow(
+      "the labels are now [bug], not the [bug, needs triage] the event carried",
+    );
     expect(fake.writes).toEqual([]);
     expect(
       log.mock.calls.some((call) =>
@@ -512,10 +531,14 @@ describe("mutate — the live re-read before any write", () => {
     const fake = createFakeForge({
       prSnapshot: { head: { ref: "x", sha: "b".repeat(40) }, labels: ["bug"] },
     });
-    const log = await runMutation(fake, staleDecision(), {
+    const { run, log } = runMutation(fake, staleDecision(), {
       threadLabels: ["bug"],
       subject: { head: "a".repeat(40), state: "open", merged: false },
     });
+    await expect(run).rejects.toThrow(ThreadMovedError);
+    await expect(run).rejects.toThrow(
+      "the head is now " + "b".repeat(12) + ", not the " + "a".repeat(12) + " this run read",
+    );
     expect(fake.writes).toEqual([]);
     expect(
       log.mock.calls.some((call) =>
@@ -532,10 +555,11 @@ describe("mutate — the live re-read before any write", () => {
       { merged: false, state: "closed" },
     ]) {
       const fake = createFakeForge({ prSnapshot: { labels: ["bug"], ...live } });
-      const log = await runMutation(fake, staleDecision(), {
+      const { run, log } = runMutation(fake, staleDecision(), {
         threadLabels: ["bug"],
         subject: { head: "a".repeat(40), state: "open", merged: false },
       });
+      await expect(run).rejects.toThrow(ThreadMovedError);
       expect(fake.writes).toEqual([]);
       expect(
         log.mock.calls.some(

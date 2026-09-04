@@ -9,17 +9,22 @@
 // Bounded outcome: triage re-reads the thread immediately before any write
 // and treats what it read at the start as claims (`triage/src/mutate.mjs`,
 // judged through the live reads `core/src/forge.mjs` serves). When the live
-// head differs from the one the run read, nothing is written — no label, no
-// comment — and the skip is logged with the reason in the annotation. The
-// run never re-derives: re-deriving would mean another model call on a
-// subject that is no longer the one that was asked about. A run whose
+// head differs from the one the run read, nothing is written onto the thread
+// — no label, no comment — the skip is logged with the reason in the
+// annotation, and the run's record is written as `abandoned` carrying that
+// reason (issue #279): the record, not the thread, is where the outcome
+// lands. The run never re-derives: re-deriving would mean another model call
+// on a subject that is no longer the one that was asked about. A run whose
 // subject did not move is unaffected: the same fixture with a still head
 // writes, and the marker records the head the run verified.
 //
 // Deterministic and offline: no network, no model, no timers.
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, describe, it } from "node:test";
 
 import { createEvidence } from "#core/untrusted.mjs";
 
@@ -30,15 +35,29 @@ const H2 = "b".repeat(40);
 const BOT = "github-actions[bot]";
 const NOW = Date.parse("2026-07-01T11:00:00Z");
 
+/** @type {string} */
+let root;
+
+before(() => {
+  root = mkdtempSync(join(tmpdir(), "subject-moved-"));
+});
+
+after(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
 /**
  * The whole world of a pull_request triage run, with the one hostile fact
  * wired in: the head the forge answers on the run's first (snapshot) read
  * and on its second (pre-write) read.
  *
  * @param {string[]} heads the head each successive getPullRequest answers
- * @returns {{ forge: { writes: { op: string, args: unknown[] }[] }, logs: string[], drive: () => Promise<void> }}
+ * @param {string} name the world's own workspace directory under the temp root
+ * @returns {{ forge: { writes: { op: string, args: unknown[] }[] }, logs: string[], workspace: string, recordPath: string, drive: () => Promise<void> }}
  */
-function world(heads) {
+function world(heads, name) {
+  const workspace = join(root, name);
+  mkdirSync(workspace, { recursive: true });
   const comments = [];
   /** @type {{ op: string, args: unknown[] }[]} */
   const writes = [];
@@ -148,16 +167,29 @@ function world(heads) {
     owner: "ecoma-io",
     apiUrl: "",
     eventPath: "",
+    workspace,
   };
 
   return {
     forge,
     logs,
+    workspace,
+    recordPath: ".triage-record",
     drive: async () => {
       const original = console.log;
       console.log = (line) => logs.push(String(line));
       try {
-        await run({ model: "fake", labels: [], dryRun: false, configPath: "" }, context, io);
+        await run(
+          {
+            model: "fake",
+            labels: [],
+            dryRun: false,
+            configPath: "",
+            recordPath: ".triage-record",
+          },
+          context,
+          io,
+        );
       } finally {
         console.log = original;
       }
@@ -167,7 +199,7 @@ function world(heads) {
 
 describe("a subject that moves between the read and the write", () => {
   it("a head that moved in flight receives nothing — no label, no comment", async () => {
-    const moved = world([H1, H2]);
+    const moved = world([H1, H2], "moved");
 
     await moved.drive();
 
@@ -183,10 +215,24 @@ describe("a subject that moves between the read and the write", () => {
       "the skip names the move",
     );
     assert.ok(annotation.includes("::warning"), "the skip reaches the run log as a warning");
+
+    // The record is where the outcome lands now (issue #279): a write the
+    // freshness gate withheld is an `abandoned` record, the divergence
+    // reason riding as its `reason`.
+    const record = JSON.parse(
+      readFileSync(join(moved.workspace, moved.recordPath, "triage-record-pr-7.json"), "utf8"),
+    );
+    assert.equal(record.outcome, "abandoned", "the withheld run's record ends abandoned");
+    assert.match(
+      record.reason,
+      /the head is now bbbbbbbbbbbb/,
+      "the record carries the move as the reason",
+    );
+    assert.ok(record.decision !== null, "the superseded decision stays in the record");
   });
 
   it("a still head writes — and the marker records the head the run verified", async () => {
-    const still = world([H1, H1]);
+    const still = world([H1, H1], "still");
 
     await still.drive();
 

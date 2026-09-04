@@ -124,6 +124,20 @@ describe("buildTriageRecord", () => {
     expect(record.outcome).toBe("failed");
   });
 
+  it("carries an abandoned run: the superseded decision stays, the divergence reason rides as the reason", () => {
+    const reason = "the head is now bbbbbbbbbbbbbb, not the aaaaaaaaaaaaaaa this run read";
+    const record = recordFixture({ outcome: "abandoned", reason });
+    expect(record.outcome).toBe("abandoned");
+    expect(record.decision).toBeDefined();
+    expect(record.reason).toBe(reason);
+    // Byte-determinism holds for this outcome too: the same run facts build
+    // the same bytes, and the validator accepts the shape.
+    expect(serialiseTriageRecord(record)).toBe(
+      serialiseTriageRecord(recordFixture({ outcome: "abandoned", reason })),
+    );
+    expect(() => validateTriageRecord(JSON.parse(serialiseTriageRecord(record)))).not.toThrow();
+  });
+
   it("carries a thread-less, policy-less record for a run that died before the payload parsed", () => {
     const record = recordFixture({
       eventAction: "",
