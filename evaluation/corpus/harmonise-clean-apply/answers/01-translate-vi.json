@@ -1,0 +1,5 @@
+{
+  "content": "{\"drift\":true,\"summary\":\"kept in step\",\"content\":\"# Hướng dẫn phát triển\\n\\nCài đặt bộ công cụ, rồi chạy các bước kiểm tra.\\n\"}",
+  "finishReason": "stop",
+  "toolCalls": []
+}

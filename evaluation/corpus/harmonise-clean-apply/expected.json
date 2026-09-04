@@ -1,0 +1,12 @@
+{
+  "outcome": "published",
+  "writes": [
+    "createBlob",
+    "createBlob",
+    "createBlob",
+    "createTree",
+    "createCommit",
+    "upsertBranch",
+    "upsertPullRequest"
+  ]
+}

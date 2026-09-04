@@ -23,6 +23,7 @@ on:
       - "tools/evaluate.*"
       - "triage/src/**"
       - "review/src/**"
+      - "harmonise/src/**"
       - "core/src/**"
 
 concurrency:
