@@ -47,10 +47,10 @@ import {
 } from "./verify.mjs";
 
 /** The artifact schema a run without an applicability fact emits. Bumped only on a breaking shape change. */
-export const reviewArtifactSchemaVersion = 3;
+export const reviewArtifactSchemaVersion = 4;
 
 /** The schema version once a run records an applicability fact — the full shape and the skipped shape alike. */
-export const applicabilityArtifactSchemaVersion = 4;
+export const applicabilityArtifactSchemaVersion = 5;
 
 /** @typedef {import("./risk.mjs").RiskLevel} RiskLevel */
 /** @typedef {import("./lanes.mjs").AttentionLane} AttentionLane */
@@ -77,7 +77,7 @@ const FACTS_KEYS = new Set([
   "provenance",
 ]);
 const OUTCOME_KEYS = new Set(["classification", "reason"]);
-const POLICY_KEYS = new Set(["strictness", "strategy"]);
+const POLICY_KEYS = new Set(["strictness", "strategy", "basis", "branch", "sha"]);
 const RISK_KEYS = new Set(["path", "risk", "lane"]);
 const FINDING_KEYS = new Set([
   "id",
@@ -115,6 +115,7 @@ const SKIPPED_ARTIFACT_KEYS = new Set([
   "pullRequest",
   "headRef",
   "outcome",
+  "policy",
   "applicability",
 ]);
 /** The exact key set a skip record — the durable record for a path with no applicability fact — serialises with. */
@@ -125,6 +126,7 @@ const SKIP_RECORD_KEYS = new Set([
   "pullRequest",
   "headRef",
   "outcome",
+  "policy",
 ]);
 const APPLICABILITY_SECTION_KEYS = new Set([
   "context",
@@ -154,11 +156,15 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 /**
  * The strictness policy that governed the run. `strictness` is the config's arm;
  * `strategy` selects whether verification ran at all — a verdict column is
- * meaningless without it.
+ * meaningless without it. `basis`, `branch` and `sha` pin the policy source
+ * so a stale record is detectable against the governance branch's current tip.
  *
  * @typedef {object} RunPolicy
  * @property {"low" | "medium" | "high"} strictness
  * @property {"standard" | "adversarial"} strategy
+ * @property {"default" | "base" | "pushed" | "dispatched"} basis
+ * @property {string} branch
+ * @property {string} sha
  */
 
 /**
@@ -362,8 +368,8 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 /**
  * The reduced artifact a skipped run writes — the record IS the run's whole
  * outcome, so it names the skip and the applicability fact that decided it,
- * and nothing else. No policy, risk, findings or coverage: nothing was read
- * beyond the classification.
+ * and the policy pin so a stale record is detectable. No risk, findings or
+ * coverage: nothing was read beyond the classification.
  *
  * @typedef {object} SkippedRunArtifact
  * @property {typeof applicabilityArtifactSchemaVersion} schemaVersion
@@ -371,6 +377,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {number} pullRequest
  * @property {string} headRef
  * @property {{ classification: "skip", reason: string }} outcome
+ * @property {RunPolicy} policy
  * @property {ApplicabilitySection} applicability
  */
 
@@ -378,9 +385,10 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * The durable record for a skip path that leaves no applicability fact — the
  * code-owned state skip under no policy, and the empty universe. It rides the
  * applicability family's version constant (the ledger: skip records ride the
- * applicability family), names its kind, and carries the run identity plus the
- * outcome sentence. No findings, coverage or policy: nothing was read beyond
- * the classification — the same posture buildSkippedArtifact takes.
+ * applicability family), names its kind, and carries the run identity, the
+ * outcome sentence and the policy pin so a stale record is detectable. No
+ * findings or coverage: nothing was read beyond the classification — the same
+ * posture buildSkippedArtifact takes.
  *
  * @typedef {object} SkipRecord
  * @property {typeof applicabilityArtifactSchemaVersion} schemaVersion
@@ -389,6 +397,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {number} pullRequest
  * @property {string} headRef
  * @property {{ classification: "skip", reason: string }} outcome
+ * @property {RunPolicy} policy
  */
 
 /** The schema-version-agnostic body the full shapes share. */
@@ -663,6 +672,16 @@ export function buildArtifact(runFacts) {
   assertExactKeys(policyRec, "run facts.policy", POLICY_KEYS);
   const strictness = asEnum(policyRec.strictness, STRICTNESS_ARMS, "run facts.policy.strictness");
   const strategy = asEnum(policyRec.strategy, STRATEGY, "run facts.policy.strategy");
+  const policyBasis = asEnum(
+    policyRec.basis,
+    /** @type {const} */ (["default", "base", "pushed", "dispatched"]),
+    "run facts.policy.basis",
+  );
+  const policyBranch = asNonEmptyString(policyRec.branch, "run facts.policy.branch");
+  const policySha = asNonEmptyString(policyRec.sha, "run facts.policy.sha");
+  if (!HEAD_REF.test(policySha)) {
+    throw new ArtifactError("run facts.policy.sha must be a 40-char hex commit sha — refused");
+  }
 
   const riskRaw = asArray(facts.risk, "run facts.risk");
   /** @type {RiskRow[]} */
@@ -943,7 +962,7 @@ export function buildArtifact(runFacts) {
     pullRequest,
     headRef,
     outcome: { classification, reason },
-    policy: { strictness, strategy },
+    policy: { strictness, strategy, basis: policyBasis, branch: policyBranch, sha: policySha },
     risk: riskRows,
     findings: findingsOut,
     verification: { gate: verificationGate, verdicts: verdictsOut },
@@ -999,19 +1018,28 @@ export function applicabilitySection({
 /**
  * Builds the reduced artifact a skipped run writes — the code-owned record
  * that review did not run and the applicability fact that decided it. The
- * record is the skip's whole outcome: exact keys, schemaVersion 3, and
- * nothing that was never read.
+ * record is the skip's whole outcome: exact keys, schemaVersion 5, the
+ * policy pin so a stale record is detectable, and nothing that was never
+ * read.
  *
  * @param {object} skip
  * @param {string} skip.repository "owner/repo", as the forge names it
  * @param {number} skip.pullRequest the pull request number
  * @param {string} skip.headRef the head the skip describes, full 40 hex chars
  * @param {string} skip.reason the code-composed sentence, uncapped
+ * @param {RunPolicy} skip.policy the policy source pin
  * @param {ApplicabilitySection} skip.applicability the deciding applicability fact
  * @throws {ArtifactError} on any malformed field
  * @returns {SkippedRunArtifact}
  */
-export function buildSkippedArtifact({ repository, pullRequest, headRef, reason, applicability }) {
+export function buildSkippedArtifact({
+  repository,
+  pullRequest,
+  headRef,
+  reason,
+  policy,
+  applicability,
+}) {
   const repo = asNonEmptyString(repository, "skipped run.repository");
   const number = asPositiveInt(pullRequest, "skipped run.pullRequest");
   const ref = asNonEmptyString(headRef, "skipped run.headRef");
@@ -1019,6 +1047,24 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
     throw new ArtifactError("skipped run.headRef must be a 40-char hex commit sha — refused");
   }
   asNonEmptyString(reason, "skipped run.reason");
+  const policyRecord = asRecord(policy, "skipped run.policy");
+  assertExactKeys(policyRecord, "skipped run.policy", POLICY_KEYS);
+  const pStrictness = asEnum(
+    policyRecord.strictness,
+    STRICTNESS_ARMS,
+    "skipped run.policy.strictness",
+  );
+  const pStrategy = asEnum(policyRecord.strategy, STRATEGY, "skipped run.policy.strategy");
+  const pBasis = asEnum(
+    policyRecord.basis,
+    /** @type {const} */ (["default", "base", "pushed", "dispatched"]),
+    "skipped run.policy.basis",
+  );
+  const pBranch = asNonEmptyString(policyRecord.branch, "skipped run.policy.branch");
+  const pSha = asNonEmptyString(policyRecord.sha, "skipped run.policy.sha");
+  if (!HEAD_REF.test(pSha)) {
+    throw new ArtifactError("skipped run.policy.sha must be a 40-char hex commit sha — refused");
+  }
   const section = asApplicabilitySection(applicability, SKIPPED_SHAPE_BASES, true);
   return deepFreeze({
     schemaVersion: applicabilityArtifactSchemaVersion,
@@ -1026,6 +1072,13 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
     pullRequest: number,
     headRef: ref,
     outcome: { classification: "skip", reason },
+    policy: {
+      strictness: pStrictness,
+      strategy: pStrategy,
+      basis: pBasis,
+      branch: pBranch,
+      sha: pSha,
+    },
     applicability: section,
   });
 }
@@ -1035,8 +1088,9 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
  * — the code-owned state skip under no policy, and the empty universe. It
  * mirrors buildSkippedArtifact's validation posture: exact keys, a closed kind
  * vocabulary, the run identity fail-closed, and the code-composed reason
- * uncapped. Byte-deterministic: the same inputs yield the same object and the
- * same serialised bytes.
+ * uncapped. Carries the policy pin so a stale record is detectable.
+ * Byte-deterministic: the same inputs yield the same object and the same
+ * serialised bytes.
  *
  * @param {object} skip
  * @param {string} skip.repository "owner/repo", as the forge names it
@@ -1044,10 +1098,11 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
  * @param {string} skip.headRef the head the skip describes, full 40 hex chars
  * @param {string} skip.reason the code-composed sentence, uncapped
  * @param {"state" | "nothing-to-review"} skip.kind which skip path wrote the record
+ * @param {RunPolicy} skip.policy the policy source pin
  * @throws {ArtifactError} on any malformed field
  * @returns {SkipRecord}
  */
-export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind }) {
+export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind, policy }) {
   const repo = asNonEmptyString(repository, "skip record.repository");
   const number = asPositiveInt(pullRequest, "skip record.pullRequest");
   const ref = asNonEmptyString(headRef, "skip record.headRef");
@@ -1056,6 +1111,24 @@ export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind
   }
   asNonEmptyString(reason, "skip record.reason");
   const skipKind = asEnum(kind, SKIP_KINDS, "skip record.kind");
+  const policyRecord = asRecord(policy, "skip record.policy");
+  assertExactKeys(policyRecord, "skip record.policy", POLICY_KEYS);
+  const pStrictness = asEnum(
+    policyRecord.strictness,
+    STRICTNESS_ARMS,
+    "skip record.policy.strictness",
+  );
+  const pStrategy = asEnum(policyRecord.strategy, STRATEGY, "skip record.policy.strategy");
+  const pBasis = asEnum(
+    policyRecord.basis,
+    /** @type {const} */ (["default", "base", "pushed", "dispatched"]),
+    "skip record.policy.basis",
+  );
+  const pBranch = asNonEmptyString(policyRecord.branch, "skip record.policy.branch");
+  const pSha = asNonEmptyString(policyRecord.sha, "skip record.policy.sha");
+  if (!HEAD_REF.test(pSha)) {
+    throw new ArtifactError("skip record.policy.sha must be a 40-char hex commit sha — refused");
+  }
   return deepFreeze({
     schemaVersion: applicabilityArtifactSchemaVersion,
     kind: skipKind,
@@ -1063,6 +1136,13 @@ export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind
     pullRequest: number,
     headRef: ref,
     outcome: { classification: "skip", reason },
+    policy: {
+      strictness: pStrictness,
+      strategy: pStrategy,
+      basis: pBasis,
+      branch: pBranch,
+      sha: pSha,
+    },
   });
 }
 

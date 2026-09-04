@@ -27,6 +27,13 @@ const HEAD = "0".repeat(40);
 const OTHER_HEAD = "f".repeat(40);
 const DIGEST = "b".repeat(64);
 const BAD_DIGEST = "not-a-digest";
+const POLICY_SOURCE = /** @type {const} */ ({
+  strictness: "high",
+  strategy: "adversarial",
+  basis: "base",
+  branch: "main",
+  sha: HEAD,
+});
 
 /**
  * @param {Partial<import("./artifact.mjs").RunFacts>} [over]
@@ -38,7 +45,13 @@ function facts(over = {}) {
     pullRequest: 7,
     headRef: HEAD,
     outcome: { classification: "published", reason: "Complete review published (2 findings)" },
-    policy: { strictness: "high", strategy: "adversarial" },
+    policy: {
+      strictness: "high",
+      strategy: "adversarial",
+      basis: "base",
+      branch: "main",
+      sha: HEAD,
+    },
     risk: [
       { path: "src/a.mjs", risk: "medium", lane: "standard" },
       { path: "src/b.mjs", risk: "low", lane: "skim" },
@@ -102,7 +115,7 @@ describe("buildArtifact", () => {
   it("builds the expected artifact from valid facts", () => {
     const artifact = buildArtifact(facts());
     expect(artifact.schemaVersion).toBe(reviewArtifactSchemaVersion);
-    expect(artifact.schemaVersion).toBe(3);
+    expect(artifact.schemaVersion).toBe(4);
     expect(artifact.repository).toBe("octocat/example");
     expect(artifact.pullRequest).toBe(7);
     expect(artifact.headRef).toBe(HEAD);
@@ -110,7 +123,13 @@ describe("buildArtifact", () => {
       classification: "published",
       reason: "Complete review published (2 findings)",
     });
-    expect(artifact.policy).toEqual({ strictness: "high", strategy: "adversarial" });
+    expect(artifact.policy).toEqual({
+      strictness: "high",
+      strategy: "adversarial",
+      basis: "base",
+      branch: "main",
+      sha: HEAD,
+    });
     expect(artifact.risk).toEqual(facts().risk);
     expect(artifact.gates).toEqual(facts().gates);
     expect(artifact.findings).toHaveLength(2);
@@ -454,6 +473,42 @@ describe("buildArtifact refusals", () => {
     expect(() => buildArtifact(facts({ headRef: "" }))).toThrow(ArtifactError);
   });
 
+  it("refuses a policy pin missing its basis, branch or sha", () => {
+    for (const key of ["basis", "branch", "sha"]) {
+      expect(() =>
+        buildArtifact(
+          tampered((f) => {
+            delete f.policy[key];
+          }),
+        ),
+      ).toThrow(/run facts\.policy is missing/);
+    }
+  });
+
+  it("refuses a policy pin sha that is not a 40-char hex commit sha", () => {
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.policy.sha = "main";
+        }),
+      ),
+    ).toThrow(/run facts\.policy\.sha must be a 40-char hex commit sha/);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.policy.sha = "";
+        }),
+      ),
+    ).toThrow(ArtifactError);
+    expect(() =>
+      buildArtifact(
+        tampered((f) => {
+          f.policy.sha = "A".repeat(40);
+        }),
+      ),
+    ).toThrow(/run facts\.policy\.sha must be a 40-char hex commit sha/);
+  });
+
   it("refuses a non-positive pull request number", () => {
     expect(() => buildArtifact(facts({ pullRequest: 0 }))).toThrow(ArtifactError);
   });
@@ -475,6 +530,12 @@ describe("buildArtifact refusals", () => {
       "strategy",
       (/** @type {any} */ f) => {
         f.policy.strategy = "aggressive";
+      },
+    ],
+    [
+      "policy basis",
+      (/** @type {any} */ f) => {
+        f.policy.basis = "guessed";
       },
     ],
     [
@@ -1294,7 +1355,7 @@ describe("serialiseArtifact", () => {
   });
 
   it("includes the schema version", () => {
-    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":3');
+    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":4');
   });
 
   it("serialises to valid JSON that parses back to the artifact", () => {
@@ -1337,7 +1398,13 @@ describe("serialiseArtifact", () => {
         ...(f.verdict === undefined ? {} : { verdict: f.verdict }),
         ...(f.reason === undefined ? {} : { reason: f.reason }),
       })),
-      policy: { strategy: ordered.policy.strategy, strictness: ordered.policy.strictness },
+      policy: {
+        strategy: ordered.policy.strategy,
+        strictness: ordered.policy.strictness,
+        basis: ordered.policy.basis,
+        branch: ordered.policy.branch,
+        sha: ordered.policy.sha,
+      },
       outcome: { reason: ordered.outcome.reason, classification: ordered.outcome.classification },
       headRef: ordered.headRef,
       pullRequest: ordered.pullRequest,
@@ -1457,7 +1524,7 @@ describe("the applicability fact and the skipped-run record", () => {
       inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
     });
 
-  it("carries the applicability fact on schema version 3, exact keys", () => {
+  it("carries the applicability fact on schema version 4, exact keys", () => {
     const bytes = serialiseArtifact(buildArtifact(facts({ applicability: ruleSection() })));
     const round = JSON.parse(bytes);
     expect(round.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
@@ -1490,7 +1557,7 @@ describe("the applicability fact and the skipped-run record", () => {
     });
   });
 
-  it("keeps schema version 2 byte-for-byte when no applicability fact is present", () => {
+  it("keeps schema version 4 byte-for-byte when no applicability fact is present", () => {
     const bytes = serialiseArtifact(buildArtifact(facts()));
     expect(JSON.parse(bytes).schemaVersion).toBe(reviewArtifactSchemaVersion);
     expect(bytes).not.toContain("applicability");
@@ -1503,14 +1570,25 @@ describe("the applicability fact and the skipped-run record", () => {
       pullRequest: 192,
       headRef: HEAD,
       reason,
+      policy: POLICY_SOURCE,
       applicability: ruleSection(),
     });
     expect(artifact.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
     expect(artifact.outcome).toEqual({ classification: "skip", reason });
+    expect(artifact.policy).toEqual(POLICY_SOURCE);
     const round = JSON.parse(serialiseArtifact(artifact));
     expect(Object.keys(round).sort()).toEqual(
-      ["applicability", "headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+      [
+        "applicability",
+        "headRef",
+        "outcome",
+        "policy",
+        "pullRequest",
+        "repository",
+        "schemaVersion",
+      ].sort(),
     );
+    expect(round.policy).toEqual(POLICY_SOURCE);
   });
 
   it("builds the reduced skipped-run record — state basis, no matched rule", () => {
@@ -1519,6 +1597,7 @@ describe("the applicability fact and the skipped-run record", () => {
       pullRequest: 7,
       headRef: HEAD,
       reason: "#7 is a draft — not ready means not reviewed",
+      policy: POLICY_SOURCE,
       applicability: stateSection(),
     });
     expect(JSON.parse(serialiseArtifact(artifact)).applicability.basis).toBe("state");
@@ -1534,6 +1613,7 @@ describe("the applicability fact and the skipped-run record", () => {
         pullRequest: 7,
         headRef: HEAD,
         reason: "r",
+        policy: POLICY_SOURCE,
         applicability: applicabilitySection({
           context: "maintainer",
           applicable: false,
@@ -1553,6 +1633,7 @@ describe("the applicability fact and the skipped-run record", () => {
         pullRequest: 7,
         headRef: HEAD,
         reason: "r",
+        policy: POLICY_SOURCE,
         applicability: applicabilitySection({
           context: "automation",
           applicable: true,
@@ -1563,6 +1644,19 @@ describe("the applicability fact and the skipped-run record", () => {
         }),
       }),
     ).toThrow(/must record applicable: false/);
+  });
+
+  it("refuses a skipped record whose policy pin sha is not a 40-char hex commit sha", () => {
+    expect(() =>
+      buildSkippedArtifact({
+        repository: "acme/widgets",
+        pullRequest: 7,
+        headRef: HEAD,
+        reason: "r",
+        policy: /** @type {any} */ ({ ...POLICY_SOURCE, sha: "main" }),
+        applicability: ruleSection(),
+      }),
+    ).toThrow(/skipped run\.policy\.sha must be a 40-char hex commit sha/);
   });
 
   it("refuses an unknown intensity key — the section's shape stays exact", () => {
@@ -1630,6 +1724,7 @@ describe("the applicability fact and the skipped-run record", () => {
           pullRequest: 192,
           headRef: HEAD,
           reason: "r",
+          policy: POLICY_SOURCE,
           applicability: ruleSection(),
         }),
       ),
@@ -1685,6 +1780,7 @@ describe("the applicability fact and the skipped-run record", () => {
         pullRequest: 192,
         headRef: HEAD,
         reason: "r",
+        policy: POLICY_SOURCE,
         applicability: { ...ruleSection(), posture: "automation" },
       }),
     ).toThrow(/a skipped run took no posture/);
@@ -1712,6 +1808,7 @@ describe("buildSkipRecord", () => {
     headRef: HEAD,
     reason: "#7 is a draft — not ready means not reviewed",
     kind: /** @type {"state" | "nothing-to-review"} */ ("state"),
+    policy: POLICY_SOURCE,
     ...over,
   });
 
@@ -1726,7 +1823,15 @@ describe("buildSkipRecord", () => {
       });
       const round = JSON.parse(serialiseArtifact(record));
       expect(Object.keys(round).sort()).toEqual(
-        ["headRef", "kind", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+        [
+          "headRef",
+          "kind",
+          "outcome",
+          "policy",
+          "pullRequest",
+          "repository",
+          "schemaVersion",
+        ].sort(),
       );
     }
   });
@@ -1749,6 +1854,42 @@ describe("buildSkipRecord", () => {
     expect(() => buildSkipRecord(recordInput({ repository: "" }))).toThrow(ArtifactError);
     expect(() => buildSkipRecord(recordInput({ reason: "" }))).toThrow(ArtifactError);
     expect(() => buildSkipRecord(recordInput({ pullRequest: 0 }))).toThrow(ArtifactError);
+  });
+
+  it("carries the policy pin — round-trips basis, branch and sha", () => {
+    const record = buildSkipRecord(recordInput());
+    expect(record.policy).toEqual({
+      strictness: "high",
+      strategy: "adversarial",
+      basis: "base",
+      branch: "main",
+      sha: HEAD,
+    });
+    const round = JSON.parse(serialiseArtifact(record));
+    expect(round.policy).toEqual(record.policy);
+  });
+
+  it("refuses a policy pin sha that is not a 40-char hex commit sha", () => {
+    expect(() =>
+      buildSkipRecord(
+        recordInput({
+          policy: /** @type {any} */ ({ ...POLICY_SOURCE, sha: "main" }),
+        }),
+      ),
+    ).toThrow(/skip record\.policy\.sha must be a 40-char hex commit sha/);
+    expect(() => buildSkipRecord(recordInput({ policy: /** @type {any} */ (undefined) }))).toThrow(
+      ArtifactError,
+    );
+  });
+
+  it("refuses a policy pin outside the vocabulary", () => {
+    expect(() =>
+      buildSkipRecord(
+        recordInput({
+          policy: /** @type {any} */ ({ ...POLICY_SOURCE, basis: "guessed" }),
+        }),
+      ),
+    ).toThrow(/skip record\.policy\.basis 'guessed' is outside the vocabulary/);
   });
 
   it("names a delivery file inside the artifact upload glob", () => {

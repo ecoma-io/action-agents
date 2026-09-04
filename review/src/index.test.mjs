@@ -520,7 +520,13 @@ describe("writeRunArtifact", () => {
       pullRequest: 7,
       headRef: SHA,
       outcome: { classification: "published", reason: "Complete review published (1 findings)" },
-      policy: { strictness: "medium", strategy: "standard" },
+      policy: {
+        strictness: "medium",
+        strategy: "standard",
+        basis: "base",
+        branch: "main",
+        sha: SHA,
+      },
       risk: [{ path: "src/a.mjs", risk: "low", lane: "skim" }],
       findings: [
         {
@@ -555,7 +561,7 @@ describe("writeRunArtifact", () => {
     expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-${SHA}.json`));
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(artifactFixture()));
-    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 3, headRef: SHA });
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 4, headRef: SHA });
   });
 
   it("names a skip record inside the artifact upload glob", () => {
@@ -566,6 +572,13 @@ describe("writeRunArtifact", () => {
       headRef: SHA,
       reason: "#7 is a draft — not ready means not reviewed",
       kind: "state",
+      policy: {
+        strictness: "medium",
+        strategy: "standard",
+        basis: "base",
+        branch: "main",
+        sha: SHA,
+      },
     });
     const file = writeRunArtifact({
       workspace: root,
@@ -576,7 +589,7 @@ describe("writeRunArtifact", () => {
     expect(p.basename(file)).toMatch(/^review-artifact-.*\.json$/);
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(record));
-    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 4, kind: "state", headRef: SHA });
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 5, kind: "state", headRef: SHA });
   });
 
   it("creates a nested custom directory", () => {
