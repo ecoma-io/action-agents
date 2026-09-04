@@ -1506,7 +1506,7 @@ describe("the applicability fact and the skipped-run record", () => {
       applicability: ruleSection(),
     });
     expect(artifact.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
-    expect(artifact.outcome).toEqual({ classification: "skipped", reason });
+    expect(artifact.outcome).toEqual({ classification: "skip", reason });
     const round = JSON.parse(serialiseArtifact(artifact));
     expect(Object.keys(round).sort()).toEqual(
       ["applicability", "headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
@@ -1721,7 +1721,7 @@ describe("buildSkipRecord", () => {
       expect(record.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
       expect(record.kind).toBe(kind);
       expect(record.outcome).toEqual({
-        classification: "skipped",
+        classification: "skip",
         reason: "#7 is a draft — not ready means not reviewed",
       });
       const round = JSON.parse(serialiseArtifact(record));

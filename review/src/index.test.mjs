@@ -705,7 +705,7 @@ describe("run writes the artifact only after publication", () => {
         readFileSync(p.join(root, ".review-artifact", files[0] ?? ""), "utf8"),
       );
       expect(record.kind).toBe("state");
-      expect(record.outcome.classification).toBe("skipped");
+      expect(record.outcome.classification).toBe("skip");
     } finally {
       vi.restoreAllMocks();
     }

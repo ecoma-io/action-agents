@@ -298,7 +298,7 @@ describe("the universe and the budget", () => {
     expect(clearedRecord.kind).toBe("nothing-to-review");
     expect(clearedRecord.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
     expect(clearedRecord.outcome).toEqual({
-      classification: "skipped",
+      classification: "skip",
       reason: "universe empty — marker cleared",
     });
 
@@ -316,7 +316,7 @@ describe("the universe and the budget", () => {
     expect(bare.calls.upserts).toHaveLength(0);
     const skippedRecord = JSON.parse(serialiseArtifact(/** @type {any} */ (skipped.artifact)));
     expect(skippedRecord.kind).toBe("nothing-to-review");
-    expect(skippedRecord.outcome.classification).toBe("skipped");
+    expect(skippedRecord.outcome.classification).toBe("skip");
   });
 
   it("suppresses a nothing-to-review record under dry-run — nothing written, nothing delivered", async () => {
@@ -2282,7 +2282,7 @@ describe("the run artifact", () => {
     expect(record.kind).toBe("state");
     expect(record.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
     expect(record.outcome).toEqual({
-      classification: "skipped",
+      classification: "skip",
       reason: "#7 is a draft — not ready means not reviewed",
     });
   });
@@ -2301,7 +2301,7 @@ describe("the run artifact", () => {
     expect(result.artifact).toBeDefined();
     const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
     expect(record.kind).toBe("state");
-    expect(record.outcome.classification).toBe("skipped");
+    expect(record.outcome.classification).toBe("skip");
   });
 
   it("a run abandoned for a moved head writes no artifact", async () => {
@@ -2724,7 +2724,7 @@ describe("the applicability axis", () => {
     const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
     expect(record.schemaVersion).toBe(4);
     expect(record.outcome).toEqual({
-      classification: "skipped",
+      classification: "skip",
       reason: result.reason,
     });
     expect(record.repository).toBe("ecoma-io/action-agents");
@@ -2845,7 +2845,7 @@ describe("the applicability axis", () => {
     expect(chatCalls).toHaveLength(0);
     const record = JSON.parse(serialiseArtifact(/** @type {any} */ (recorded.artifact)));
     expect(record.schemaVersion).toBe(4);
-    expect(record.outcome.classification).toBe("skipped");
+    expect(record.outcome.classification).toBe("skip");
     expect(record.applicability).toEqual({
       context: "maintainer",
       applicable: false,
