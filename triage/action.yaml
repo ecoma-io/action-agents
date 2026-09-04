@@ -38,6 +38,16 @@ inputs:
     description: Decide and log, write nothing. Defaults to true, so a first run cannot surprise anyone.
     required: false
     default: "true"
+  record-path:
+    description: >-
+      Directory inside the workspace where the machine-readable run record is
+      written at every terminal point — a landed mutation, a dry run, an
+      event-gate skip, a failure. The record carries the run's own facts:
+      event, thread, policy pin, the decision (when one was made), the
+      terminal state in the run contract's vocabulary, and the reason. The
+      write never leaves the workspace, and `.git` is refused outright.
+    required: false
+    default: ".triage-record"
 
 runs:
   using: node24

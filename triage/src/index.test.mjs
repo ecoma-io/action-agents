@@ -10,7 +10,11 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import * as p from "node:path";
+import { tmpdir } from "node:os";
+
+import { buildTriageRecord, REASON_CHARS, serialiseTriageRecord } from "./run-record.mjs";
 
 import { createEvidence } from "#core/untrusted.mjs";
 import { OwnLoginsError } from "#core/comment.mjs";
@@ -18,7 +22,14 @@ import { PastFileCeilingError } from "#core/forge.mjs";
 import { TransportError } from "#core/transport-errors.mjs";
 import { readContext } from "#core/runtime.mjs";
 
-import { ACTION, main, readInputs, run } from "./index.mjs";
+import { ACTION, main, readInputs, run, writeRunRecord } from "./index.mjs";
+
+/**
+ * The record write is confined below `GITHUB_WORKSPACE`, so the fixture's
+ * workspace is a real directory: a run that reaches a terminal point leaves
+ * its record here, and the ceiling is exercised against real paths.
+ */
+const WORKSPACE = mkdtempSync(p.join(tmpdir(), "triage-runner-"));
 
 /**
  * A complete runner environment, from which each test removes what it is about.
@@ -31,9 +42,9 @@ const runner = {
   "INPUT_API-KEY": "sk-secret",
   INPUT_MODEL: "gpt-x",
   GITHUB_REPOSITORY: "ecoma-io/action-agents",
-  GITHUB_WORKSPACE: "/work",
+  GITHUB_WORKSPACE: WORKSPACE,
   GITHUB_EVENT_NAME: "issues",
-  GITHUB_EVENT_PATH: "/work/event.json",
+  GITHUB_EVENT_PATH: p.join(WORKSPACE, "event.json"),
 };
 
 /**
@@ -371,6 +382,16 @@ describe("readInputs", () => {
   it("reads a configured config-path", () => {
     expect(readInputs({ ...runner, "INPUT_CONFIG-PATH": "policies/triage.json5" }).configPath).toBe(
       "policies/triage.json5",
+    );
+  });
+
+  it("defaults the record-path to .triage-record", () => {
+    expect(readInputs(runner).recordPath).toBe(".triage-record");
+  });
+
+  it("reads a configured record-path", () => {
+    expect(readInputs({ ...runner, "INPUT_RECORD-PATH": "out/records" }).recordPath).toBe(
+      "out/records",
     );
   });
 
@@ -1713,6 +1734,286 @@ describe("run — the untrusted-data ceiling (no steering)", () => {
     expect(body).toContain("&lt;script>");
     expect(body).not.toMatch(/@maintainer/);
     expect(body).toContain("_Classified by the `triage` action.");
+  });
+});
+
+describe("run — the run record", () => {
+  /** Reads a record from the fixture workspace's default record directory.
+   *
+   * @param {string} name
+   */
+  const readRecord = (name) =>
+    JSON.parse(readFileSync(p.join(WORKSPACE, ".triage-record", name), "utf8"));
+
+  it("writes a published record after the mutation lands", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: issueEvent({ labels: ["triage"] }) });
+
+    await run(inputs(), readContext(runner), world);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("published");
+    expect(record.dryRun).toBe(false);
+    expect(record.thread).toEqual({ type: "issue", number: 7 });
+    expect(record.policy).toEqual({ basis: "default", branch: "main", sha: "0".repeat(40) });
+    expect(record.event).toEqual({ eventName: "issues", action: "" });
+    expect(record.decision).toMatchObject({ kind: "labels", add: ["bug"] });
+    expect(record.reason).toMatch(/labels decision: 1 to add, 0 to remove, 0 refused/u);
+    expect(record.verification).toEqual({ requested: false, answers: [], downgraded: [] });
+  });
+
+  it("writes a skip record for a dry run — the run wrote nothing", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: issueEvent({ labels: ["triage"] }) });
+
+    await run(inputs({ dryRun: true }), readContext(runner), world);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.dryRun).toBe(true);
+    expect(record.outcome).toBe("skip");
+    expect(world.forge.writes).toEqual([]);
+  });
+
+  it("writes a skip record carrying the event gate's reason verbatim", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: { action: "closed", ...issueEvent() } });
+
+    await run(inputs(), readContext(runner), world);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("skip");
+    expect(record.reason).toBe("a closed thread awaits no triage");
+    expect("decision" in record).toBe(false);
+  });
+
+  it("writes a failed record when the model call dies, and the original error still surfaces", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ chatFailure: new Error("the provider's response body is not JSON") });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(/not JSON/u);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toBe("the provider's response body is not JSON");
+    expect("decision" in record).toBe(false);
+  });
+
+  it("writes a thread-less record when the run dies before the payload parses", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: {} });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /carries no 'issue' object/u,
+    );
+
+    const record = readRecord("triage-record-issues.json");
+    expect(record.thread).toBeNull();
+    expect(record.policy).toBeNull();
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toBe("the event payload carries no 'issue' object");
+  });
+
+  it("stays green when the record write fails after the mutation landed, and logs the loss", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: issueEvent({ labels: ["triage"] }) });
+
+    await run(inputs({ recordPath: "../outside" }), readContext(runner), world);
+
+    // The mutate was the run's outcome; the record was the loss.
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toMatch(
+      /the run record was not written: record-path '\.\.\/outside' resolves outside the workspace/u,
+    );
+  });
+
+  it("goes red when the record write fails on the skip path — the record is the skip's whole outcome", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: { action: "closed", ...issueEvent() } });
+
+    await expect(
+      run(inputs({ recordPath: "../outside" }), readContext(runner), world),
+    ).rejects.toThrow(/outside the workspace/u);
+  });
+
+  it("an abandoned record carries the divergence reason sanitised — a hostile label name's marker does not survive", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The divergence reason interpolates the live thread's label names, so a
+    // hostile name rides it exactly as in the #259 corpus. The record build
+    // site sanitises: control characters flattened, length under the cap.
+    const world = io({
+      event: issueEvent({ labels: ["triage"] }),
+      liveLabels: ["bug", "evil\u001b]2;owned\u0007"],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("abandoned");
+    // No raw control character survives into the record; the stripped form
+    // is what carries.
+    expect(record.reason).not.toContain("\u001b");
+    expect(record.reason).not.toContain("\u0007");
+    expect(record.reason).toContain("evil ]2;owned");
+    expect(record.reason.length).toBeLessThanOrEqual(REASON_CHARS);
+    expect(record.decision).toBeDefined();
+  });
+
+  it("writes an abandoned record when the freshness gate withheld the write", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The live re-read disagrees with the payload's label claim — the same
+    // fixture shape the mutate-level divergence tests pin.
+    const world = io({
+      event: issueEvent({ labels: ["triage"] }),
+      liveLabels: ["bug", "size/l"],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    // The run resolves green, nothing landed, the warning still logged.
+    expect(world.forge.writes).toEqual([]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toContain("nothing written — the thread changed while this run was in flight");
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("abandoned");
+    expect(record.reason).toBe(
+      "the labels are now [bug, size/l], not the [triage] the event carried",
+    );
+    // The superseded decision stays carried: the record shows what was
+    // decided and that a fresher state superseded it.
+    expect(record.decision).toMatchObject({ kind: "labels", add: ["bug"] });
+  });
+
+  it("goes red when the record write fails on the abandoned path — the record is the run's whole outcome", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      event: issueEvent({ labels: ["triage"] }),
+      liveLabels: ["bug", "size/l"],
+    });
+
+    await expect(
+      run(inputs({ recordPath: "../outside" }), readContext(runner), world),
+    ).rejects.toThrow(/outside the workspace/u);
+    expect(world.forge.writes).toEqual([]);
+  });
+
+  it("delivers under the record-path input, inside the upload glob", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: issueEvent({ labels: ["triage"] }) });
+
+    await run(inputs({ recordPath: "out/records" }), readContext(runner), world);
+
+    const file = p.join(WORKSPACE, "out", "records", "triage-record-issue-7.json");
+    expect(existsSync(file)).toBe(true);
+    expect(p.basename(file)).toMatch(/triage-record-.*\.json/u);
+  });
+
+  it("the dogfood workflow uploads the record glob", () => {
+    const workflow = readFileSync(
+      new URL("../../.github/workflows/triage.yml", import.meta.url),
+      "utf8",
+    );
+    expect(workflow).toContain("name: triage-run-record");
+    expect(workflow).toContain("triage-record-*.json");
+    expect(workflow).toContain("if: always()");
+    expect(workflow).toContain("if-no-files-found: ignore");
+  });
+});
+
+/**
+ * The ceiling `writeRunRecord` holds: the path resolves inside the workspace
+ * or the write is refused, `.git` is refused outright (case-insensitively),
+ * and a symlinked branch of the tree cannot carry the write out — the same
+ * ceiling review's `writeRunArtifact` holds, pointed at triage's record.
+ */
+describe("writeRunRecord — the write ceiling", () => {
+  /** The record the write tests need; the ceiling does not read its content. */
+  const recordFixture = () =>
+    buildTriageRecord({
+      repository: "ecoma-io/action-agents",
+      eventName: "issues",
+      eventAction: "opened",
+      threadType: "issue",
+      threadNumber: 41,
+      dryRun: true,
+      model: "gpt-x",
+      policy: { basis: "default", branch: "main", sha: "0".repeat(40) },
+      decision: null,
+      outcome: "skip",
+      reason: "a dry run writes nothing",
+    });
+
+  it("writes a deterministically named file of deterministic bytes into the default directory", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    const file = writeRunRecord({
+      workspace: root,
+      directory: ".triage-record",
+      record: recordFixture(),
+    });
+    expect(file).toBe(p.join(root, ".triage-record", "triage-record-issue-41.json"));
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).toBe(serialiseTriageRecord(recordFixture()));
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 1, outcome: "skip" });
+  });
+
+  it("creates a nested custom directory", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    const file = writeRunRecord({
+      workspace: root,
+      directory: "out/records",
+      record: recordFixture(),
+    });
+    expect(file).toBe(p.join(root, "out", "records", "triage-record-issue-41.json"));
+  });
+
+  it("refuses a relative path that climbs out of the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    expect(() =>
+      writeRunRecord({ workspace: root, directory: "../elsewhere", record: recordFixture() }),
+    ).toThrow(/outside the workspace/u);
+  });
+
+  it("refuses an absolute path outside the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    expect(() =>
+      writeRunRecord({ workspace: root, directory: tmpdir(), record: recordFixture() }),
+    ).toThrow(/outside the workspace/u);
+  });
+
+  it("refuses a path through .git", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    expect(() =>
+      writeRunRecord({ workspace: root, directory: ".git/artifacts", record: recordFixture() }),
+    ).toThrow(/touches \.git/u);
+  });
+
+  it("refuses a path through .git case-insensitively", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    expect(() =>
+      writeRunRecord({ workspace: root, directory: ".Git/artifacts", record: recordFixture() }),
+    ).toThrow(/touches \.git/u);
+  });
+
+  it("refuses a symlinked directory that resolves into .git", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    mkdirSync(p.join(root, ".git"));
+    // The lexical path carries no `.git` segment, so only the post-resolve
+    // check can see that the real location is the metadata directory.
+    symlinkSync(p.join(root, ".git"), p.join(root, "link"), "dir");
+    expect(() =>
+      writeRunRecord({ workspace: root, directory: "link", record: recordFixture() }),
+    ).toThrow(/resolves inside \.git/u);
+  });
+
+  it("refuses a symlinked directory that leaves the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "record-write-"));
+    const outside = mkdtempSync(p.join(tmpdir(), "record-outside-"));
+    mkdirSync(p.join(outside, "real"));
+    symlinkSync(p.join(outside, "real"), p.join(root, "link"), "dir");
+    expect(() =>
+      writeRunRecord({ workspace: root, directory: "link", record: recordFixture() }),
+    ).toThrow(/outside the workspace/u);
   });
 });
 

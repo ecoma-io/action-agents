@@ -13,8 +13,9 @@
 // Bounded outcome, in two layers. The live re-read before any write
 // (`triage/src/mutate.mjs`) compares the payload's claims against the
 // thread's state right now — so a literal stale redelivery is a complete
-// second run that writes nothing and finishes green with a warning: the
-// thread moved on while the event sat in the queue. Convergence and repair
+// second run that writes nothing onto the thread and finishes green with a
+// warning, its record ending `abandoned` with the reason carried (issue
+// #279): the thread moved on while the event sat in the queue. Convergence and repair
 // arrive with a fresh payload — a real later event whose claims match live
 // state: label sets converge because removals tolerate an absent label (the
 // forge reads GitHub's 404 as already-absent, `core/src/forge.mjs`) and
@@ -28,7 +29,10 @@
 // answer.
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, describe, it } from "node:test";
 
 import { createEvidence } from "#core/untrusted.mjs";
 
@@ -36,6 +40,13 @@ import { run } from "../../../triage/src/index.mjs";
 
 const NOW = "2026-07-01T11:00:00Z";
 const BOT = "action-agents[bot]";
+
+/** One temp root per world; every run's record write has somewhere to land. */
+const roots = [];
+
+after(() => {
+  for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+});
 
 /** A sheet with a queue marker, so one plan carries both a removal and an addition. */
 const CONFIG = JSON.stringify({
@@ -64,6 +75,10 @@ const ANSWER = JSON.stringify({ labels: ["bug"], rationale: "redelivery fixture"
  * @param {{ failFirstAdd?: boolean }} [options]
  */
 function forge(options = {}) {
+  const root = mkdtempSync(join(tmpdir(), "duplicate-delivery-"));
+  roots.push(root);
+  const workspace = join(root, "ws");
+  mkdirSync(workspace, { recursive: true });
   const labels = new Set(["needs triage"]);
   /** @type {{ op: store, args: unknown[] }[]} */
   const writes = [];
@@ -145,6 +160,7 @@ function forge(options = {}) {
     async getIssue(_number) {
       return { labels: [...labels].sort() };
     },
+    workspace,
   };
   return world;
 }
@@ -160,8 +176,15 @@ function forge(options = {}) {
  */
 function deliver(worldForge, answer = ANSWER, payloadLabels = [{ name: "needs triage" }]) {
   return run(
-    { model: "fake", labels: [], dryRun: false, configPath: "" },
-    { eventName: "issues", repo: "action-agents", owner: "ecoma-io", apiUrl: "", eventPath: "" },
+    { model: "fake", labels: [], dryRun: false, configPath: "", recordPath: ".triage-record" },
+    {
+      eventName: "issues",
+      repo: "action-agents",
+      owner: "ecoma-io",
+      apiUrl: "",
+      eventPath: "",
+      workspace: worldForge.workspace,
+    },
     {
       forge: worldForge,
       chat: {
@@ -202,6 +225,22 @@ describe("triage — the same event redelivered", () => {
     await deliver(worldForge);
     assert.equal(worldForge.modelCalls.count, 2, "run two still paid its own model call");
     assert.deepEqual(worldForge.writes, afterRunOne, "the stale redelivery wrote nothing");
+
+    // The record is where that outcome lands (issue #279): a stale
+    // redelivery is a write the freshness gate withheld — the record ends
+    // `abandoned`, the reason naming the move. Run three rewrites the file;
+    // read it now.
+    const record = JSON.parse(
+      readFileSync(
+        join(worldForge.workspace, ".triage-record", "triage-record-issue-7.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(record.outcome, "abandoned", "the withheld run's record ends abandoned");
+    assert.ok(
+      record.reason.includes("the labels are now [bug], not the [needs triage] the event carried"),
+      "the record carries the divergence reason",
+    );
 
     // Convergence comes from a delivery whose payload matches live state —
     // a real later event, not the stale replay. Its payload already agrees

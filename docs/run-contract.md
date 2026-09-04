@@ -13,14 +13,14 @@ action's outcome vocabulary, gate set, or write surface changes.
 
 Every run ends in exactly one terminal state:
 
-| State       | What it means                                                                                    |
-| ----------- | ------------------------------------------------------------------------------------------------ |
-| `published` | the run did what it set out to do and its writes landed                                          |
-| `partial`   | some of the run's operations applied before the run stopped — recorded, never replayed           |
-| `refused`   | the action's own ceilings declined to act — off-sheet answer, config absent, unsupported event   |
-| `abandoned` | a fresher run superseded this one; abandonment can follow a write, so state alone proves nothing |
-| `skip`      | the run had nothing to do — event out of scope, dry-run, nothing to review                       |
-| `failed`    | a defect or an environment break; the class below names which                                    |
+| State       | What it means                                                                                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `published` | the run did what it set out to do and its writes landed                                                                                                              |
+| `partial`   | some of the run's operations applied before the run stopped — recorded, never replayed                                                                               |
+| `refused`   | the action's own ceilings declined to act — off-sheet answer, config absent, unsupported event                                                                       |
+| `abandoned` | a fresher state superseded this one — a newer run, or the thread changed while this run was in flight; abandonment can follow a write, so state alone proves nothing |
+| `skip`      | the run had nothing to do — event out of scope, dry-run, nothing to review                                                                                           |
+| `failed`    | a defect or an environment break; the class below names which                                                                                                        |
 
 And every run carries a verdict: `pass`, `fail`, or `unknown`.
 
@@ -35,20 +35,21 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 
 ## What today's outcomes map to
 
-| Action      | Today's outcome                     | Contract state                                        |
-| ----------- | ----------------------------------- | ----------------------------------------------------- |
-| `triage`    | green run with writes               | `published`                                           |
-| `triage`    | dry-run, event-gate exit            | `skip`                                                |
-| `triage`    | red run                             | `failed` or `refused` per the class                   |
-| `review`    | `nothing-to-review`                 | `published` (the marker-clearing write still happens) |
-| `review`    | `published`                         | `published`                                           |
-| `review`    | `published-without-artifact`        | `published` with verdict `unknown` on the archive     |
-| `review`    | `dry-run`                           | `skip`                                                |
-| `review`    | `abandoned`                         | `abandoned`                                           |
-| `harmonise` | commit + pull request               | `published`                                           |
-| `harmonise` | some pairs applied, run stopped     | `partial`                                             |
-| `harmonise` | config-absent or protection refusal | `refused`                                             |
-| `harmonise` | a throw the run did not declare     | `failed`                                              |
+| Action      | Today's outcome                                                     | Contract state                                        |
+| ----------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
+| `triage`    | green run with writes                                               | `published`                                           |
+| `triage`    | dry-run, event-gate exit                                            | `skip`                                                |
+| `triage`    | red run                                                             | `failed` or `refused` per the class                   |
+| `triage`    | the write withheld — the thread changed while the run was in flight | `abandoned`                                           |
+| `review`    | `nothing-to-review`                                                 | `published` (the marker-clearing write still happens) |
+| `review`    | `published`                                                         | `published`                                           |
+| `review`    | `published-without-artifact`                                        | `published` with verdict `unknown` on the archive     |
+| `review`    | `dry-run`                                                           | `skip`                                                |
+| `review`    | `abandoned`                                                         | `abandoned`                                           |
+| `harmonise` | commit + pull request                                               | `published`                                           |
+| `harmonise` | some pairs applied, run stopped                                     | `partial`                                             |
+| `harmonise` | config-absent or protection refusal                                 | `refused`                                             |
+| `harmonise` | a throw the run did not declare                                     | `failed`                                              |
 
 ## Failure taxonomy
 
@@ -71,6 +72,51 @@ Fifteen classes; the class names the outcome, so the mapping is a function:
 | F-13 | partial-mutation          | `failed` + `partial`            | record what applied; a re-run re-derives from live state, never replays      |
 | F-14 | artifact-write-failure    | `published` + verdict `unknown` | the comment stands; the archive failed                                       |
 | F-15 | internal-unknown          | `failed`                        | an unhandled throw is a bug, and the record says so                          |
+
+## Run records
+
+Every run leaves one machine-readable record behind — a local file inside the
+runner's workspace, delivered by the workflow's upload step — so a run's
+account outlives the runner log. The contract's rules for every record:
+
+- **One record per run, at every terminal point.** A landed mutation, a dry
+  run, a gate skip, a failure: each ends in a record. A run that died before
+  anything could be recorded may write no file, and the upload's
+  `if-no-files-found: ignore` keeps those runs green.
+- **Byte-deterministic (I15).** No wall-clock fields; the same run facts
+  build the same bytes. Keys sorted, compact JSON, no trailing newline.
+- **Fail-closed.** The module that owns a record family validates it before
+  serialising; a shape it did not specify is refused, not coerced, and a
+  validation failure is a code bug that fails at build.
+- **Sanitised at the build sites (I14, I16).** Model or repository text a
+  record carries passes the comment sanitiser and honours its retention class
+  and cap — [ADR 003](adr/003-evidence-retention.md) states the classes.
+- **The `outcome` speaks the terminal-state vocabulary above, whole.** A word
+  outside it is a word the contract has not defined.
+
+Two families exist today:
+
+| Family            | Module                      | `schemaVersion` | Delivery glob            | Written at                                             |
+| ----------------- | --------------------------- | --------------- | ------------------------ | ------------------------------------------------------ |
+| review's artifact | `review/src/artifact.mjs`   | 3 (4 for skips) | `review-artifact-*.json` | after a published comment; a draft run writes its skip |
+| triage's record   | `triage/src/run-record.mjs` | 1               | `triage-record-*.json`   | every terminal point                                   |
+
+Triage's record fields, version 1: `schemaVersion`, `repository`, `event`
+(`eventName`, `action`), `thread` (`type`, `number`, or `null` for a run that
+died before the payload parsed), `dryRun`, `model`, `policy` (`basis`,
+`branch`, `sha`, or `null` before the source resolved), `decision` (present
+iff the run reached one: `kind`, `add`, `remove` with their code-owned
+reasons, `refusals`, sanitised capped `rationale`, `signal` with its
+sanitised related title), `outcome`, `reason`, `verification` (the block
+issue #274 froze — present, typed, validated, empty until filled).
+
+The two-tier posture a record write is judged by: after the run's own outcome
+has landed (review's comment published; triage's mutation applied) a failed
+record write is a logged loss, and the run stays green — review's
+`published-without-artifact` maps to `published` with verdict `unknown` on
+the archive (F-14). Everywhere else a record-write failure is the red run:
+a skip's record is the skip's whole outcome, and a failure's record must not
+mask the original error it records.
 
 ## Concurrency: read-then-write, never compare-and-swap
 
