@@ -22,28 +22,34 @@
  */
 
 import { normaliseReadPath } from "./coverage.mjs";
+import { contentDigest, isDigest } from "./digest.mjs";
 
 /** @typedef {import("./answer.mjs").Finding} Finding */
 
 /**
- * One recorded read the loop captured, reduced to the span that matters for
- * anchoring: the repository-relative path and the 1-based, inclusive line
- * range the capture reached.
+ * One recorded read the loop captured: the repository-relative path, the
+ * 1-based, inclusive line range the capture reached, and the sha256 of the
+ * content those lines cover — the digest that makes the anchoring
+ * content-checkable, not just coordinate-checkable.
  *
  * @typedef {object} LedgerRead
  * @property {string} path normalised repository-relative path
  * @property {number} startLine first captured line, 1-based
  * @property {number} endLine last captured line, inclusive
+ * @property {string} digest sha256 (lowercase hex) of the captured content
  */
 
 /**
  * The resolved read reference attached to an anchored finding — ledger data
- * only, never model text.
+ * only, never model text. The digest rides with the coordinates so a
+ * consumer who can re-read the path at the recorded head can verify the
+ * finding anchored into the same content the run judged.
  *
  * @typedef {object} Provenance
  * @property {string} path the covering read's normalised path
  * @property {number} startLine the covering read's first captured line
  * @property {number} endLine the covering read's last captured line, inclusive
+ * @property {string} digest sha256 (lowercase hex) of the covering read's content
  */
 
 /**
@@ -103,7 +109,12 @@ export function attachProvenance(findings, ledger) {
     }
     published.push({
       ...finding,
-      provenance: { path: read.path, startLine: read.startLine, endLine: read.endLine },
+      provenance: {
+        path: read.path,
+        startLine: read.startLine,
+        endLine: read.endLine,
+        digest: read.digest,
+      },
     });
   }
   return { published, quarantined };
@@ -114,9 +125,10 @@ export function attachProvenance(findings, ledger) {
  * successful `read_file` captured — to this module's read list. A capture
  * starts at line 1 and reaches the line count of the captured content,
  * counted the same way the verification excerpt counts: splitting on
- * newlines, so a capture and its verdicts agree on where content ends.
+ * newlines, so a capture and its later digests agree on where content ends.
  * Insertion order is recording order, so the map's one-read-per-path shape
- * keeps the resolution deterministic.
+ * keeps the resolution deterministic. Each read also carries the sha256 of
+ * its captured content, so the anchoring is content-checkable end to end.
  *
  * @param {ReadonlyMap<string, string>} recordedReads resolved-relative path → captured content
  * @returns {LedgerRead[]}
@@ -136,6 +148,7 @@ export function readsFromRecordedReads(recordedReads) {
       path: normaliseReadPath(path),
       startLine: 1,
       endLine: content.split("\n").length,
+      digest: contentDigest(content),
     });
   }
   return reads;
@@ -184,7 +197,15 @@ export function validatedLedger(ledger) {
     if (startLine > endLine) {
       throw new TypeError(`${where} records an empty or inverted line range`);
     }
-    return { path: normaliseReadPath(entry["path"]), startLine, endLine };
+    if (!isDigest(entry["digest"])) {
+      throw new TypeError(`${where} has no well-formed content digest`);
+    }
+    return {
+      path: normaliseReadPath(entry["path"]),
+      startLine,
+      endLine,
+      digest: /** @type {string} */ (entry["digest"]),
+    };
   });
 }
 
@@ -218,7 +239,12 @@ function validatedProvenance(provenance) {
     throw new TypeError("provenance has no path");
   }
   if (!isLine(entry["startLine"]) || !isLine(entry["endLine"])) {
-    throw new TypeError("provenance has a non-integer or out-of-range line bound");
+    throw new TypeError(
+      "provenance of an anchored finding has a non-integer or out-of-range line bound",
+    );
+  }
+  if (!isDigest(entry["digest"])) {
+    throw new TypeError("provenance of an anchored finding has no well-formed content digest");
   }
   return /** @type {Provenance} */ (provenance);
 }

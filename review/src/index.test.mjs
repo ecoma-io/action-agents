@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   symlinkSync,
   writeFileSync,
@@ -29,7 +30,7 @@ import {
   run,
   writeRunArtifact,
 } from "./index.mjs";
-import { buildArtifact, serialiseArtifact } from "./artifact.mjs";
+import { buildArtifact, buildSkipRecord, serialiseArtifact } from "./artifact.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 
@@ -208,6 +209,7 @@ describe("run over injected io", () => {
     const logged = [];
     const env = runnerEnv({
       event: { action: "opened", pull_request: { number: 9, base: { ref: "main" } } },
+      extra: { GITHUB_WORKSPACE: mkdtempSync(p.join(tmpdir(), "review-wiring-skip-")) },
     });
     try {
       await run(readInputs(env), readContext(env), {
@@ -259,6 +261,7 @@ describe("run over injected io", () => {
         info: (message) => logged.push(message),
       });
       expect(logged.some((line) => line.includes("is a draft"))).toBe(true);
+      expect(logged.some((line) => line.includes("review-artifact-skip-"))).toBe(true);
     } finally {
       vi.restoreAllMocks();
     }
@@ -282,7 +285,12 @@ describe("run over the real forge", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     /** @type {string[]} */
     const requested = [];
-    const env = runnerEnv({ extra: { GITHUB_API_URL: "https://ghe.example.com/api/v3" } });
+    const env = runnerEnv({
+      extra: {
+        GITHUB_API_URL: "https://ghe.example.com/api/v3",
+        GITHUB_WORKSPACE: mkdtempSync(p.join(tmpdir(), "review-wiring-url-")),
+      },
+    });
     vi.stubGlobal(
       "fetch",
       /** @type {typeof globalThis.fetch} */ (
@@ -503,6 +511,7 @@ describe("run — request-timeout-ms wiring", () => {
 
 describe("writeRunArtifact", () => {
   const SHA = "a".repeat(40);
+  const DIGEST = "c".repeat(64);
 
   /** @returns {import("./artifact.mjs").RunArtifact} */
   function artifactFixture() {
@@ -519,7 +528,7 @@ describe("writeRunArtifact", () => {
           file: "src/a.mjs",
           line: 2,
           message: "off-by-one",
-          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3 },
+          provenance: { path: "src/a.mjs", startLine: 1, endLine: 3, digest: DIGEST },
         },
       ],
       verification: { gate: { passed: true } },
@@ -546,7 +555,28 @@ describe("writeRunArtifact", () => {
     expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-${SHA}.json`));
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(artifactFixture()));
-    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 2, headRef: SHA });
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 3, headRef: SHA });
+  });
+
+  it("names a skip record inside the artifact upload glob", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    const record = buildSkipRecord({
+      repository: "acme/widgets",
+      pullRequest: 7,
+      headRef: SHA,
+      reason: "#7 is a draft — not ready means not reviewed",
+      kind: "state",
+    });
+    const file = writeRunArtifact({
+      workspace: root,
+      directory: ".review-artifact",
+      artifact: record,
+    });
+    expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-skip-${SHA}.json`));
+    expect(p.basename(file)).toMatch(/^review-artifact-.*\.json$/);
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).toBe(serialiseArtifact(record));
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 4, kind: "state", headRef: SHA });
   });
 
   it("creates a nested custom directory", () => {
@@ -619,7 +649,7 @@ describe("writeRunArtifact", () => {
 });
 
 describe("run writes the artifact only after publication", () => {
-  it("a draft run writes no artifact file", async () => {
+  it("a draft run writes only its skip record", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const root = mkdtempSync(p.join(tmpdir(), "artifact-draft-"));
     const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
@@ -669,7 +699,13 @@ describe("run writes the artifact only after publication", () => {
         now: () => 0,
         info: () => undefined,
       });
-      expect(existsSync(p.join(root, ".review-artifact"))).toBe(false);
+      const files = readdirSync(p.join(root, ".review-artifact"));
+      expect(files).toEqual([`review-artifact-skip-${"a".repeat(40)}.json`]);
+      const record = JSON.parse(
+        readFileSync(p.join(root, ".review-artifact", files[0] ?? ""), "utf8"),
+      );
+      expect(record.kind).toBe("state");
+      expect(record.outcome.classification).toBe("skipped");
     } finally {
       vi.restoreAllMocks();
     }

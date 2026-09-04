@@ -261,7 +261,10 @@ intentionally not run`), and the applicability fact with `applicable: false`,
 posture `standard`, and the deciding rule's id. A pull request already skipped by its draft or
 closed state writes the same reduced record **when the policy is on**, with
 basis `state` — under a policy, a skip is recorded honestly rather than only
-logged; without one, today's log line alone, unchanged. The log carries one
+logged; without one, a **skip record** still leaves the run: the
+repository/head/pull-request facts, `outcome: skipped`, a `kind` of `state`
+(or `nothing-to-review`, for an empty universe) and no applicability fact.
+The log carries one
 audit line whenever the policy is in play:
 
 ```text
@@ -270,8 +273,9 @@ policy source: event=pull_request basis=base branch=main sha=<sha> path=.github/
 
 Dry run suppresses every skip record: absolute zero mutation means zero.
 The artifact schema moves to `schemaVersion: 3` only when a run has an
-applicability fact to carry; a policy-less run still writes `2`, and the two
-shapes never mix in one record.
+applicability fact to carry; skip records ride the applicability family's
+`schemaVersion` (`4`) with a `kind` field, and the three shapes never mix in
+one record.
 
 ## Inputs
 
@@ -1083,8 +1087,8 @@ contract a human reads; both are projections of the same final facts, and
 neither can drift from the other, because both are built from the same
 values in the same pass.
 
-The schema is versioned (`schemaVersion: 2`; `3` once a run carries an
-applicability fact, and the two never mix in one record) and the builder is
+The schema is versioned (`schemaVersion: 3`; `4` once a run carries an
+applicability fact, and the shapes never mix in one record) and the builder is
 fail-closed:
 a fact outside the declared key sets, a vocabulary word the code does not
 declare (`severity`, `verdict`, lifecycle state, gate name, risk level,
@@ -1092,19 +1096,19 @@ attention lane, phase name), a gate table that is not the declared gates in
 the declared order, or a verdict whose lifecycle does not follow from it is
 a typed `ArtifactError`, never a coerced field. The fields:
 
-| Field                                  | Carries                                                                                                                                                                                  |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `repository`, `pullRequest`, `headRef` | what was reviewed, the head as a 40-character hex sha                                                                                                                                    |
-| `outcome`                              | `published` and the same reason string the run logs                                                                                                                                      |
-| `policy`                               | the strictness and strategy the run ran under                                                                                                                                            |
-| `risk`                                 | the per-file risk table, byte-wise sorted, one row per changed file                                                                                                                      |
-| `findings`                             | the published set — each with its identity, anchor line, and `provenance` naming the recorded read that covers it                                                                        |
-| `verification`                         | the gate's outcome plus one entry per bound verdict, derived from the findings — a separate verdict list that could disagree does not exist                                              |
-| `gates`                                | every declared gate's result, in the declared order, a reason iff it failed                                                                                                              |
-| `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                                                                          |
-| `phases`                               | the loop's phase transitions, in order                                                                                                                                                   |
-| `provenance`                           | the marker comment's id — nothing else, no timestamp, no run id                                                                                                                          |
-| `applicability`                        | schema version 3 only — the derived context, its inputs, the decision and what decided it, the posture and the resolved intensity; see [the applicability axis](#the-applicability-axis) |
+| Field                                  | Carries                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `repository`, `pullRequest`, `headRef` | what was reviewed, the head as a 40-character hex sha                                                                                                                                                                                                                                                                                      |
+| `outcome`                              | `published` and the same reason string the run logs                                                                                                                                                                                                                                                                                        |
+| `policy`                               | the strictness and strategy the run ran under                                                                                                                                                                                                                                                                                              |
+| `risk`                                 | the per-file risk table, byte-wise sorted, one row per changed file                                                                                                                                                                                                                                                                        |
+| `findings`                             | the published set — each with its identity, anchor line, and `provenance` naming the recorded read that covers it, its sha256 carrying the content those coordinates held                                                                                                                                                                  |
+| `verification`                         | the gate's outcome plus one entry per bound verdict, derived from the findings — each bound verdict also carries `evidence: {digest, excerpt}`, the sha256 of the exact window the verifier judged plus its retention excerpt, sanitiser-stripped and capped at 300 characters; a separate verdict list that could disagree does not exist |
+| `gates`                                | every declared gate's result, in the declared order, a reason iff it failed                                                                                                                                                                                                                                                                |
+| `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                                                                                                                                                                                                                            |
+| `phases`                               | the loop's phase transitions, in order                                                                                                                                                                                                                                                                                                     |
+| `provenance`                           | the marker comment's id — nothing else, no timestamp, no run id                                                                                                                                                                                                                                                                            |
+| `applicability`                        | schema version 4 only — the derived context, its inputs, the decision and what decided it, the posture and the resolved intensity; see [the applicability axis](#the-applicability-axis)                                                                                                                                                   |
 
 Byte-determinism is a property, not a style: identical facts serialise to
 identical bytes (`serialiseArtifact`), so two runs of the same review differ
@@ -1119,10 +1123,10 @@ lifecycle, byte for byte as it arrived. A skipped candidate is unresolved
 with no id — the one state a finding can hold without one.
 
 Publication-only, and stale-refusing twice. A run that publishes nothing —
-`nothing-to-review`, an abandonment, a dry run — writes no artifact; a skip
-writes nothing but its log line when no policy is present, and the reduced
-skipped-run record when one is (see [the applicability
-axis](#the-applicability-axis)), the newer-head rule extends to the record:
+an abandonment, a dry run — writes no artifact; a skip always leaves a record
+(see [what a skip leaves behind](#what-a-skip-leaves-behind)): the reduced
+skipped-run record when a policy is present, a `kind`-carrying skip record
+otherwise. The newer-head rule extends to every record:
 `assertFreshArtifact` compares
 the artifact's head against a forge read taken before the comment exists, so
 a refusal there writes nothing at all, and again against a second read taken
@@ -1134,7 +1138,9 @@ pull request has already left.
 The write is confined like every read. The `artifact-path` input (default
 `.review-artifact`) is resolved inside `GITHUB_WORKSPACE` or refused; `.git`
 is refused outright; a symlinked branch of the tree cannot carry the write
-out. The file is named `review-artifact-<head sha>.json`. The shipped
+out. The file is named `review-artifact-<head sha>.json`; a skip record is
+named `review-artifact-skip-<head sha>.json`, and both sit inside the upload
+glob `.review-artifact/review-artifact-*.json`. The shipped
 workflow uploads it with `actions/upload-artifact` after the review step,
 `if: always()` so a failed comment step still leaves its record, and
 `if-no-files-found: ignore` because an unpublished run has no file — the
@@ -1153,8 +1159,8 @@ side: the same snapshot checks, the same ceilings, the same validation.
 - a pull request with zero changed files, or every changed file ignored →
   the model is never invoked; an existing marker comment is updated to a
   deterministic "Nothing to review." body so stale findings do not outlive
-  their own relevance, and with no marker present it is a green run and a log
-  line;
+  their own relevance, and with no marker present it is a green run, a log
+  line and a `nothing-to-review` skip record;
 - `maxDiffLines` exceeded, or the assembled prompt past its budget → a red
   refusal naming the counted total, or the estimate;
 - more changed files than GitHub's 3000-file listing ceiling → red refusal,

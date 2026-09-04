@@ -41,6 +41,7 @@ import {
   applicabilitySection,
   assertFreshArtifact,
   buildArtifact,
+  buildSkipRecord,
   buildSkippedArtifact,
   withCommentId,
 } from "./artifact.mjs";
@@ -92,7 +93,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "published-without-artifact" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
- * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact} [artifact] the machine-readable run record — present when the run published or when a policy recorded a skipped run (the record is the skip's whole outcome); absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
+ * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact | import("./artifact.mjs").SkipRecord} [artifact] the machine-readable run record — present when the run published, when a policy recorded a skipped run (the record is the skip's whole outcome), or when a skip path with no applicability fact left its durable record; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
  * @property {import("./artifact.mjs").ApplicabilitySection} [applicability] the applicability fact, present when the review policy is active
  */
 /**
@@ -151,8 +152,23 @@ export async function reviewPullRequest({
   // record IS the skip's whole outcome. Under dry-run nothing is written,
   // so there it stays a log line, today's exact shape.
   if (stateSkip !== undefined) {
-    if (applicability === undefined || inputs.dryRun) {
+    if (inputs.dryRun) {
       return { outcome: "skip", reason: stateSkip };
+    }
+    if (applicability === undefined) {
+      // No policy either — the record still leaves the run: kind "state",
+      // through the same delivery the applicability family's records ride.
+      return {
+        outcome: "skip",
+        reason: stateSkip,
+        artifact: buildSkipRecord({
+          repository: `${context.owner}/${context.repo}`,
+          pullRequest: pullRequestNumber,
+          headRef: headSha,
+          reason: stateSkip,
+          kind: "state",
+        }),
+      };
     }
     const derived = classifyContext(
       classificationInputs(
@@ -293,6 +309,7 @@ export async function reviewPullRequest({
 
   if (inventory.reviewed.length === 0) {
     return nothingToReview({
+      repository: `${context.owner}/${context.repo}`,
       pullRequestNumber,
       headSha,
       io,
@@ -887,12 +904,14 @@ function wireDefect(item, detail, info) {
 /**
  * The universe emptied: an existing marker gets a deterministic clearing
  * body so stale findings do not outlive their relevance; with no marker,
- * a green log line is the whole result.
+ * a green log line is the whole result. Either way the run leaves a durable
+ * record — kind "nothing-to-review" — unless dry-run suppressed the write.
  *
- * @param {{ pullRequestNumber: number, headSha: string, io: Io, dryRun: boolean, startedAt: number, applicabilityFact?: import("./artifact.mjs").ApplicabilitySection }} input
+ * @param {{ repository: string, pullRequestNumber: number, headSha: string, io: Io, dryRun: boolean, startedAt: number, applicabilityFact?: import("./artifact.mjs").ApplicabilitySection }} input
  * @returns {Promise<RunResult>}
  */
 async function nothingToReview({
+  repository,
   pullRequestNumber,
   headSha,
   io,
@@ -937,6 +956,13 @@ async function nothingToReview({
       return /** @type {RunResult} */ ({
         outcome: "nothing-to-review",
         reason: "universe empty — marker cleared",
+        artifact: buildSkipRecord({
+          repository,
+          pullRequest: pullRequestNumber,
+          headRef: headSha,
+          reason: "universe empty — marker cleared",
+          kind: "nothing-to-review",
+        }),
         ...(applicabilityFact !== undefined ? { applicability: applicabilityFact } : {}),
       });
     }
@@ -944,6 +970,19 @@ async function nothingToReview({
   return /** @type {RunResult} */ ({
     outcome: "skip",
     reason: "universe empty and no prior review comment — nothing to do",
+    // The dry-run guard is here and not above: with no marker there is no
+    // write to suppress, only the record, so the record is what dry-run drops.
+    ...(!dryRun
+      ? {
+          artifact: buildSkipRecord({
+            repository,
+            pullRequest: pullRequestNumber,
+            headRef: headSha,
+            reason: "universe empty and no prior review comment — nothing to do",
+            kind: "nothing-to-review",
+          }),
+        }
+      : {}),
     ...(applicabilityFact !== undefined ? { applicability: applicabilityFact } : {}),
   });
 }

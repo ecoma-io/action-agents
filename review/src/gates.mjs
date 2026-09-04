@@ -226,9 +226,11 @@ function assertedFinding(entry) {
  * Why a published finding's provenance does not anchor it to the ledger,
  * or nothing when it does. The attached reference must be well formed, name
  * the finding's own file at the normalised spelling, cover the finding's
- * line, and match a recorded read exactly — path and span together. The
- * reference rides on the finding, so it is a claim; only the ledger's own
- * entries are evidence, and a claim no recorded read backs anchors nothing.
+ * line, and match a recorded read exactly — path and span together, and the
+ * digest with it: a reference whose digest disagrees with the covering read
+ * is a content mismatch, not an anchor. The reference rides on the finding,
+ * so it is a claim; only the ledger's own entries are evidence, and a claim
+ * no recorded read backs anchors nothing.
  *
  * @param {Record<string, unknown>} finding an `assertedFinding` entry
  * @param {LedgerRead[]} ledger the validated ledger
@@ -258,11 +260,17 @@ function unanchoredBecause(finding, ledger) {
   if (line < startLine || line > endLine) {
     return `${name} — provenance span ${String(startLine)}-${String(endLine)} misses the anchor line`;
   }
-  const backed = ledger.some(
+  const covering = ledger.find(
     (read) => read.path === path && read.startLine === startLine && read.endLine === endLine,
   );
-  if (!backed) {
+  if (covering === undefined) {
     return `${name} — provenance does not match any recorded read`;
+  }
+  // The reference's coordinates resolve to a recorded read; the digest is the
+  // content check. A mismatch is the one way an anchored claim can still be
+  // about bytes the ledger does not hold — reported, never coerced into a pass.
+  if (record["digest"] !== covering.digest) {
+    return `${name} — provenance digest does not match the covering read's content`;
   }
   return undefined;
 }
