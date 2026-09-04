@@ -257,7 +257,7 @@ export async function run(inputs, context, io) {
       eventName: context.eventName,
       action: eventAction,
       changedLabel,
-      markerLabel: config?.labels.workflowMarkers[0] ?? null,
+      markerLabels: config?.labels.workflowMarkers ?? [],
       roleOf: config === null ? undefined : (name) => config.labels.roles.get(name),
       threadLabels: thread.labels,
     });

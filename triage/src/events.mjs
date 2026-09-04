@@ -112,7 +112,7 @@ export function eventChangedLabel(event) {
  * @param {string} input.eventName the `GITHUB_EVENT_NAME`: `issues` or `pull_request`
  * @param {string} input.action the payload's `action` field; "" when the payload has none
  * @param {string | null} input.changedLabel the label a `labeled`/`unlabeled` event names, else null
- * @param {string | null} input.markerLabel the config's first `labels.workflowMarkers` entry, else null
+ * @param {string[]} input.markerLabels the config's `labels.workflowMarkers` entries
  * @param {(name: string) => string | undefined} [input.roleOf] the config's `labels.roles` lookup
  * @param {string[]} [input.threadLabels] the labels the thread already carries, from the payload
  * @returns {EventDecision}
@@ -121,7 +121,7 @@ export function decideEvent({
   eventName,
   action,
   changedLabel,
-  markerLabel,
+  markerLabels,
   roleOf,
   threadLabels = [],
 }) {
@@ -144,7 +144,13 @@ export function decideEvent({
   if (action === "reopened") return retriage("the thread re-enters triage");
   if (action === "closed") return skip("a closed thread awaits no triage");
   if (action === "labeled" || action === "unlabeled") {
-    return decideLabelEvent({ action, changedLabel, markerLabel, roleOf, threadLabels });
+    return decideLabelEvent({
+      action,
+      changedLabel,
+      markerLabel: markerLabels[0] ?? null,
+      roleOf,
+      threadLabels,
+    });
   }
 
   if (eventName === "issues") {
