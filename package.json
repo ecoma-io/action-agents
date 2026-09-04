@@ -68,7 +68,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
     "@commitlint/config-conventional": "^21.2.2",
-    "@ecoma-io/archkeep": "0.22.1",
+    "@ecoma-io/archkeep": "0.24.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.11",
