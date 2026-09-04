@@ -15,8 +15,8 @@ importers:
         specifier: ^21.2.2
         version: 21.2.2
       '@ecoma-io/archkeep':
-        specifier: 0.21.0
-        version: 0.21.0(typescript@5.9.3)
+        specifier: 0.22.0
+        version: 0.22.0(typescript@5.9.3)
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.9.1(jiti@2.6.1)(supports-color@7.2.0))
@@ -169,8 +169,8 @@ packages:
     resolution: {integrity: sha512-aalGyl7dbB5PArRebDIX43ZvBlXrYm9uWzGJ26t+4SzJVPsOuvfILGGbw5X4yX7i50YEmJ8zvbiWnqH/AAnZqg==}
     engines: {node: '>=22'}
 
-  '@ecoma-io/archkeep@0.21.0':
-    resolution: {integrity: sha512-ePw1bkE+Y0ePeR9sWlz1tGzQvxSKjAq+uWuU8CsJacRaONGDZa8h4cwdVPwHcFM5Q8eEHzEB4D1FCKtBl78DIQ==}
+  '@ecoma-io/archkeep@0.22.0':
+    resolution: {integrity: sha512-aJakGs6kfBqGP48pCurjE+ZFAtAzfFZVoRt74FBflYvJkJQWAKAv9CIpFXR3Y9XYom23eEO8Rc7xvGsoenfGGA==}
     engines: {node: '>=22'}
     hasBin: true
     peerDependencies:
@@ -1434,7 +1434,7 @@ snapshots:
 
   '@conventional-changelog/template@1.4.0': {}
 
-  '@ecoma-io/archkeep@0.21.0(typescript@5.9.3)':
+  '@ecoma-io/archkeep@0.22.0(typescript@5.9.3)':
     dependencies:
       smol-toml: 1.8.0
       typescript: 5.9.3
