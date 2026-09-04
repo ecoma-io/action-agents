@@ -14,7 +14,17 @@
 // repository does not otherwise hold.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["config:recommended"],
+  // extends order: base preset first, then additive presets on top. In Renovate
+  // later extends override earlier ones for conflicting keys, so the base preset
+  // comes first and any custom overrides or feature toggles follow. The two
+  // presets added here are purely additive (they toggle features, not override
+  // config), so order among them is cosmetic — grouped by kind: vulnerability
+  // alerts before action digest pinning.
+  extends: [
+    "config:recommended",
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    "helpers:pinGitHubActionDigests",
+  ],
   // Every update waits three days after publish before Renovate offers it —
   // every manager, every dependency type. Malware shipped in a compromised
   // release is usually detected and yanked within the first days, so the
