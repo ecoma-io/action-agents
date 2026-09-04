@@ -10,7 +10,9 @@ run for "the guarantees hold" has committed the hollow-verdict shape the
 [run contract](run-contract.md) forbids, and this page exists so nobody makes
 that mistake by accident.
 
-Recorded 2026-09-04 at pin `@ecoma-io/archkeep` **0.22.0** (exact, no range);
+Recorded 2026-09-04 at pin `@ecoma-io/archkeep` **0.22.1** (exact, no range;
+first recorded at 0.22.0, re-measured claim-by-claim at the 0.22.1 bump —
+issue #280, the release closing ten organization-filed upstream issues);
 owned by the repository maintainers. Every behavioral claim below was measured
 by running the pinned binary against real trees — the fixtures under
 `tools/fixtures/` and purpose-built variants of them — not cited from
@@ -73,7 +75,7 @@ not weaker — they are held by authorities that can actually witness them.
 
 ## The gate contract at the pin
 
-What a run of `archkeep check` at 0.22.0 does, measured. Three exits, and the
+What a run of `archkeep check` at 0.22.1 does, measured. Three exits, and the
 vocabulary mirrors the run contract's on purpose:
 
 | Exit | Run status   | Verdict   | What it means                                                                  |
