@@ -108,7 +108,8 @@ died before the payload parsed), `dryRun`, `model`, `policy` (`basis`,
 iff the run reached one: `kind`, `add`, `remove` with their code-owned
 reasons, `refusals`, sanitised capped `rationale`, `signal` with its
 sanitised related title), `outcome`, `reason`, `verification` (the block
-issue #274 froze — present, typed, validated, empty until filled).
+issue #274 froze — present, typed, validated; filled by the opt-in
+verification pass when it ran, the empty block otherwise).
 
 The two-tier posture a record write is judged by: after the run's own outcome
 has landed (review's comment published; triage's mutation applied) a failed

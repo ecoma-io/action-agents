@@ -10,12 +10,15 @@ import {
   REASON_CHARS,
   TRIAGE_OUTCOMES,
   buildTriageRecord,
+  isOpId,
+  isReasonDigest,
   serialiseTriageRecord,
   triageRecordFilename,
   triageRecordSchemaVersion,
   validateTriageRecord,
   VERIFICATION_VERDICTS,
 } from "./run-record.mjs";
+import { reasonDigest } from "./verify.mjs";
 
 const SHA = "c".repeat(40);
 const DIGEST = "b".repeat(64);
@@ -166,6 +169,32 @@ describe("buildTriageRecord", () => {
       answers: [{ opId: "add:bug", verdict: "confirmed", reasonDigest: DIGEST }],
       downgraded: ["remove:needs triage"],
     });
+  });
+
+  it("a record with a filled verification block validates, and filling does not bump the schema", () => {
+    // The digest spelling `verify.mjs` computes is the digest shape the frozen
+    // block requires — the two modules cannot drift apart silently. The op
+    // ids cover the whole grammar, including a label that carries a colon and
+    // the bare comment op.
+    const record = recordFixture({
+      verification: {
+        requested: true,
+        answers: [
+          { opId: "add:bug", verdict: "confirmed", reasonDigest: reasonDigest("crash on save") },
+          { opId: "add:priority: high", verdict: "refuted", reasonDigest: DIGEST },
+          { opId: "remove:needs triage", verdict: "uncertain", reasonDigest: "a".repeat(64) },
+          { opId: "comment", verdict: "confirmed", reasonDigest: "f".repeat(64) },
+        ],
+        downgraded: ["add:priority: high", "remove:needs triage"],
+      },
+    });
+    expect(triageRecordSchemaVersion).toBe(1);
+    expect(record.schemaVersion).toBe(triageRecordSchemaVersion);
+    for (const answer of record.verification.answers) {
+      expect(isReasonDigest(answer.reasonDigest)).toBe(true);
+      expect(isOpId(answer.opId)).toBe(true);
+    }
+    expect(() => validateTriageRecord(JSON.parse(serialiseTriageRecord(record)))).not.toThrow();
   });
 
   it("is frozen — the code's record is not mutable by a consumer", () => {

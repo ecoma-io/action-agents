@@ -42,17 +42,18 @@ All inputs listed below. Shared inputs (`github-token`, `api-url`, `api-key`,
 `model`, `request-timeout-ms`, `config-path`) are documented in the
 [development configuration page](../development/configuration.md).
 
-| Input                | Required | Default          | What it does                                              |
-| -------------------- | -------- | ---------------- | --------------------------------------------------------- |
-| `github-token`       | yes      | —                | Token for GitHub API calls.                               |
-| `api-url`            | yes      | —                | Base URL of an OpenAI-compatible endpoint.                |
-| `api-key`            | no       | —                | Key for that endpoint. Leave unset for keyless endpoints. |
-| `model`              | yes      | —                | Model id to ask.                                          |
-| `request-timeout-ms` | no       | `30000`          | Per-attempt timeout in milliseconds.                      |
-| `config-path`        | no       | `""`             | Override the config file location.                        |
-| `labels`             | no       | `""`             | Narrow the label sheet to a comma-separated subset.       |
-| `dry-run`            | no       | `true`           | Decide and log, write nothing.                            |
-| `record-path`        | no       | `.triage-record` | Directory for the machine-readable run record.            |
+| Input                | Required | Default          | What it does                                                            |
+| -------------------- | -------- | ---------------- | ----------------------------------------------------------------------- |
+| `github-token`       | yes      | —                | Token for GitHub API calls.                                             |
+| `api-url`            | yes      | —                | Base URL of an OpenAI-compatible endpoint.                              |
+| `api-key`            | no       | —                | Key for that endpoint. Leave unset for keyless endpoints.               |
+| `model`              | yes      | —                | Model id to ask.                                                        |
+| `request-timeout-ms` | no       | `30000`          | Per-attempt timeout in milliseconds.                                    |
+| `config-path`        | no       | `""`             | Override the config file location.                                      |
+| `labels`             | no       | `""`             | Narrow the label sheet to a comma-separated subset.                     |
+| `dry-run`            | no       | `true`           | Decide and log, write nothing.                                          |
+| `verify`             | no       | `false`          | One extra model call re-checks the plan before writing; downgrade-only. |
+| `record-path`        | no       | `.triage-record` | Directory for the machine-readable run record.                          |
 
 **`labels`**: a comma-separated subset of the label sheet declared in the config
 file. A name the file does not declare is a startup error. Setting this with no
@@ -70,6 +71,19 @@ is refused; a consumer workflow can upload the files with the glob
 **`dry-run`**: defaults to `true`, so a first run cannot surprise anyone. When
 true, the action decides and logs the classification but writes no labels and no
 comment. Flip to `false` after verifying the sheet produces the right results.
+
+**`verify`**: defaults to `false` — the second look is opt-in. When true, after
+the decision and before anything is written, the run makes one bounded model
+call that re-checks each proposed operation — identified by an id the code
+mints (`add:<label>`, `remove:<label>`, `comment`), never by model text —
+against the same evidence the decision was derived from. The answer is judged
+against a strict contract, and every operation the verifier refutes or cannot
+confirm is downgraded to a refusal: the pass can only prevent writes, never
+cause them. Downgrading every operation ends the run `refused` with nothing
+written — and the run itself stays green. No verify answer is ever re-asked. A
+dry run never requests verification, so an operator previewing a decision sees
+the unverified decision. The [development page](../development/triage.md#verification-opt-in-issue-274)
+spells out the contract and what the pass does not catch.
 
 **Writing is freshness-gated.** Everything the decision was built from — the
 thread's labels, and for a pull request also its state, merged flag and head
@@ -333,8 +347,8 @@ matching size label.
 ## Events
 
 `triage` decides exactly which events re-run its pipeline. Its expensive work
-is one model call (at most two asks — an unusable answer earns one retry)
-plus the evidence reads that feed it, so it only pays for
+is one decide call — opt-in verification adds at most one bounded verify call
+— plus the evidence reads that feed it, so it only pays for
 them when the event could have changed triage-relevant evidence: the thread's
 content, its diff, its draft state, or the queue state the
 `labels.workflowMarkers` lifecycle keys on. Everything else logs one audit
@@ -404,10 +418,11 @@ an addition, never a stale claim standing beside its replacement). See
 
 ## Cost and budget controls
 
-| Control              | Default | Effect                                                               |
-| -------------------- | ------- | -------------------------------------------------------------------- |
-| `dry-run`            | `true`  | No API calls to GitHub for writing. Model calls still count.         |
-| `request-timeout-ms` | `30000` | Per-attempt timeout. Raise for endpoints that are legitimately slow. |
+| Control              | Default | Effect                                                                    |
+| -------------------- | ------- | ------------------------------------------------------------------------- |
+| `dry-run`            | `true`  | No API calls to GitHub for writing. Model calls still count.              |
+| `verify`             | `false` | Off, the pass costs nothing; `true` adds at most one bounded verify call. |
+| `request-timeout-ms` | `30000` | Per-attempt timeout. Raise for endpoints that are legitimately slow.      |
 
 The action asks the model once per thread per run. An answer that never
 presented the JSON object the prompt asked for — empty, or prose instead of
@@ -418,7 +433,10 @@ taken as it stands: an off-sheet refusal or a missed contract is the model's
 decision, and a decision is never retried. Model text is never logged — the
 refusal names the shape, not the bytes. There is no agent loop — the model
 reads the thread body, the config sheet, and the instructions, and answers
-in one round (or two asks, in the worst case).
+in one round (at most two asks, in the worst case). Opt-in verification
+(`verify: true`) adds at most one bounded verify call on top: it re-checks
+the plan the decision reached, its answer is judged once against the contract,
+and it is never re-asked.
 
 ## Failure modes
 

@@ -38,6 +38,18 @@ inputs:
     description: Decide and log, write nothing. Defaults to true, so a first run cannot surprise anyone.
     required: false
     default: "true"
+  verify:
+    description: >-
+      Opt-in verification of the decision before anything is written: one
+      bounded model call re-checks each proposed operation — identified by an
+      id the code mints, never by model text — against the same evidence the
+      decision was derived from, and every operation the verifier refutes or
+      cannot confirm is downgraded to a refusal. The pass can only prevent
+      writes, never cause them; downgrading every operation ends the run
+      `refused` with nothing written. No verify answer is ever re-asked. Off
+      by default; a dry run never requests verification.
+    required: false
+    default: "false"
   record-path:
     description: >-
       Directory inside the workspace where the machine-readable run record is
