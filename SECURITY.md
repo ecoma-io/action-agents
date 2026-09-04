@@ -118,7 +118,9 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    what it does has a vulnerability, not a missing feature.
 
 4. **File access is confined to the checked-out workspace.** This one applies to
-   any action that reads files — `review` does. Every path is resolved through
+   any action that reads files — `review` does — and to any action that writes
+   them: `triage`'s run record is written below `GITHUB_WORKSPACE`, under the
+   same ceiling. Every path is resolved through
    `realpath` and refused unless it lands inside `GITHUB_WORKSPACE`; `.git` is
    refused outright, because it holds the credential the checkout was performed
    with. A path escape here is a direct route from an injected instruction to

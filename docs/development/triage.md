@@ -44,6 +44,7 @@ workflow's choice, and `dry-run` needs no write at all.
 | `config-path`        | overrides `.github/action-agents/triage/triage.json5` / `.json` — see the configuration page                                                                                                                     |
 | `labels`             | narrows the sheet the config file declares, for this call site only; a name the file does not declare is a startup error, and so is a `labels:` input with no file at all, because there is nothing to narrow    |
 | `dry-run`            | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                               |
+| `record-path`        | directory inside the workspace where the machine-readable run record is written at every terminal point — see [the run record](#the-run-record)                                                                  |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
 backoff, `Retry-After` and the attempt limit are `core/transport/http.mjs` policy, not inputs.
@@ -419,13 +420,69 @@ sanitised candidate title; it states that the thread stays open and nothing
 is closed. A run that judged nothing incomplete and nothing related writes
 no comment at all.
 
+### The run record
+
+Every run ends in a record, whatever its terminal point: a landed mutation,
+a dry run, an event-gate skip, a failure. `triage/src/run-record.mjs` builds
+it, validates it fail-closed and serialises it byte-deterministically; the
+write itself is `writeRunRecord` in `triage/src/index.mjs`, under the same
+workspace ceiling every read honours — the path must resolve inside
+`GITHUB_WORKSPACE`, and `.git` is refused outright, before and after the
+directory is created.
+
+Where it is written, per terminal path:
+
+- a **landed mutation** — after `mutate()` returns, the record is written
+  with the decision attached. A failed write here is a logged loss, not a red
+  run: the mutate was the run's outcome, and the record was the loss.
+- a **dry run** — the same point, same rule; the record says `dryRun: true`
+  and its outcome is `skip` (the run contract's word for a run that wrote
+  nothing — see the mapping table in
+  [the run contract](../run-contract.md#what-todays-outcomes-map-to)).
+- an **event-gate skip** — the record is written before the run returns, with
+  the gate's reason verbatim and no `decision` key. Here a failed write is a
+  red run: a skip's record is the skip's whole outcome.
+- a **failure** — the record is written in `run`'s catch, then the original
+  error is rethrown; the record's own write failure is logged, never allowed
+  to mask the original. A run that dies before the payload parses names no
+  thread and no policy pin — the record carries `null`s and the filename
+  falls back to the event name.
+
+The fields, in schema version 1: `schemaVersion`, `repository`, `event`
+(`eventName`, `action`), `thread` (`type`, `number`; `null` when the run died
+before the payload parsed), `dryRun`, `model`, `policy` (`basis`, `branch`,
+`sha`; `null` before the source resolved), `decision` (present iff the run
+reached one: `kind`, `add`, `remove` with their code-owned reasons,
+`refusals`, the sanitised capped `rationale`, and the `signal` with its
+sanitised related title), `outcome`, `reason`, and the `verification` block
+the verification design (issue #274) froze — present, typed, validated, and
+empty until that work fills it. The executor's log lines and the comment body
+stay out: the log lines are the run log's, and the comment itself is the
+durable form of that path.
+
+`outcome` speaks the run contract's terminal-state vocabulary only —
+`published`, `partial`, `refused`, `abandoned`, `skip`, `failed` — and the
+validator refuses anything else. Today's paths use `published` (a landed
+mutation), `skip` (a dry run or an event-gate exit) and `failed` (what lands
+in the catch: a defect or an environment break — the ceilings refuse as a
+decision, not a throw).
+
+Delivery: the file lands under the `record-path` directory (default
+`.triage-record`), named `triage-record-<type>-<number>.json` for a parsed
+thread and `triage-record-<eventName>.json` for a run that died before the
+payload parsed — both inside the upload glob `triage-record-*.json`, which
+this repository's own triage workflow uploads with `if: always()`.
+
 ## Failure posture
 
 A run fails loudly. The provider unreachable after retries, a config that does
 not validate, an answer entirely off-sheet — the step goes red rather than
 green-on-nothing, and a workflow that wants triage soft uses
 `continue-on-error`. Refused labels are logged before the run ends, so the
-annotation says what was refused and why.
+annotation says what was refused and why. The record write has its own
+two-tier posture, stated in [the run record](#the-run-record): after the
+run's own outcome has landed it is a logged loss, everywhere else it is the
+red run.
 
 ## What `triage` never does
 

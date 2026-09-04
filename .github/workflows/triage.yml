@@ -81,3 +81,17 @@ jobs:
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
           model: triage
           dry-run: false
+
+      # The run record — event, thread, policy pin, the decision when one was
+      # made, the terminal state in the run contract's vocabulary and the
+      # reason — as a downloadable file. `always()` keeps the record for runs
+      # that skipped, failed or never reached the model; a run that died
+      # before anything could be recorded may write no file, and
+      # `if-no-files-found: ignore` keeps those runs green.
+      - name: Upload the run record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: triage-run-record
+          path: .triage-record/triage-record-*.json
+          if-no-files-found: ignore

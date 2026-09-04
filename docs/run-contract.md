@@ -72,6 +72,51 @@ Fifteen classes; the class names the outcome, so the mapping is a function:
 | F-14 | artifact-write-failure    | `published` + verdict `unknown` | the comment stands; the archive failed                                       |
 | F-15 | internal-unknown          | `failed`                        | an unhandled throw is a bug, and the record says so                          |
 
+## Run records
+
+Every run leaves one machine-readable record behind — a local file inside the
+runner's workspace, delivered by the workflow's upload step — so a run's
+account outlives the runner log. The contract's rules for every record:
+
+- **One record per run, at every terminal point.** A landed mutation, a dry
+  run, a gate skip, a failure: each ends in a record. A run that died before
+  anything could be recorded may write no file, and the upload's
+  `if-no-files-found: ignore` keeps those runs green.
+- **Byte-deterministic (I15).** No wall-clock fields; the same run facts
+  build the same bytes. Keys sorted, compact JSON, no trailing newline.
+- **Fail-closed.** The module that owns a record family validates it before
+  serialising; a shape it did not specify is refused, not coerced, and a
+  validation failure is a code bug that fails at build.
+- **Sanitised at the build sites (I14, I16).** Model or repository text a
+  record carries passes the comment sanitiser and honours its retention class
+  and cap — [ADR 003](adr/003-evidence-retention.md) states the classes.
+- **The `outcome` speaks the terminal-state vocabulary above, whole.** A word
+  outside it is a word the contract has not defined.
+
+Two families exist today:
+
+| Family            | Module                      | `schemaVersion` | Delivery glob            | Written at                                             |
+| ----------------- | --------------------------- | --------------- | ------------------------ | ------------------------------------------------------ |
+| review's artifact | `review/src/artifact.mjs`   | 3 (4 for skips) | `review-artifact-*.json` | after a published comment; a draft run writes its skip |
+| triage's record   | `triage/src/run-record.mjs` | 1               | `triage-record-*.json`   | every terminal point                                   |
+
+Triage's record fields, version 1: `schemaVersion`, `repository`, `event`
+(`eventName`, `action`), `thread` (`type`, `number`, or `null` for a run that
+died before the payload parsed), `dryRun`, `model`, `policy` (`basis`,
+`branch`, `sha`, or `null` before the source resolved), `decision` (present
+iff the run reached one: `kind`, `add`, `remove` with their code-owned
+reasons, `refusals`, sanitised capped `rationale`, `signal` with its
+sanitised related title), `outcome`, `reason`, `verification` (the block
+issue #274 froze — present, typed, validated, empty until filled).
+
+The two-tier posture a record write is judged by: after the run's own outcome
+has landed (review's comment published; triage's mutation applied) a failed
+record write is a logged loss, and the run stays green — review's
+`published-without-artifact` maps to `published` with verdict `unknown` on
+the archive (F-14). Everywhere else a record-write failure is the red run:
+a skip's record is the skip's whole outcome, and a failure's record must not
+mask the original error it records.
+
 ## Concurrency: read-then-write, never compare-and-swap
 
 GitHub offers no compare-and-swap for labels or comments, so the discipline is

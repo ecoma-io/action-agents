@@ -42,21 +42,29 @@ All inputs listed below. Shared inputs (`github-token`, `api-url`, `api-key`,
 `model`, `request-timeout-ms`, `config-path`) are documented in the
 [development configuration page](../development/configuration.md).
 
-| Input                | Required | Default | What it does                                              |
-| -------------------- | -------- | ------- | --------------------------------------------------------- |
-| `github-token`       | yes      | —       | Token for GitHub API calls.                               |
-| `api-url`            | yes      | —       | Base URL of an OpenAI-compatible endpoint.                |
-| `api-key`            | no       | —       | Key for that endpoint. Leave unset for keyless endpoints. |
-| `model`              | yes      | —       | Model id to ask.                                          |
-| `request-timeout-ms` | no       | `30000` | Per-attempt timeout in milliseconds.                      |
-| `config-path`        | no       | `""`    | Override the config file location.                        |
-| `labels`             | no       | `""`    | Narrow the label sheet to a comma-separated subset.       |
-| `dry-run`            | no       | `true`  | Decide and log, write nothing.                            |
+| Input                | Required | Default          | What it does                                              |
+| -------------------- | -------- | ---------------- | --------------------------------------------------------- |
+| `github-token`       | yes      | —                | Token for GitHub API calls.                               |
+| `api-url`            | yes      | —                | Base URL of an OpenAI-compatible endpoint.                |
+| `api-key`            | no       | —                | Key for that endpoint. Leave unset for keyless endpoints. |
+| `model`              | yes      | —                | Model id to ask.                                          |
+| `request-timeout-ms` | no       | `30000`          | Per-attempt timeout in milliseconds.                      |
+| `config-path`        | no       | `""`             | Override the config file location.                        |
+| `labels`             | no       | `""`             | Narrow the label sheet to a comma-separated subset.       |
+| `dry-run`            | no       | `true`           | Decide and log, write nothing.                            |
+| `record-path`        | no       | `.triage-record` | Directory for the machine-readable run record.            |
 
 **`labels`**: a comma-separated subset of the label sheet declared in the config
 file. A name the file does not declare is a startup error. Setting this with no
 file at all is also a startup error, because there is nothing to narrow. Empty
 means no narrowing — with no file the classification is written as a comment.
+
+**`record-path`**: every run — landed mutation, dry run, gate skip, failure —
+writes one machine-readable record here: event, thread, policy pin, the
+decision when one was made, the terminal state in the run contract's
+vocabulary, and the reason. The write is confined to the workspace and `.git`
+is refused; a consumer workflow can upload the files with the glob
+`triage-record-*.json`, the way this repository's own workflow does.
 
 **`dry-run`**: defaults to `true`, so a first run cannot surprise anyone. When
 true, the action decides and logs the classification but writes no labels and no
