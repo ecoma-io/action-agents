@@ -56,17 +56,18 @@ and pass it as `github-token`.
 All inputs listed below. Shared inputs are documented in the
 [development configuration page](../development/configuration.md).
 
-| Input                | Required | Default | What it does                                                            |
-| -------------------- | -------- | ------- | ----------------------------------------------------------------------- |
-| `github-token`       | yes      | —       | Token for GitHub API calls.                                             |
-| `api-url`            | yes      | —       | Base URL of an OpenAI-compatible endpoint.                              |
-| `api-key`            | no       | —       | Key for that endpoint. Leave unset for keyless endpoints.               |
-| `model`              | yes      | —       | Model id to ask.                                                        |
-| `request-timeout-ms` | no       | `30000` | Per-attempt timeout in milliseconds.                                    |
-| `config-path`        | no       | `""`    | Override the config file location.                                      |
-| `source-language`    | yes      | —       | BCP-47 tag of the source-of-truth language.                             |
-| `documents`          | no       | `""`    | Comma-separated globs narrowing which source documents to keep in step. |
-| `dry-run`            | no       | `true`  | Report drift, propose nothing.                                          |
+| Input                | Required | Default             | What it does                                                            |
+| -------------------- | -------- | ------------------- | ----------------------------------------------------------------------- |
+| `github-token`       | yes      | —                   | Token for GitHub API calls.                                             |
+| `api-url`            | yes      | —                   | Base URL of an OpenAI-compatible endpoint.                              |
+| `api-key`            | no       | —                   | Key for that endpoint. Leave unset for keyless endpoints.               |
+| `model`              | yes      | —                   | Model id to ask.                                                        |
+| `request-timeout-ms` | no       | `30000`             | Per-attempt timeout in milliseconds.                                    |
+| `config-path`        | no       | `""`                | Override the config file location.                                      |
+| `source-language`    | yes      | —                   | BCP-47 tag of the source-of-truth language.                             |
+| `documents`          | no       | `""`                | Comma-separated globs narrowing which source documents to keep in step. |
+| `dry-run`            | no       | `true`              | Report drift, propose nothing.                                          |
+| `record-path`        | no       | `.harmonise-record` | Directory for the machine-readable run record.                          |
 
 **`source-language`**: the key of the `languages` map every other version is
 judged against. Must be declared in the config file.
@@ -292,6 +293,13 @@ with optimistic locking. A dry run proposes nothing.
 **Report in the PR body**: the pull request body documents every pair — source
 document, target document, change type (new, updated, unchanged, noop), and any
 recovery action taken.
+
+**Run record**: one JSON file per run under `record-path` (default
+`.harmonise-record`), named after the base commit the run pinned to — the
+outcome, the pair accounting and the pull request it wrote, never document or
+model text. This repository's own workflow uploads it as the
+`harmonise-run-record` artifact; the contract is on the
+[development page](../development/harmonise.md#the-run-record).
 
 ### Pull request lifecycle
 

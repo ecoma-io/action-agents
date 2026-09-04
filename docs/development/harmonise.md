@@ -27,6 +27,7 @@ A real run needs `contents: write` and `pull-requests: write`, and the workflow'
 | `source-language`    | overrides `sourceLanguage`; must name a language the config declares. Required in v1 — the config must exist and name a source language.                                                                         |
 | `documents`          | glob filter over the source-document set; empty = all of them. Default is empty, because the map defines the space                                                                                               |
 | `dry-run`            | report drift and missing translations, propose nothing — the default, because the output of a real run is a pull request                                                                                         |
+| `record-path`        | directory inside the workspace where the machine-readable run record lands at the run's terminal points; default `.harmonise-record` — see [the run record](#the-run-record)                                     |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
 backoff, `Retry-After` and the attempt limit are `core/transport/http.mjs` policy, not inputs.
@@ -737,9 +738,64 @@ Two caveats the implementation must settle before code:
 - **Suffix follows the branch key.** The advisory files must carry the same key the publishing branch is named by; if the branch scheme later moves to per-target-language branching, the suffix moves with it or the guarantee breaks.
 - **Same target from multiple sources still collides.** Two branches both translating `fr` write the same target's records — but that is genuine content overlap, not a spurious advisory collision, and is outside the common one-source-per-target case.
 
+## The run record
+
+Every run leaves one machine-readable record of itself at the terminal point it
+reaches: the pull request a real run published, the partial exit that follows
+failed pairs, the all-in-step skip, the dry run. `harmonise/src/run-record.mjs`
+builds it, validates it fail-closed and serialises it byte-deterministically;
+the write itself is `writeRunRecord` in `harmonise/src/index.mjs`, under the
+same workspace ceiling every read honours — the path must resolve inside
+`GITHUB_WORKSPACE`, and `.git` is refused outright, before and after the
+directory is created. The family's shared contract — one record per run,
+byte-determinism, the fail-closed validator, the closed outcome vocabulary, the
+two-tier write posture — is [the run contract's](../run-contract.md#run-records);
+its retention row is [ADR 003](../adr/003-evidence-retention.md).
+
+Where it is written, per terminal path:
+
+- a **published run** — after the pull request is opened or updated. A failed
+  write here is a logged loss, not a red run: the publication was the run's
+  outcome, and the record was the loss.
+- a **partial exit** — the same point, same rule, with the failed pairs counted
+  in the record and the run still exiting red after the record lands.
+- an **all-in-step skip** and a **dry run** — nothing else landed, so the
+  record is the skip's whole outcome, and a failed write is a red run.
+
+A run that never reaches a terminal point — a config refusal, a transport
+break, any throw the run did not declare — writes no record, and the upload's
+`if-no-files-found: ignore` keeps those runs green.
+
+The fields, in schema version 1: `schemaVersion`, `repository`, `eventName`,
+`sourceLanguage`, `dryRun`, `outcome`, `reason` (the terminal path's own
+sentence), `pairs` (`proposed`, `unchanged`, `skipped`, `failed` — the four
+total the selected schedule, and the validator refuses a record that does not
+partition it), `pullRequest` (`number`, `created`; `null` when the run wrote
+none) and `headSha` (the base commit every read pinned to). The log lines and
+the pull-request body stay out of the record: the log lines are the run log's,
+and the pull request itself is the durable form of that path.
+
+`outcome` speaks the run contract's terminal-state vocabulary through
+`HARMONISE_OUTCOMES`, the closed set `harmonise/src/run-record.mjs` exports and
+validates against — a word outside it is refused, not coerced. Today's paths
+use `published`, `partial` and `skip`.
+
+Delivery: the file lands under the `record-path` directory (default
+`.harmonise-record`), named after the base commit — `harmonise-record-<base
+sha>.json`, from `harmoniseRecordFilename` in the same module — so a record's
+identity is the instant it judged. The name sits inside the upload glob
+`.harmonise-record/harmonise-record-*.json`, which this repository's own
+harmonise workflow uploads with `if: always()` as the `harmonise-run-record`
+artifact.
+
+Retention: every field is a fact the code already computed — no model text, no
+document text, no translation text. The record carries the run's own pair
+accounting and terminal state; the translation's durable form is the pull
+request body, and the record is the run's, not the documents'.
+
 ## Failure posture
 
-The same law as `triage`: the provider unreachable after retries, a config that does not validate, a set narrowed to nothing — red, not green-on-nothing.
+The same law as `triage`: the provider unreachable after retries, a config that does not validate, a set narrowed to nothing — red, not green-on-nothing. The record write has its own two-tier posture, stated in [the run record](#the-run-record): after the run's own outcome has landed it is a logged loss, everywhere else it is the red run.
 
 **PR behavior on failures:** If at least one pair succeeds, the run creates a PR containing the successful changes and exits red. The log records which pairs failed. If no pairs succeed, the run fails with no PR. This ensures partial work is reviewable while failures are not silently ignored.
 
@@ -818,7 +874,7 @@ This specification is the contract the shipped code implements; what follows are
 - Pattern overlap — a file claimed by two patterns goes to the more specific one (more literal characters around the placeholder); two patterns of equal specificity are refused rather than guessed;
 - Language key ref-name validation — language keys are validated as BCP 47 tags (`^[a-zA-Z]{2,8}(-[a-zA-Z0-9]+)*$`), which is also what keeps the branch name `harmonise/<sourceLanguage>` a safe ref name;
 - ~~Commit/PR attribution and title format~~ — settled: the title is the repository's own via `pullRequest.title` (issue #30);
-- Dry-run report — the report is the action log and nothing is written; a pair that failed still turns a dry run red.
+- Dry-run report — the report is the action log and nothing is written to the repository; a pair that failed still turns a dry run red. The one file a dry run leaves is its run record ([the run record](#the-run-record)), written in the workspace.
 
 **Link rewriting complexity:** Relative link recomputation across directories is specified; complex paths (deep nesting, encoded segments) resolve through the same deterministic algorithm, but exotic destinations — angle-bracket destinations, backslash separators — pass through untouched in v1.
 
