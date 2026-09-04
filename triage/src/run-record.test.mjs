@@ -290,6 +290,16 @@ describe("validateTriageRecord refusals", () => {
     );
   });
 
+  it("refuses a removal reason outside the declared vocabulary", () => {
+    expect(() =>
+      validateTriageRecord(
+        malformed((r, d) => {
+          d["remove"] = [{ name: "needs triage", reason: "because the model said so" }];
+        }),
+      ),
+    ).toThrow(/outside the frozen vocabulary 'size' \| 'marker' \| 'owned'/u);
+  });
+
   it("refuses a wrong schemaVersion", () => {
     expect(() => validateTriageRecord(malformed((r) => (r["schemaVersion"] = 2)))).toThrow(
       /schemaVersion/u,

@@ -20,7 +20,7 @@ import { oneLine } from "#core/one-line.mjs";
 import { warning } from "#core/runtime.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
-import { RATIONALE_CHARS } from "./decision.mjs";
+import { RATIONALE_CHARS, REMOVAL_REASONS } from "./decision.mjs";
 
 /** @typedef {import("#core/policy.mjs").PolicySource} PolicySource */
 /** @typedef {import("./decision.mjs").Decision} Decision */
@@ -487,6 +487,16 @@ function asDecision(value) {
     assertExactKeys(removal, "a decision removal", REMOVAL_KEYS);
     asNonEmptyString(removal["name"], "a decision removal's 'name'");
     asNonEmptyString(removal["reason"], "a decision removal's 'reason'");
+    // The reason is a code-owned word, not prose — decision.mjs declares the
+    // vocabulary and every call site mints one of its words, so the record
+    // validator refusing a fourth word is what makes the field's declared
+    // class checkable from the record alone.
+    if (!REMOVAL_REASONS.some((word) => word === removal["reason"])) {
+      throw new TypeError(
+        `a decision removal's 'reason' is '${String(removal["reason"])}' — outside the ` +
+          `frozen vocabulary ${REMOVAL_REASONS.map((word) => `'${word}'`).join(" | ")}`,
+      );
+    }
   }
   asStringList(decision["refusals"], "the triage record's 'decision.refusals'");
   asBoundedString(
