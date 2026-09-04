@@ -370,7 +370,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {string} repository
  * @property {number} pullRequest
  * @property {string} headRef
- * @property {{ classification: "skipped", reason: string }} outcome
+ * @property {{ classification: "skip", reason: string }} outcome
  * @property {ApplicabilitySection} applicability
  */
 
@@ -388,7 +388,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {string} repository
  * @property {number} pullRequest
  * @property {string} headRef
- * @property {{ classification: "skipped", reason: string }} outcome
+ * @property {{ classification: "skip", reason: string }} outcome
  */
 
 /** The schema-version-agnostic body the full shapes share. */
@@ -1025,7 +1025,7 @@ export function buildSkippedArtifact({ repository, pullRequest, headRef, reason,
     repository: repo,
     pullRequest: number,
     headRef: ref,
-    outcome: { classification: "skipped", reason },
+    outcome: { classification: "skip", reason },
     applicability: section,
   });
 }
@@ -1062,7 +1062,7 @@ export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind
     repository: repo,
     pullRequest: number,
     headRef: ref,
-    outcome: { classification: "skipped", reason },
+    outcome: { classification: "skip", reason },
   });
 }
 
