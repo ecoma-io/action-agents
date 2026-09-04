@@ -2,15 +2,15 @@
   "$comment": "Written by scripts/sync-skills.mjs, judged by scripts/check-skills.mjs. Not hand-edited: these hashes are what makes an edit to a vendored skill loud instead of silent.",
   "source": {
     "package": "@ecoma-io/archkeep",
-    "version": "0.21.0",
+    "version": "0.22.0",
     "repository": "https://github.com/ecoma-io/archkeep",
-    "ref": "v0.21.0"
+    "ref": "v0.22.0"
   },
   "skills": {
     "arch-change/SKILL.md": "da4bd8e03cb2ea8cd81d4ee7a1b5c3a2c7f40433d04e0c8bdbf1e078c0b3edf8",
     "arch-check/SKILL.md": "accc4383c91e83bcc4a91c98dbe739f2c5043e1389d0c4ab54bf236ee4f37f9b",
     "arch-context/SKILL.md": "26a78956009672e222c40aaed9342f6ec12b88c7f6f4e364f3828614eb31b665",
-    "arch-migrate/SKILL.md": "802400c1affc1eba70013187b0ab7ce767178cc2dcbaa1d48a312256b6ecc5e9",
+    "arch-migrate/SKILL.md": "06db93cf65c7308e95691ef82b51f1e785f71da85f61cca19f3e1ca51497517a",
     "arch-review/SKILL.md": "5dfe78f2746fb01b320d50e4c6e3504ffc1786b0f05883349cc89d8a27a7d9de"
   },
   "notes": {

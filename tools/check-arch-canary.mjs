@@ -19,13 +19,17 @@
 //   merely exist.
 //
 //   boundary-canary-unresolved — the same import over a subpath specifier no
-//   compiler options can resolve. Measured reality at this pin: archkeep
-//   exits 0 with verdict "pass" and records the import site in
-//   `coverage.blindSpots`. This gate asserts the site is NAMED there —
-//   visibility, not verdict. Whether archkeep should also fail such a tree
-//   is a question for archkeep (filed upstream); nobody may tighten this
-//   assertion into a pass/fail claim without re-measuring first, because an
-//   assertion the tool does not honor is a new fail-open in this directory.
+//   compiler options can resolve. Measured reality at this pin (0.22.0,
+//   which carries the upstream fix for ecoma-io/archkeep#595): archkeep
+//   REFUSES the tree — exit 3, verdict "unknown", run status "no-verdict",
+//   `coverage.complete: false` — and still names the import site in
+//   `coverage.blindSpots`. The blind spot no longer passes silently: the
+//   site is visible AND the verdict withholds. (At 0.21.0 this run exited 0
+//   with verdict "pass" and `complete: true` over the same blind spot — the
+//   exact fail-open filed upstream and fixed there; the earlier
+//   verdict-agnostic assertion is retired with it.) Nobody may loosen this
+//   back into a pass claim without re-measuring first, because an assertion
+//   the tool does not honor is a new fail-open in this directory.
 //
 // Each fixture is judged from its own directory, so the fixture's
 // `archkeep.json` is the project graph the run judges — the fixture is a
@@ -133,13 +137,13 @@ if (judged === null) {
   }
 }
 
-// ── 2. The unresolvable illegal edge must stay VISIBLE — not judged ──────
+// ── 2. The unresolvable illegal edge must be REFUSED, and still named ────
 //
-// Visibility, not verdict: this fixture asserts archkeep NAMES the import
-// site in coverage.blindSpots. It deliberately does not assert pass or fail —
-// measured behavior at this pin is exit 0 / verdict "pass", and if archkeep
-// ever changes that, this check should still hold or fail for the right
-// reason (a missing name), never because a verdict was pinned.
+// Measured at this pin (0.22.0, the #595 fix): the run refuses — exit 3,
+// verdict "unknown", run status "no-verdict", coverage.complete false — and
+// the site stays named in coverage.blindSpots. Both halves matter: a refusal
+// without a name is undiagnosable; a name without a refusal is the old
+// fail-open.
 
 const visible = runArchkeep("boundary-canary-unresolved");
 if (visible === null) {
@@ -151,13 +155,23 @@ if (visible === null) {
   failures.push(visible.report.trim());
 } else {
   const env =
-    /** @type {{ coverage?: { blindSpots?: { file?: string, reason?: string }[] } | null, decision?: { verdict?: string } }} */ (
+    /** @type {{ status?: unknown, exitCode?: unknown, coverage?: { complete?: unknown, blindSpots?: { file?: string, reason?: string }[] } | null, decision?: { verdict?: unknown, reason?: unknown } }} */ (
       visible.envelope
     );
-  const exitSupported = visible.status === 0 || visible.status === 1;
-  if (!exitSupported) {
+  if (
+    visible.status !== 3 ||
+    env.status !== "no-verdict" ||
+    env.decision?.verdict !== "unknown" ||
+    typeof env.decision?.reason !== "string" ||
+    !env.decision.reason.includes("could not be resolved")
+  ) {
     failures.push(
-      `boundary-canary-unresolved: expected exit 0 or 1 (verdict-agnostic), got ${String(visible.status)}. The fixture may be broken rather than blind-spotted.`,
+      `boundary-canary-unresolved: expected the refusal contract (exit 3, run status "no-verdict", verdict "unknown", a reason naming the unresolved coverage), got exit ${String(visible.status)}, status ${JSON.stringify(env.status)}, verdict ${JSON.stringify(env.decision?.verdict)}, reason ${JSON.stringify(env.decision?.reason)}. A pass or a plain fail here means the pinned contract moved — re-measure, never absorb.`,
+    );
+  }
+  if (env.coverage?.complete !== false) {
+    failures.push(
+      `boundary-canary-unresolved: expected coverage.complete false — a run that could not judge an import site is not complete. Got ${JSON.stringify(env.coverage?.complete)}.`,
     );
   }
   const blindSpots = env.coverage?.blindSpots ?? [];
@@ -171,8 +185,7 @@ if (visible === null) {
     failures.push(
       "boundary-canary-unresolved: the unresolvable import site is not named in coverage.blindSpots " +
         "(expected canary-triage/src/index.mjs naming #canary-review/src/index.mjs). " +
-        "An edge nobody can see is an edge nobody judges — this is the exact fail-open the " +
-        "root gate once suffered. Got:",
+        "A refusal without a name is undiagnosable. Got:",
     );
     failures.push(JSON.stringify(blindSpots, null, 2));
   }
@@ -190,6 +203,6 @@ if (failures.length > 0) {
 } else {
   console.log(
     "boundary-gate canary: the resolvable illegal edge is judged and named, " +
-      "and the unresolvable one stays visible in coverage.blindSpots — the law is loud.",
+      "and the unresolvable one is refused with its site still named — the law is loud.",
   );
 }
