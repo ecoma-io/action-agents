@@ -180,14 +180,20 @@ describe("triage — a failed identity read refuses, it never guesses", () => {
       JSON.stringify({ classification: "a bug", rationale: "Because." }),
     );
 
-    // Typed: the run is red with a name, not a silent fallback.
+    // Typed, and typed twice: the mutation's uniform accounting wraps the
+    // identity read's refusal — the run is red with the accounting, and the
+    // refusal's own voice stays on the error's cause.
     assert.ok(world.rejection instanceof Error);
     assert.equal(
       /** @type {Error} */ (world.rejection).name,
-      "OwnLoginsError",
-      "the run did not refuse as OwnLoginsError",
+      "PartialMutationError",
+      "the run did not refuse as PartialMutationError",
     );
-    assert.match(/** @type {Error} */ (world.rejection).message, /refusing to guess/);
+    assert.match(/** @type {Error} */ (world.rejection).message, /classification comment/);
+    const cause = /** @type {Error} */ (world.rejection).cause;
+    assert.ok(cause instanceof Error);
+    assert.equal(cause.name, "OwnLoginsError", "the underlying refusal is the identity read");
+    assert.match(String(cause.message), /refusing to guess/);
 
     // The bounded outcome: the write surface is untouched. No duplicate
     // created, no claim of the existing comment, nothing deleted.
@@ -243,11 +249,19 @@ describe("triage — a failed identity read refuses, it never guesses", () => {
     assert.ok(rejection instanceof Error);
     assert.equal(
       /** @type {Error} */ (rejection).name,
-      "OwnLoginsError",
-      "the run did not refuse as OwnLoginsError",
+      "PartialMutationError",
+      "the run did not refuse as PartialMutationError",
     );
-    assert.match(/** @type {Error} */ (rejection).message, /GraphQL viewer/);
-    assert.match(/** @type {Error} */ (rejection).message, /refusing to guess/);
+    assert.match(/** @type {Error} */ (rejection).message, /classification comment/);
+    const identityCause = /** @type {Error} */ (rejection).cause;
+    assert.ok(identityCause instanceof Error);
+    assert.equal(
+      identityCause.name,
+      "OwnLoginsError",
+      "the underlying refusal is the identity read",
+    );
+    assert.match(String(identityCause.message), /GraphQL viewer/);
+    assert.match(String(identityCause.message), /refusing to guess/);
     assert.deepEqual(worldForge.writes, [], "a typed identity refusal still never wrote");
   });
 
