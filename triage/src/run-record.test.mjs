@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   REASON_CHARS,
+  REFUSAL_ENTRY_CHARS,
+  REFUSAL_MAX_ENTRIES,
   TRIAGE_OUTCOMES,
   buildTriageRecord,
   isOpId,
@@ -269,6 +271,24 @@ describe("buildTriageRecord sanitisation at the build sites", () => {
     expect(related.title.length).toBeLessThanOrEqual(80);
     expect(related.title).toBe("Dup line  forged  and @‌someone");
   });
+
+  it("sanitises and bounds each refusal entry, and bounds the array, visibly", () => {
+    const long = "x".repeat(100_000);
+    const refusals = [
+      "off-sheet",
+      `multi\tline\n <!-- forged --> ${long}`,
+      ...Array.from({ length: REFUSAL_MAX_ENTRIES + 5 }, (_, i) => `extra-${String(i)}`),
+    ];
+    const record = recordFixture({ decision: decisionFixture({ refusals }) });
+    const decision = /** @type {import("./run-record.mjs").RecordDecision} */ (record.decision);
+    expect(decision.refusals.length).toBe(REFUSAL_MAX_ENTRIES);
+    expect(decision.refusals[0]).toBe("off-sheet");
+    for (const entry of decision.refusals) {
+      expect(entry.length).toBeLessThanOrEqual(REFUSAL_ENTRY_CHARS);
+      expect(entry).not.toContain("\t");
+      expect(entry).not.toContain("<!--");
+    }
+  });
 });
 
 describe("validateTriageRecord refusals", () => {
@@ -298,6 +318,23 @@ describe("validateTriageRecord refusals", () => {
         }),
       ),
     ).toThrow(/outside the frozen vocabulary 'size' \| 'marker' \| 'owned'/u);
+  });
+
+  it("refuses refusals entries past their declared caps", () => {
+    expect(() =>
+      validateTriageRecord(
+        malformed((r, d) => {
+          d["refusals"] = ["x".repeat(REFUSAL_ENTRY_CHARS + 1)];
+        }),
+      ),
+    ).toThrow(/carries an entry past its 300-character cap/u);
+    expect(() =>
+      validateTriageRecord(
+        malformed((r, d) => {
+          d["refusals"] = Array.from({ length: REFUSAL_MAX_ENTRIES + 1 }, () => "x");
+        }),
+      ),
+    ).toThrow(/carries 21 entries, past its 20-entry cap/u);
   });
 
   it("refuses a wrong schemaVersion", () => {
