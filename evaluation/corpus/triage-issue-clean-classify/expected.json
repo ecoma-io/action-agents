@@ -1,0 +1,8 @@
+{
+  "outcome": "published",
+  "adds": ["bug"],
+  "removes": [],
+  "refusals": [],
+  "commentExpected": false,
+  "signalExpected": false
+}

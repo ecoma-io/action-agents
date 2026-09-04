@@ -1,0 +1,8 @@
+{
+  "outcome": "published",
+  "adds": ["docs"],
+  "removes": [],
+  "refusals": ["made-up"],
+  "commentExpected": false,
+  "signalExpected": false
+}

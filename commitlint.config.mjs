@@ -27,6 +27,7 @@ export default {
         // Everything else.
         "docs",
         "workspace", // release-please's release pull request uses this scope
+        "evaluation", // the offline corpus and evaluator under evaluation/
         "deps", // Renovate writes chore(deps):
         "ci", // Renovate writes chore(ci):
       ],

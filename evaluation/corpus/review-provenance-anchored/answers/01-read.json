@@ -1,0 +1,11 @@
+{
+  "content": "",
+  "toolCalls": [
+    {
+      "id": "call-1",
+      "name": "read_file",
+      "arguments": "{\"path\":\"src/cache.js\"}"
+    }
+  ],
+  "finishReason": "tool_calls"
+}

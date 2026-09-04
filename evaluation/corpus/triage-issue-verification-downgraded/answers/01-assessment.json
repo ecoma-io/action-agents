@@ -1,0 +1,5 @@
+{
+  "content": "{\"labels\":[\"bug\",\"docs\"],\"rationale\":\"The shipped schema disagrees with its reference, which is both a defect and a documentation gap.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

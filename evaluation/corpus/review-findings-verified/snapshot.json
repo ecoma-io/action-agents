@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": ""
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "synchronize",
+    "payload": {
+      "action": "synchronize",
+      "pull_request": {
+        "number": 4107,
+        "base": {
+          "ref": "main",
+          "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 4107,
+    "title": "Batch exporter: flush and drain",
+    "body": "Adds the batch exporter and its rollup helper. Synthetic description.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": null,
+      ".github/action-agents/review/instruction.md": null
+    }
+  },
+  "headFiles": {
+    "src/exporter.js": "\"use strict\";\n\nexport function flush(batch, sink) {\n  try {\n    sink.write(batch);\n  } catch {\n    return { ok: true, written: batch.length };\n  }\n  return { ok: true, written: batch.length };\n}\n\nexport function drain(queue, cursor, sink) {\n  while (cursor < queue.length) {\n    const batch = queue[cursor];\n    flush(batch, sink);\n    cursor += 1;\n  }\n  return cursor;\n}\n\nexport function clamp(offset, span) {\n  return offset * span;\n}",
+    "src/summary.js": "\"use strict\";\n\nimport { flush } from \"./exporter.js\";\n\nexport function summarise(queue, batches) {\n  let total = 0;\n  for (const batch of batches) {\n    total += batch.length;\n  }\n  const lines = queue.map((entry, index) => {\n    if (entry.count === 0) {\n      return null;\n    }\n    return `${index}: ${entry.count}`;\n  });\n  return { total, lines: lines.filter(Boolean) };\n}"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": {
+      "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a"
+    },
+    "getPullRequest": {
+      "number": 4107,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "Batch exporter: flush and drain",
+      "body": "Adds the batch exporter and its rollup helper. Synthetic description.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "feat/synthetic-4107",
+        "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+      }
+    },
+    "listPullRequestFiles": [
+      {
+        "filename": "src/exporter.js",
+        "status": "added",
+        "additions": 23,
+        "deletions": 0,
+        "patch": "@@ -0,0 +1,23 @@\n+\"use strict\";\n+\n+export function flush(batch, sink) {\n+  try {\n+    sink.write(batch);\n+  } catch {\n+    return { ok: true, written: batch.length };\n+  }\n+  return { ok: true, written: batch.length };\n+}"
+      },
+      {
+        "filename": "src/summary.js",
+        "status": "added",
+        "additions": 17,
+        "deletions": 0,
+        "patch": "@@ -0,0 +1,17 @@\n+\"use strict\";\n+\n+import { flush } from \"./exporter.js\";\n+\n+export function summarise(queue, batches) {\n+  let total = 0;"
+      }
+    ],
+    "listComments": [],
+    "whoami": {
+      "login": "github-actions[bot]"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "content": "{\"verdict\":\"refuted\",\"reason\":\"the offset is produced by the drain loop from the queue length, so it is already inside the span.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

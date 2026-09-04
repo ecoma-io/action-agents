@@ -1,0 +1,5 @@
+{
+  "content": "{\"labels\":[\"docs\",\"made-up\"],\"rationale\":\"This is documentation work, and the wording reads like a label some other team uses elsewhere.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

@@ -1,0 +1,5 @@
+{
+  "content": "{\"verdict\":\"confirmed\",\"reason\":\"the loop re-adds batch.length without tracking which batches were retried.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

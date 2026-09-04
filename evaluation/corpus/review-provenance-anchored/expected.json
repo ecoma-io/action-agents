@@ -1,0 +1,12 @@
+{
+  "outcome": "published",
+  "findings": [
+    {
+      "file": "src/cache.js",
+      "line": 10,
+      "severity": "nit",
+      "valid": true
+    }
+  ],
+  "verdicts": {}
+}

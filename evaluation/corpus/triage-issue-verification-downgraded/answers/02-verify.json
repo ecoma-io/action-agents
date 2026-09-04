@@ -1,0 +1,5 @@
+{
+  "content": "[{\"opId\":\"add:bug\",\"verdict\":\"confirmed\",\"reason\":\"The thread shows shipped behaviour disagreeing with its documented schema, which is a defect.\"},{\"opId\":\"add:docs\",\"verdict\":\"refuted\",\"reason\":\"The reporter asks which name is current; nothing shows the reference page itself is wrong.\"}]",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

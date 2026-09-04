@@ -1,0 +1,62 @@
+# The offline evaluation (issue #278, wave W5): `pnpm eval` replays the corpus
+# in `evaluation/corpus/` through the real action modules with recorded
+# doubles — no network, no model, no token — and prints the frozen metric
+# table with its thresholds.
+#
+# ADVISORY, DELIBERATELY. `continue-on-error: true`, and the job name appears
+# in no required-check list: this run informs calibration (are the ceilings
+# refusing more than they should, is the verifier agreeing with itself), it
+# gates nothing. A red run here is a finding to read, not a merge to block —
+# the initial thresholds are deliberately loose, and an anchoring re-derivation
+# failure is a corpus defect the report names, not a broken pull request.
+#
+# Path-filtered, for the same reason the advisory status is deliberate: the
+# corpus replays the actions, so a change to `triage/src`, `review/src` or
+# `core/src` can move the numbers even when nothing in `evaluation/` moved,
+# and that drift is exactly what the table exists to show.
+name: Evaluation
+
+on:
+  pull_request:
+    paths:
+      - "evaluation/**"
+      - "tools/evaluate.*"
+      - "triage/src/**"
+      - "review/src/**"
+      - "core/src/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    name: Offline evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Reads the pnpm version from `packageManager` in package.json, so the
+      # runner uses the same pnpm a contributor's Corepack fetches.
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      # `--ignore-scripts` for the reason ci.yml documents at length: no
+      # dependency runs install-time code in this repository, and `pnpm eval`
+      # needs none of it — the evaluator imports the action modules directly.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Exit 1 on a threshold miss or any corpus defect. `continue-on-error`
+      # keeps the run advisory: the log carries the table and the verdict.
+      - run: pnpm eval
+        continue-on-error: true
