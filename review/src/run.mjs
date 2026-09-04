@@ -167,6 +167,7 @@ export async function reviewPullRequest({
           headRef: headSha,
           reason: stateSkip,
           kind: "state",
+          policy: { strictness: config.strictness, strategy: config.strategy, ...source },
         }),
       };
     }
@@ -185,6 +186,7 @@ export async function reviewPullRequest({
         pullRequest: pullRequestNumber,
         headRef: headSha,
         reason: stateSkip,
+        policy: { strictness: config.strictness, strategy: config.strategy, ...source },
         applicability: applicabilitySection({
           context: derived.context,
           applicable: false,
@@ -268,6 +270,7 @@ export async function reviewPullRequest({
           pullRequest: pullRequestNumber,
           headRef: headSha,
           reason: skipReason,
+          policy: { strictness: config.strictness, strategy: config.strategy, ...source },
           applicability: applicabilityFact,
         }),
       };
@@ -315,6 +318,9 @@ export async function reviewPullRequest({
       io,
       dryRun: inputs.dryRun,
       startedAt,
+      source,
+      strictness: config.strictness,
+      strategy: config.strategy,
       ...(applicabilityFact !== undefined ? { applicabilityFact } : {}),
     });
   }
@@ -576,7 +582,7 @@ export async function reviewPullRequest({
     pullRequest: pullRequestNumber,
     headRef: headSha,
     outcome: { classification: "published", reason },
-    policy: { strictness: runStrictness, strategy: config.strategy },
+    policy: { strictness: runStrictness, strategy: config.strategy, ...source },
     risk: lanes,
     findings: publishedAnchored,
     verification: {
@@ -907,7 +913,7 @@ function wireDefect(item, detail, info) {
  * a green log line is the whole result. Either way the run leaves a durable
  * record — kind "nothing-to-review" — unless dry-run suppressed the write.
  *
- * @param {{ repository: string, pullRequestNumber: number, headSha: string, io: Io, dryRun: boolean, startedAt: number, applicabilityFact?: import("./artifact.mjs").ApplicabilitySection }} input
+ * @param {{ repository: string, pullRequestNumber: number, headSha: string, io: Io, dryRun: boolean, startedAt: number, source: import("#core/policy.mjs").PolicySource, strictness: import("./config.mjs").Strictness, strategy: import("./config.mjs").Strategy, applicabilityFact?: import("./artifact.mjs").ApplicabilitySection }} input
  * @returns {Promise<RunResult>}
  */
 async function nothingToReview({
@@ -917,6 +923,9 @@ async function nothingToReview({
   io,
   dryRun,
   startedAt,
+  source,
+  strictness,
+  strategy,
   applicabilityFact,
 }) {
   // Same publication guard as the main path: the clearing update is a
@@ -962,6 +971,7 @@ async function nothingToReview({
           headRef: headSha,
           reason: "universe empty — marker cleared",
           kind: "nothing-to-review",
+          policy: { strictness, strategy, ...source },
         }),
         ...(applicabilityFact !== undefined ? { applicability: applicabilityFact } : {}),
       });
@@ -980,6 +990,7 @@ async function nothingToReview({
             headRef: headSha,
             reason: "universe empty and no prior review comment — nothing to do",
             kind: "nothing-to-review",
+            policy: { strictness, strategy, ...source },
           }),
         }
       : {}),
