@@ -151,15 +151,16 @@ export function decide({ evidence, assessment }) {
   // category no longer awaits triage. Absent from the config, nothing is
   // removed; the model is never told the marker's name, because it is on no
   // sheet offered to it.
-  const marker = policy?.labels.workflowMarkers[0];
+  const markers = policy?.labels.workflowMarkers ?? [];
   const classifiedCategory =
-    marker !== undefined && policy !== null
+    markers.length > 0 && policy !== null
       ? accepted.some((name) => policy.labels.roles.get(name) === "semantic-classification")
       : false;
-  const clearMarker =
-    marker !== undefined && classifiedCategory && thread.labels.includes(marker)
-      ? [{ name: marker, reason: /** @type {"marker"} */ ("marker") }]
-      : [];
+  const clearMarker = classifiedCategory
+    ? markers
+        .filter((marker) => thread.labels.includes(marker))
+        .map((name) => ({ name, reason: /** @type {"marker"} */ ("marker") }))
+    : [];
 
   // Issue-side evaluator dimensions (PR-C): a sheet-mode issue run asks the
   // model three bounded questions — quality, relationships, priority —
