@@ -35,45 +35,45 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 
 ## What today's outcomes map to
 
-| Action      | Today's outcome                                                     | Contract state                                        |
-| ----------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
-| `triage`    | green run with writes                                               | `published`                                           |
-| `triage`    | dry-run, event-gate exit                                            | `skip`                                                |
-| `triage`    | red run                                                             | `failed` or `refused` per the class                   |
-| `triage`    | the write withheld — the thread changed while the run was in flight | `abandoned`                                           |
-| `review`    | `nothing-to-review`                                                 | `published` (the marker-clearing write still happens) |
-| `review`    | `published`                                                         | `published`                                           |
-| `review`    | `published-without-artifact`                                        | `published` with verdict `unknown` on the archive     |
-| `review`    | `dry-run`                                                           | `skip`                                                |
-| `review`    | `abandoned`                                                         | `abandoned`                                           |
-| `harmonise` | commit + pull request                                               | `published`                                           |
-| `harmonise` | some pairs applied, run stopped                                     | `partial`                                             |
-| `harmonise` | dry run, or every pair already in step                              | `skip`                                                |
-| `harmonise` | config-absent or protection refusal                                 | `refused`                                             |
-| `harmonise` | a throw the run did not declare                                     | `failed`                                              |
+| Action      | Today's outcome                                                     | Contract state                                                                |
+| ----------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `triage`    | green run with writes                                               | `published`                                                                   |
+| `triage`    | dry-run, event-gate exit                                            | `skip`                                                                        |
+| `triage`    | red run                                                             | `failed` or `refused` per the class                                           |
+| `triage`    | the write withheld — the thread changed while the run was in flight | `abandoned`                                                                   |
+| `review`    | `nothing-to-review`                                                 | `published` (the marker-clearing write still happens)                         |
+| `review`    | `published`                                                         | `published`                                                                   |
+| `review`    | `published-without-artifact`                                        | `published` with verdict `unknown` on the archive                             |
+| `review`    | `dry-run`                                                           | `skip`                                                                        |
+| `review`    | `abandoned`                                                         | `abandoned`                                                                   |
+| `harmonise` | commit + pull request                                               | `published`                                                                   |
+| `harmonise` | some pairs applied, run stopped                                     | `partial`                                                                     |
+| `harmonise` | dry run, or every pair already in step                              | `skip`                                                                        |
+| `harmonise` | a pair the preparation refuses                                      | `partial` when other pairs published; a `skip` record and a red run otherwise |
+| `harmonise` | config-absent, or any throw the run did not declare                 | red run, no record — the carve-out below                                      |
 
 ## Failure taxonomy
 
 Fifteen classes; the class names the outcome, so the mapping is a function:
 
-| #     | Class                     | Outcome                         | The rule it pins                                                                                                                                                                                               |
-| ----- | ------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F-01  | event-name-unsupported    | `failed`                        | an unsupported event name is a defect or misconfiguration — review/triage throw                                                                                                                                |
-| F-01a | event-action-unsupported  | `skip`                          | an unsupported action is out of scope, not a failure                                                                                                                                                           |
-| F-02  | config-invalid/absent     | `refused`                       | no config, no run                                                                                                                                                                                              |
-| F-03  | policy-source-unavailable | `failed`                        | the pin must resolve before anything reads it                                                                                                                                                                  |
-| F-04  | transport-5xx/429         | `failed` after retries          | retry with backoff, then stop                                                                                                                                                                                  |
-| F-05  | transport-timeout         | `failed`                        | reads may retry; non-idempotent writes are pinned to one attempt                                                                                                                                               |
-| F-06  | auth (401/403)            | `failed`, zero writes           | a bad token is an environment break                                                                                                                                                                            |
-| F-07  | not-found-mid-write       | treated as applied              | a 404 on delete means already gone; the thread-existence inference is named                                                                                                                                    |
-| F-08  | rate-limit-exhausted      | `failed`                        | backoff, then stop                                                                                                                                                                                             |
-| F-09  | provider-invalid-answer   | `refused` or `failed`           | off-sheet (deterministic) refuses; junk fails — the mapping stays a function                                                                                                                                   |
-| F-10  | provider-refusal          | —                               | reserved, unused: no action can distinguish a refusal from junk yet                                                                                                                                            |
-| F-11  | ceiling-exceeded          | typed refusal, else `failed`    | budgets exist to be enforced, not reported                                                                                                                                                                     |
-| F-12  | subject-moved             | abort, no writes                | head/base moved between read and write                                                                                                                                                                         |
-| F-13  | partial-mutation          | `failed`                        | records as `failed` with per-op accounting in the reason — a re-run re-derives from live state, never replays; `partial` is a recognised terminal vocabulary word but is never the written outcome word (#247) |
-| F-14  | artifact-write-failure    | `published` + verdict `unknown` | the comment stands; the archive failed                                                                                                                                                                         |
-| F-15  | internal-unknown          | `failed`                        | an unhandled throw is a bug, and the record says so                                                                                                                                                            |
+| #     | Class                     | Outcome                                                 | The rule it pins                                                                                                                                                                                    |
+| ----- | ------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-01  | event-name-unsupported    | `failed`                                                | an unsupported event name is a defect or misconfiguration — review/triage throw                                                                                                                     |
+| F-01a | event-action-unsupported  | review `failed`; triage re-triages                      | review's event gate throws — a red refusal, no artifact; triage decides an unlisted action from live state and never silently skips it                                                              |
+| F-02  | config-invalid/absent     | `refused`                                               | no config, no run                                                                                                                                                                                   |
+| F-03  | policy-source-unavailable | `failed`                                                | the pin must resolve before anything reads it                                                                                                                                                       |
+| F-04  | transport-5xx/429         | `failed` after retries                                  | retry with backoff, then stop                                                                                                                                                                       |
+| F-05  | transport-timeout         | `failed`                                                | reads may retry; non-idempotent writes are pinned to one attempt                                                                                                                                    |
+| F-06  | auth (401/403)            | `failed`, zero writes                                   | a bad token is an environment break                                                                                                                                                                 |
+| F-07  | not-found-mid-write       | treated as applied                                      | a 404 on delete means already gone; the thread-existence inference is named                                                                                                                         |
+| F-08  | rate-limit-exhausted      | `failed`                                                | backoff, then stop                                                                                                                                                                                  |
+| F-09  | provider-invalid-answer   | `refused` or `failed`                                   | off-sheet (deterministic) refuses; junk fails — the mapping stays a function                                                                                                                        |
+| F-10  | provider-refusal          | —                                                       | reserved, unused: no action can distinguish a refusal from junk yet                                                                                                                                 |
+| F-11  | ceiling-exceeded          | typed refusal, else `failed`                            | budgets exist to be enforced, not reported                                                                                                                                                          |
+| F-12  | subject-moved             | `abandoned` (triage, review); harmonise: red, no record | head/base moved between read and write — the write is refused loudly, never hidden; triage and review record `abandoned` and stay green, harmonise has no declared path and ends red with no record |
+| F-13  | partial-mutation          | `failed` (triage); `partial` (harmonise)                | records as `failed` with per-op accounting in the reason; harmonise's partial exit writes `partial` — some pairs published, the run stopped; a re-run re-derives from live state, never replays     |
+| F-14  | artifact-write-failure    | `published` + verdict `unknown`                         | the comment stands; the archive failed                                                                                                                                                              |
+| F-15  | internal-unknown          | `failed`                                                | an unhandled throw is a bug, and the record says so                                                                                                                                                 |
 
 ## Run records
 
@@ -81,9 +81,12 @@ Every run leaves one machine-readable record behind — a local file inside the
 runner's workspace, delivered by the workflow's upload step — so a run's
 account outlives the runner log. The contract's rules for every record:
 
-- **One record per run, at every terminal point.** A landed mutation, a dry
-  run, a gate skip, a failure: each ends in a record. A run that died before
-  anything could be recorded may write no file, and the upload's
+- **One record per run, at every terminal point the action declares.** A
+  landed mutation, a dry run, a gate skip: each ends in a record. A
+  failure's posture is per action — triage records at its own terminal
+  points, failures included; review and harmonise have no declared failure
+  record, so an undeclared throw (a config refusal, a transport break, any
+  throw the run did not declare) ends red with no record, and the upload's
   `if-no-files-found: ignore` keeps those runs green.
 - **Byte-deterministic (I15).** No wall-clock fields; the same run facts
   build the same bytes. Keys sorted, compact JSON, no trailing newline.
@@ -94,7 +97,10 @@ account outlives the runner log. The contract's rules for every record:
   record carries passes the comment sanitiser and honours its retention class
   and cap — [ADR 003](adr/003-evidence-retention.md) states the classes.
 - **The `outcome` speaks the terminal-state vocabulary above, whole.** A word
-  outside it is a word the contract has not defined.
+  outside it is a word the contract has not defined — triage and harmonise
+  write their records' `outcome` from it, and review's artifact speaks the
+  classification vocabulary its own shapes declare, which the mapping table
+  above maps onto it.
 
 Three families exist today:
 
