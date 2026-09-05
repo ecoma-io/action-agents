@@ -759,27 +759,42 @@ Where it is written, per terminal path:
   outcome, and the record was the loss.
 - a **partial exit** — the same point, same rule, with the failed pairs counted
   in the record and the run still exiting red after the record lands.
-- an **all-in-step skip** and a **dry run** — nothing else landed, so the
-  record is the skip's whole outcome, and a failed write is a red run.
+- an **all-in-step skip** and a **dry run** — the same logged-loss tier as
+  the paths above (#347): a failed write is logged, the run keeps its
+  verdict, and the built record is stashed — a red exit (failed pairs)
+  re-attempts it at the boundary writer, exactly as it was built.
 
-A run that never reaches a terminal point — a config refusal, a transport
-break, any throw the run did not declare — writes no record, and the upload's
-`if-no-files-found: ignore` keeps those runs green.
+A throw the run did not declare — a config refusal, a transport break, a
+mid-run defect — is recorded by the boundary writer: `refused`
+for a typed deterministic refusal, `failed` for every other throw, and then
+the original error still fails the step, so the record never masks the throw
+it records (#344, #347). Only a run that dies before it holds the facts a
+record is built from, and a run whose record write itself fails — at the
+boundary, or at a declared point under the logged-loss tier — stay
+unrecorded; the upload's `if-no-files-found: ignore` keeps the green ones
+green.
 
-The fields, in schema version 2: `schemaVersion`, `repository`, `eventName`,
+The fields, in schema version 3: `schemaVersion`, `repository`, `eventName`,
 `sourceLanguage`, `dryRun`, `outcome`, `reason` (the terminal path's own
-sentence), `pairs` (`selected` — the schedule's size in pair-targets, one
+sentence, sanitised and capped — the cap is measured the way the validator's
+bound is read, in UTF-16 length, so a capped reason always fits it (#347)),
+`pairs` (`selected` — the schedule's size in pair-targets, one
 source document against one language — under `proposed`, `unchanged`,
 `skipped`, `failed`, the four that partition it, and the validator refuses a
-record where they do not), `pullRequest` (`number`, `created`; `null` when the run wrote
-none) and `headSha` (the base commit every read pinned to). The log lines and
+record where they do not; `null` when the run died before its accounting was
+finalised), `pullRequest` (`number`, `created`; `null` when the run wrote
+none) and `headSha` (the base commit every read pinned to; `null` before the
+run resolved one). The log lines and
 the pull-request body stay out of the record: the log lines are the run log's,
 and the pull request itself is the durable form of that path.
 
 `outcome` speaks the run contract's terminal-state vocabulary through
 `HARMONISE_OUTCOMES`, the closed set `harmonise/src/run-record.mjs` exports and
-validates against — a word outside it is refused, not coerced. Today's paths
-use `published`, `partial` and `skip`.
+validates against — a word outside it is refused, not coerced. The
+publication, partial and skip paths record `published`, `partial` and
+`skip`; the red terminals record `refused` — every line of the red set a
+deterministic refusal — or `failed` when one defect line is present, the
+worst line deciding (#347).
 
 Delivery: the file lands under the `record-path` directory (default
 `.harmonise-record`), named after the base commit — `harmonise-record-<base
@@ -796,7 +811,7 @@ request body, and the record is the run's, not the documents'.
 
 ## Failure posture
 
-The same law as `triage`: the provider unreachable after retries, a config that does not validate, a set narrowed to nothing — red, not green-on-nothing. The record write has its own two-tier posture, stated in [the run record](#the-run-record): after the run's own outcome has landed it is a logged loss, everywhere else it is the red run.
+The same law as `triage`: the provider unreachable after retries, a config that does not validate, a set narrowed to nothing — red, not green-on-nothing. The record write's posture is F-14's two-tier rule, stated in [the run record](#the-run-record) and in [the run contract](../run-contract.md#run-records): where the run's own outcome has landed — publication, partial exit, and, since #347, the declared skip points — the loss is logged and the verdict stands; where the record write is the run's only outcome, the loss is the red run; a red exit re-attempts the stashed record at the boundary writer, and a failure's record never masks the original error it records.
 
 **PR behavior on failures:** If at least one pair succeeds, the run creates a PR containing the successful changes and exits red. The log records which pairs failed. If no pairs succeed, the run fails with no PR. This ensures partial work is reviewable while failures are not silently ignored.
 
