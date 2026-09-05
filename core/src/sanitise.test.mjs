@@ -87,6 +87,27 @@ describe("rule 4 — length caps, visibly", () => {
     expect(text).toBe("short");
     expect(notes).toHaveLength(0);
   });
+  it("caps astral text by UTF-16 length — the measure every validator reads (#347)", () => {
+    // 200 emoji: 200 code points but 400 UTF-16 units. A cap that counted
+    // code points passes them whole, and the bound read back with `.length`
+    // is already over.
+    const { text, notes } = sanitiseCommentText("\u{1F600}".repeat(200), { maxChars: 20 });
+
+    expect(text.length).toBe(20);
+    expect(text.endsWith("…[truncated]")).toBe(true);
+    expect(notes[0]).toMatch(/truncated model text from 400 to 20/);
+  });
+
+  it("never splits a surrogate pair at the cut (#347)", () => {
+    // The emoji's low surrogate lands exactly on the cut: the cap backs off
+    // one unit rather than emitting a lone half — corrupt, not truncated.
+    const { text } = sanitiseCommentText("a".repeat(7) + "\u{1F600}" + "b".repeat(15), {
+      maxChars: 20,
+    });
+
+    expect(() => encodeURIComponent(text)).not.toThrow();
+    expect(text).toBe("a".repeat(7) + "…[truncated]");
+  });
 });
 
 describe("an adversarial answer, whole", () => {

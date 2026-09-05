@@ -1205,8 +1205,9 @@ describe("run — no sheet, the comment half", () => {
 
   it("cuts the rationale at the 300-char cap without splitting a surrogate pair", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // 287 ASCII, one two-unit emoji, padding: a UTF-16 slice(0, 288) would
-    // cut the emoji in half; the codepoint cap must keep it whole.
+    // 287 ASCII, one two-unit emoji, padding: a naive UTF-16 slice(0, 288)
+    // would cut the emoji in half; the cap backs off one unit and the emoji
+    // is dropped whole — never emitted as a corrupt lone half (#347).
     const answer = JSON.stringify({
       classification: "bug report",
       rationale: `${"a".repeat(287)}\u{1F980}${"b".repeat(25)}`,
@@ -1218,7 +1219,9 @@ describe("run — no sheet, the comment half", () => {
     const write = world.forge.writes[0];
     if (write === undefined) throw new Error("no comment was written");
     const body = String(write.args[1]);
-    expect(body).toContain(`> ${"a".repeat(287)}\u{1F980}…[truncated]`);
+    expect(body).toContain(`> ${"a".repeat(287)}…[truncated]`);
+    // A lone surrogate half would throw here — the no-split rule, pinned.
+    expect(() => encodeURIComponent(body)).not.toThrow();
     expect(body).toContain("**bug report**");
   });
 

@@ -169,7 +169,12 @@ function breakMentions(text) {
 }
 
 /**
- * Rule 4. The cut is marked inside the text, never silent.
+ * Rule 4. The cut is marked inside the text, never silent. The metric is
+ * UTF-16 length — what `String.prototype.length` counts and what every
+ * validator and surface bound reads back — never the code-point count,
+ * which astral-plane text drives past the very bound the cap exists to
+ * keep (#347). The cut never splits a surrogate pair: a lone half is
+ * corrupt text, not truncated text.
  *
  * @param {string} text
  * @param {number} maxChars
@@ -177,8 +182,18 @@ function breakMentions(text) {
  * @returns {string}
  */
 function cap(text, maxChars, notes) {
-  const chars = [...text];
-  if (chars.length <= maxChars) return text;
-  notes.push(`truncated model text from ${String(chars.length)} to ${String(maxChars)} characters`);
-  return `${chars.slice(0, Math.max(0, maxChars - TRUNCATION_MARK.length)).join("")}${TRUNCATION_MARK}`;
+  if (text.length <= maxChars) return text;
+  notes.push(`truncated model text from ${String(text.length)} to ${String(maxChars)} characters`);
+  let cut = Math.max(0, maxChars - TRUNCATION_MARK.length);
+  if (
+    cut > 0 &&
+    cut < text.length &&
+    text.charCodeAt(cut - 1) >= 0xd800 &&
+    text.charCodeAt(cut - 1) <= 0xdbff &&
+    text.charCodeAt(cut) >= 0xdc00 &&
+    text.charCodeAt(cut) <= 0xdfff
+  ) {
+    cut -= 1;
+  }
+  return `${text.slice(0, cut)}${TRUNCATION_MARK}`;
 }
