@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/ecoma-io/action-agents/compare/v0.8.4...v0.9.0) (2026-09-05)
+
+
+### Features
+
+* **core:** default request-timeout-ms to 120 s ([#342](https://github.com/ecoma-io/action-agents/issues/342)) ([2a4c58b](https://github.com/ecoma-io/action-agents/commit/2a4c58ba0c26ed5a646e6847f0cf055326c71329)), closes [#341](https://github.com/ecoma-io/action-agents/issues/341)
+* **review:** a general-purpose review eligibility policy ([#339](https://github.com/ecoma-io/action-agents/issues/339)) ([458c140](https://github.com/ecoma-io/action-agents/commit/458c140fe428eb9abfa65a437dc6a0d2832e13a3))
+
 ## [0.8.4](https://github.com/ecoma-io/action-agents/compare/v0.8.3...v0.8.4) (2026-09-05)
 
 
