@@ -252,6 +252,25 @@ function realIo(inputs, context, overrides = {}) {
  */
 
 /**
+ * The red-run facts `harmoniseRun` has landed so far, stashed as they become
+ * true. A `null` means the run died before the fact existed — never that
+ * there was none — and is what the boundary writer records.
+ *
+ * @typedef {object} RedFacts
+ * @property {string | null} headSha the base commit the reads pinned to, once the policy source resolved
+ * @property {import("./run-record.mjs").RecordPairs | null} pairs the pair accounting, once the schedule was finalised
+ * @property {import("./run-record.mjs").RecordPullRequest | null} pullRequest the pull request, once the upsert landed
+ * @property {boolean} recorded whether a declared terminal point already wrote this run's one record
+ */
+
+/**
+ * Runs one harmonise pass and, when it ends red, writes the run's one
+ * `failed` record before the original error fails the step (#344). The
+ * record never masks the throw it records, and its own failure is a logged
+ * loss, not a replacement error; a declared terminal point that already
+ * wrote — a skip record, the published or partial record — is never
+ * overwritten.
+ *
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
  * @param {Partial<Io> & { fetchImpl?: typeof globalThis.fetch }} [io] injectable for tests; real clients omit it, and realIo builds every member
@@ -260,6 +279,48 @@ function realIo(inputs, context, overrides = {}) {
 export async function run(inputs, context, io) {
   /** @type {Io} */
   const world = realIo(inputs, context, io ?? {});
+  /** @type {RedFacts} */
+  const red = { headSha: null, pairs: null, pullRequest: null, recorded: false };
+  try {
+    await harmoniseRun(inputs, context, world, red);
+  } catch (cause) {
+    if (!red.recorded) {
+      try {
+        world.writeRecord({
+          record: buildHarmoniseRecord({
+            repository: `${context.owner}/${context.repo}`,
+            eventName: context.eventName,
+            sourceLanguage: inputs.sourceLanguage,
+            dryRun: inputs.dryRun,
+            outcome: "failed",
+            reason: cause instanceof Error ? cause.message : String(cause),
+            pairs: red.pairs,
+            pullRequest: red.pullRequest,
+            headSha: red.headSha,
+          }),
+        });
+      } catch (recordCause) {
+        info(
+          `harmonise: the failed-run record was not written: ` +
+            `${recordCause instanceof Error ? recordCause.message : String(recordCause)}`,
+        );
+      }
+    }
+    throw cause;
+  }
+}
+
+/**
+ * The run body: everything between the event read and the final verdict,
+ * parameterised over the io world and the red-facts holder it stashes into.
+ *
+ * @param {Inputs} inputs
+ * @param {ReturnType<typeof readContext>} context
+ * @param {Io} world
+ * @param {RedFacts} red
+ * @returns {Promise<void>}
+ */
+async function harmoniseRun(inputs, context, world, red) {
   const event = await world.readEvent();
 
   // The policy source is resolved once, from the execution context: for a
@@ -272,6 +333,9 @@ export async function run(inputs, context, io) {
     event: /** @type {Record<string, unknown>} */ (event),
     forge: world.forge,
   });
+  // The red-run stash begins: from here on, a red exit names the commit it
+  // was judging.
+  red.headSha = source.sha;
   const policy = { getContents: policyReader(world.forge, source) };
   const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
   let config = validateConfig(loaded.raw);
@@ -785,9 +849,28 @@ export async function run(inputs, context, io) {
     if (entry !== undefined) outcomes.push(entry);
   }
 
+  const proposed = outcomes.filter((entry) => entry.outcome === "proposed");
+  // The run's pair accounting, as the record carries it. The unit is the
+  // pair-target — one source document against one language — the unit every
+  // path above lands a pair in, and `selected` is that schedule's size for
+  // this run. `proposed`, `unchanged`, `skipped` and `failed` partition it,
+  // totalling it exactly, and the record validator refuses a record where
+  // they do not. `unchanged` gathers both noop verdicts — a proven-in-step
+  // skip and a model's endorsement — the two faces of "already in step".
+  const unchangedCount = outcomes.filter(
+    (entry) => entry.outcome === "unchanged" || entry.outcome === "unchanged-skipped",
+  ).length;
+  const pairCounts = {
+    selected: selected.reduce((total, pair) => total + pair.targets.length, 0),
+    proposed: proposed.length,
+    unchanged: unchangedCount,
+    skipped: skippedLines.length,
+    failed: failedLines.length,
+  };
+  // The red-run stash: once the accounting exists, a red exit records it.
+  red.pairs = pairCounts;
   // Every pair failing or skipping is red: work existed and none of it was
   // attempted successfully. Some failing or skipping is reported and carried.
-  const proposed = outcomes.filter((entry) => entry.outcome === "proposed");
   if (outcomes.length === 0 && skippedLines.length === 0 && failedLines.length > 0) {
     throw new Error(`every pair failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`);
   }
@@ -835,23 +918,6 @@ export async function run(inputs, context, io) {
       ? `${String(failedLines.length)} pair(s) failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`
       : "";
 
-  // The run's pair accounting, as the record carries it. The unit is the
-  // pair-target — one source document against one language — the unit every
-  // path above lands a pair in, and `selected` is that schedule's size for
-  // this run. `proposed`, `unchanged`, `skipped` and `failed` partition it,
-  // totalling it exactly, and the record validator refuses a record where
-  // they do not. `unchanged` gathers both noop verdicts — a proven-in-step
-  // skip and a model's endorsement — the two faces of "already in step".
-  const unchangedCount = outcomes.filter(
-    (entry) => entry.outcome === "unchanged" || entry.outcome === "unchanged-skipped",
-  ).length;
-  const pairCounts = {
-    selected: selected.reduce((total, pair) => total + pair.targets.length, 0),
-    proposed: proposed.length,
-    unchanged: unchangedCount,
-    skipped: skippedLines.length,
-    failed: failedLines.length,
-  };
   const recordBase = {
     repository: `${context.owner}/${context.repo}`,
     eventName: context.eventName,
@@ -870,6 +936,7 @@ export async function run(inputs, context, io) {
       pullRequest: null,
     });
     world.writeRecord({ record });
+    red.recorded = true;
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -886,6 +953,7 @@ export async function run(inputs, context, io) {
       pullRequest: null,
     });
     world.writeRecord({ record });
+    red.recorded = true;
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -988,6 +1056,7 @@ export async function run(inputs, context, io) {
     title,
     body,
   });
+  red.pullRequest = { number: pullRequest.number, created: pullRequest.created };
 
   info(
     pullRequest.created
@@ -1011,6 +1080,7 @@ export async function run(inputs, context, io) {
   });
   try {
     world.writeRecord({ record });
+    red.recorded = true;
   } catch (cause) {
     info(
       `harmonise: the run record was not written: ${cause instanceof Error ? cause.message : String(cause)}`,

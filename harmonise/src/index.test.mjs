@@ -3243,6 +3243,105 @@ describe("the run record (#297)", () => {
     // A dry run, so the refusal fires before anything was published.
     expect(forgeDouble.writes.map((/** @type {{ op: string }} */ w) => w.op)).toHaveLength(0);
   });
+
+  it("a red run writes one failed record, then the original error still fails the step (#344)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(
+      makeRepo({ documents: { "manual/dev.md": "" } }),
+      makeInventory(["manual/dev.md"]),
+    );
+    const ioDouble = io(forgeDouble);
+
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+      /every pair skipped[\s\S]*the source document is empty/,
+    );
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("failed");
+    // The thrown message, sanitised and one-lined at the record's build site.
+    expect(record.reason).toMatch(/every pair skipped.*the source document is empty/);
+    expect(record.pairs).toEqual({ selected: 1, proposed: 0, unchanged: 0, skipped: 1, failed: 0 });
+    expect(record.headSha).toBe(forgeDouble.baseSha);
+    expect(record.pullRequest).toBeNull();
+  });
+
+  it("an every-pair-failed red run records the failing lines and stays red (#344)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo(), makeInventory(["manual/dev.md", "manual/vi/dev.md"]));
+    const ioDouble = io(forgeDouble, [new Error("the model refused the pair")]);
+
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+      /every pair failed[\s\S]*the model refused the pair/,
+    );
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("failed");
+    expect(record.pairs).toEqual({ selected: 1, proposed: 0, unchanged: 0, skipped: 0, failed: 1 });
+    expect(record.reason).toMatch(/every pair failed.*the model refused the pair/);
+  });
+
+  it("an undeclared mid-run defect writes the failed record and propagates the original error (#344)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = io(forgeDouble);
+    ioDouble.forge.getRepository = async () => {
+      throw new TypeError("synthetic mid-run defect");
+    };
+
+    const cause = await run(readInputs(runner), context(), ioDouble).then(
+      () => null,
+      (error) => error,
+    );
+    // The original error, not a replacement: same constructor, same message.
+    expect(cause).toBeInstanceOf(TypeError);
+    expect(/** @type {Error} */ (cause).message).toBe("synthetic mid-run defect");
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("failed");
+    expect(record.headSha).toBe(forgeDouble.baseSha);
+    expect(record.pairs).toBeNull();
+    expect(record.pullRequest).toBeNull();
+    expect(record.reason).toBe("synthetic mid-run defect");
+  });
+
+  it("a record-write failure on the red path is a logged loss, and the original error still fails the step (#344)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const forgeDouble = forge(makeRepo());
+    const ioDouble = io(forgeDouble);
+    ioDouble.forge.getRepository = async () => {
+      throw new TypeError("synthetic mid-run defect");
+    };
+    ioDouble.writeRecord = () => {
+      throw new Error("the disk is full");
+    };
+
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+      /synthetic mid-run defect/,
+    );
+    expect(logged(log)).toMatch(/the failed-run record was not written: the disk is full/);
+    expect(ioDouble.records).toHaveLength(0);
+  });
+
+  it("a declared skip record survives a red exit — the boundary never writes twice (#344)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // A dry run with one translatable pair and one vanished source: the
+    // skip record is written at the declared point, then the failed pair
+    // reddens the run — and the failed-run boundary must not overwrite it.
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": "# Dev\n\nFine prose.\n" },
+      }),
+      makeInventory(["manual/dev.md", "manual/lost.md"]),
+    );
+    const ioDouble = io(forgeDouble);
+
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+      /1 pair\(s\) failed/,
+    );
+    expect(ioDouble.records).toHaveLength(1);
+    expect(ioDouble.records[0].outcome).toBe("skip");
+    expect(ioDouble.records[0].reason).toBe("dry run — nothing was written");
+  });
 });
 
 describe("main", () => {
