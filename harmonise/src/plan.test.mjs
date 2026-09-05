@@ -376,7 +376,7 @@ describe("translatePair", () => {
       documents: { languages: {} },
     });
     await expect(pending).rejects.toBeInstanceOf(DeterministicRefusalError);
-    await expect(pending).rejects.toThrowError(/transposed protected content/);
+    await expect(pending).rejects.toThrowError(/does not preserve the protected content's order/);
     expect(chat.calls()).toBe(1);
   });
 

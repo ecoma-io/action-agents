@@ -375,7 +375,7 @@ describe("placeholder order", () => {
     });
     const candidate = `Alpha keeps ${g(2)}. Beta must ${g(1)}.\n`;
     expect(() => restoreDocument(candidate, protection)).toThrow(
-      `placeholder ${g(2)} appears before ${g(1)} — the translation transposed protected content`,
+      `placeholder ${g(2)} appears before ${g(1)} — the candidate does not preserve the protected content's order`,
     );
     expect(() => restoreDocument(candidate, protection)).toThrow(DeterministicRefusalError);
   });
@@ -389,7 +389,31 @@ describe("placeholder order", () => {
       .replace(g(2), g(1))
       .replace("@@A@@", g(2));
     expect(() => restoreDocument(swapped, protection)).toThrow(
-      `placeholder ${g(2)} appears before ${g(1)} — the translation transposed protected content`,
+      `placeholder ${g(2)} appears before ${g(1)} — the candidate does not preserve the protected content's order`,
+    );
+  });
+
+  it("refuses a singleton swapped with a repeated token's first occurrence", () => {
+    const { protection } = protect(
+      "Alpha keeps logs 30 days. Beta must ship weekly. Gamma cites ship weekly again.\n",
+      { glossary: ["logs 30 days", "ship weekly"] },
+    );
+    // g(1) is required once, g(2) twice: counts match, yet the first g(2)
+    // landing before g(1) means the protected bytes come back swapped (#358).
+    const candidate = `Alpha keeps ${g(2)}. Beta must ${g(1)}. Gamma cites ${g(2)} again.\n`;
+    expect(() => restoreDocument(candidate, protection)).toThrow(
+      `placeholder ${g(2)} appears before ${g(1)} — the candidate does not preserve the protected content's order`,
+    );
+    expect(() => restoreDocument(candidate, protection)).toThrow(DeterministicRefusalError);
+  });
+
+  it("restores a repeated token in place beside its singleton neighbour", () => {
+    const { protection } = protect(
+      "Alpha keeps logs 30 days. Beta must ship weekly. Gamma cites ship weekly again.\n",
+      { glossary: ["logs 30 days", "ship weekly"] },
+    );
+    expect(restoreDocument(protection.text, protection)).toBe(
+      "Alpha keeps logs 30 days. Beta must ship weekly. Gamma cites ship weekly again.\n",
     );
   });
 
@@ -399,14 +423,20 @@ describe("placeholder order", () => {
     expect(restoreDocument(`Alpha keeps ${g(1)}. Beta must ${g(2)}.\n`, protection)).toBe(source);
   });
 
-  it("governs a repeated token by counts alone, wherever it lands", () => {
+  it("pins a repeated token's first occurrence and lets its later ones land by counts alone", () => {
     const { protection } = protect(
       "Alpha keeps logs 30 days. Beta must logs 30 days. Gamma will ship weekly.\n",
       { glossary: ["logs 30 days", "ship weekly"] },
     );
-    const candidate = `First ${g(2)}. Then ${g(1)} and ${g(1)}.\n`;
-    expect(restoreDocument(candidate, protection)).toBe(
-      "First ship weekly. Then logs 30 days and logs 30 days.\n",
+    // Document order is g(1), g(1), g(2): the first g(1) must precede the
+    // first g(2), but where the second g(1) lands is counts' business.
+    const clustered = `First ${g(1)}. Then ${g(1)} and ${g(2)}.\n`;
+    expect(restoreDocument(clustered, protection)).toBe(
+      "First logs 30 days. Then logs 30 days and ship weekly.\n",
+    );
+    const firstSwapped = `First ${g(2)}. Then ${g(1)} and ${g(1)}.\n`;
+    expect(() => restoreDocument(firstSwapped, protection)).toThrow(
+      `placeholder ${g(2)} appears before ${g(1)} — the candidate does not preserve the protected content's order`,
     );
   });
 
@@ -419,7 +449,7 @@ describe("placeholder order", () => {
       .replace(s(2), s(1))
       .replace("@@A@@", s(2));
     expect(() => restoreDocument(swapped, protection)).toThrow(
-      `placeholder ${s(2)} appears before ${s(1)} — the translation transposed protected content`,
+      `placeholder ${s(2)} appears before ${s(1)} — the candidate does not preserve the protected content's order`,
     );
     expect(restoreDocument(protection.text, protection)).toBe(source);
   });
@@ -429,7 +459,7 @@ describe("placeholder order", () => {
     const { protection } = protect(source, { glossary: ["repository"] });
     const swapped = `The ${g(1)} grows.\n\n${s(1)}\n`;
     expect(() => restoreDocument(swapped, protection)).toThrow(
-      `placeholder ${g(1)} appears before ${s(1)} — the translation transposed protected content`,
+      `placeholder ${g(1)} appears before ${s(1)} — the candidate does not preserve the protected content's order`,
     );
     expect(restoreDocument(`${s(1)}\n\nThe ${g(1)} grows tall.\n`, protection)).toBe(
       "<!-- harmonise:skip -->\nkept verbatim\n\nThe repository grows tall.\n",
