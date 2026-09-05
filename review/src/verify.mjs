@@ -34,6 +34,9 @@ import { contentDigest } from "./digest.mjs";
 import { json5Parse } from "#core/json5-parse.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
+import { PUBLISHED_LIFECYCLE_STATES, VERDICTS } from "./vocabulary.mjs";
+
+export { PUBLISHED_LIFECYCLE_STATES, VERDICTS };
 
 /** @typedef {import("./answer.mjs").Finding} Finding */
 /** @typedef {import("./config.mjs").Strategy} Strategy */
@@ -59,8 +62,6 @@ export const VERIFIER_MAX_TOOL_CALLS = 40;
 export const VERIFIER_MAX_EVIDENCE_BYTES = 128 * 2 ** 10;
 
 const EXCERPT_CUT = "…[truncated]";
-
-export const VERDICTS = /** @type {const} */ (["confirmed", "refuted", "uncertain"]);
 
 /**
  * @typedef {"confirmed" | "refuted" | "uncertain"} Verdict
@@ -158,13 +159,6 @@ export const LIFECYCLE_OF_VERDICT = Object.freeze({
   refuted: "refuted",
   uncertain: "unresolved",
 });
-
-/** The lifecycle vocabulary an artifact may record — a candidate never publishes. */
-export const PUBLISHED_LIFECYCLE_STATES = /** @type {const} */ ([
-  "confirmed",
-  "refuted",
-  "unresolved",
-]);
 
 /**
  * One finding after the pass — the validated finding untouched, its

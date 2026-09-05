@@ -213,6 +213,32 @@ run judged), **policy** (what the configuration allows), **human-workflow**
 - Markers stay code-only, lifecycles stay publication-scoped, the sheet stays
   policy-only; new epistemic state gets its own fields.
 
+## The canonical review result
+
+A review's verified publication set is canonical: one shape, built once by
+`createCanonicalResult`, that the comment, the SARIF upload and the merge gate
+all project from ([ADR 004](adr/004-canonical-review-result.md)). Three rules
+give the shape its authority:
+
+- **Finding identity is content, not position.** A finding's fingerprint is a
+  versioned digest over its normalized path, its claim kind — a closed,
+  code-validated vocabulary the verification pass binds from evidence, as
+  epistemic as the verdicts themselves — and the code span the reviewed bytes
+  carry at its anchor. Line moves, message rewrites and severity re-grades
+  keep the identity; a rewritten span, a new file or a reclassified claim is
+  a new finding — churn reconciliation records, never enforcement drift,
+  since the gate reads the current set. Claims sharing the full key in one
+  run collapse to the first, recorded on the result.
+- **Reconciliation is code, and incomplete runs resolve nothing.** The
+  `new | persisting | moved | resolved | unresolved` vocabulary is computed
+  from artifacts; a run that could not complete its coverage never declares a
+  previous finding `resolved`.
+- **The gate is a pure function of the canonical result and the policy.**
+  `unknown` never passes; an incomplete, abandoned or refused run does not
+  pass; a confirmed finding the policy blocks on blocks the gate. The model
+  names no consequence, and no projection — comment or SARIF — is ever read
+  back as input.
+
 ## The seventeen invariants
 
 Each names one authority: **A** architectural (archkeep-enforced), **D**

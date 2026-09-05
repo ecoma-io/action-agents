@@ -25,11 +25,23 @@ reads as a different finding, a re-worded one can duplicate.
    canonical. The comment, the Code Scanning upload and the merge gate are
    projections computed from it; none of them is authoritative, and none
    records state the canonical result does not carry.
-2. **Finding identity is content-addressed and line-independent.** A finding's
-   cross-run identity is a deterministic digest over its rule or kind, its
-   normalized path and its normalized code span — never the line number, never
-   the message wording. A moved finding keeps its identity; a rewritten span
-   is a new finding.
+2. **Finding identity is content-addressed and position-independent.** A
+   finding's cross-run identity is a versioned digest over its normalized
+   path, its claim kind and its normalized code span — never the line
+   number, never the message wording, never the severity. The kind is
+   epistemic state: a model-emitted pick from a closed, code-validated
+   vocabulary, bound by the verification pass from evidence the way it
+   binds the verdict, and trusted to exactly that degree. The span is
+   captured from the reviewed bytes by code, never written by the model,
+   and stored so the fingerprint is recomputable. A moved, re-worded or
+   re-graded finding keeps its identity; a rewritten span or a new file
+   mints a new one. A reclassified claim does too — the one identity
+   change kind can mint — and its consequence is reconciliation churn
+   (`resolved` beside `new`), never enforcement drift: the gate reads the
+   current set, and a confirmed blocking finding blocks under either
+   label. Claims that share the full key inside one run collapse to the
+   first in publication order, recorded on the result — no occurrence
+   rank ever enters the identity.
 3. **Reconciliation is code, not model.** `previous + current → new |
 persisting | moved | resolved | unresolved` is a pure deterministic
    function over artifacts. An incomplete or unknown current run never
