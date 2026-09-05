@@ -758,7 +758,7 @@ test("pinHarmonise pins the op sequence and a refused run's exact message", () =
 test("the harmonise seed entries replay green and pin their terminal states", async () => {
   const entries = await loadCorpus(CORPUS_ROOT);
   const harmoniseEntries = entries.filter((entry) => entry.kind === "harmonise");
-  assert.equal(harmoniseEntries.length, 2);
+  assert.equal(harmoniseEntries.length, 3);
   for (const entry of harmoniseEntries) {
     const replay = await replayHarmonise(entry);
     pinHarmonise(entry, replay);
