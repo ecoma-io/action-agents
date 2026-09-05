@@ -84,12 +84,15 @@ export const VERIFICATION_VERDICTS = /** @type {const} */ (["confirmed", "refute
  * The verification block every triage record carries from this schema on.
  * Until the opt-in verification pass exists (issue #274), nothing requests
  * verification: the block is present, typed and validated, and empty —
- * filling it later is a fill, not a schema change.
+ * filling it later is a fill, not a schema change. The relations the
+ * validator refuses — duplicated answers or downgrades, evidence under
+ * `requested: false`, a downgrade without an answer, a downgrade of an
+ * operation answered `confirmed` — are stated on `validateVerificationBlock`.
  *
  * @typedef {object} VerificationBlock
  * @property {boolean} requested whether this run asked for verification
  * @property {VerificationAnswer[]} answers one per verified op, in plan order
- * @property {string[]} downgraded op ids the verification downgraded to refusals
+ * @property {string[]} downgraded op ids the verification downgraded to refusals, a subset of `answers`' op ids
  */
 
 /**
@@ -130,9 +133,19 @@ export function isReasonDigest(value) {
 
 /**
  * Fail-closed validation of a record's verification block: exactly the
- * three keys, the frozen vocabularies, no repair. A malformed block is a
- * code bug — the builder's output is what flows here — and refusing it
- * beats inventing evidence.
+ * three keys, the frozen vocabularies, and the block-level relations the
+ * verification contract states — one answer per verified operation (no
+ * duplicate `opId`), one downgrade per operation, the block empty when no
+ * pass ran (`requested: false` carries no evidence), every downgraded
+ * operation an answered one, and no downgrade of an operation the same
+ * block answers `confirmed` (a confirmed op stands — a record claiming
+ * both is self-contradictory evidence). What the block cannot prove about
+ * itself — membership in the run's plan, and plan order — is minted and
+ * held where the plan exists (`verify.mjs`), and is deliberately not
+ * re-stated here: the record carries no plan to check against.
+ *
+ * A malformed block is a code bug — the builder's output is what flows
+ * here — and refusing it beats inventing evidence.
  *
  * @param {unknown} value
  * @returns {VerificationBlock}
@@ -155,6 +168,8 @@ export function validateVerificationBlock(value) {
   if (!Array.isArray(record["answers"]) || !Array.isArray(record["downgraded"])) {
     throw new TypeError("the verification block's 'answers' and 'downgraded' must be arrays");
   }
+  /** The answers by op id, for the block-level relations judged below. */
+  const answersByOpId = new Map();
   for (const answer of record["answers"]) {
     if (typeof answer !== "object" || answer === null || Array.isArray(answer)) {
       throw new TypeError("a verification answer is not an object");
@@ -173,6 +188,11 @@ export function validateVerificationBlock(value) {
     if (!isOpId(entry["opId"])) {
       throw new TypeError("a verification answer's opId is outside the code-minted vocabulary");
     }
+    if (answersByOpId.has(entry["opId"])) {
+      throw new TypeError(
+        `a verification answer names '${String(entry["opId"])}' twice — one answer per verified operation`,
+      );
+    }
     if (
       entry["verdict"] !== "confirmed" &&
       entry["verdict"] !== "refuted" &&
@@ -183,10 +203,41 @@ export function validateVerificationBlock(value) {
     if (!isReasonDigest(entry["reasonDigest"])) {
       throw new TypeError("a verification answer's reasonDigest is not a well-formed digest");
     }
+    answersByOpId.set(entry["opId"], entry["verdict"]);
   }
+  const downgradedOps = new Set();
   for (const opId of record["downgraded"]) {
     if (!isOpId(opId)) {
       throw new TypeError("a downgraded op id is outside the code-minted vocabulary");
+    }
+    if (downgradedOps.has(opId)) {
+      throw new TypeError(
+        `the verification block downgrades '${String(opId)}' twice — a plan holds each operation once`,
+      );
+    }
+    downgradedOps.add(opId);
+  }
+  if (
+    record["requested"] === false &&
+    (record["answers"].length > 0 || record["downgraded"].length > 0)
+  ) {
+    throw new TypeError(
+      "the verification block carries answers or downgrades under 'requested: false' — " +
+        "the block is the empty one when no pass ran",
+    );
+  }
+  for (const opId of downgradedOps) {
+    if (!answersByOpId.has(opId)) {
+      throw new TypeError(
+        `the verification block downgrades '${String(opId)}' without an answer for it — ` +
+          "a downgraded operation is a verified one",
+      );
+    }
+    if (answersByOpId.get(opId) === "confirmed") {
+      throw new TypeError(
+        `the verification block downgrades '${String(opId)}' whose answer is 'confirmed' — ` +
+          "a confirmed operation stands; downgraded and written never diverge",
+      );
     }
   }
   return /** @type {VerificationBlock} */ (value);

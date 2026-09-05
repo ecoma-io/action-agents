@@ -20,9 +20,15 @@ import {
   triageRecordFilename,
   triageRecordSchemaVersion,
   validateTriageRecord,
+  validateVerificationBlock,
   VERIFICATION_VERDICTS,
 } from "./run-record.mjs";
-import { reasonDigest } from "./verify.mjs";
+import {
+  judgeVerificationAnswer,
+  mintVerificationPlan,
+  reasonDigest,
+  verifyDecision,
+} from "./verify.mjs";
 
 const SHA = "c".repeat(40);
 const DIGEST = "b".repeat(64);
@@ -187,16 +193,25 @@ describe("buildTriageRecord", () => {
   });
 
   it("carries the frozen verification block it is given", () => {
+    // The block is contract-consistent: every downgraded op is one the same
+    // block answers, and no answer it downgrades is `confirmed` — the shapes
+    // `validateVerificationBlock` holds the record to.
     const record = recordFixture({
       verification: {
         requested: true,
-        answers: [{ opId: "add:bug", verdict: "confirmed", reasonDigest: DIGEST }],
+        answers: [
+          { opId: "add:bug", verdict: "confirmed", reasonDigest: DIGEST },
+          { opId: "remove:needs triage", verdict: "uncertain", reasonDigest: "a".repeat(64) },
+        ],
         downgraded: ["remove:needs triage"],
       },
     });
     expect(record.verification).toEqual({
       requested: true,
-      answers: [{ opId: "add:bug", verdict: "confirmed", reasonDigest: DIGEST }],
+      answers: [
+        { opId: "add:bug", verdict: "confirmed", reasonDigest: DIGEST },
+        { opId: "remove:needs triage", verdict: "uncertain", reasonDigest: "a".repeat(64) },
+      ],
       downgraded: ["remove:needs triage"],
     });
   });
@@ -524,6 +539,176 @@ describe("validateTriageRecord refusals", () => {
         ),
       ),
     ).toThrow(/not a well-formed digest/u);
+  });
+});
+
+describe("validateVerificationBlock relations", () => {
+  /**
+   * A contract-consistent filled block — one answer per operation, downgrades
+   * a subset, none of them `confirmed` — the shapes the relations below
+   * break one at a time.
+   *
+   * @returns {Record<string, unknown>}
+   */
+  function consistentBlock() {
+    return {
+      requested: true,
+      answers: [
+        { opId: "add:bug", verdict: "confirmed", reasonDigest: DIGEST },
+        { opId: "add:priority: high", verdict: "refuted", reasonDigest: "a".repeat(64) },
+        { opId: "remove:needs triage", verdict: "uncertain", reasonDigest: "f".repeat(64) },
+      ],
+      downgraded: ["add:priority: high", "remove:needs triage"],
+    };
+  }
+
+  /**
+   * A mutable clone of a consistent block, for refusal tests: the frozen
+   * record the builder produces is not the input here — the block is.
+   *
+   * @template T
+   * @param {(block: Record<string, unknown>) => void} breakIt
+   * @returns {T}
+   */
+  function brokenBlock(breakIt) {
+    const block = structuredClone(consistentBlock());
+    breakIt(block);
+    return /** @type {T} */ (block);
+  }
+
+  it("passes a contract-consistent filled block — the relations hold, nothing to refuse", () => {
+    expect(() => validateVerificationBlock(consistentBlock())).not.toThrow();
+    expect(() =>
+      validateTriageRecord(malformed((r) => (r["verification"] = consistentBlock()))),
+    ).not.toThrow();
+  });
+
+  it("passes the empty block a run without the pass carries, and the empty plan's block", () => {
+    expect(() =>
+      validateVerificationBlock({ requested: false, answers: [], downgraded: [] }),
+    ).not.toThrow();
+    // The empty-plan shape `verifyDecision` mints: the pass ran, nothing was
+    // proposed, nothing to answer, nothing to downgrade.
+    expect(() =>
+      validateVerificationBlock({ requested: true, answers: [], downgraded: [] }),
+    ).not.toThrow();
+  });
+
+  it("refuses a duplicate answer — one entry per verified operation", () => {
+    expect(() =>
+      validateVerificationBlock(
+        brokenBlock((block) => {
+          block["answers"] = [
+            .../** @type {unknown[]} */ (block["answers"]),
+            { opId: "add:bug", verdict: "confirmed", reasonDigest: "e".repeat(64) },
+          ];
+        }),
+      ),
+    ).toThrow(/names 'add:bug' twice — one answer per verified operation/u);
+  });
+
+  it("refuses a duplicate downgrade — a plan holds each operation once", () => {
+    expect(() =>
+      validateVerificationBlock(
+        brokenBlock((block) => {
+          block["downgraded"] = [
+            .../** @type {string[]} */ (block["downgraded"]),
+            "add:priority: high",
+          ];
+        }),
+      ),
+    ).toThrow(/downgrades 'add:priority: high' twice — a plan holds each operation once/u);
+  });
+
+  it("refuses answers under 'requested: false' — evidence no pass produced", () => {
+    expect(() =>
+      validateVerificationBlock(
+        brokenBlock((block) => {
+          block["requested"] = false;
+        }),
+      ),
+    ).toThrow(/carries answers or downgrades under 'requested: false'/u);
+  });
+
+  it("refuses downgrades under 'requested: false' — evidence no pass produced", () => {
+    expect(() =>
+      validateVerificationBlock(
+        brokenBlock((block) => {
+          block["requested"] = false;
+          block["answers"] = [];
+        }),
+      ),
+    ).toThrow(/carries answers or downgrades under 'requested: false'/u);
+  });
+
+  it("refuses a downgrade of an operation no answer names", () => {
+    expect(() =>
+      validateVerificationBlock(
+        brokenBlock((block) => {
+          block["answers"] = /** @type {unknown[]} */ (block["answers"]).filter(
+            (answer) =>
+              /** @type {Record<string, unknown>} */ (answer)["opId"] !== "add:priority: high",
+          );
+        }),
+      ),
+    ).toThrow(/downgrades 'add:priority: high' without an answer for it/u);
+  });
+
+  it("refuses a downgrade of an operation the same block answers 'confirmed'", () => {
+    expect(() =>
+      validateVerificationBlock(
+        brokenBlock((block) => {
+          block["downgraded"] = ["add:bug", "add:priority: high"];
+        }),
+      ),
+    ).toThrow(/downgrades 'add:bug' whose answer is 'confirmed'/u);
+  });
+});
+
+describe("the record validates the real pass's blocks", () => {
+  it("a block `judgeVerificationAnswer` produces validates — builder and validator cannot drift", () => {
+    const plan = mintVerificationPlan(decisionFixture());
+    const answer = JSON.stringify([
+      { opId: "remove:needs triage", verdict: "confirmed", reason: "the marker names it" },
+      // An off-plan id, an off-vocabulary verdict and an over-cap reason are
+      // the deviations the pass disposes as `uncertain` — the block they
+      // produce still validates.
+      { opId: "add:not-in-plan", verdict: "confirmed", reason: "invented" },
+      { opId: "add:bug", verdict: "certainly", reason: "off vocabulary" },
+      {
+        opId: "add:priority: high",
+        verdict: "uncertain",
+        reason: "x".repeat(301),
+      },
+    ]);
+    const { block } = judgeVerificationAnswer(answer, plan);
+    expect(block.requested).toBe(true);
+    expect(() => validateVerificationBlock(block)).not.toThrow();
+  });
+
+  it("the block an unreachable verifier produces validates — the transport path is the same boundary", async () => {
+    const plan = mintVerificationPlan(decisionFixture());
+    const chat = {
+      complete: async () => {
+        throw new Error("connection reset by the provider");
+      },
+    };
+    const { block } = await verifyDecision({
+      plan,
+      thread: {
+        number: 41,
+        type: "issue",
+        state: "open",
+        title: "t",
+        body: "b",
+        labels: [],
+        createdAt: "2026-09-05T00:00:00Z",
+        creator: "octocat",
+      },
+      chat: /** @type {never} */ (chat),
+      model: "triage",
+    });
+    expect(() => validateVerificationBlock(block)).not.toThrow();
   });
 });
 
