@@ -24,6 +24,7 @@ import {
 } from "./frontmatter.mjs";
 import { parseTranslationAnswer } from "./answer.mjs";
 import { RefusalError } from "./recovery.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { buildTranslationPrompt } from "./prompt.mjs";
 import {
   compareStructuralProfiles,
@@ -266,6 +267,9 @@ export async function translatePair(input) {
   try {
     return judgeAnswer(content, input);
   } catch (cause) {
+    // A typed refusal keeps its class: the boundary records it `refused`, and
+    // classification must name it a refusal — re-asking never helps.
+    if (cause instanceof DeterministicRefusalError) throw cause;
     throw new RefusalError(cause instanceof Error ? cause.message : String(cause));
   }
 }
@@ -276,7 +280,7 @@ export async function translatePair(input) {
  * when the answer legitimately changed nothing. Throws on any contract
  * failure — parse, restoration, the byte cap, frontmatter, structure,
  * links; `translatePair` retags what this raises as a `RefusalError` on
- * the way out.
+ * the way out — a typed refusal keeps its class.
  *
  * @param {string} content The model's answer content.
  * @param {Parameters<typeof translatePair>[0]} input

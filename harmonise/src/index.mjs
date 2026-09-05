@@ -796,9 +796,10 @@ async function harmoniseRun(inputs, context, world, red) {
                 cause instanceof Error ? cause.message : String(cause)
               } (classified ${failureClass}, ${action})`,
               // The model path's failures are provider defects or junk
-              // answers — F-09's other arm fails — never the run's own
-              // ceilings, so the line never carries the refusal class.
-              refusal: false,
+              // answers — F-09's other arm fails — with one exception
+              // (#351): the protection layer's restoration verdict carries
+              // the refusal class, and the run records it refused.
+              refusal: cause instanceof DeterministicRefusalError,
             },
           };
         }

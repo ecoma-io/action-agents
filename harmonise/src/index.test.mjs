@@ -41,6 +41,7 @@ import {
   TM_SCHEMA_VERSION,
 } from "./tm.mjs";
 import { DEFAULT_POLICY, DELAY_CLASSES } from "./recovery.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { MAX_SOURCE_BYTES } from "./plan.mjs";
 import { harmoniseRecordSchemaVersion, serialiseHarmoniseRecord } from "./run-record.mjs";
 
@@ -964,6 +965,51 @@ describe("run", () => {
     expect(error.message).toMatch(/every pair failed/);
     expect(error.message).toMatch(/lost protected content|appears 0 times/);
     expect(ioDouble.chat.calls()).toBe(1);
+  });
+
+  it("fails a run whose answer transposes two count-1 placeholders, as a refusal", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let calls = 0;
+    const chatDouble = /** @type {any} */ ({
+      calls: () => calls,
+      async complete(/** @type {any} */ request) {
+        calls++;
+        const user = request.messages[request.messages.length - 1]?.content ?? "";
+        const start = user.indexOf("[source-document]\n") + "[source-document]\n".length;
+        const next = user.indexOf("\n\n[", start);
+        const source = next === -1 ? user.slice(start) : user.slice(start, next);
+        const [first, second] = [
+          ...source.matchAll(/\[\[harmonise:[0-9a-f]{16}:[a-z]\d+\]\]/g),
+        ].map((match) => match[0]);
+        // A fluent translation that swapped the two placeholders' positions.
+        const transposed = source
+          .replace(first, "@@A@@")
+          .replace(second, first)
+          .replace("@@A@@", second);
+        return {
+          content: JSON.stringify({ drift: true, summary: "kept in step", content: transposed }),
+          toolCalls: [],
+          finishReason: undefined,
+        };
+      },
+    });
+    const ioDouble = /** @type {any} */ ({
+      forge: forge(
+        makeRepo({
+          config: makeConfig({ glossary: ["repository", "guides"] }),
+          documents: { "manual/dev.md": "# Dev\n\nThe repository holds guides.\n" },
+        }),
+      ),
+      chat: chatDouble,
+      evidence,
+    });
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error).toBeInstanceOf(DeterministicRefusalError);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/transposed protected content/);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(chatDouble.calls()).toBe(1);
   });
 
   it("fails a pair whose answer corrupts Markdown structure", async () => {
