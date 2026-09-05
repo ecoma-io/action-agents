@@ -3,11 +3,17 @@
 // What is pinned: an absent map refuses (unlike triage's policy-empty case —
 // no map means nothing to keep in step); validation is complete at startup;
 // and the shape a run later relies on — source inside languages, at least one
-// target, patterns carrying exactly one `{document}` — cannot be half-right.
+// target, patterns carrying exactly one `{document}` — cannot be half-right;
+// and the config boundary's classification — a ForgeError passes through
+// unchanged, every other core-loader throw is a deterministic refusal with
+// its message preserved — is pinned cause by cause.
 
 import { describe, expect, it } from "vitest";
 
-import { loadConfigFile, validateConfig } from "./config.mjs";
+import { ForgeError } from "#core/forge.mjs";
+
+import { loadConfigFile, MAX_CONFIG_BYTES, validateConfig } from "./config.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 /** @param {Record<string, string | null>} files @returns {import("./config.mjs").ContentsReader} */
 function reader(files) {
@@ -95,6 +101,102 @@ describe("loadConfigFile", () => {
         source: SOURCE,
       }),
     ).rejects.toThrow(/must hold an object/);
+  });
+});
+
+// The boundary retype trusts exactly one invariant: the forge read is the
+// core loader's only defect surface, so every non-ForgeError it raises is
+// one of the deterministic startup refusals — retyped, never reworded
+// (config.mjs). Each cause is pinned to that classification, so a new core
+// throw that is not a refusal, a retype that widens, or a reworded message
+// fails here.
+describe("loadConfigFile classification", () => {
+  it("rethrows a ForgeError unchanged — the forge read is the defect surface, not a refusal", async () => {
+    const failure = new ForgeError("getContents", new Error("the network is gone"));
+    const forge = {
+      async getContents() {
+        throw failure;
+      },
+    };
+
+    await expect(loadConfigFile({ forge, configPath: "", source: SOURCE })).rejects.toBe(failure);
+    await expect(
+      loadConfigFile({ forge, configPath: "custom/map.json", source: SOURCE }),
+    ).rejects.toBe(failure);
+  });
+
+  it("retypes the absent-defaults refusal, message preserved", async () => {
+    const refusal = loadConfigFile({ forge: reader({}), configPath: "", source: SOURCE });
+    await expect(refusal).rejects.toThrow(DeterministicRefusalError);
+    await expect(refusal).rejects.toThrow(/no config file exists/);
+  });
+
+  it("retypes the twice-declared refusal, message preserved", async () => {
+    const refusal = loadConfigFile({
+      forge: reader({
+        ".github/action-agents/harmonise/harmonise.json5": VALID,
+        ".github/action-agents/harmonise/harmonise.json": VALID,
+      }),
+      configPath: "",
+      source: SOURCE,
+    });
+    await expect(refusal).rejects.toThrow(DeterministicRefusalError);
+    await expect(refusal).rejects.toThrow(/declared twice/);
+  });
+
+  it("retypes the named-path-absent refusal, message preserved", async () => {
+    const refusal = loadConfigFile({
+      forge: reader({}),
+      configPath: "custom/map.json",
+      source: SOURCE,
+    });
+    await expect(refusal).rejects.toThrow(DeterministicRefusalError);
+    await expect(refusal).rejects.toThrow(/does not exist on branch/);
+  });
+
+  it("retypes the byte-cap refusal, message preserved", async () => {
+    const refusal = loadConfigFile({
+      forge: reader({
+        ".github/action-agents/harmonise/harmonise.json5": "x".repeat(MAX_CONFIG_BYTES + 1),
+      }),
+      configPath: "",
+      source: SOURCE,
+    });
+    await expect(refusal).rejects.toThrow(DeterministicRefusalError);
+    await expect(refusal).rejects.toThrow(/-byte cap/);
+  });
+
+  it("retypes the parse and shape refusals, messages preserved", async () => {
+    const unparsable = loadConfigFile({
+      forge: reader({ ".github/action-agents/harmonise/harmonise.json5": "{nope" }),
+      configPath: "",
+      source: SOURCE,
+    });
+    await expect(unparsable).rejects.toThrow(DeterministicRefusalError);
+    await expect(unparsable).rejects.toThrow(/does not parse/);
+
+    const shape = loadConfigFile({
+      forge: reader({ ".github/action-agents/harmonise/harmonise.json5": "[1,2]" }),
+      configPath: "",
+      source: SOURCE,
+    });
+    await expect(shape).rejects.toThrow(DeterministicRefusalError);
+    await expect(shape).rejects.toThrow(/must hold an object/);
+  });
+
+  it("retypes the schema-major refusal, message preserved", async () => {
+    const future = `{
+  schemaVersion: 2,
+  sourceLanguage: "en",
+  languages: { en: "manual/{document}.md", vi: "manual/vi/{document}.md" },
+}`;
+    const refusal = loadConfigFile({
+      forge: reader({ ".github/action-agents/harmonise/harmonise.json5": future }),
+      configPath: "",
+      source: SOURCE,
+    });
+    await expect(refusal).rejects.toThrow(DeterministicRefusalError);
+    await expect(refusal).rejects.toThrow(/declares schemaVersion 2/);
   });
 });
 
