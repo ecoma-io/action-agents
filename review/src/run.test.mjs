@@ -3551,6 +3551,51 @@ describe("the eligibility axis", () => {
     expect(forge.calls.upserts).toHaveLength(1);
   });
 
+  it("measures the pre-ignore change — a wholly ignored file still counts against a changes rule", async () => {
+    // The one file is entirely inside the ignore set, so the post-ignore
+    // universe holds zero counted lines and the scope layer would never
+    // refuse. The eligibility guard reads the pre-ignore total instead:
+    // 9000 lines over `gt: 8000`, skip. Feeding this test post-ignore
+    // totals — the doctrine inversion — would flip it to no skip.
+    const PRE_IGNORE_CONFIG = JSON.stringify({
+      schemaVersion: 1,
+      ignore: ["generated/**"],
+      applicability: {
+        bots: [],
+        rules: [{ id: "oversized", when: { changes: { lines: { gt: 8000 } } }, run: false }],
+      },
+    });
+    const forge = forgeStub({
+      config: PRE_IGNORE_CONFIG,
+      files: [
+        {
+          filename: "generated/bulk.mjs",
+          status: "modified",
+          additions: 9000,
+          deletions: 0,
+          patch: "@@ -1 +1,2 @@\n+x",
+        },
+      ],
+    });
+    const listings = countedListings(forge);
+    /** @type {number[]} */
+    const chatCalls = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: ELIG_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: eligEvent(MAINTAINER_DOCS),
+      io: io(forge, countingChat(chatCalls)),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(result.reason).toContain("oversized");
+    expect(result.reason).toContain("9000 changed lines across 1 file");
+    expect(listings).toHaveLength(1);
+    expect(chatCalls).toHaveLength(0);
+    expect(forge.calls.upserts).toHaveLength(0);
+  });
+
   it("suppresses the new-anchor skips under dry-run — logged, nothing written", async () => {
     const forge = forgeStub({
       config: ELIGIBILITY_CONFIG,

@@ -676,10 +676,11 @@ function validateIntensity(value, label, fileStrictness, context, run) {
 
 /**
  * Validates a rule's `when` — the eligibility conditions grammar. Every
- * family present is a conjunct. Unknown keys refuse; every family must be
- * non-empty, because an empty condition set is a rule that matches
- * everything and the run-contract's dead-weight doctrine refuses what
- * declares nothing.
+ * family present is a conjunct. Unknown keys refuse; each family present
+ * must be non-empty — an empty family could only ever match nothing, which
+ * is dormancy worn as a condition. An absent or empty `when` is legal: it
+ * constrains nothing, and the rule then stands or falls on its anchor
+ * alone.
  *
  * @param {unknown} value
  * @param {string} label

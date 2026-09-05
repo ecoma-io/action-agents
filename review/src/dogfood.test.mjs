@@ -162,7 +162,12 @@ describe("the repository's own eligibility policy", () => {
     expect(changeTotals(files)).toEqual({ files: 2, lines: 10000 });
   });
 
-  it("a change of ignored paths alone is not oversized", async () => {
+  it("pre-ignore totals below the guard stay reviewable — the ignored paths change nothing here", async () => {
+    // The guard reads pre-ignore totals by design, so whether these paths
+    // sit in the scope layer's ignore set is irrelevant to it: 7500 < 8000
+    // is reviewable at the eligibility stage. (Downstream, an
+    // ignored-paths-only change meets an empty universe and becomes the
+    // nothing-to-review skip — the scope layer's own honest outcome.)
     const { evaluated } = decide(await ownPolicy().then((c) => c.applicability), {
       number: 341,
       login: "johnitvn",
