@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.3](https://github.com/ecoma-io/action-agents/compare/v0.8.2...v0.8.3) (2026-09-05)
+
+
+### Bug Fixes
+
+* **triage,harmonise:** close the record retention and accounting gaps ([#327](https://github.com/ecoma-io/action-agents/issues/327)) ([72bc708](https://github.com/ecoma-io/action-agents/commit/72bc7083260767d13362f1f3d68504a1c3b03d2b))
+* **triage,harmonise:** gates refuse the dead entry, the contract tells the truth ([#329](https://github.com/ecoma-io/action-agents/issues/329)) ([dbdd227](https://github.com/ecoma-io/action-agents/commit/dbdd22711c272d38594f78ce037271f10f76290c))
+* **triage:** bind every write to a verified op — the signal included ([#325](https://github.com/ecoma-io/action-agents/issues/325)) ([fb44af2](https://github.com/ecoma-io/action-agents/commit/fb44af2585f149688e37d9ae7d5a40859a936024))
+
 ## [0.8.2](https://github.com/ecoma-io/action-agents/compare/v0.8.1...v0.8.2) (2026-09-04)
 
 
