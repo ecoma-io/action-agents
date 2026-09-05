@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/ecoma-io/action-agents/compare/v0.9.0...v0.10.0) (2026-09-05)
+
+
+### Features
+
+* adopt @ecoma-io/archkeep 0.25.0 and re-measure the boundary gate contracts ([#349](https://github.com/ecoma-io/action-agents/issues/349)) ([2fc9833](https://github.com/ecoma-io/action-agents/commit/2fc9833ae38f5cc534a51f3d80371706ffc1451a))
+
+
+### Bug Fixes
+
+* **harmonise:** pin every token's first occurrence in the restoration order walk ([#358](https://github.com/ecoma-io/action-agents/issues/358)) ([#359](https://github.com/ecoma-io/action-agents/issues/359)) ([30fea63](https://github.com/ecoma-io/action-agents/commit/30fea6357554be8676dc75143073e4305f460806))
+* **harmonise:** refuse transposed protected placeholders ([#351](https://github.com/ecoma-io/action-agents/issues/351)) ([#352](https://github.com/ecoma-io/action-agents/issues/352)) ([022d0ce](https://github.com/ecoma-io/action-agents/commit/022d0ceeb0816f4862c468d587ac2cba7f775353))
+* **harmonise:** write a failed run record at declared red terminals ([#347](https://github.com/ecoma-io/action-agents/issues/347)) ([326aad6](https://github.com/ecoma-io/action-agents/commit/326aad6b59070e61adf6a5061bc5af8cc28f61c9))
+
 ## [0.9.0](https://github.com/ecoma-io/action-agents/compare/v0.8.4...v0.9.0) (2026-09-05)
 
 
