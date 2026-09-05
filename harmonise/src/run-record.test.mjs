@@ -1,7 +1,8 @@
 // Tests for the harmonise run record — the pure module. The builder is proven
 // byte-deterministic and fail-closed, the outcome vocabulary is pinned to the
 // run contract's own words, the pairs accounting is proven to partition the
-// selected schedule, and the filename rule is proven to land inside the
+// selected schedule — `selected` recorded and the four counts refused when
+// they do not total it — and the filename rule is proven to land inside the
 // upload glob.
 
 import { describe, expect, it } from "vitest";
@@ -29,7 +30,7 @@ function recordFixture(over = {}) {
     dryRun: false,
     outcome: "published",
     reason: "opened pull request #42 (harmonise/vi → main)",
-    pairs: { proposed: 3, unchanged: 1, skipped: 2, failed: 0 },
+    pairs: { selected: 6, proposed: 3, unchanged: 1, skipped: 2, failed: 0 },
     pullRequest: { number: 42, created: true },
     headSha: SHA,
     ...over,
@@ -50,14 +51,14 @@ function cloneFixture(over = {}) {
 describe("buildHarmoniseRecord", () => {
   it("builds the expected record from valid run facts", () => {
     expect(recordFixture()).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       repository: "octocat/example",
       eventName: "workflow_dispatch",
       sourceLanguage: "en",
       dryRun: false,
       outcome: "published",
       reason: "opened pull request #42 (harmonise/vi → main)",
-      pairs: { proposed: 3, unchanged: 1, skipped: 2, failed: 0 },
+      pairs: { selected: 6, proposed: 3, unchanged: 1, skipped: 2, failed: 0 },
       pullRequest: { number: 42, created: true },
       headSha: SHA,
     });
@@ -103,14 +104,14 @@ describe("buildHarmoniseRecord", () => {
     const shuffled = {
       headSha: SHA,
       pullRequest: { created: true, number: 42 },
-      pairs: { failed: 0, skipped: 2, unchanged: 1, proposed: 3 },
+      pairs: { failed: 0, skipped: 2, unchanged: 1, proposed: 3, selected: 6 },
       reason: "opened pull request #42 (harmonise/vi → main)",
       outcome: "published",
       dryRun: false,
       sourceLanguage: "en",
       eventName: "workflow_dispatch",
       repository: "octocat/example",
-      schemaVersion: 1,
+      schemaVersion: 2,
     };
     expect(serialiseHarmoniseRecord(validateHarmoniseRecord(shuffled))).toBe(
       serialiseHarmoniseRecord(recordFixture()),
@@ -136,9 +137,16 @@ describe("validateHarmoniseRecord", () => {
   });
 
   it("refuses a wrong schemaVersion", () => {
-    expect(() => validateHarmoniseRecord(cloneFixture({ schemaVersion: 2 }))).toThrow(
-      /schemaVersion is not 1/,
+    expect(() => validateHarmoniseRecord(cloneFixture({ schemaVersion: 3 }))).toThrow(
+      /schemaVersion is not 2/,
     );
+  });
+
+  it("refuses the version-1 record the partition superseded — the released shape is named and refused", () => {
+    const v1 = cloneFixture();
+    v1["schemaVersion"] = 1;
+    v1["pairs"] = { proposed: 3, unchanged: 1, skipped: 2, failed: 0 };
+    expect(() => validateHarmoniseRecord(v1)).toThrow(/schemaVersion is not 2/);
   });
 
   it("refuses an outcome outside the run contract's terminal states", () => {
@@ -157,20 +165,60 @@ describe("validateHarmoniseRecord", () => {
     );
   });
 
-  it("refuses a pairs block that is not four non-negative integers", () => {
+  it("refuses a pairs block that is not five non-negative integers", () => {
     expect(() =>
       validateHarmoniseRecord(
-        cloneFixture({ pairs: { proposed: -1, unchanged: 0, skipped: 0, failed: 0 } }),
+        cloneFixture({ pairs: { selected: 6, proposed: -1, unchanged: 0, skipped: 0, failed: 0 } }),
       ),
     ).toThrow(/pairs.proposed/);
     expect(() =>
       validateHarmoniseRecord(
-        cloneFixture({ pairs: { proposed: 1.5, unchanged: 0, skipped: 0, failed: 0 } }),
+        cloneFixture({
+          pairs: { selected: 6, proposed: 1.5, unchanged: 0, skipped: 0, failed: 0 },
+        }),
       ),
     ).toThrow(/pairs.proposed/);
+    expect(() =>
+      validateHarmoniseRecord(
+        cloneFixture({ pairs: { selected: -1, proposed: 3, unchanged: 1, skipped: 2, failed: 0 } }),
+      ),
+    ).toThrow(/pairs.selected/);
     const extra = cloneFixture();
     extra["pairs"] = { .../** @type {any} */ (extra["pairs"]), total: 6 };
     expect(() => validateHarmoniseRecord(extra)).toThrow(/unknown key 'total'/);
+  });
+
+  it("refuses a pairs block missing 'selected' — the partition's other side is mandatory", () => {
+    const missing = cloneFixture();
+    delete (/** @type {any} */ (missing["pairs"])["selected"]);
+    expect(() => validateHarmoniseRecord(missing)).toThrow(/missing 'selected'/);
+  });
+
+  it("refuses a pairs block whose four counts do not partition the selected schedule", () => {
+    // Over-count: the four total 6 against a selected of 5.
+    expect(() =>
+      validateHarmoniseRecord(
+        cloneFixture({ pairs: { selected: 5, proposed: 3, unchanged: 1, skipped: 2, failed: 0 } }),
+      ),
+    ).toThrow(
+      /pairs' does not partition the selected schedule: proposed \+ unchanged \+ skipped \+ failed is 6, 'selected' is 5/,
+    );
+    // Under-count: the same four total 6 against a selected of 7.
+    expect(() =>
+      validateHarmoniseRecord(
+        cloneFixture({ pairs: { selected: 7, proposed: 3, unchanged: 1, skipped: 2, failed: 0 } }),
+      ),
+    ).toThrow(
+      /pairs' does not partition the selected schedule: proposed \+ unchanged \+ skipped \+ failed is 6, 'selected' is 7/,
+    );
+  });
+
+  it("accepts the empty partition — nothing selected, nothing in any bucket", () => {
+    expect(() =>
+      validateHarmoniseRecord(
+        cloneFixture({ pairs: { selected: 0, proposed: 0, unchanged: 0, skipped: 0, failed: 0 } }),
+      ),
+    ).not.toThrow();
   });
 
   it("refuses a pull request that is neither null nor the exact two-key shape", () => {
@@ -219,6 +267,6 @@ describe("the record's vocabulary", () => {
   });
 
   it("pins the schema version the docs state", () => {
-    expect(harmoniseRecordSchemaVersion).toBe(1);
+    expect(harmoniseRecordSchemaVersion).toBe(2);
   });
 });

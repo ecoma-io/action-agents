@@ -766,11 +766,12 @@ A run that never reaches a terminal point — a config refusal, a transport
 break, any throw the run did not declare — writes no record, and the upload's
 `if-no-files-found: ignore` keeps those runs green.
 
-The fields, in schema version 1: `schemaVersion`, `repository`, `eventName`,
+The fields, in schema version 2: `schemaVersion`, `repository`, `eventName`,
 `sourceLanguage`, `dryRun`, `outcome`, `reason` (the terminal path's own
-sentence), `pairs` (`proposed`, `unchanged`, `skipped`, `failed` — the four
-total the selected schedule, and the validator refuses a record that does not
-partition it), `pullRequest` (`number`, `created`; `null` when the run wrote
+sentence), `pairs` (`selected` — the schedule's size in pair-targets, one
+source document against one language — under `proposed`, `unchanged`,
+`skipped`, `failed`, the four that partition it, and the validator refuses a
+record where they do not), `pullRequest` (`number`, `created`; `null` when the run wrote
 none) and `headSha` (the base commit every read pinned to). The log lines and
 the pull-request body stay out of the record: the log lines are the run log's,
 and the pull request itself is the durable form of that path.

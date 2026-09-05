@@ -1301,9 +1301,10 @@ describe("run", () => {
     );
 
     // A failed pair is a failed run even when others carried — but the
-    // healthy pair's line is still reported before the red.
+    // healthy pair's line is still reported before the red. The accounting
+    // counts pair-targets, so the vanished source fails once per language.
     await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
-      /1 pair\(s\) failed[\s\S]*manual\/lost\.md: gone from the branch/,
+      /2 pair\(s\) failed[\s\S]*fr manual\/lost\.md: gone from the branch[\s\S]*vi manual\/lost\.md: gone from the branch/,
     );
     expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
   });
@@ -3021,10 +3022,18 @@ describe("the run record (#297)", () => {
       dryRun: false,
       outcome: "published",
       reason: "opened pull request #42 (harmonise/en → main)",
-      pairs: { proposed: 1, unchanged: 0, skipped: 0, failed: 0 },
+      pairs: { selected: 1, proposed: 1, unchanged: 0, skipped: 0, failed: 0 },
       pullRequest: { number: 42, created: true },
       headSha: forgeDouble.baseSha,
     });
+    // The record the run built satisfies its own partition — every pair-target
+    // the schedule held landed in exactly one bucket.
+    expect(
+      ioDouble.records[0].pairs.proposed +
+        ioDouble.records[0].pairs.unchanged +
+        ioDouble.records[0].pairs.skipped +
+        ioDouble.records[0].pairs.failed,
+    ).toBe(ioDouble.records[0].pairs.selected);
   });
 
   it("a dry run records skip — a null pull request and the counts the schedule held", async () => {
@@ -3039,7 +3048,20 @@ describe("the run record (#297)", () => {
     expect(ioDouble.records[0].dryRun).toBe(true);
     expect(ioDouble.records[0].pullRequest).toBeNull();
     expect(ioDouble.records[0].reason).toBe("dry run — nothing was written");
-    expect(ioDouble.records[0].pairs).toEqual({ proposed: 1, unchanged: 0, skipped: 0, failed: 0 });
+    expect(ioDouble.records[0].pairs).toEqual({
+      selected: 1,
+      proposed: 1,
+      unchanged: 0,
+      skipped: 0,
+      failed: 0,
+    });
+    // The partition holds on the record the run actually built.
+    expect(
+      ioDouble.records[0].pairs.proposed +
+        ioDouble.records[0].pairs.unchanged +
+        ioDouble.records[0].pairs.skipped +
+        ioDouble.records[0].pairs.failed,
+    ).toBe(ioDouble.records[0].pairs.selected);
   });
 
   it("a run that published some pairs and lost others records the partial exit", async () => {
@@ -3057,7 +3079,21 @@ describe("the run record (#297)", () => {
     expect(ioDouble.records).toHaveLength(1);
     expect(ioDouble.records[0].outcome).toBe("partial");
     expect(ioDouble.records[0].pullRequest).toEqual({ number: 42, created: true });
-    expect(ioDouble.records[0].pairs).toEqual({ proposed: 1, unchanged: 0, skipped: 0, failed: 1 });
+    expect(ioDouble.records[0].pairs).toEqual({
+      selected: 2,
+      proposed: 1,
+      unchanged: 0,
+      skipped: 0,
+      failed: 1,
+    });
+    // The partition holds on the record the run actually built — a pair that
+    // failed is still a pair-target the schedule held.
+    expect(
+      ioDouble.records[0].pairs.proposed +
+        ioDouble.records[0].pairs.unchanged +
+        ioDouble.records[0].pairs.skipped +
+        ioDouble.records[0].pairs.failed,
+    ).toBe(ioDouble.records[0].pairs.selected);
     expect(ioDouble.records[0].reason).toMatch(/^opened pull request #42; 1 pair\(s\) failed/);
   });
 
@@ -3095,7 +3131,20 @@ describe("the run record (#297)", () => {
     expect(ioDouble.records[0].reason).toBe(
       "nothing to propose — no branch, no commit, no pull request",
     );
-    expect(ioDouble.records[0].pairs).toEqual({ proposed: 0, unchanged: 1, skipped: 0, failed: 0 });
+    expect(ioDouble.records[0].pairs).toEqual({
+      selected: 1,
+      proposed: 0,
+      unchanged: 1,
+      skipped: 0,
+      failed: 0,
+    });
+    // The partition holds on the record the run actually built.
+    expect(
+      ioDouble.records[0].pairs.proposed +
+        ioDouble.records[0].pairs.unchanged +
+        ioDouble.records[0].pairs.skipped +
+        ioDouble.records[0].pairs.failed,
+    ).toBe(ioDouble.records[0].pairs.selected);
   });
 
   it("a record-write failure before anything is published is the red run", async () => {

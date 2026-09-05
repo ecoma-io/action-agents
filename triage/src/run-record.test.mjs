@@ -4,9 +4,11 @@
 // pinned to the run contract's own words, and the filename rules are proven
 // to land inside the upload glob.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  NEEDS_MORE_INFO_CHARS,
+  NEEDS_MORE_INFO_MAX_ENTRIES,
   REASON_CHARS,
   REFUSAL_ENTRY_CHARS,
   REFUSAL_MAX_ENTRIES,
@@ -88,6 +90,32 @@ function malformed(breakIt) {
   );
   breakIt(clone, /** @type {Record<string, unknown>} */ (clone["decision"]));
   return clone;
+}
+
+/**
+ * The signal section of a built record, pre-cast for the assertions below —
+ * the builder's `signal` is unknown to the reader even when the record
+ * carries a decision.
+ *
+ * @param {import("./run-record.mjs").TriageRecord} record
+ * @returns {import("./run-record.mjs").RecordSignal}
+ */
+function signalOf(record) {
+  const decision = /** @type {import("./run-record.mjs").RecordDecision} */ (record.decision);
+  return /** @type {import("./run-record.mjs").RecordSignal} */ (decision.signal);
+}
+
+/**
+ * A signal with the given missing-required names and no related candidate —
+ * the shape the `needsMoreInfo` tests below ride on.
+ *
+ * @param {string[]} needsMoreInfo
+ * @returns {import("./decision.mjs").Decision}
+ */
+function decisionWithNames(needsMoreInfo) {
+  return decisionFixture({
+    signal: { needsMoreInfo, modelJudgedQuality: false, related: null },
+  });
 }
 
 describe("buildTriageRecord", () => {
@@ -291,6 +319,62 @@ describe("buildTriageRecord sanitisation at the build sites", () => {
   });
 });
 
+describe("buildTriageRecord sanitises signal.needsMoreInfo at the build site", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("escapes tag-shaped HTML in a missing-required name", () => {
+    const signal = signalOf(
+      recordFixture({ decision: decisionWithNames(['<script>alert("x")</script>']) }),
+    );
+    expect(signal.needsMoreInfo[0]).toBe('&lt;script>alert("x")&lt;/script>');
+  });
+
+  it("flattens a multi-line missing-required name to one line", () => {
+    const signal = signalOf(
+      recordFixture({ decision: decisionWithNames(["first line\nsecond line"]) }),
+    );
+    expect(signal.needsMoreInfo[0]).toBe("first line second line");
+  });
+
+  it("caps a long missing-required name at the declared width, visibly", () => {
+    const signal = signalOf(
+      recordFixture({ decision: decisionWithNames(["x".repeat(NEEDS_MORE_INFO_CHARS + 40)]) }),
+    );
+    const first = signal.needsMoreInfo[0];
+    expect(first).toBeDefined();
+    expect(first?.length).toBe(NEEDS_MORE_INFO_CHARS);
+    expect(first?.endsWith(TRUNCATION_MARK)).toBe(true);
+  });
+
+  it("caps the list at the declared count and logs what it dropped", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const entries = Array.from(
+      { length: NEEDS_MORE_INFO_MAX_ENTRIES + 5 },
+      (_, i) => `field-${String(i)}`,
+    );
+    const signal = signalOf(recordFixture({ decision: decisionWithNames(entries) }));
+    expect(signal.needsMoreInfo).toEqual(
+      Array.from({ length: NEEDS_MORE_INFO_MAX_ENTRIES }, (_, i) => `field-${String(i)}`),
+    );
+    expect(
+      log.mock.calls.some((call) =>
+        String(call[0]).includes("signal.needsMoreInfo capped at 10 entries; 5 dropped"),
+      ),
+    ).toBe(true);
+  });
+
+  it("collapses control characters in a missing-required name", () => {
+    const signal = signalOf(
+      recordFixture({ decision: decisionWithNames(["steps\tto\r\nreproduce"]) }),
+    );
+    expect(signal.needsMoreInfo[0]).toBe("steps to reproduce");
+    expect(signal.needsMoreInfo[0]).not.toContain("\t");
+    expect(signal.needsMoreInfo[0]).not.toContain("\n");
+  });
+});
+
 describe("validateTriageRecord refusals", () => {
   it("refuses an unknown top-level key", () => {
     expect(() => validateTriageRecord(malformed((r) => (r["extra"] = true)))).toThrow(
@@ -440,6 +524,55 @@ describe("validateTriageRecord refusals", () => {
         ),
       ),
     ).toThrow(/not a well-formed digest/u);
+  });
+});
+
+describe("validateTriageRecord needsMoreInfo caps", () => {
+  /**
+   * A clone whose missing-required list is replaced outright — the validator
+   * sees the replaced list, never a repaired one.
+   *
+   * @param {unknown} entries
+   * @returns {Record<string, unknown>}
+   */
+  function withNames(entries) {
+    return malformed((_r, d) => {
+      const signal = /** @type {Record<string, unknown>} */ (d["signal"]);
+      signal["needsMoreInfo"] = entries;
+    });
+  }
+
+  it("refuses a needsMoreInfo entry past its declared width — never repairs it", () => {
+    expect(() => validateTriageRecord(withNames(["x".repeat(NEEDS_MORE_INFO_CHARS + 1)]))).toThrow(
+      /needsMoreInfo.*exceeds its 80-character cap/u,
+    );
+  });
+
+  it("refuses a needsMoreInfo list past its declared entry count", () => {
+    expect(() =>
+      validateTriageRecord(
+        withNames(Array.from({ length: NEEDS_MORE_INFO_MAX_ENTRIES + 1 }, () => "x")),
+      ),
+    ).toThrow(/needsMoreInfo.*carries 11 entries, past its 10-entry cap/u);
+  });
+
+  it("refuses a needsMoreInfo entry that is not a string", () => {
+    expect(() => validateTriageRecord(withNames([7]))).toThrow(/needsMoreInfo.*is not a string/u);
+    expect(() => validateTriageRecord(withNames([{ name: "steps" }]))).toThrow(
+      /needsMoreInfo.*is not a string/u,
+    );
+  });
+
+  it("accepts a list at exactly its declared caps", () => {
+    const record = recordFixture({
+      decision: decisionWithNames(
+        Array.from({ length: NEEDS_MORE_INFO_MAX_ENTRIES }, () =>
+          "x".repeat(NEEDS_MORE_INFO_CHARS),
+        ),
+      ),
+    });
+    expect(() => validateTriageRecord(JSON.parse(serialiseTriageRecord(record)))).not.toThrow();
+    expect(signalOf(record).needsMoreInfo.length).toBe(NEEDS_MORE_INFO_MAX_ENTRIES);
   });
 });
 

@@ -40,6 +40,12 @@ export const REFUSAL_ENTRY_CHARS = 300;
 /** The most refusals a record carries, so a junk answer's off-sheet list cannot bloat the record. */
 export const REFUSAL_MAX_ENTRIES = 20;
 
+/** The per-entry cap `signal.needsMoreInfo` sanitises each template field name under — the same width as the related title's. */
+export const NEEDS_MORE_INFO_CHARS = 80;
+
+/** The most missing-required names a record carries, bounding a repository-controlled issue-template list. */
+export const NEEDS_MORE_INFO_MAX_ENTRIES = 10;
+
 /**
  * The vocabulary a record's `outcome` may carry: the run contract's terminal
  * states (`docs/run-contract.md`), whole and in its own order. A word outside
@@ -213,7 +219,7 @@ export function validateVerificationBlock(value) {
  * sanitised at the build site, the way `signalBody` sanitises it.
  *
  * @typedef {object} RecordSignal
- * @property {string[]} needsMoreInfo the deterministic missing-required fields, when judged incomplete
+ * @property {string[]} needsMoreInfo the deterministic missing-required field names, sanitised and capped at the build site — ≤80 characters per entry, ≤10 entries
  * @property {boolean} modelJudgedQuality true when the incomplete judgement was the model's
  * @property {{ number: number, type: string, title: string } | null} related the best relationship candidate, sanitised title and all
  */
@@ -320,7 +326,7 @@ function decisionSection(decision) {
       signal === null
         ? null
         : {
-            needsMoreInfo: [...signal.needsMoreInfo],
+            needsMoreInfo: cappedNeedsMoreInfo(signal.needsMoreInfo),
             modelJudgedQuality: signal.modelJudgedQuality,
             related:
               signal.related === null
@@ -375,6 +381,37 @@ function cappedRefusals(refusals) {
   if (dropped > 0) {
     warning(
       `sanitiser: decision.refusals capped at ${String(REFUSAL_MAX_ENTRIES)} entries; ` +
+        `${String(dropped)} dropped`,
+    );
+  }
+  return capped;
+}
+
+/**
+ * The record's copy of the missing-required field names. The names enter
+ * from the repository's own issue-template `attributes.label` entries —
+ * untrusted repository data, not code-owned words — so each entry passes
+ * the same boundary its sibling record fields pass: one line, sanitiser,
+ * declared per-entry cap, and the array itself is bounded by a declared
+ * count, so a template with a huge field list cannot bloat the record. Both
+ * truncations are visible: the sanitiser's notes and the dropped count land
+ * in the run log, never in the record's bytes.
+ *
+ * ADR 003's triage row keeps `needsMoreInfo` persist-class on exactly these
+ * terms ("untrusted text enters only through the sanitiser at a declared
+ * cap"); before this helper those terms were declared but not met.
+ *
+ * @param {string[]} entries
+ * @returns {string[]}
+ */
+function cappedNeedsMoreInfo(entries) {
+  const capped = entries
+    .slice(0, NEEDS_MORE_INFO_MAX_ENTRIES)
+    .map((entry) => cappedLine(entry, NEEDS_MORE_INFO_CHARS));
+  const dropped = entries.length - capped.length;
+  if (dropped > 0) {
+    warning(
+      `sanitiser: signal.needsMoreInfo capped at ${String(NEEDS_MORE_INFO_MAX_ENTRIES)} entries; ` +
         `${String(dropped)} dropped`,
     );
   }
@@ -567,7 +604,28 @@ function asSignal(value) {
   if (value === null) return;
   const signal = asRecord(value, "the triage record's 'decision.signal'");
   assertExactKeys(signal, "the triage record's 'decision.signal'", SIGNAL_KEYS);
-  asStringList(signal["needsMoreInfo"], "the triage record's 'decision.signal.needsMoreInfo'");
+  // The names are repository-controlled issue-template data, so the caps are
+  // refused by name here exactly as `decision.refusals`' are: a record that
+  // re-entered past its declared shape is a code bug, and repairing it would
+  // invent evidence.
+  const needsMoreInfo = asArray(
+    signal["needsMoreInfo"],
+    "the triage record's 'decision.signal.needsMoreInfo'",
+  );
+  if (needsMoreInfo.length > NEEDS_MORE_INFO_MAX_ENTRIES) {
+    throw new TypeError(
+      `the triage record's 'decision.signal.needsMoreInfo' carries ` +
+        `${String(needsMoreInfo.length)} entries, past its ` +
+        `${String(NEEDS_MORE_INFO_MAX_ENTRIES)}-entry cap`,
+    );
+  }
+  for (const entry of needsMoreInfo) {
+    asBoundedString(
+      entry,
+      "the triage record's 'decision.signal.needsMoreInfo' entry",
+      NEEDS_MORE_INFO_CHARS,
+    );
+  }
   if (typeof signal["modelJudgedQuality"] !== "boolean") {
     throw new TypeError(
       "the triage record's 'decision.signal.modelJudgedQuality' is not a boolean",
