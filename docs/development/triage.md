@@ -34,18 +34,18 @@ workflow's choice, and `dry-run` needs no write at all.
 
 ## Inputs
 
-| Input                | Meaning                                                                                                                                                                                                          |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `github-token`       | the token the action writes with — the workflow's `permissions:` block is the real bound                                                                                                                         |
-| `api-url`            | base URL of an OpenAI-compatible endpoint                                                                                                                                                                        |
-| `api-key`            | key for that endpoint; empty is a supported keyless configuration                                                                                                                                                |
-| `model`              | model id to ask                                                                                                                                                                                                  |
-| `request-timeout-ms` | per-attempt timeout in milliseconds for one provider call — the attempt must complete the whole completion; raise it for endpoints that legitimately take longer than 30 seconds; default 30000, floored at 1000 |
-| `config-path`        | overrides `.github/action-agents/triage/triage.json5` / `.json` — see the configuration page                                                                                                                     |
-| `labels`             | narrows the sheet the config file declares, for this call site only; a name the file does not declare is a startup error, and so is a `labels:` input with no file at all, because there is nothing to narrow    |
-| `dry-run`            | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                               |
-| `record-path`        | directory inside the workspace where the machine-readable run record is written at every terminal point — see [the run record](#the-run-record)                                                                  |
-| `verify`             | opt-in verification of the decision before anything is written — one bounded model call, downgrade-only, [its own section](#verification-opt-in-issue-274); default `false`, and a dry run never requests it     |
+| Input                | Meaning                                                                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `github-token`       | the token the action writes with — the workflow's `permissions:` block is the real bound                                                                                                                           |
+| `api-url`            | base URL of an OpenAI-compatible endpoint                                                                                                                                                                          |
+| `api-key`            | key for that endpoint; empty is a supported keyless configuration                                                                                                                                                  |
+| `model`              | model id to ask                                                                                                                                                                                                    |
+| `request-timeout-ms` | per-attempt timeout in milliseconds for one provider call — the attempt must complete the whole completion; raise it for endpoints that legitimately take longer than two minutes; default 120000, floored at 1000 |
+| `config-path`        | overrides `.github/action-agents/triage/triage.json5` / `.json` — see the configuration page                                                                                                                       |
+| `labels`             | narrows the sheet the config file declares, for this call site only; a name the file does not declare is a startup error, and so is a `labels:` input with no file at all, because there is nothing to narrow      |
+| `dry-run`            | decide and log, write nothing — the default, so a first run cannot surprise anyone                                                                                                                                 |
+| `record-path`        | directory inside the workspace where the machine-readable run record is written at every terminal point — see [the run record](#the-run-record)                                                                    |
+| `verify`             | opt-in verification of the decision before anything is written — one bounded model call, downgrade-only, [its own section](#verification-opt-in-issue-274); default `false`, and a dry run never requests it       |
 
 Timeouts come in two layers. `request-timeout-ms` bounds one provider attempt; retries,
 backoff, `Retry-After` and the attempt limit are `core/transport/http.mjs` policy, not inputs.

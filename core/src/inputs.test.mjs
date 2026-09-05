@@ -24,7 +24,7 @@ describe("readSharedInputs", () => {
       apiUrl: "https://api.example/v1",
       apiKey: "sk-x",
       model: "gpt-x",
-      requestTimeoutMs: 30_000,
+      requestTimeoutMs: 120_000,
     });
   });
 

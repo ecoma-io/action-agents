@@ -48,7 +48,7 @@ All inputs listed below. Shared inputs (`github-token`, `api-url`, `api-key`,
 | `api-url`            | yes      | —                | Base URL of an OpenAI-compatible endpoint.                              |
 | `api-key`            | no       | —                | Key for that endpoint. Leave unset for keyless endpoints.               |
 | `model`              | yes      | —                | Model id to ask.                                                        |
-| `request-timeout-ms` | no       | `30000`          | Per-attempt timeout in milliseconds.                                    |
+| `request-timeout-ms` | no       | `120000`         | Per-attempt timeout in milliseconds.                                    |
 | `config-path`        | no       | `""`             | Override the config file location.                                      |
 | `labels`             | no       | `""`             | Narrow the label sheet to a comma-separated subset.                     |
 | `dry-run`            | no       | `true`           | Decide and log, write nothing.                                          |
@@ -418,11 +418,11 @@ an addition, never a stale claim standing beside its replacement). See
 
 ## Cost and budget controls
 
-| Control              | Default | Effect                                                                    |
-| -------------------- | ------- | ------------------------------------------------------------------------- |
-| `dry-run`            | `true`  | No API calls to GitHub for writing. Model calls still count.              |
-| `verify`             | `false` | Off, the pass costs nothing; `true` adds at most one bounded verify call. |
-| `request-timeout-ms` | `30000` | Per-attempt timeout. Raise for endpoints that are legitimately slow.      |
+| Control              | Default  | Effect                                                                    |
+| -------------------- | -------- | ------------------------------------------------------------------------- |
+| `dry-run`            | `true`   | No API calls to GitHub for writing. Model calls still count.              |
+| `verify`             | `false`  | Off, the pass costs nothing; `true` adds at most one bounded verify call. |
+| `request-timeout-ms` | `120000` | Per-attempt timeout. Raise for endpoints that are legitimately slow.      |
 
 The action asks the model once per thread per run. An answer that never
 presented the JSON object the prompt asked for — empty, or prose instead of

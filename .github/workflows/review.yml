@@ -73,11 +73,6 @@ jobs:
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
           model: review
-          # The default 30 s per-attempt ceiling times out against this
-          # gateway on real 30-turn reviews (#319). The input was built for
-          # exactly this consumer; 120 s still sits far inside the job's
-          # 15-minute timeout.
-          request-timeout-ms: "120000"
           # Live: the write surface below is one upserted marker comment.
           dry-run: "false"
 

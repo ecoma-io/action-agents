@@ -62,7 +62,7 @@ All inputs listed below. Shared inputs are documented in the
 | `api-url`            | yes      | —                   | Base URL of an OpenAI-compatible endpoint.                              |
 | `api-key`            | no       | —                   | Key for that endpoint. Leave unset for keyless endpoints.               |
 | `model`              | yes      | —                   | Model id to ask.                                                        |
-| `request-timeout-ms` | no       | `30000`             | Per-attempt timeout in milliseconds.                                    |
+| `request-timeout-ms` | no       | `120000`            | Per-attempt timeout in milliseconds.                                    |
 | `config-path`        | no       | `""`                | Override the config file location.                                      |
 | `source-language`    | yes      | —                   | BCP-47 tag of the source-of-truth language.                             |
 | `documents`          | no       | `""`                | Comma-separated globs narrowing which source documents to keep in step. |
@@ -369,11 +369,11 @@ never validated as one. The full validation rules are on the
 
 ## Cost and budget controls
 
-| Control              | Default | Effect                                                  |
-| -------------------- | ------- | ------------------------------------------------------- |
-| `concurrency`        | `2`     | How many pairs translate at once. Max `4`.              |
-| `dry-run`            | `true`  | Report drift, propose nothing. Model calls still count. |
-| `request-timeout-ms` | `30000` | Per-attempt timeout for one provider call.              |
+| Control              | Default  | Effect                                                  |
+| -------------------- | -------- | ------------------------------------------------------- |
+| `concurrency`        | `2`      | How many pairs translate at once. Max `4`.              |
+| `dry-run`            | `true`   | Report drift, propose nothing. Model calls still count. |
+| `request-timeout-ms` | `120000` | Per-attempt timeout for one provider call.              |
 
 Each translatable pair that actually changed makes one model call (translation)
 plus potentially a recovery call. Pairs that are unchanged or noop make no model
