@@ -1,0 +1,5 @@
+{
+  "content": "{\"labels\":[\"bug\"],\"rationale\":\"The report names a data-loss defect in the nightly import.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}
