@@ -1007,7 +1007,7 @@ describe("run", () => {
     const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
     expect(error).toBeInstanceOf(DeterministicRefusalError);
     expect(error.message).toMatch(/every pair failed/);
-    expect(error.message).toMatch(/transposed protected content/);
+    expect(error.message).toMatch(/does not preserve the protected content's order/);
     expect(error.message).toMatch(/classified refusal, give-up/);
     expect(chatDouble.calls()).toBe(1);
   });
