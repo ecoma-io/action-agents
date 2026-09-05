@@ -10,9 +10,11 @@ run for "the guarantees hold" has committed the hollow-verdict shape the
 [run contract](run-contract.md) forbids, and this page exists so nobody makes
 that mistake by accident.
 
-Recorded 2026-09-04 at pin `@ecoma-io/archkeep` **0.22.1** (exact, no range;
-first recorded at 0.22.0, re-measured claim-by-claim at the 0.22.1 bump —
-issue #280, the release closing ten organization-filed upstream issues);
+Recorded 2026-09-04 at pin `@ecoma-io/archkeep` **0.22.1**, re-measured
+claim-by-claim at pin **0.25.0** on 2026-09-05 (exact, no range; first
+recorded at 0.22.0, re-measured at the 0.22.1 bump — issue #280, the
+release closing ten organization-filed upstream issues; unchanged at the
+0.24.0 bump — issue #314 — and at this 0.25.0 bump — issue #348);
 owned by the repository maintainers. Every behavioral claim below was measured
 by running the pinned binary against real trees — the fixtures under
 `tools/fixtures/` and purpose-built variants of them — not cited from
@@ -75,7 +77,7 @@ not weaker — they are held by authorities that can actually witness them.
 
 ## The gate contract at the pin
 
-What a run of `archkeep check` at 0.22.1 does, measured. Three exits, and the
+What a run of `archkeep check` at 0.25.0 does, measured. Three exits, and the
 vocabulary mirrors the run contract's on purpose:
 
 | Exit | Run status   | Verdict   | What it means                                                                  |
@@ -234,9 +236,10 @@ re-pinning.
 
 ## Cost, and the U-2 trigger
 
-Measured on a recent main `Verify` run (2026-09-04): the six arch-gate steps
-total ~7 seconds — boundary 1s, canary 3s, transport seam 1s, HTTP monopoly
-1s, forge monopoly <1s, action shape 1s. The single `verify` job stands; there
+Measured at pin 0.25.0 (2026-09-05, local wall clock): the six arch-gate steps
+total ~6 seconds — boundary 1s, canary 2s, transport seam 1s, HTTP monopoly
+0.5s, forge monopoly 0.5s, action shape 0.5s (a 2026-09-04 `Verify`-run
+measurement at 0.22.1 recorded ~7s). The single `verify` job stands; there
 is nothing to parallelize at this cost. **Revisit trigger: any single arch
 gate exceeding 30 seconds** — measured per step, recorded here, re-checked
 whenever the pin moves or the job grows a step.
