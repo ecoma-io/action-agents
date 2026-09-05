@@ -265,6 +265,28 @@ describe("buildTriageRecord", () => {
     expect(validateTriageRecord(JSON.parse(serialiseTriageRecord(recordFixture())))).toBeTruthy();
   });
 
+  it("strips the non-whitespace control characters the one-line collapse cannot reach (#366)", () => {
+    // Minted, not typed: a literal control byte in the source would be the
+    // very byte this test refuses in the record. ESC, BEL and BS ride model
+    // answers and source filenames, and none of them — nor DEL — is
+    // whitespace, so the one-line collapse alone leaves them standing; the
+    // strip rule at this boundary is what removes them.
+    const esc = String.fromCharCode(0x1b);
+    const bel = String.fromCharCode(0x07);
+    const bs = String.fromCharCode(0x08);
+    const del = String.fromCharCode(0x7f);
+    const record = recordFixture({
+      reason: `refused${bel}while${esc}[31mred${bs}flag${del}end`,
+    });
+    // Each stripped byte became a space and the collapse tightened the run;
+    // the visible fragments survive in order.
+    expect(record.reason).toBe("refused while [31mred flag end");
+    for (const char of record.reason) {
+      const code = char.codePointAt(0) ?? 0;
+      expect(code <= 0x1f || code === 0x7f).toBe(false);
+    }
+  });
+
   it("caps model text at the build site, visibly", () => {
     const record = recordFixture({ reason: "r".repeat(REASON_CHARS + 200) });
     expect(record.reason.length).toBe(REASON_CHARS);

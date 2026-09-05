@@ -392,17 +392,18 @@ function decisionSection(decision) {
 }
 
 /**
- * One sanitiser pass at a build site: flattened to one line, structural
- * tokens removed, mentions broken, capped visibly. The notes are logged the
- * way the comment builders log theirs — the record's bytes stay clean, and
- * the run log carries what the sanitiser bit off.
+ * One sanitiser pass at a build site: flattened to one line with control
+ * characters stripped, structural tokens removed, mentions broken, capped
+ * visibly. The notes are logged the way the comment builders log theirs —
+ * the record's bytes stay clean, and the run log carries what the sanitiser
+ * bit off.
  *
  * @param {string} text
  * @param {number} maxChars
  * @returns {string}
  */
 function cappedLine(text, maxChars) {
-  const result = sanitiseCommentText(oneLine(text), { maxChars });
+  const result = sanitiseCommentText(oneLine(text, { stripControlChars: true }), { maxChars });
   for (const note of result.notes) {
     warning(`sanitiser: ${note}`);
   }
