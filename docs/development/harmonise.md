@@ -253,7 +253,7 @@ translated document
 
 Placeholders use a random-per-run identifier (similar to `core/untrusted.mjs`) to prevent untrusted content from forging them. A document containing the literal placeholder syntax cannot bypass validation because the random identifier changes each run.
 
-A placeholder has the shape `[[harmonise:<run-id>:<kind><n>]]` — one shared random hex `run-id` per action run, a kind (`g` for glossary terms, `s` for protected spans), and an index. One glossary term maps to one placeholder repeated at each of its occurrences; each protected span gets its own.
+A placeholder has the shape `[[harmonise:<run-id>:<kind><n>]]` — one shared random hex `run-id` per action run, a kind (`g` for glossary terms, `s` for protected spans), and an index: for `g`, the term's position in the glossary array (`g1` is the first entry); for `s`, the span's position in document order. The index is how a refusal that names a token maps back to the consumer's own config — a message naming `g3` points at the third entry of the configured glossary, one naming `s2` at the second protected span in document order. One glossary term maps to one placeholder repeated at each of its occurrences; each protected span gets its own.
 
 - If a source document already contains text in the placeholder's own namespace, the id is regenerated before use; a source that collides with several consecutive ids is refused rather than risk ambiguity;
 - Validation counts every placeholder occurrence: a translation must carry exactly the source's count of each — no loss, no duplication, no edited syntax, no invented placeholders;
@@ -276,6 +276,7 @@ If the model:
 - Wrong count of a placeholder → translation invalid, run fails;
 - Modifies a placeholder syntax → translation invalid, run fails;
 - Replaces the placeholder with the term in target language → translation invalid, run fails;
+- Moves a later placeholder's first occurrence ahead of an earlier one's → typed refusal: the pair is skipped and recorded `refused`, never re-asked in-run (#358);
 
 ### Scope (v1)
 

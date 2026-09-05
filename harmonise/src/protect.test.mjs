@@ -440,6 +440,21 @@ describe("placeholder order", () => {
     );
   });
 
+  it("restores a singleton relocated past a repeated token's second occurrence", () => {
+    const { protection } = protect(
+      "Alpha keeps logs 30 days. Beta must ship weekly. Gamma cites logs 30 days again.\n",
+      { glossary: ["logs 30 days", "ship weekly"] },
+    );
+    // Document order is g(1), g(2), g(1); the candidate's is g(1), g(1),
+    // g(2). The first occurrences keep their order, so the walk passes and
+    // the counts re-seat the tokens — leaving the singleton's clause past
+    // g(1)'s second occurrence: the accepted residual of pinning firsts.
+    const candidate = `Alpha keeps ${g(1)}. Beta must ${g(1)}. Gamma cites ${g(2)} again.\n`;
+    expect(restoreDocument(candidate, protection)).toBe(
+      "Alpha keeps logs 30 days. Beta must logs 30 days. Gamma cites ship weekly again.\n",
+    );
+  });
+
   it("refuses transposed skip placeholders and passes in-order ones", () => {
     const source =
       "<!-- harmonise:skip -->\nfirst kept\n\nprose\n\n<!-- harmonise:skip -->\nsecond kept\n";

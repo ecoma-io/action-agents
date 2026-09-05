@@ -174,10 +174,19 @@ an intentional glossary entry.
 
 Restoration checks order as well as counts: every placeholder — however often
 it repeats — is pinned by its first occurrence, and a candidate that places two
-in each other's positions is refused — protected content is never restored
-transposed. The trade is one-sided on purpose: a legitimate translation that
-moves a later protected clause earlier is refused and not re-asked, because
-wrong bytes are worse than a refused run.
+in each other's positions is refused — no protected span's first occurrence is
+ever restored transposed. The pin scopes to first occurrences on purpose: a
+repeated term's later occurrences re-seat by counts and may relocate, so a
+document ordered A, B, A restores from a candidate ordered A, A, B, with B's
+clause carried past A's second occurrence. That residual is accepted, not
+missed — wrong bytes for a repeated term's later occurrences are the deliberate
+price of not refusing legitimate clustering. The trade is one-sided on purpose:
+a legitimate translation that moves a later protected clause earlier is refused
+and not re-asked, because wrong bytes are worse than a refused run. An upgrade
+makes that refusal newly reachable: a document that passed on an earlier
+version by fronting a repeated term's first occurrence now refuses — with no
+re-translation storm behind it, because a pair the diff shows unchanged is
+skipped before the model is asked, let alone a gate consulted.
 
 #### `instructions`
 
@@ -394,17 +403,18 @@ calls — the action detects staleness from the diff before asking the model.
 
 ## Failure modes
 
-| Symptom                                                  | Cause                                                 | Resolution                                                                         |
-| -------------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| "No config file found"                                   | No file at the configured or default locations.       | Create `.github/action-agents/harmonise/harmonise.json5`.                          |
-| "sourceLanguage not found in languages"                  | `sourceLanguage` is not a key of the `languages` map. | Add the source language to the map, or change `sourceLanguage`.                    |
-| "Language pattern must contain exactly one `{document}`" | A language's pattern is malformed.                    | Fix the pattern — `**/{document}.vi.md` is correct.                                |
-| "Glossary entry contains control characters"             | A glossary term has `\0`, newlines or tabs.           | Remove the control characters.                                                     |
-| "Config file exceeds 64 KiB"                             | Config file too large.                                | Reduce it.                                                                         |
-| "Instruction document exceeds 8 KiB"                     | An instruction document is too large.                 | Shorten it.                                                                        |
-| "PR title exceeds 200 characters"                        | The rendered title is too long.                       | Shorten the template or the number of changed documents.                           |
-| "Manual-edit conflict"                                   | A target document was edited outside the action.      | Resolve the conflict manually. The action reports the pair as failed and moves on. |
-| "Provider unreachable"                                   | The `api-url` endpoint did not respond.               | Check the endpoint and the timeout.                                                |
+| Symptom                                                           | Cause                                                                                                                                                    | Resolution                                                                                                                                                                                                               |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "No config file found"                                            | No file at the configured or default locations.                                                                                                          | Create `.github/action-agents/harmonise/harmonise.json5`.                                                                                                                                                                |
+| "sourceLanguage not found in languages"                           | `sourceLanguage` is not a key of the `languages` map.                                                                                                    | Add the source language to the map, or change `sourceLanguage`.                                                                                                                                                          |
+| "Language pattern must contain exactly one `{document}`"          | A language's pattern is malformed.                                                                                                                       | Fix the pattern — `**/{document}.vi.md` is correct.                                                                                                                                                                      |
+| "Glossary entry contains control characters"                      | A glossary term has `\0`, newlines or tabs.                                                                                                              | Remove the control characters.                                                                                                                                                                                           |
+| "Config file exceeds 64 KiB"                                      | Config file too large.                                                                                                                                   | Reduce it.                                                                                                                                                                                                               |
+| "Instruction document exceeds 8 KiB"                              | An instruction document is too large.                                                                                                                    | Shorten it.                                                                                                                                                                                                              |
+| "PR title exceeds 200 characters"                                 | The rendered title is too long.                                                                                                                          | Shorten the template or the number of changed documents.                                                                                                                                                                 |
+| "Manual-edit conflict"                                            | A target document was edited outside the action.                                                                                                         | Resolve the conflict manually. The action reports the pair as failed and moves on.                                                                                                                                       |
+| "Provider unreachable"                                            | The `api-url` endpoint did not respond.                                                                                                                  | Check the endpoint and the timeout.                                                                                                                                                                                      |
+| "… the candidate does not preserve the protected content's order" | The translation moved a later protected term's first occurrence ahead of an earlier one — often a legitimate target-language reorder, not model failure. | Reorder the source's protected firsts, drop the term from the glossary, or wait for the next run (a refusal is never re-asked in-run, but the next scheduled run makes a fresh model call); hand-translate if it recurs. |
 
 ## Recipes
 
