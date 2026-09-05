@@ -22,6 +22,7 @@ import {
   evaluateApplicability,
 } from "./applicability.mjs";
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
 import { normaliseReadPath, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
@@ -96,6 +97,18 @@ export const PROMPT_HEADROOM = 0.5;
  */
 
 /**
+ * The red-run facts `reviewPullRequest` has landed so far, stashed as they
+ * become true — the review twin of harmonise's `RedFacts` (#347). A `null`
+ * head or an absent member means the run died before the fact existed,
+ * never that there was none, and is what the entrypoint's boundary writer
+ * records when the run ends red before its own write site (#355).
+ *
+ * @typedef {object} ReviewRedFacts
+ * @property {string | null} headRef the head the snapshot read pinned, once it landed
+ * @property {number} [commentId] the comment's id, once an upsert returned one
+ * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability context, once the classification derived it
+ */
+/**
  * @typedef {object} RunResult
  * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "published-without-artifact" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
@@ -111,6 +124,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @param {Record<string, unknown>} input.event the parsed event payload
  * @param {Io} input.io
  * @param {number} input.pullRequestNumber
+ * @param {ReviewRedFacts} [input.red] the red-facts holder a caller that records red exits stashes into; optional, and a run that never reddens leaves it untouched
  * @returns {Promise<RunResult>}
  */
 export async function reviewPullRequest({
@@ -120,6 +134,7 @@ export async function reviewPullRequest({
   eventName,
   event,
   io,
+  red,
 }) {
   // Sampled once at the very start: core's newer-head guard compares the
   // comment's server-side update time against THIS moment, not write time.
@@ -132,6 +147,9 @@ export async function reviewPullRequest({
       ? `#${String(pullRequestNumber)} is ${snapshot.state}${snapshot.merged ? " and merged" : ""}`
       : undefined;
   const headSha = snapshot.head.sha;
+  // The red-run stash begins: from here on, a red exit names the head it
+  // was judging (#355).
+  if (red !== undefined) red.headRef = headSha;
 
   // ── Policy: resolve the source, then config, all before the first model
   // call and before any skip a policy would record. The base branch's tip
@@ -152,7 +170,22 @@ export async function reviewPullRequest({
   if (stateSkip === undefined || applicabilityOn) {
     io.info(policySourceAuditLine({ eventName, source, path: loaded.path }));
   }
-  const config = validateConfig(loaded.raw);
+  let config;
+  try {
+    config = validateConfig(loaded.raw);
+  } catch (cause) {
+    // validateConfig is pure over the parsed file (config.mjs's contract):
+    // every throw reaching here — its own or the applicability policy
+    // validator's — is a startup refusal (F-02), so the boundary retypes it
+    // once instead of every raise site carrying the class. The reader
+    // refusals that never reach this try (a configured path that is absent,
+    // a policy declared twice, a foreign schema major) stay plain errors —
+    // the same tier harmonise keeps (#347) — because the reading call
+    // interleaves transport breaks a blanket retype would mislabel.
+    throw new DeterministicRefusalError(cause instanceof Error ? cause.message : String(cause), {
+      cause,
+    });
+  }
   const applicability = config.applicability;
 
   // ── Applicability: a code-owned state skip joins the audit story — the
@@ -267,6 +300,9 @@ export async function reviewPullRequest({
       basis: evaluated.basis,
       inputs: derived.inputs,
     });
+    // The red-run stash follows the classification: a run that dies past
+    // here records the context the policy judged it in (#355).
+    if (red !== undefined) red.applicability = derived.context;
     if (!evaluated.applicable) {
       if (inputs.dryRun) {
         return {
@@ -325,7 +361,10 @@ export async function reviewPullRequest({
   if (postureInstruction !== undefined) {
     postureDocument = documents.postureDocuments.get(postureInstruction);
     if (postureDocument === undefined) {
-      throw new Error(
+      // A config naming a posture whose document did not load is a
+      // deterministic startup refusal — the run declines to review without
+      // the policy's mode-scoped instructions rather than review half-instructed.
+      throw new DeterministicRefusalError(
         `the posture document '${postureInstruction}' did not survive loading — refusing ` +
           `rather than reviewing without the policy's mode-scoped instructions`,
       );
@@ -340,7 +379,10 @@ export async function reviewPullRequest({
     maxDiffLines: config.maxDiffLines,
   });
   if (inventory.excluded.length > 0) {
-    throw new Error(
+    // The diff-line budget is a declared ceiling (F-11): refusing past the
+    // break is the run declining to act, not a defect — the typed class,
+    // so the red boundary records it `refused` (#355).
+    throw new DeterministicRefusalError(
       `the diff counts ${String(inventory.countedDiffLines + inventory.excludedDiffLines)} lines ` +
         `against a ${String(config.maxDiffLines)}-line budget — the ${String(inventory.excluded.length)} ` +
         `file(s) past the break (${inventory.excluded[0]?.filename ?? ""} onward) are refused, not half-reviewed`,
@@ -440,7 +482,10 @@ export async function reviewPullRequest({
 
   const estimated = estimateTokens(messages);
   if (estimated > PROMPT_HEADROOM * inputs.contextWindow) {
-    throw new Error(
+    // The prompt-headroom ceiling (F-11): a review that cannot fit is
+    // declined, never truncated — the typed class, so the red boundary
+    // records it `refused` (#355).
+    throw new DeterministicRefusalError(
       `the assembled prompt estimates at ${String(estimated)} tokens, past half the ` +
         `${String(inputs.contextWindow)}-token window — a review that cannot fit is refused, not truncated`,
     );
@@ -488,7 +533,13 @@ export async function reviewPullRequest({
   );
   if (answer === undefined || !conclusion.passed) {
     io.info(`review: gate ${conclusion.gate} failed — ${conclusion.reason}`);
-    throw new Error(`the final answer failed the output contract twice: ${conclusion.reason}`);
+    // F-09's off-sheet arm: the model's final answer never satisfied the
+    // contract, before validation, verification or publication spent a
+    // further call — a deterministic refusal the red boundary records
+    // `refused` (#355), never a half-reviewed publication.
+    throw new DeterministicRefusalError(
+      `the final answer failed the output contract twice: ${conclusion.reason}`,
+    );
   }
 
   const validated = validateAnswer({
@@ -682,6 +733,11 @@ export async function reviewPullRequest({
     head: headSha,
     startedAt,
   });
+  // The red-run stash follows the comment: a run that dies past here — the
+  // identity attach, the write-time freshness read — records the comment
+  // that stands (#355). Every typed refusal fires before any write, so a
+  // `refused` record can never name one.
+  if (red !== undefined) red.commentId = upsert.id;
   const record = withCommentId(artifact, upsert.id);
 
   // The comment's newer-head rule extends to the artifact, and the guard

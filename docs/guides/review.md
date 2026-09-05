@@ -70,8 +70,10 @@ nothing. Flip to `true` during initial evaluation.
 
 **`artifact-path`**: directory inside `GITHUB_WORKSPACE` where the
 machine-readable run record is written (JSON file named after the reviewed
-commit). The action refuses to resolve this outside the workspace. When the
-review publishes nothing, no file is written.
+commit). The action refuses to resolve this outside the workspace. A run that
+ends red still leaves its record — a `refused` or `failed` file naming what
+killed it; only a run that died before it held the facts an artifact is built
+from writes no file.
 
 ## Config file
 
@@ -340,7 +342,9 @@ The file carries the same facts the comment renders; every bound verdict also
 records the sha256 of the exact evidence window it judged plus a bounded
 retention excerpt of it, so a consumer can re-check the content behind the
 verdict. Skipped runs leave a record too — a skip record naming which skip
-path wrote it, under the same upload glob. Upload the records as a workflow
+path wrote it, under the same upload glob — and so does a red exit: a
+`refused` record when one of the run's own ceilings declined to act, a
+`failed` record for anything else. Upload the records as a workflow
 artifact to keep them across runs:
 
 ```yaml

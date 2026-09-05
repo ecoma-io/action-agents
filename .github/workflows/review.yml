@@ -78,9 +78,11 @@ jobs:
 
       # The run artifact — policy, risk table, findings with verification
       # states, gate outcomes, coverage, phase log — as a downloadable file.
-      # `always()` keeps the record for runs whose comment step failed; a run
-      # that published nothing wrote no file, and `if-no-files-found: ignore`
-      # keeps those runs green.
+      # `always()` keeps the record for runs whose comment step failed, and a
+      # red exit leaves its refused/failed record behind too; only the two
+      # carve-outs (a death before the run holds the facts an artifact is
+      # built from, and a failed artifact write itself) write no file, and
+      # `if-no-files-found: ignore` keeps those runs green.
       - name: Upload the run artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

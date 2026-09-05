@@ -2164,7 +2164,7 @@ describe("the run artifact", () => {
     expect(result.commentId).toBe(101);
     const artifact = /** @type {import("./artifact.mjs").PublishedRunArtifact} */ (result.artifact);
     if (artifact === undefined) throw new Error("expected an artifact on publication");
-    expect(artifact.schemaVersion).toBe(4);
+    expect(artifact.schemaVersion).toBe(5);
     expect(artifact.repository).toBe("acme/widgets");
     expect(artifact.pullRequest).toBe(7);
     expect(artifact.headRef).toBe(HEAD);
@@ -2753,7 +2753,7 @@ describe("the applicability axis", () => {
     expect(listings).toHaveLength(0);
     expect(chatCalls).toHaveLength(0);
     const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
-    expect(record.schemaVersion).toBe(5);
+    expect(record.schemaVersion).toBe(6);
     expect(record.outcome).toEqual({
       classification: "skip",
       reason: result.reason,
@@ -2875,7 +2875,7 @@ describe("the applicability axis", () => {
     expect(recorded.outcome).toBe("skip");
     expect(chatCalls).toHaveLength(0);
     const record = JSON.parse(serialiseArtifact(/** @type {any} */ (recorded.artifact)));
-    expect(record.schemaVersion).toBe(5);
+    expect(record.schemaVersion).toBe(6);
     expect(record.outcome.classification).toBe("skip");
     expect(record.applicability).toEqual({
       context: "maintainer",
@@ -2916,7 +2916,7 @@ describe("the applicability axis", () => {
     expect(result.outcome).toBe("published");
     const bytes = serialiseArtifact(/** @type {any} */ (result.artifact));
     const record = JSON.parse(bytes);
-    expect(record.schemaVersion).toBe(4);
+    expect(record.schemaVersion).toBe(5);
     expect(Object.keys(record).sort()).toEqual(
       [
         "coverage",
