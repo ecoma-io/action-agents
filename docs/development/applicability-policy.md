@@ -309,7 +309,9 @@ additive and all gated on the policy being present:
   SHA, the skipped outcome, the applicability section — and the artifact
   validator learns that second shape. Policy-enabled runs carry an artifact
   `schemaVersion` that names the new shape; runs without the policy keep
-  today's artifact byte-for-byte.
+  their own family's version, which moves only on a breaking shape change
+  to that family — the bare family re-stamped 4 → 5 when the red-terminal
+  shapes landed (#355), green artifacts included.
 
 ## Security boundaries
 
