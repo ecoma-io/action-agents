@@ -83,6 +83,32 @@ describe("buildHarmoniseRecord", () => {
     expect(() => validateHarmoniseRecord(record)).not.toThrow();
     expect(Object.isFrozen(record)).toBe(true);
   });
+  it("caps an astral-plane reason by UTF-16 length — the validator's own metric (#347)", () => {
+    // 200 emoji are 200 code points but 400 UTF-16 units: a cap that counted
+    // code points passed the reason whole and the validator refused it —
+    // the red run left no record at all.
+    const record = recordFixture({
+      outcome: "failed",
+      reason: "\u{1F600}".repeat(200),
+      pullRequest: null,
+    });
+    expect(record.reason.length).toBe(REASON_CHARS);
+    expect(record.reason.endsWith("…[truncated]")).toBe(true);
+  });
+
+  it("caps an astral reason the code-point count would have passed untouched (#347)", () => {
+    // 177 emoji: 177 code points — under the cap, so uncapped — but 354
+    // UTF-16 units, over the validator's bound. The mismatch threw with no
+    // truncation note anywhere.
+    const record = recordFixture({ reason: "\u{1F600}".repeat(177) });
+    expect(record.reason.length).toBe(REASON_CHARS);
+    expect(record.reason.endsWith("…[truncated]")).toBe(true);
+  });
+
+  it("keeps an exactly-at-bound astral reason without a cut", () => {
+    const record = recordFixture({ reason: "\u{1F600}".repeat(150) });
+    expect(record.reason).toBe("\u{1F600}".repeat(150));
+  });
 
   it("carries an updated pull request without pretending it was created", () => {
     const record = recordFixture({

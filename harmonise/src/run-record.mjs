@@ -30,7 +30,7 @@ import { sanitiseCommentText } from "#core/sanitise.mjs";
  */
 export const harmoniseRecordSchemaVersion = 3;
 
-/** The terminal reason's cap, in characters — the same width as the triage record's reason keeps. */
+/** The terminal reason's cap — measured as UTF-16 length, the metric the validator's bound and the core sanitiser's cap share (#347); the same width as the triage record's reason keeps. */
 export const REASON_CHARS = 300;
 
 /**

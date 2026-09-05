@@ -3178,17 +3178,20 @@ describe("the run record (#297)", () => {
     ).toBe(ioDouble.records[0].pairs.selected);
   });
 
-  it("a record-write failure before anything is published is the red run", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+  it("a record-write failure before anything is published is a logged loss — the dry run keeps its verdict (#347)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const forgeDouble = forge(makeRepo());
     const ioDouble = io(forgeDouble);
     ioDouble.writeRecord = () => {
       throw new Error("the disk is full");
     };
 
-    // The dry run writes its record before it exits, so the loss is the run's
-    // own outcome — a green run with no record is an unauditable green.
-    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(/the disk is full/);
+    // The run's verdict belongs to the pairs, never to the record write:
+    // the loss is logged, the green verdict stands, and nothing pretends a
+    // record exists.
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    expect(logged(log)).toMatch(/the run record was not written: the disk is full/);
+    expect(ioDouble.records).toHaveLength(0);
   });
 
   it("a record-write failure after publication is a logged loss, and the run keeps its verdict", async () => {
@@ -3234,15 +3237,18 @@ describe("the run record (#297)", () => {
   });
 
   it("a record-path that escapes the workspace is refused — the ceiling holds for writes too (I7)", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const ctx = context();
     const forgeDouble = forge(makeRepo());
     const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: echoingChat(), evidence });
 
+    // The write never leaves the workspace — the refusal is the ceiling
+    // holding — and the loss is a logged one: the dry run's verdict belongs
+    // to the pairs, the same tier as the publish path (#347).
     await expect(
       run(readInputs({ ...runner, "INPUT_RECORD-PATH": "../outside" }), ctx, ioDouble),
-    ).rejects.toThrow(/resolves outside the workspace/);
-    // A dry run, so the refusal fires before anything was published.
+    ).resolves.toBeUndefined();
+    expect(logged(log)).toMatch(/the run record was not written: .*resolves outside the workspace/);
     expect(forgeDouble.writes.map((/** @type {{ op: string }} */ w) => w.op)).toHaveLength(0);
   });
 
@@ -3401,6 +3407,100 @@ describe("the run record (#297)", () => {
     expect(ioDouble.records).toHaveLength(1);
     expect(ioDouble.records[0].outcome).toBe("skip");
     expect(ioDouble.records[0].reason).toBe("dry run — nothing was written");
+  });
+  it("a declared partial record a failed write could not land is what the boundary writes (#347)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Two pairs, one of which the model fails: the publish path builds the
+    // partial record after the pull request lands. Its write fails once —
+    // and the boundary must re-attempt THAT record, not rebuild the
+    // terminal as `failed` from the throw.
+    const forgeDouble = forge(
+      makeRepo({
+        documents: {
+          "manual/dev.md": "# Dev\n\nProse.\n",
+          "manual/second.md": "# Two\n\nProse.\n",
+        },
+      }),
+      makeInventory(["manual/dev.md", "manual/second.md"]),
+    );
+    const ioDouble = io(forgeDouble);
+    ioDouble.sleep = async () => undefined;
+    const echo = echoingChat();
+    ioDouble.chat = {
+      /** @param {{ model: string, messages: { role: "system" | "user" | "assistant" | "tool", content: string }[] }} request */
+      async complete(request) {
+        const user = request.messages[request.messages.length - 1]?.content ?? "";
+        if (user.includes("# Two")) throw new Error("the model refused the pair");
+        return echo.complete(request);
+      },
+    };
+    let calls = 0;
+    const inner = ioDouble.writeRecord.bind(ioDouble);
+    ioDouble.writeRecord = (/** @type {{ record: any }} */ input) => {
+      calls += 1;
+      if (calls === 1) throw new Error("the disk is full");
+      return inner(input);
+    };
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).rejects.toThrow(/1 pair\(s\) failed/);
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("partial");
+    expect(record.pullRequest).toEqual({ number: 42, created: true });
+    expect(record.pairs).toEqual({
+      selected: 2,
+      proposed: 1,
+      unchanged: 0,
+      skipped: 0,
+      failed: 1,
+    });
+    expect(record.reason).toMatch(/opened pull request #42; 1 pair\(s\) failed/);
+  });
+
+  it("a declared skip record a failed write could not land is what a red dry run records (#347)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The vanished-source dry run: the declared skip record's write fails
+    // once, the failed pair reddens the run, and the boundary re-attempts
+    // the stashed skip record — the terminal is never relabelled `failed`.
+    const forgeDouble = forge(
+      makeRepo({ documents: { "manual/dev.md": "# Dev\n\nFine prose.\n" } }),
+      makeInventory(["manual/dev.md", "manual/lost.md"]),
+    );
+    const ioDouble = io(forgeDouble);
+    let calls = 0;
+    const inner = ioDouble.writeRecord.bind(ioDouble);
+    ioDouble.writeRecord = (/** @type {{ record: any }} */ input) => {
+      calls += 1;
+      if (calls === 1) throw new Error("the disk is full");
+      return inner(input);
+    };
+
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(
+      /1 pair\(s\) failed/,
+    );
+    expect(ioDouble.records).toHaveLength(1);
+    expect(ioDouble.records[0].outcome).toBe("skip");
+    expect(ioDouble.records[0].reason).toBe("dry run — nothing was written");
+  });
+
+  it("an astral-plane provider excerpt still leaves the failed run its record (#347)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The provider's excerpt is model text and can be anything: 200 emoji
+    // are 200 code points but 400 UTF-16 units. A reason cap and a validator
+    // that disagreed on the metric made the record's own build throw — run
+    // #344's red left no artifact at all.
+    const forgeDouble = forge(makeRepo(), makeInventory(["manual/dev.md", "manual/vi/dev.md"]));
+    const ioDouble = io(forgeDouble, [new Error("\u{1F600}".repeat(200))]);
+    ioDouble.sleep = async () => undefined;
+
+    await expect(run(readInputs(runner), context(), ioDouble)).rejects.toThrow(/every pair failed/);
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("failed");
+    expect(record.reason.length).toBeLessThanOrEqual(300);
+    expect(record.reason.endsWith("…[truncated]")).toBe(true);
   });
 });
 

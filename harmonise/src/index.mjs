@@ -271,6 +271,7 @@ function realIo(inputs, context, overrides = {}) {
  * @property {string | null} headSha the base commit the reads pinned to, once the policy source resolved
  * @property {import("./run-record.mjs").RecordPairs | null} pairs the pair accounting, once the schedule was finalised
  * @property {import("./run-record.mjs").RecordPullRequest | null} pullRequest the pull request, once the upsert landed
+ * @property {import("./run-record.mjs").HarmoniseRecord | null} record a declared terminal's built record its own write could not land; the boundary writer's first choice (#347)
  * @property {boolean} recorded whether a declared terminal point already wrote this run's one record
  */
 
@@ -290,6 +291,25 @@ function redSetTerminal(name, lines) {
     ? new DeterministicRefusalError(message)
     : new Error(message);
 }
+/**
+ * A declared record write that failed: the loss is logged — the run log is
+ * where a record loss lives — and the built record is stashed, so a red
+ * exit re-attempts that record instead of relabelling the terminal from
+ * the throw (#347). Whether the loss keeps the run's verdict or reddens a
+ * run whose only outcome was the record is the write site's tier, not this
+ * helper's (F-14).
+ *
+ * @param {RedFacts} red
+ * @param {import("./run-record.mjs").HarmoniseRecord} record
+ * @param {unknown} cause
+ * @returns {void}
+ */
+function loseRecord(red, record, cause) {
+  red.record = record;
+  info(
+    `harmonise: the run record was not written: ${cause instanceof Error ? cause.message : String(cause)}`,
+  );
+}
 
 /**
  * Runs one harmonise pass and, when it ends red, writes the run's one red
@@ -298,7 +318,8 @@ function redSetTerminal(name, lines) {
  * undeclared throw (#347). The record never masks the throw it records, and
  * its own failure is a logged loss, not a replacement error; a declared
  * terminal point that already wrote — a skip record, the published or
- * partial record — is never overwritten.
+ * partial record — is never overwritten, and one whose write failed is
+ * re-attempted exactly as it was built (#347).
  *
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
@@ -309,28 +330,32 @@ export async function run(inputs, context, io) {
   /** @type {Io} */
   const world = realIo(inputs, context, io ?? {});
   /** @type {RedFacts} */
-  const red = { headSha: null, pairs: null, pullRequest: null, recorded: false };
+  const red = { headSha: null, pairs: null, pullRequest: null, record: null, recorded: false };
   try {
     await harmoniseRun(inputs, context, world, red);
   } catch (cause) {
     if (!red.recorded) {
-      try {
-        world.writeRecord({
-          record: buildHarmoniseRecord({
-            repository: `${context.owner}/${context.repo}`,
-            eventName: context.eventName,
-            sourceLanguage: inputs.sourceLanguage,
-            dryRun: inputs.dryRun,
-            outcome: cause instanceof DeterministicRefusalError ? "refused" : "failed",
-            reason: cause instanceof Error ? cause.message : String(cause),
-            pairs: red.pairs,
-            pullRequest: red.pullRequest,
-            headSha: red.headSha,
-          }),
+      // The stashed record a declared terminal built comes first: a write
+      // that failed must never relabel the terminal it was written for
+      // (#347). The fallback build is for a throw no declared point saw.
+      const record =
+        red.record ??
+        buildHarmoniseRecord({
+          repository: `${context.owner}/${context.repo}`,
+          eventName: context.eventName,
+          sourceLanguage: inputs.sourceLanguage,
+          dryRun: inputs.dryRun,
+          outcome: cause instanceof DeterministicRefusalError ? "refused" : "failed",
+          reason: cause instanceof Error ? cause.message : String(cause),
+          pairs: red.pairs,
+          pullRequest: red.pullRequest,
+          headSha: red.headSha,
         });
+      try {
+        world.writeRecord({ record });
       } catch (recordCause) {
         info(
-          `harmonise: the failed-run record was not written: ` +
+          `harmonise: ${red.record === null ? "the failed-run" : "the run"} record was not written: ` +
             `${recordCause instanceof Error ? recordCause.message : String(recordCause)}`,
         );
       }
@@ -997,8 +1022,12 @@ async function harmoniseRun(inputs, context, world, red) {
       reason: "dry run — nothing was written",
       pullRequest: null,
     });
-    world.writeRecord({ record });
-    red.recorded = true;
+    try {
+      world.writeRecord({ record });
+      red.recorded = true;
+    } catch (cause) {
+      loseRecord(red, record, cause);
+    }
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -1014,8 +1043,12 @@ async function harmoniseRun(inputs, context, world, red) {
       reason: "nothing to propose — no branch, no commit, no pull request",
       pullRequest: null,
     });
-    world.writeRecord({ record });
-    red.recorded = true;
+    try {
+      world.writeRecord({ record });
+      red.recorded = true;
+    } catch (cause) {
+      loseRecord(red, record, cause);
+    }
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -1144,9 +1177,7 @@ async function harmoniseRun(inputs, context, world, red) {
     world.writeRecord({ record });
     red.recorded = true;
   } catch (cause) {
-    info(
-      `harmonise: the run record was not written: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
+    loseRecord(red, record, cause);
   }
 
   // Published first, red second — exactly the specification's ordering.
