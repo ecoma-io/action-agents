@@ -45,6 +45,8 @@ import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
 import { createCanonicalResult } from "./canonical.mjs";
 import { decideReviewGate } from "./merge-gate.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
+import { embedRecordBlock, previousRecord } from "./record.mjs";
+import { reconcile } from "./reconcile.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
 import {
   applicabilitySection,
@@ -670,17 +672,46 @@ export async function reviewPullRequest({
   // check run's and the ruleset's job, not the action's exit code.
   const gate = decideReviewGate(canonical);
 
+  // ── The cross-run reconciliation (ADR 004 decision 3) ──
+  // The previous canonical record is recovered from the marker comment the
+  // last published run left on the thread; record.mjs embeds it in the same
+  // upsert that publishes, so this read is the whole persistence story (the
+  // artifact file does not survive across runs). Guarded at every step: no
+  // marker comment or no readable block — a first run, and the comment
+  // renders unlabeled. The labels are comment prose and nothing else: the
+  // gate above, the SARIF projection and every exit read the current
+  // canonical record alone, never the reconciliation.
+  const previous = previousRecord(await io.forge.listComments(pullRequestNumber), ACTION);
+  const reconciled =
+    previous === undefined ? undefined : reconcile({ previous, current: canonical });
+  // canonical.findings is built from `published` in order, so the labels
+  // join by index — no fingerprint matching duplicated here; reconcile is
+  // the single source of the pairing.
+  const labelledFindings =
+    reconciled === undefined
+      ? published
+      : published.map((finding, index) => {
+          const label = reconciled.current[index]?.reconciliation;
+          return label === undefined ? finding : { ...finding, reconciliation: label };
+        });
+
   const body = renderComment({
     status: status.label,
     headSha,
     coverage: outcome.coverage,
     summary: validated.summary,
-    findings: published,
+    findings: labelledFindings,
     policySource: source,
     strictness: runStrictness,
     quarantinedCount: anchored.quarantined.length,
+    ...(reconciled !== undefined ? { resolvedFindings: reconciled.previous } : {}),
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
+  // The body that gets written: the prose plus the record block the next
+  // run reconciles against, appended by this same upsert so the thread
+  // never carries a stale record. The dry-run log shows the same bytes the
+  // run would have written.
+  const publishedBody = `${body}${embedRecordBlock(canonical)}\n`;
 
   // ── Before publication: the guard that makes stale reviews unreachable ──
   const fresh = await io.forge.getPullRequest(pullRequestNumber);
@@ -701,7 +732,7 @@ export async function reviewPullRequest({
   }
 
   if (inputs.dryRun) {
-    io.info(`review: dry run — the comment that would have been published:\n${body}`);
+    io.info(`review: dry run — the comment that would have been published:\n${publishedBody}`);
     return {
       outcome: "dry-run",
       reason: "dry run: nothing written",
@@ -781,7 +812,7 @@ export async function reviewPullRequest({
     store: io.forge,
     action: ACTION,
     issueNumber: pullRequestNumber,
-    buildBody: (marker) => `${marker}\n${body}`,
+    buildBody: (marker) => `${marker}\n${publishedBody}`,
     ownLogins,
     head: headSha,
     startedAt,

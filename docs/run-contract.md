@@ -235,12 +235,17 @@ give the shape its authority:
 - **Reconciliation is code, and incomplete runs resolve nothing.** The
   `new | persisting | moved | resolved | unresolved` vocabulary is computed
   from artifacts; a run that could not complete its coverage never declares a
-  previous finding `resolved`.
+  previous finding `resolved`. The published comment embeds the record the
+  next run reconciles against — the comment, not the artifact file, is what
+  survives between runs.
 - **The gate is a pure function of the canonical result and the policy.**
   `unknown` never passes; an incomplete, abandoned or refused run does not
   pass; a confirmed finding the policy blocks on blocks the gate. The model
   names no consequence, and no projection — comment or SARIF — is ever read
-  back as input.
+  back as input. The one carve-out runs the other way: the published comment
+  embeds the record it projected, the next run recovers it to render the
+  cross-run labels as comment prose, and a missing or unreadable record
+  reconciles as a first run — never a consequence.
 - **Evidence is captured, never claimed.** Before publication, code reads the
   reviewed bytes at each finding's (file, line) anchor and stores the digest
   and capped excerpt the fingerprint is recomputable from — the capture

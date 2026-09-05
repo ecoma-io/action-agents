@@ -335,7 +335,17 @@ workflow choice.
 **Marker comment**: one comment per pull request, created or updated in place by
 its marker. The comment carries the review's findings with their verification
 states — confirmed, refuted, unresolved — policy and risk table, gate outcomes,
-and the phase log.
+and the phase log. It also embeds the published run's canonical record as a
+machine-readable block, so the next run can reconcile against it.
+
+**Cross-run labels**: when the previous marker comment carried a readable
+record, code compares the two published records and tags every finding
+`[new]`, `[persisting]`, `[moved]` or `[resolved]`, adds a one-line comparison
+count under the summary, and lists the findings that resolved where they
+retired. The labels are informational prose over the same facts the artifact
+already carries: they never change the gate verdict, the SARIF projection or
+any exit code, and a missing or unreadable previous record simply renders the
+comment as a first run.
 
 **Run artifact** (when `dry-run` is `false`): a machine-readable JSON file
 written inside the workspace at `artifact-path`, named after the reviewed commit.
@@ -391,7 +401,11 @@ under every kind in the vocabulary, and a refuted finding never blocks.
 
 The action's own exit never fails on a BLOCK — enforcement is the check
 run's and the ruleset's job, so a BLOCK is still a published, green run with
-its outputs standing. The SARIF upload is the consumer's step:
+its outputs standing. A branch ruleset requiring the `review gate` check is
+satisfied by the neutral `observe`-mode check — a ruleset only starts
+enforcing after the workflow sets `gate-mode: required`. A refused or failed
+run renders no gate check run at all, which a ruleset treats as pending:
+fail-closed. The SARIF upload is the consumer's step:
 
 ```yaml
 - id: review
