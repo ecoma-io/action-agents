@@ -172,9 +172,12 @@ glossary: [
 Control characters (`\0`, newlines, tabs) are refused at startup — they are never
 an intentional glossary entry.
 
-Restoration checks order as well as counts: a candidate that places two
-single-occurrence placeholders in each other's positions is refused — protected
-content is never restored transposed.
+Restoration checks order as well as counts: every placeholder — however often
+it repeats — is pinned by its first occurrence, and a candidate that places two
+in each other's positions is refused — protected content is never restored
+transposed. The trade is one-sided on purpose: a legitimate translation that
+moves a later protected clause earlier is refused and not re-asked, because
+wrong bytes are worse than a refused run.
 
 #### `instructions`
 
