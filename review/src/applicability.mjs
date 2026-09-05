@@ -252,10 +252,10 @@ export function classifyContext(inputs) {
  * @param {ExecutionContext} input.context the derived context
  * @param {string} input.title the pull request's title
  * @param {string} input.branch the head ref name
- * @param {string[]} [input.labels] the pull request's labels, exact names
- * @param {string} [input.base] the base ref name
- * @param {AuthorFacts} [input.author] the author facts from the event payload
- * @param {ChangeFacts | null} [input.changes] the pre-ignore change totals, or null when no listing was fetched
+ * @param {string[] | undefined} [input.labels] the pull request's labels, exact names
+ * @param {string | undefined} [input.base] the base ref name
+ * @param {AuthorFacts | undefined} [input.author] the author facts from the event payload
+ * @param {ChangeFacts | null | undefined} [input.changes] the pre-ignore change totals, or null when no listing was fetched
  * @param {string[] | null} input.paths the post-ignore changed paths, or null when no rule carries a paths condition and no listing was fetched
  * @returns {{ applicable: boolean, matchedRule: string | null, basis: "rule" | "default", posture: Posture, instruction: string | undefined, intensity: RuleIntensity | undefined }}
  */
@@ -323,10 +323,10 @@ export function changeTotals(files) {
  * failed condition costs more review, never less.
  * @property {string} title
  * @property {string} branch
- * @property {string} [base]
- * @property {string[]} [labels]
- * @property {AuthorFacts} [author]
- * @property {ChangeFacts | null} [changes] null when no listing was fetched
+ * @property {string | undefined} [base]
+ * @property {string[] | undefined} [labels]
+ * @property {AuthorFacts | undefined} [author]
+ * @property {ChangeFacts | null | undefined} [changes] null when no listing was fetched
  * @property {string[] | null} paths null when no rule carries a paths condition
  */
 /**

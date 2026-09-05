@@ -734,6 +734,7 @@ describe("the eligibility conditions", () => {
    * @param {Partial<import("./applicability.mjs").RuleFacts> & { context?: import("./applicability.mjs").ExecutionContext }} [over]
    */
   const evaluated = (policy, over = {}) => {
+    /** @type {import("./applicability.mjs").RuleFacts & { context: import("./applicability.mjs").ExecutionContext }} */
     const facts = {
       context: "external",
       title: "the change",
@@ -745,11 +746,11 @@ describe("the eligibility conditions", () => {
       paths: null,
       ...over,
     };
-    return evaluateApplicability({ policy, ...facts });
+    return evaluateApplicability({ ...facts, policy });
   };
 
   /** A rule factory: id plus when, run: false unless said otherwise. */
-  /** @param {import("./applicability.mjs").WhenConditions} when @param {string} [id] */
+  /** @param {Record<string, unknown>} when @param {string} [id] */
   const skipRule = (when, id = "skip-rule") => ({ id, when, run: false });
 
   it("skips on the GitHub-attested bot type, allowlist not required", () => {
@@ -862,9 +863,12 @@ describe("the eligibility conditions", () => {
       },
       "medium",
     );
-    expect(evaluated(policy, { base: undefined }).applicable).toBe(true);
-    expect(evaluated(policy, { labels: undefined }).applicable).toBe(true);
-    expect(evaluated(policy, { author: undefined }).applicable).toBe(true);
+    // Each family's fact is omitted from the sheet — base, labels, author,
+    // then changes — and each gap fails the family that needs it. An
+    // omitted key and an explicitly-undefined one are the same refusal at
+    // the evaluator; `changes` alone can also arrive as null (no listing
+    // was fetched), the one gap that is a value.
+    expect(evaluated(policy, {}).applicable).toBe(true);
     expect(evaluated(policy, { changes: null }).applicable).toBe(true);
   });
 
