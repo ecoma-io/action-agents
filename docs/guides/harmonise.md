@@ -391,30 +391,68 @@ never validated as one. The full validation rules are on the
 
 ## What a translated answer must pass
 
-The model's answer is judged by deterministic gates before it can become a
-proposal: parse, the script gate, placeholder restoration, the byte cap,
-frontmatter identity, structural preservation and link identity. A refusal is
-never retried — the same answer fails the same way.
+An **arriving candidate** — the model's answer — is judged by deterministic
+gates before it can become a proposal: parse, the script gate, placeholder
+restoration, the byte cap, frontmatter identity, structural preservation and
+link identity. The scope is the arriving answer: one that repeats the
+published translation byte-for-byte is a no-op and returns before the gates —
+an endorsed publication is not re-judged. A refusal is never retried — the
+same answer fails the same way.
 
-The **script gate** checks that the answer's prose is written in the target
-language's script: a `vi` target must come back in Latin letters, a `ja`
-target in Japanese writing. The expected scripts must hold more than half of
-the candidate's counted letters, and an answer that fails the majority is
-refused. What the gate accepts by design:
+The **script gate** checks that the candidate's translatable prose is written
+in the target language's script: a `vi` target must come back in Latin
+letters, a `ja` target in Japanese writing. The expected scripts must hold
+more than half of the candidate's counted letters, and an answer whose
+remaining prose is half wrong-script letters refuses. What the gate accepts
+by design:
 
 - **Same-script wrong-language answers pass.** An English answer for an `es`
   target is Latin on Latin; the gate is a script floor, not language
   identification.
-- **Frontmatter keys, inline HTML tag names and code carried in prose skew
-  the counts slightly.** They are letters in the candidate and vote like any
-  other letter; the action's own placeholder spellings never vote.
+- **Only prose votes.** Letters of inline code, the frontmatter block and
+  link destinations no longer vote; HTML tag names in prose remain voters.
+  The action's own placeholder spellings never vote.
+- **Traditional and simplified Chinese are one Unicode script.** A `zh`
+  target expects Han, and the gate cannot tell 简体 from 繁體.
+- **Serbian is not judged.** `sr` is absent from the table because its script
+  is contested — Cyrillic is the official script, Latin is in wide everyday
+  use — and the gate is off for it rather than refusing one of the two
+  correct spellings wholesale. The same holds for `sr-Latn` and `sr-Cyrl`:
+  the table keys on the primary subtag alone.
 - **A target language the gate does not know is not judged.** A language
   whose primary subtag is absent from the gate's built-in table leaves the
   pair unjudged by this gate — a fail-open deliberately narrower than a wrong
   default that would refuse correct translations wholesale.
 
+A script-gate refusal names the target subtag, the winning script and the
+fraction — read it as a model or language-configuration problem (the wrong
+model, or the wrong tag in `languages`), not a document problem: the
+document is never coerced, and nothing is written.
+
 The table of known languages is part of the action, not your configuration —
-there is nothing to set for it.
+there is nothing to set for it. Its coverage, by script:
+
+| Script                    | Primary subtags                                                                                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Latin                     | `en`, `vi`, `fr`, `de`, `es`, `it`, `pt`, `nl`, `pl`, `tr`, `id`, `sv`, `da`, `no`, `nb`, `fi`, `cs`, `ro`, `hu`, `ca`, `sq`, `ms` |
+| Cyrillic                  | `ru`, `uk`, `bg`, `mk`, `be`                                                                                                       |
+| Han                       | `zh`                                                                                                                               |
+| Han + Hiragana + Katakana | `ja`                                                                                                                               |
+| Hangul + Han              | `ko`                                                                                                                               |
+| Thai                      | `th`                                                                                                                               |
+| Arabic                    | `ar`, `fa`, `ur`                                                                                                                   |
+| Hebrew                    | `he`                                                                                                                               |
+| Greek                     | `el`                                                                                                                               |
+| Devanagari                | `hi`, `mr`, `ne`                                                                                                                   |
+| Bengali                   | `bn`                                                                                                                               |
+| Tamil                     | `ta`                                                                                                                               |
+| Georgian                  | `ka`                                                                                                                               |
+| Armenian                  | `hy`                                                                                                                               |
+| Ethiopic                  | `am`                                                                                                                               |
+
+A pair that published a wrong-script answer before this gate existed refuses
+on its next source change — unchanged pairs skip before the gate runs, so
+there is no re-translation storm on upgrade.
 
 ## Cost and budget controls
 

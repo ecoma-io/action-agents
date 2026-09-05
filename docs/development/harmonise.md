@@ -492,21 +492,48 @@ This is not a generic Markdown transformation framework. It implements only the 
 
 Before anything is restored, the tokenised answer is judged by
 `harmonise/src/script-gate.mjs`: `judgeScript(text, languageTag)` counts the
-candidate's letters per Unicode script — `\p{L}` membership with
-`\p{Script=…}` tests, the machinery's own `[[harmonise:…]]` token spellings
-excluded — and refuses the pair unless the configured target language's
-scripts hold strictly more than half of the counted letters; the refusal
-sentence names the target subtag, the winning foreign script and the
-fraction, byte-deterministically. The expected scripts come from a curated
-table keyed by the language tag's primary subtag (`en` → Latin, `ja` →
-Han + Hiragana + Katakana, `ko` → Hangul + Han), judged as a union. The table
-is code, not configuration — a tag joins it when its script is
+candidate's **translatable prose** per Unicode script — `\p{L}` membership
+with `\p{Script=…}` tests — and refuses the pair unless the configured
+target language's scripts hold strictly more than half of the counted
+letters. The count is over prose only, and the exclusions are the protection
+layer's own masking machinery (`markdown.mjs`'s `fenceMask`,
+`maskCodeSpans`, `maskDestinations` and `frontmatterExtent`), never a second
+implementation: the leading frontmatter block (keys are source-language
+words, values are already f-tokens — neither votes), fenced code blocks,
+inline code spans, link machinery (inline and image destinations,
+reference-definition destinations, angle autolinks, bare scheme URLs) and
+the pipeline's own `[[harmonise:…]]` token spellings. Link text is prose and
+keeps voting; inline HTML tag names in prose are the accepted residual
+voters — no HTML parser exists here, and none is being built.
+
+The refusal sentence names the target subtag, the winning foreign script and
+the fraction, byte-deterministically, quoting no candidate content — and it
+points at the fix: a model or language-configuration problem, never a
+document problem, and the document is never coerced.
+
+The expected scripts come from a curated table keyed by the language tag's
+primary subtag (`en` → Latin, `ru`/`uk`/`bg`/`mk`/`be` → Cyrillic, `ja` →
+Han + Hiragana + Katakana, `ko` → Hangul + Han), judged as a union. The
+table is code, not configuration — a tag joins it when its script is
 uncontroversial, by a reviewed decision in this repository, never a consumer
-setting — and a primary subtag the table does not know leaves the pair
-unjudged by this gate rather than guessed at: a fail-open strictly narrower
-than a wrong default. A candidate with no counted letters passes, and a
-violation is a refusal like every answer-contract failure: raised in
-`judgeAnswer`, never retried.
+setting — and the standing precedent for staying out is `sr`: Serbian is
+officially Cyrillic and commonly Latin, so either single expected script
+would refuse one of the two correct spellings wholesale, and the tag's own
+subtags cannot disambiguate (`sr-Latn` and `sr-Cyrl` both reduce to `sr`).
+A primary subtag the table does not know leaves the pair unjudged by this
+gate rather than guessed at: a fail-open strictly narrower than a wrong
+default. `mn` is the standing case of doubt: Mongolian is Cyrillic in
+dominant everyday use but co-official in its traditional script, so it waits
+for a consumer need rather than joining by assumption. A candidate with no
+counted letters passes.
+
+The violation is the typed deterministic refusal (`refusal.mjs`'s
+`DeterministicRefusalError`), raised in `judgeAnswer` — never retried, like
+every answer-contract failure — and its class is the record's outcome: an
+all-pairs wrong-script red set records `refused` at the boundary (#347's
+class column), while one defect line beside it records `failed`. The gate
+judges the arriving candidate only: the identity no-op path in `judgeAnswer`
+returns before it, and an endorsed publication is not re-judged.
 
 ## The prompt
 
@@ -862,7 +889,7 @@ An answer that violates the answer contract is a **refusal**: raised where the a
 
 ## Capabilities
 
-What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. On `main` today the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `prompt`, `answer` and `pull-request` — and, wired on `main` since `v0.3.0` through `plan` and `src/index.mjs`, `frontmatter`, `blocks`, `tm`, `pool`, `protection`, `threeway` and `recovery`: the translation memory (#64) is read once per run, consulted per pair as advisory reference, and recorded on publication — then pruned at that publication to exactly the entries the sync state's records reference, so the memory has no eviction cap of its own: a state record can always reach the merge base it references, whatever the repository's age or size (#150), and a no-op endorsement is recorded the same way so an endorsed pair converges instead of costing one model call per run forever (#95, #150); pairs translate under the bounded-concurrent pool (#85), outcomes returned in input order so completion order never reaches the record; a target that drifted outside harmonise is merged three-way against the base the memory proves (#91), a merge that cannot be proven failing the pair closed; and every pair's failure is classified and retried under the deterministic recovery policy (#107) — refusals and auth failures never, transport faults twice, unknown once, the policy's mapped backoff between attempts. Plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
+What a run does is decided by `src/index.mjs` and what it imports; a module nothing on that path reaches changes no run, however complete its tests. On `main` today the production path runs through `config`, `inventory`, `patterns`, `markdown`, `links`, `link-graph`, `fingerprint`, `drift`, `stale`, `state`, `plan`, `protect`, `script-gate`, `prompt`, `answer` and `pull-request` — and, wired on `main` since `v0.3.0` through `plan` and `src/index.mjs`, `frontmatter`, `blocks`, `tm`, `pool`, `protection`, `threeway` and `recovery`: the translation memory (#64) is read once per run, consulted per pair as advisory reference, and recorded on publication — then pruned at that publication to exactly the entries the sync state's records reference, so the memory has no eviction cap of its own: a state record can always reach the merge base it references, whatever the repository's age or size (#150), and a no-op endorsement is recorded the same way so an endorsed pair converges instead of costing one model call per run forever (#95, #150); pairs translate under the bounded-concurrent pool (#85), outcomes returned in input order so completion order never reaches the record; a target that drifted outside harmonise is merged three-way against the base the memory proves (#91), a merge that cannot be proven failing the pair closed; and every pair's failure is classified and retried under the deterministic recovery policy (#107) — refusals and auth failures never, transport faults twice, unknown once, the policy's mapped backoff between attempts. Plus — from `core/` — `http`, `chat`, `forge`, `glob`, `inputs`, `json5-parse`, `runtime`, `untrusted` and `sanitise`. The skip-unchanged classification (#75) is part of the run itself: a pair whose recorded publication still matches is skipped without a model call.
 
 What `harmonise` uses from `core/`, module by module: +
 
@@ -926,6 +953,7 @@ The specification is living text, and changes to it are recorded here rather tha
 - **Title customization (#30):** The commit subject and pull-request title — one line, always — may be renamed by the repository through the optional `pullRequest.title` config key. `{n}` and `{sourceLanguage}` are its only placeholders, substituted deterministically at publish time; absent, the built-in convention stands byte-for-byte unchanged. The pull-request body stays action-authored.
 - **Recovery wiring (#107):** The pair loop's fixed two-attempt retry is replaced by the deterministic recovery policy. Every failure is classified — refusal, transport, auth, unknown — and the class decides the retry: transport faults retry twice (up to three model calls per pair), unknown failures once, and refusals and auth failures never. Answer-contract violations — malformed JSON, empty content, placeholder corruption, lost protected tokens, structural and link validation failures, frontmatter tampering — are refusals: the one-retry allowance link and structural failures had is withdrawn, and the second call an unfixable answer used to spend is no longer made.
 - **Script gate (#354):** The tokenised answer is judged before restoration by a script floor — `plan`'s `judgeScript`, counting letters per Unicode script against a curated primary-subtag table — and the pair refuses unless the target language's scripts hold strictly more than half of the counted letters. The violation joins the answer-contract refusals: raised in `judgeAnswer`, never retried. A language the table does not know is not judged by the gate, and a same-script wrong-language answer still passes — a script floor, not language identification.
+- **Script gate hardening (#354 reviews):** The count is narrowed to translatable prose — the leading frontmatter block, fenced code blocks, inline code spans and link machinery never vote, through the protection layer's own `markdown.mjs` masks, and inline HTML tag names in prose stay voters as the accepted residual — and the violation is raised as the typed deterministic refusal, so an all-pairs wrong-script red set records `refused` (F-09 names it beside #351). `sr` leaves the table — its script is contested, and the gate is off for it — while `mk` and `be` join the Cyrillic row. I17 is reworded to arriving-candidate scope: the identity no-op path returns before the gate, and an endorsed publication is not re-judged.
 
 ## Acceptance criteria
 

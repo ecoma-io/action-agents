@@ -69,7 +69,7 @@ omission.
 | I14 — records keep only their declared retention class and cap    | R         | `pnpm test`, over [ADR 003](adr/003-evidence-retention.md)                                                                    | blind                                  |
 | I15 — records are byte-deterministic given the run's inputs       | R         | `pnpm test`                                                                                                                   | blind                                  |
 | I16 — untrusted text enters only through the framing or sanitiser | R         | `pnpm test` and the adversarial corpus                                                                                        | blind                                  |
-| I17 — published prose carries the target language's script        | R         | `pnpm test`                                                                                                                   | blind                                  |
+| I17 — arriving candidates carry the target language's script      | R         | `pnpm test`                                                                                                                   | blind                                  |
 
 The tally is the message: archkeep proves exactly two of the seventeen (I1, I12)
 and is structurally incapable of the rest. That is not a gap in the tool; it
