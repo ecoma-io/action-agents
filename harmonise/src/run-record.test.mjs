@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   HARMONISE_OUTCOMES,
+  REASON_CHARS,
   buildHarmoniseRecord,
   harmoniseRecordFilename,
   harmoniseRecordSchemaVersion,
@@ -236,7 +237,6 @@ describe("validateHarmoniseRecord", () => {
 
   it("refuses empty text and a non-boolean dry run", () => {
     expect(() => validateHarmoniseRecord(cloneFixture({ repository: "" }))).toThrow(/repository/);
-    expect(() => validateHarmoniseRecord(cloneFixture({ reason: "" }))).toThrow(/reason/);
     expect(() => validateHarmoniseRecord(cloneFixture({ dryRun: "false" }))).toThrow(/dryRun/);
   });
 
@@ -268,5 +268,72 @@ describe("the record's vocabulary", () => {
 
   it("pins the schema version the docs state", () => {
     expect(harmoniseRecordSchemaVersion).toBe(2);
+  });
+});
+
+describe("the record's reason boundary", () => {
+  // The reason is the one record field whose provenance is not purely
+  // code-owned — the publication path interpolates the repository's default
+  // branch name — so it passes the sanitiser at the build site under a
+  // declared cap, and the validator refuses an over-cap value. The
+  // assertions are on the record's bytes; what the sanitiser bit off is the
+  // run log's business.
+
+  it("caps an over-limit reason at the build site, visibly", () => {
+    const record = recordFixture({ reason: "x".repeat(400) });
+    expect(record.reason.length).toBeLessThanOrEqual(REASON_CHARS);
+    expect(record.reason.endsWith("…[truncated]")).toBe(true);
+  });
+
+  it("keeps adversarial fragments out of the record: no structure, no mention, one line", () => {
+    // The control character is minted, not typed — a literal one in the
+    // source would be the very byte this test refuses in the record.
+    const control = String.fromCharCode(0x0b);
+    const record = recordFixture({
+      reason: `<script>alert(1)</script> <!-- comment --> @mention\ttabbed\nline${control}`,
+    });
+    // The sanitiser's guarantees, exactly: structural tokens removed, the
+    // tag-shaped `<` escaped, the mention broken with the zero-width
+    // non-joiner, and the whitespace family — tab, newline, the vertical
+    // tab — collapsed to single spaces by the one-line pass.
+    expect(record.reason).toBe("&lt;script>alert(1)&lt;/script>  comment  @‌mention tabbed line");
+    expect(record.reason).not.toContain("\n");
+    expect(record.reason).not.toContain("\t");
+    for (const char of record.reason) {
+      const code = char.codePointAt(0) ?? 0;
+      expect(code <= 0x1f || code === 0x7f).toBe(false);
+    }
+    expect(record.reason).not.toContain("<script>");
+    expect(record.reason).not.toContain("<!--");
+    expect(record.reason).toContain("@‌mention");
+  });
+
+  it("takes a reason at the cap and refuses one past it", () => {
+    expect(() =>
+      validateHarmoniseRecord(cloneFixture({ reason: "x".repeat(REASON_CHARS) })),
+    ).not.toThrow();
+    expect(() =>
+      validateHarmoniseRecord(cloneFixture({ reason: "x".repeat(REASON_CHARS + 1) })),
+    ).toThrow(/exceeds its 300-character cap/u);
+  });
+
+  it("refuses a reason that is not a string", () => {
+    expect(() => validateHarmoniseRecord(cloneFixture({ reason: 7 }))).toThrow(
+      /'reason' is not a string/u,
+    );
+  });
+
+  it("leaves the real composed sentences byte-for-byte — the sanitiser has nothing to bite", () => {
+    expect(recordFixture().reason).toBe("opened pull request #42 (harmonise/vi → main)");
+    expect(
+      recordFixture({ reason: "updated pull request #42 in place (harmonise/vi → main)" }).reason,
+    ).toBe("updated pull request #42 in place (harmonise/vi → main)");
+  });
+
+  it("same run facts build the same bytes at the reason boundary", () => {
+    const reason = "x".repeat(REASON_CHARS);
+    const bytes = serialiseHarmoniseRecord(recordFixture({ reason }));
+    expect(bytes).toBe(serialiseHarmoniseRecord(recordFixture({ reason })));
+    expect(JSON.parse(bytes)).toStrictEqual(recordFixture({ reason }));
   });
 });

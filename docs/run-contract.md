@@ -122,7 +122,8 @@ issue #274 froze — present, typed, validated; filled by the opt-in
 verification pass when it ran, the empty block otherwise).
 
 Harmonise's record fields, version 2: `schemaVersion`, `repository`,
-`eventName`, `sourceLanguage`, `dryRun`, `outcome`, `reason`, `pairs`
+`eventName`, `sourceLanguage`, `dryRun`, `outcome`, a sanitised and capped
+`reason`, `pairs`
 (`selected`, `proposed`, `unchanged`, `skipped`, `failed` — the five total
 the selected schedule), `pullRequest` (`number`, `created`, or `null` when
 the run wrote none), `headSha` (the base commit every read pinned to).
