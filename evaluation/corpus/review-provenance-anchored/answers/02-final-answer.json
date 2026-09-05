@@ -1,5 +1,5 @@
 {
-  "content": "{\"findings\":[{\"severity\":\"nit\",\"file\":\"src/cache.js\",\"line\":10,\"message\":\"the cache stores the bare value but hands back a wrapper, so a hit and a miss return different shapes for the same key\"}],\"summary\":\"One nit on the new lookup cache.\"}",
+  "content": "{\"findings\":[{\"severity\":\"nit\",\"file\":\"src/cache.js\",\"line\":10,\"message\":\"the cache stores the bare value but hands back a wrapper, so a hit and a miss return different shapes for the same key\",\"kind\":\"correctness\"}],\"summary\":\"One nit on the new lookup cache.\"}",
   "toolCalls": [],
   "finishReason": "stop"
 }

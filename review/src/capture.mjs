@@ -66,21 +66,22 @@ export function captureFindingEvidence({ workspace, file, line }) {
   try {
     const entry = workspace.resolve(file);
     if (entry.kind !== "file") {
-      throw new CaptureRefusal(
-        `capture refused for ${where} — the anchor names no file in this checkout`,
-      );
+      throw new CaptureRefusal("the anchor names no file in this checkout");
     }
     content = readBounded(entry.absolute);
   } catch (cause) {
-    if (cause instanceof CaptureRefusal) throw cause;
     // The confinement's refusals travel with their own reason and the asked
-    // path; absence is named as absence. Either way the anchor is uncapturable.
-    throw new CaptureRefusal(
-      `capture refused for ${where} — the reviewed file could not be read from the checkout: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-      { cause: cause instanceof Error ? cause : undefined },
-    );
+    // path; absence is named as absence. Every capture failure names the
+    // file and the line that could not be captured.
+    const reason =
+      cause instanceof Error
+        ? cause instanceof CaptureRefusal
+          ? cause.message
+          : `the reviewed file could not be read from the checkout: ${cause.message}`
+        : `the reviewed file could not be read from the checkout: ${String(cause)}`;
+    throw new CaptureRefusal(`capture refused for ${where} — ${reason}`, {
+      cause: cause instanceof Error ? cause : undefined,
+    });
   }
   if (content === "") {
     throw new CaptureRefusal(`capture refused for ${where} — the reviewed file is empty`);

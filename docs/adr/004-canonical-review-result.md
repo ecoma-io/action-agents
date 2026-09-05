@@ -77,3 +77,16 @@ policy)` reads nothing but the canonical result and the policy, and never
   win an argument.
 - Consumers opt in per workflow: without the gate check and the SARIF upload
   steps, a review run behaves as it does today.
+
+## Landing
+
+Landed as a serial under epic #362. Decision 2's canonical contract
+(`canonical.mjs`, `identity.mjs`, `vocabulary.mjs` — B), decision 3's
+reconciliation (`reconcile.mjs` — B) and decision 4's merge gate
+(`merge-gate.mjs` — C) with the SARIF projection (`sarif.mjs` — D) are pure
+modules on `main`; the integration (E — the run wiring: the capture boundary
+in `run.mjs`, the kind-bound verification pass, gate execution behind
+`gate-mode`, and the job outputs, `runner.temp` SARIF write and `review gate`
+check run in the entrypoint) changed the runtime behavior this record only
+described. The ceiling manifest's check-run entry and the gate fixtures in
+`security/fixtures/canonical-gate/` landed with it.

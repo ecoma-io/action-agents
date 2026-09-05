@@ -24,6 +24,7 @@ import {
   RELEASE_AUTOMATION,
 } from "./applicability.fixtures.mjs";
 import { findingIdentity } from "./answer.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { VERIFIER_MAX_EVIDENCE_BYTES, VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
 const HEAD = "a".repeat(40);
@@ -1274,6 +1275,132 @@ describe("adversarial verification pass", () => {
     const [system, user] = chat.calls[2] ?? [];
     expect(system?.content).toContain('"confirmed"|"refuted"|"uncertain"');
     expect(user?.content).toContain("[evidence:");
+  });
+
+  it("binds the canonical record and a PASS verdict when only a refuted finding stands", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      { content: '{"verdict":"refuted","kind":"correctness","reason":"the line is correct"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: () => undefined },
+    });
+    expect(result.outcome).toBe("published");
+    const row = result.canonical?.findings[0];
+    expect(result.canonical?.head).toBe(HEAD);
+    expect(result.canonical?.run).toEqual({ state: "published", verdict: "pass" });
+    expect(row).toMatchObject({
+      kind: "correctness",
+      file: "src/a.mjs",
+      line: 2,
+      lifecycle: "refuted",
+      subject: "line2",
+    });
+    expect(row?.evidence?.digest).toBe(contentDigest("line2"));
+    // Refuted findings never block: the gate passes, with no reasons.
+    expect(result.gate).toEqual({ verdict: "PASS", reasons: [] });
+    // The check run is the entrypoint's surface, not the run's.
+    expect(forge.calls.checkRuns).toEqual([]);
+  });
+
+  it("a confirmed finding BLOCKS the gate under the all-kinds default policy", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      { content: '{"verdict":"confirmed","kind":"correctness","reason":"the guard is real"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: () => undefined },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "confirmed" });
+    expect(result.gate?.verdict).toBe("BLOCK");
+    expect(result.gate?.reasons).toEqual(["confirmed correctness finding at src/a.mjs:2."]);
+  });
+
+  it("an unresolved finding BLOCKS — a hollow pass is a defect", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      {
+        content:
+          '{"verdict":"uncertain","kind":"correctness","reason":"the excerpt alone cannot decide"}',
+      },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: () => undefined },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "unresolved" });
+    expect(result.gate?.verdict).toBe("BLOCK");
+    expect(result.gate?.reasons).toEqual(["unresolved correctness finding at src/a.mjs:2."]);
+  });
+
+  it("a capture that cannot be honoured refuses the run RED — never skip-and-continue", async () => {
+    const forge = forgeStub();
+    /** @type {import("#core/chat.mjs").ChatMessage[][]} */
+    const calls = [];
+    let turn = 0;
+    const chat = /** @type {import("#core/chat.mjs").Chat} */ ({
+      async complete() {
+        calls.push([]);
+        turn++;
+        // The checkout shrinks between anchor validation and the capture
+        // boundary — the window every real capture refusal rides in on.
+        if (turn === 3) {
+          writeFileSync(p.join(wsRoot, "src", "a.mjs"), "line1\n");
+        }
+        if (turn === 1) {
+          return { content: "", toolCalls: READ.toolCalls, finishReason: "tool_calls" };
+        }
+        if (turn === 2) {
+          return { content: CONCERN_ANSWER, toolCalls: [], finishReason: "stop" };
+        }
+        return {
+          content: '{"verdict":"confirmed","kind":"correctness","reason":"holds"}',
+          toolCalls: [],
+          finishReason: "stop",
+        };
+      },
+    });
+    let thrown;
+    try {
+      await reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: { forge, chat, now: () => 0, info: () => undefined },
+      });
+    } catch (cause) {
+      thrown = cause;
+    } finally {
+      writeFileSync(p.join(wsRoot, "src", "a.mjs"), A_CONTENT);
+    }
+    expect(thrown).toBeInstanceOf(DeterministicRefusalError);
+    expect(/** @type {Error} */ (thrown).message).toBe(
+      "capture refused for src/a.mjs:2 — the reviewed file carries 1 line(s)",
+    );
   });
 
   it("verifies only planned findings — a skim-lane nit at standard strategy never reaches a verdict call", async () => {

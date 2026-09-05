@@ -58,6 +58,14 @@ describe("parseAnswer", () => {
     if (parsed.ok) expect(parsed.rawFindings).toHaveLength(1);
   });
 
+  it("refuses a finding without a kind — the claim domain is mandatory", () => {
+    expect(
+      defectOf(
+        '{"findings":[{"severity":"nit","file":"src/a.mjs","line":2,"message":"m"}],"summary":"s"}',
+      ),
+    ).toMatch(/missing severity, kind, file, line or message/);
+  });
+
   it("refuses structural defects with named reasons", () => {
     expect(defectOf("no object here")).toMatch(/no JSON object/);
     expect(defectOf("{findings: []}")).toMatch(/no summary string/);
@@ -76,6 +84,27 @@ describe("parseAnswer", () => {
 });
 
 describe("validateAnswer", () => {
+  it("rejects a finding whose kind is outside the closed vocabulary", () => {
+    const result = validateAnswer({
+      rawFindings: [
+        {
+          severity: "nit",
+          kind: "naming",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-vocabulary domain",
+        },
+      ],
+      summary: "s",
+      reviewed,
+      workspace,
+    });
+    expect(result.findings).toHaveLength(0);
+    expect(result.rejections).toEqual([
+      expect.stringContaining("kind 'naming' is outside the vocabulary"),
+    ]);
+  });
+
   it("keeps valid anchors and drops invalid ones individually with reasons", () => {
     const result = validateAnswer({
       rawFindings: [
@@ -103,7 +132,11 @@ describe("validateAnswer", () => {
     });
 
     expect(result.findings).toHaveLength(1);
-    expect(result.findings[0]).toMatchObject({ file: "src/a.mjs", line: 2 });
+    expect(result.findings[0]).toMatchObject({
+      file: "src/a.mjs",
+      line: 2,
+      kind: "correctness",
+    });
     expect(result.rejections).toHaveLength(4);
     expect(result.rejections[0]).toContain("outside the vocabulary");
     expect(result.rejections[1]).toContain("not in the changed inventory");

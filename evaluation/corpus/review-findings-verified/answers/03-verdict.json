@@ -1,5 +1,5 @@
 {
-  "content": "{\"verdict\":\"confirmed\",\"reason\":\"the catch arm returns ok with the batch length, so a failed write reports success.\"}",
+  "content": "{\"verdict\":\"confirmed\",\"kind\":\"correctness\",\"reason\":\"the catch arm returns ok with the batch length, so a failed write reports success.\"}",
   "toolCalls": [],
   "finishReason": "stop"
 }

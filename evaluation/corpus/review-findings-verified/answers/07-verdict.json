@@ -1,5 +1,5 @@
 {
-  "content": "{\"verdict\":\"uncertain\",\"reason\":\"the recorded window does not show how the caller treats an empty window.\"}",
+  "content": "{\"verdict\":\"uncertain\",\"kind\":\"correctness\",\"reason\":\"the recorded window does not show how the caller treats an empty window.\"}",
   "toolCalls": [],
   "finishReason": "stop"
 }

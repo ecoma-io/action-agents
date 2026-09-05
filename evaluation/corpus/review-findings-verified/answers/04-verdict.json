@@ -1,5 +1,5 @@
 {
-  "content": "{\"verdict\":\"confirmed\",\"reason\":\"the cursor is incremented after flush returns, and flush reports success even when it failed.\"}",
+  "content": "{\"verdict\":\"confirmed\",\"kind\":\"correctness\",\"reason\":\"the cursor is incremented after flush returns, and flush reports success even when it failed.\"}",
   "toolCalls": [],
   "finishReason": "stop"
 }

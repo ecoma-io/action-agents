@@ -204,6 +204,23 @@ describe("parseVerdict", () => {
     if (!parsed.ok) expect(parsed.defect).toContain("vocabulary");
   });
 
+  it("refuses a missing kind — the verifier must state what it judged", () => {
+    const parsed = parseVerdict('{"verdict":"confirmed","reason":"x"}');
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.defect).toContain("kind");
+  });
+
+  it("refuses a kind outside the closed vocabulary", () => {
+    const parsed = parseVerdict('{"verdict":"confirmed","kind":"naming","reason":"x"}');
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.defect).toContain("vocabulary");
+  });
+
+  it("refuses a non-string kind", () => {
+    const parsed = parseVerdict('{"verdict":"confirmed","kind":7,"reason":"x"}');
+    expect(parsed.ok).toBe(false);
+  });
+
   it("refuses a non-string verdict", () => {
     const parsed = parseVerdict('{"verdict":1,"reason":"x"}');
     expect(parsed.ok).toBe(false);
@@ -236,6 +253,59 @@ describe("parseVerdict", () => {
       );
       expect(parsed.reason.endsWith("…[truncated]")).toBe(true);
     }
+  });
+});
+
+describe("verification kind binding", () => {
+  const plannedFinding = finding();
+  const plan = planVerification([plannedFinding], makePolicy());
+
+  it("a verdict naming the claimed kind binds and resolves the finding normally", () => {
+    const applied = applyVerdicts(
+      [plannedFinding],
+      [{ id: "1", verdict: "confirmed", kind: "correctness", reason: "holds" }],
+      plan,
+    );
+    expect(applied.findings[0]).toMatchObject({
+      id: "1",
+      kind: "correctness",
+      lifecycle: "confirmed",
+      verdict: "confirmed",
+    });
+    expect(applied.refusals).toHaveLength(0);
+  });
+
+  it("a claimed/verified kind mismatch demotes the finding — it is not confirmed", () => {
+    const applied = applyVerdicts(
+      [plannedFinding],
+      [{ id: "1", verdict: "confirmed", kind: "style", reason: "judged as naming" }],
+      plan,
+    );
+    expect(applied.findings[0]).toEqual({
+      ...plannedFinding,
+      kind: "style",
+      id: "1",
+      lifecycle: "unresolved",
+      reason: "the answer claimed kind 'correctness' but the verifier judged kind 'style'",
+    });
+    expect(applied.refusals).toEqual([
+      "the verdict for finding 1 names kind 'style' where the answer claimed 'correctness' — " +
+        "refused, never mapped onto a claim it does not name",
+    ]);
+  });
+
+  it("a demoting verdict binds the verified kind and still refuses, for refuted too", () => {
+    const applied = applyVerdicts(
+      [plannedFinding],
+      [{ id: "1", verdict: "refuted", kind: "security", reason: "judged as exposure" }],
+      plan,
+    );
+    expect(applied.findings[0]).toMatchObject({
+      kind: "security",
+      lifecycle: "unresolved",
+    });
+    expect(applied.findings[0]?.verdict).toBeUndefined();
+    expect(applied.refusals).toHaveLength(1);
   });
 });
 

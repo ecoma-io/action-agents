@@ -5,7 +5,10 @@
 // as ordinary log output — so the failure looks like a message that trailed off,
 // not like an error, and nothing goes red. Those cases are pinned first.
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as p from "node:path";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   encodeData,
@@ -17,6 +20,7 @@ import {
   getNumberInput,
   inputVariable,
   readContext,
+  setOutput,
 } from "./runtime.mjs";
 
 describe("workflow command encoding", () => {
@@ -163,5 +167,34 @@ describe("readContext", () => {
 
   it("names the variable when the run is not inside Actions at all", () => {
     expect(() => readContext({})).toThrow(/GITHUB_REPOSITORY is not set/);
+  });
+});
+
+describe("setOutput", () => {
+  it("appends an encoded name=value line to the file GITHUB_OUTPUT names", () => {
+    const file = p.join(mkdtempSync(p.join(tmpdir(), "outputs-")), "gh-output.txt");
+    writeFileSync(file, "");
+    setOutput("sarif-path", "/runner/temp/review-sarif.json", { GITHUB_OUTPUT: file });
+    setOutput("gate-verdict", "OBSERVE-BLOCK", { GITHUB_OUTPUT: file });
+    expect(readFileSync(file, "utf8")).toBe(
+      "sarif-path=/runner/temp/review-sarif.json\ngate-verdict=OBSERVE-BLOCK\n",
+    );
+  });
+
+  it("encodes the value through the runner data rules, so a value cannot forge a line", () => {
+    const file = p.join(mkdtempSync(p.join(tmpdir(), "outputs-")), "gh-output.txt");
+    writeFileSync(file, "");
+    setOutput("reasons", "line one\nline two", { GITHUB_OUTPUT: file });
+    expect(readFileSync(file, "utf8")).toBe(`reasons=${encodeData("line one\nline two")}\n`);
+  });
+
+  it("logs the pair when no GITHUB_OUTPUT names a file", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      setOutput("gate-verdict", "PASS", {});
+      expect(spy).toHaveBeenCalledWith("output gate-verdict=PASS");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
