@@ -11,10 +11,22 @@
  * refused, never coerced. The counts are the run's own pair accounting —
  * what was proposed, what was found already in step, what skipped and what
  * failed — and nothing model-composed enters the record.
+ *
+ * The terminal `reason` is the one field whose provenance is not purely
+ * code-owned — the publication path interpolates the repository's default
+ * branch name — so it passes the sanitiser at this build site under a
+ * declared cap, the way triage's record treats its own reason field.
  */
+
+import { oneLine } from "#core/one-line.mjs";
+import { warning } from "#core/runtime.mjs";
+import { sanitiseCommentText } from "#core/sanitise.mjs";
 
 /** The harmonise run record's schema version. Any shape change bumps it. */
 export const harmoniseRecordSchemaVersion = 2;
+
+/** The terminal reason's cap, in characters — the same width as the triage record's reason keeps. */
+export const REASON_CHARS = 300;
 
 /**
  * The vocabulary a record's `outcome` may carry: the run contract's terminal
@@ -78,7 +90,7 @@ export const HARMONISE_OUTCOMES = /** @type {readonly HarmoniseOutcome[]} */ ([
  * @param {string} input.sourceLanguage the BCP 47 tag this run kept in step
  * @param {boolean} input.dryRun
  * @param {HarmoniseOutcome} input.outcome the terminal state, in the run contract's vocabulary
- * @param {string} input.reason the terminal path's own sentence
+ * @param {string} input.reason the terminal path's own sentence — sanitised and capped at this build site
  * @param {RecordPairs} input.pairs the run's pair accounting
  * @param {RecordPullRequest | null} input.pullRequest the pull request the run wrote, or null
  * @param {string} input.headSha the base sha every read pinned to, 40 hex chars
@@ -102,7 +114,7 @@ export function buildHarmoniseRecord({
     sourceLanguage,
     dryRun,
     outcome,
-    reason,
+    reason: cappedLine(reason, REASON_CHARS),
     pairs: {
       selected: pairs.selected,
       proposed: pairs.proposed,
@@ -137,10 +149,11 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 /**
  * Fail-closed validation of a harmonise record: exactly the keys this module
- * spells, the run contract's outcome vocabulary, the pairs accounting that
- * partitions the selected schedule, and a well-formed head sha. A malformed
- * record is a code bug — the builder's output is what flows here — and
- * refusing it beats inventing evidence.
+ * spells, the run contract's outcome vocabulary, the reason within its
+ * declared cap, the pairs accounting that partitions the selected schedule,
+ * and a well-formed head sha. A malformed record is a code bug — the
+ * builder's output is what flows here — and refusing it beats inventing
+ * evidence.
  *
  * @param {unknown} value
  * @returns {HarmoniseRecord}
@@ -160,7 +173,7 @@ export function validateHarmoniseRecord(value) {
     throw new TypeError("the harmonise record's 'dryRun' is not a boolean");
   }
   asOutcome(record["outcome"]);
-  asNonEmptyString(record["reason"], "the harmonise record's 'reason'");
+  asBoundedString(record["reason"], "the harmonise record's 'reason'", REASON_CHARS);
   asPairs(record["pairs"]);
   asPullRequest(record["pullRequest"]);
   if (
@@ -221,6 +234,24 @@ function asPullRequest(value) {
   if (typeof pullRequest["created"] !== "boolean") {
     throw new TypeError("the harmonise record's 'pullRequest.created' is not a boolean");
   }
+}
+
+/**
+ * One sanitiser pass at a build site: flattened to one line, structural
+ * tokens removed, mentions broken, capped visibly. The notes are logged the
+ * way the comment builders log theirs — the record's bytes stay clean, and
+ * the run log carries what the sanitiser bit off.
+ *
+ * @param {string} text
+ * @param {number} maxChars
+ * @returns {string}
+ */
+function cappedLine(text, maxChars) {
+  const result = sanitiseCommentText(oneLine(text), { maxChars });
+  for (const note of result.notes) {
+    warning(`sanitiser: ${note}`);
+  }
+  return result.text;
 }
 
 /**
@@ -337,6 +368,22 @@ function asNonEmptyString(v, label) {
 }
 
 /**
+ * @param {unknown} v
+ * @param {string} label
+ * @param {number} max
+ * @returns {string}
+ */
+function asBoundedString(v, label, max) {
+  if (typeof v !== "string") {
+    throw new TypeError(`${label} is not a string`);
+  }
+  if (v.length > max) {
+    throw new TypeError(`${label} exceeds its ${String(max)}-character cap`);
+  }
+  return v;
+}
+
+/**
  * @param {Record<string, unknown>} obj
  * @param {string} label
  * @param {ReadonlySet<string>} allowed
@@ -368,7 +415,7 @@ function assertExactKeys(obj, label, allowed) {
  * @property {string} sourceLanguage the BCP 47 tag this run kept in step
  * @property {boolean} dryRun
  * @property {HarmoniseOutcome} outcome a terminal state, as the run contract spells it
- * @property {string} reason the terminal path's own sentence
+ * @property {string} reason the terminal path's own sentence, one line, sanitised and capped
  * @property {RecordPairs} pairs the run's pair accounting
  * @property {RecordPullRequest | null} pullRequest null when the run wrote none
  * @property {string} headSha the base sha every read pinned to
