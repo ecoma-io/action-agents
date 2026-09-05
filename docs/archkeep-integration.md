@@ -23,7 +23,7 @@ that is what the 0.21.0 → 0.22.0 bump (PR #267) did for the refusal lane.
 
 ## The three authorities
 
-The [run contract](run-contract.md) stamps each of its sixteen invariants with
+The [run contract](run-contract.md) stamps each of its seventeen invariants with
 one of four authority letters. The letters group into three authorities, and
 keeping the groups apart is the point of this page:
 
@@ -69,10 +69,11 @@ omission.
 | I14 — records keep only their declared retention class and cap    | R         | `pnpm test`, over [ADR 003](adr/003-evidence-retention.md)                                                                    | blind                                  |
 | I15 — records are byte-deterministic given the run's inputs       | R         | `pnpm test`                                                                                                                   | blind                                  |
 | I16 — untrusted text enters only through the framing or sanitiser | R         | `pnpm test` and the adversarial corpus                                                                                        | blind                                  |
+| I17 — published prose carries the target language's script        | R         | `pnpm test`                                                                                                                   | blind                                  |
 
-The tally is the message: archkeep proves exactly two of the sixteen (I1, I12)
+The tally is the message: archkeep proves exactly two of the seventeen (I1, I12)
 and is structurally incapable of the rest. That is not a gap in the tool; it
-is what "static facts about the source graph" means. The other fourteen are
+is what "static facts about the source graph" means. The other fifteen are
 not weaker — they are held by authorities that can actually witness them.
 
 ## The gate contract at the pin

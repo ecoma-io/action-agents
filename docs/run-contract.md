@@ -3,7 +3,7 @@
 What a run of any action here is: one subject, one policy pin, a bounded model
 call, a decision the code owns, and a terminal state from a closed vocabulary.
 This page is the durable home of that vocabulary, the failure taxonomy, the
-concurrency discipline, the state-separation rule, and the sixteen invariants
+concurrency discipline, the state-separation rule, and the seventeen invariants
 the architecture is judged on.
 
 Recorded 2026-09-03; owned by the repository maintainers; revisit when an
@@ -202,7 +202,7 @@ run judged), **policy** (what the configuration allows), **human-workflow**
 - Markers stay code-only, lifecycles stay publication-scoped, the sheet stays
   policy-only; new epistemic state gets its own fields.
 
-## The sixteen invariants
+## The seventeen invariants
 
 Each names one authority: **A** architectural (archkeep-enforced), **D**
 deterministic tooling (repo-local scripts in CI), **R** runtime safety
@@ -236,6 +236,9 @@ judges static facts only — it owns the A rows and none of the others.
 - **I15 — Records are byte-deterministic given the run's inputs.** R.
 - **I16 — Thread, diff and repository text enters only through the untrusted
   framing or the sanitiser — never as instruction.** R.
+- **I17 — A published pair's translatable prose carries the configured target
+  language's script; a violation is a deterministic refusal of the pair.** R —
+  the script gate in `judgeAnswer`; `pnpm test`.
 
 The boundary law this sits on: [Doctrine](doctrine.md) and
 [ADR 001](adr/001-core-boundary.md). What a record may keep of what a run
