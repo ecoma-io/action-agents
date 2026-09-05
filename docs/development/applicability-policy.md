@@ -3,7 +3,11 @@
 > **Status: landed — the sequence is complete; this page is retired as
 > design record.** All three axes are shipped behaviour, documented
 > normatively in [`review`](review.md): the context and `run` axes (PR 1),
-> the posture axis (PR 2), and the intensity axis (PR 3) — the one
+> the posture axis (PR 2), and the eligibility conditions (this change):
+> the bot attestation (`when.author.isBot` — GitHub's own `user.type`
+> attestation, never a title convention) and the size guard (`when.changes`)
+> that reclassifies the scope layer's `maxDiffLines` refusal as a green,
+> measured skip. The intensity axis (PR 3) — the one
 > `strictness` delta, absolute per matched rule, with the lower-gates the
 > design proposed: lowering anchored to a pinned non-`external` context,
 > deepening free everywhere. The implementation contract lives in

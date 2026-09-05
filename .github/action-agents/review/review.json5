@@ -7,7 +7,8 @@
   //
   // The ignore set is a universe filter, not a suggestion: ignored paths
   // cost nothing against maxDiffLines, are invisible to rule matching, and
-  // cannot be reached by the tools either.
+  // cannot be reached by the tools either. The eligibility size guard
+  // below reads the pre-ignore totals instead.
   ignore: [
     "pnpm-lock.yaml",
     "coverage/**",
@@ -20,8 +21,62 @@
 
   // Generous but bounded: the largest diffs this repository sees are
   // vendored-skill syncs, and those are exactly the ones worth refusing to
-  // half-review.
+  // half-review. The eligibility size guard sits above this budget: a
+  // diff beyond it is not half-reviewed, it is skipped with its measured
+  // totals recorded.
   maxDiffLines: 3000,
+
+  // The eligibility axis — whether a pull request consumes a review run at
+  // all. Every skip here is anchored by one of the three anchors the
+  // validator enforces: a pinned context, GitHub's bot attestation, or a
+  // measurement. Title, branch, path and label conventions never anchor a
+  // skip; they only narrow rules the anchor already governs.
+  applicability: {
+    // GitHub-attested bots classified as `automation`. Exact logins.
+    // `ecoma-io[bot]` is the release automation (release-please): the one
+    // bot whose writes this repository already trusts to merge.
+    bots: ["ecoma-io[bot]"],
+
+    // First match wins — a match ends the search.
+    rules: [
+      {
+        // Release pull requests contain no hand-written code:
+        // release-please folds version files and changelogs (the design
+        // record's motivating example, #192). Pinned context anchors the
+        // skip; the title and branch conventions narrow it to actual
+        // release pull requests so any other write the app makes stays
+        // reviewable.
+        id: "release-prs",
+        context: "automation",
+        when: {
+          title: "^chore\\(workspace\\): release",
+          branch: "^release-please--",
+        },
+        run: false,
+      },
+      {
+        // Every other GitHub-attested bot — renovate-class dependency
+        // automation among them. `user.type` is GitHub's own attestation:
+        // nobody but GitHub can mint it, and no pull-request content can
+        // fake it. Adding a bot to the allowlist above promotes it to
+        // full review; everything not listed lands here.
+        id: "unlisted-bots",
+        when: { author: { isBot: true } },
+        run: false,
+      },
+      {
+        // The resource exception. The scope layer would refuse this diff
+        // outright (maxDiffLines) — a half-reviewed monster presented as
+        // a complete review is the worse failure. This rule reclassifies
+        // that outcome as a green, recorded, measured skip: same no-review
+        // result, honest evidence instead of a red run. Reads the
+        // pre-ignore totals of the whole change.
+        id: "oversized",
+        when: { changes: { lines: { gt: 8000 } } },
+        run: false,
+      },
+    ],
+  },
 
   // Path-scoped rubrics. Every document here must exist on the default
   // branch — a declared rule with no file is a startup error, not dormancy.

@@ -15,7 +15,12 @@ import { createWorkspace } from "#core/workspace.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
-import { classificationInputs, classifyContext, evaluateApplicability } from "./applicability.mjs";
+import {
+  changeTotals,
+  classificationInputs,
+  classifyContext,
+  evaluateApplicability,
+} from "./applicability.mjs";
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
@@ -217,7 +222,11 @@ export async function reviewPullRequest({
   let runIntensity;
   if (applicability !== undefined) {
     let classifiedPaths = null;
-    if (applicability.rules.some((rule) => rule.when.paths !== undefined)) {
+    if (
+      applicability.rules.some(
+        (rule) => rule.when.paths !== undefined || rule.when.changes !== undefined,
+      )
+    ) {
       earlyFiles = await io.forge.listPullRequestFiles(pullRequestNumber);
       // The classification matches the post-ignore path set; the budget has
       // no vote here — a diff past the budget still skips on a matching
@@ -228,18 +237,22 @@ export async function reviewPullRequest({
         maxDiffLines: Number.MAX_SAFE_INTEGER,
       }).reviewed.map((file) => file.filename);
     }
-    const derived = classifyContext(
-      classificationInputs(
-        event.pull_request,
-        `${context.owner}/${context.repo}`,
-        applicability.bots,
-      ),
+    const cls = classificationInputs(
+      event.pull_request,
+      `${context.owner}/${context.repo}`,
+      applicability.bots,
     );
+    const derived = classifyContext(cls);
+    const changeFacts = earlyFiles === undefined ? null : changeTotals(earlyFiles);
     const evaluated = evaluateApplicability({
       policy: applicability,
       context: derived.context,
       title: snapshot.title,
       branch: snapshot.head.ref,
+      base: snapshot.base.ref,
+      labels: snapshot.labels,
+      author: { login: cls.authorLogin, isBot: cls.authorType === "Bot" },
+      changes: changeFacts,
       paths: classifiedPaths,
     });
     runPosture = evaluated.posture;
@@ -272,7 +285,20 @@ export async function reviewPullRequest({
           }),
         };
       }
-      const skipReason = `#${String(pullRequestNumber)} matched applicability rule '${evaluated.matchedRule}' — review intentionally not run`;
+      // A size-anchored skip states its numbers: the reason carries the
+      // measured totals that decided it — deterministic numbers only,
+      // never title or login text.
+      const measuredRule =
+        changeFacts !== null
+          ? applicability.rules.find((rule) => rule.id === evaluated.matchedRule)
+          : undefined;
+      const measured =
+        changeFacts !== null && measuredRule?.when.changes !== undefined
+          ? ` (${String(changeFacts.lines)} changed lines across ${String(changeFacts.files)} files)`
+          : "";
+      const skipReason =
+        `#${String(pullRequestNumber)} matched applicability rule '${evaluated.matchedRule}'` +
+        `${measured} — review intentionally not run`;
       return {
         outcome: "skip",
         reason: skipReason,

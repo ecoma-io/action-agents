@@ -147,6 +147,14 @@ not heuristics: absent an `applicability` key the classification never runs
 and behaviour is byte-for-byte the pre-axis behaviour. Design and landing
 sequence: [the applicability policy](applicability-policy.md).
 
+Eligibility, not scope. This axis answers one question — _should this pull
+request consume a review run at all?_ The scope layer answers a different
+one — _what should the reviewer inspect once it does?_ (`ignore`, the
+`maxDiffLines` budget, path-scoped rules). The two never borrow each
+other's semantics: a size condition here (`when.changes`) reads the whole
+pre-ignore change, and the budget there reads the post-ignore universe; a
+scope refusal stays a refusal and an eligibility skip stays a skip.
+
 ### The context
 
 Three contexts, derived in order, first match wins:
@@ -173,9 +181,15 @@ The `applicability` key carries `bots` (the allowlist) and `rules`, evaluated
 in config order, first match wins — never reordered, scored or merged. A rule
 names itself (`id`, unique, the audit record's name), may pin a context
 (absent matches every context), carries conjunctive `when` conditions —
-`title` and `branch` as regular-expression sources, `paths` as globs in the
-one configuration dialect over the post-ignore inventory — and a `run`
-boolean (default true). On a rule that pins a non-`external` context and
+`title`, `branch` and `base` as regular-expression sources (title, head ref
+and base ref), `paths` as globs in the one configuration dialect over
+the post-ignore inventory, `labels` as exact case-sensitive names matched
+any-of, `author` as author facts (`isBot` — the GitHub-attested
+`user.type`, declared only as `true`; `equals` — exact case-sensitive
+logins), `changes` as size guards over the **pre-ignore** totals of the
+whole change (`lines` — additions plus deletions across every changed
+file; `files` — the changed-file count; `gt` the one comparator, a whole
+number ≥ 0) — and a `run` boolean (default true). On a rule that pins a non-`external` context and
 runs, a [`posture`](#the-posture-axis) with its instruction document; on any
 running rule, an [`intensity`](#the-intensity-axis) strictness override,
 under the lower-gates. Nothing matching is the defaults: review runs, and
@@ -183,10 +197,22 @@ the record says so with basis `default`.
 
 Four laws the validator enforces rather than asks reviewers to remember:
 
-- `run: false` must declare a pinned context — a rule built from title,
-  branch or paths conventions never governs alone;
-- that context is never `external` — the external context is frozen; full
-  review is what an untrusted contribution is for;
+- a `run: false` rule is anchored by exactly one of three anchors: a pinned
+  non-`external` context; `when.author.isBot: true` — bot-ness is a GitHub
+  attestation (`user.type`), nobody but GitHub can mint it, the attestation
+  may not be negated (`isBot` accepts only `true`; `equals` narrows, it
+  never anchors); or `when.changes` — the one author-writable anchor, the
+  resource exception: the size-based no-review outcome already exists in
+  the scope layer as the `maxDiffLines` refusal, so the predicate widens no
+  author capability — it reclassifies that outcome from a red refusal to a
+  green, recorded, measured skip. A convention — title, branch, base,
+  paths, labels — never governs alone;
+- the pinned context, when one is named on a `run: false` rule, is never
+  `external` — the external context is frozen; full review is what an
+  untrusted contribution is for, and the new anchors do not open it: a
+  contextless size rule skips oversized external pull requests because the
+  scope layer already refused them; a rule that names `external` skips
+  nothing;
 - a non-standard posture declares its mode-scoped instruction document, and
   neither it nor its document rides a `run: false` skip — a skipped run took
   no posture ([the posture axis](#the-posture-axis)); and
@@ -252,13 +278,19 @@ re-deriving either.
 ### What a skip leaves behind
 
 A rule matching with `run: false` ends the run before the changed-file
-listing is even fetched (a `paths` rule fetches it once, exactly), before
-budget accounting, before the model: the run is green, writes no comment, and
-publishes a **skipped-run record** where a full run would write its artifact —
-the same repository/head/pull-request facts, `outcome: skipped` with the
-reason naming the rule (`#N matched applicability rule '<id>' — review
-intentionally not run`), and the applicability fact with `applicable: false`,
-posture `standard`, and the deciding rule's id. A pull request already skipped by its draft or
+listing is even fetched (a `paths` **or `changes`** rule fetches it once,
+exactly — the trigger is policy-wide, so a policy with a `changes` rule
+anywhere lists every pull request it evaluates, even one a bot rule would
+have skipped), before budget accounting, before the model: the run is
+green, writes no comment, and publishes a **skipped-run record** where a
+full run would write its artifact — the same repository/head/pull-request
+facts, `outcome: skipped` with the reason naming the rule (`#N matched
+applicability rule '<id>' — review intentionally not run`; when the
+deciding rule carries `when.changes` and the totals exist, a measured
+parenthetical rides along — `#3 matched applicability rule 'oversized'
+(9000 changed lines across 1 file) — review intentionally not run` —
+numbers only, never title or login text), and the applicability fact with
+`applicable: false`, posture `standard`, and the deciding rule's id. A pull request already skipped by its draft or
 closed state writes the same reduced record **when the policy is on**, with
 basis `state` — under a policy, a skip is recorded honestly rather than only
 logged; without one, a **skip record** still leaves the run: the
@@ -352,12 +384,17 @@ file alone.
     },
   ],
 
-  // Whether review applies to a pull request at all — the applicability
+  // Whether review applies to a pull request at all — the eligibility
   // axis. Absent, the key is off entirely and nothing else changes. `bots`
   // allowlists the logins that classify as automation (exact bytes);
-  // `rules` are first-match-wins: pin a context, declare conjunctive
-  // `when` conditions, and whether review runs. `run: false` must pin a
-  // context and that context is never `external`. A rule may also declare
+  // `rules` are first-match-wins: declare conjunctive `when` conditions —
+  // title, branch and base as regular-expression sources, paths as globs,
+  // labels as exact names matched any-of, author facts (`isBot` declared
+  // only as true, `equals` as exact logins), `changes` as size guards over
+  // the pre-ignore totals (lines, files; each `gt` a whole number ≥ 0) —
+  // and whether review runs. A `run: false` rule is anchored: a pinned
+  // non-`external` context, `when.author.isBot: true`, or `when.changes` —
+  // a rule naming `external` never skips. A rule may also declare
   // a non-standard `posture` with its instruction document — a
   // non-`external` context only — and an `intensity` strictness override:
   // lowering anchors to a non-`external` context, deepening is free. See
@@ -373,12 +410,26 @@ file alone.
         run: false,
       },
       {
+        // GitHub attests user.type; nobody but GitHub can mint it.
+        id: "unlisted-bots",
+        when: { author: { isBot: true } },
+        run: false,
+      },
+      {
+        // The scope layer would refuse this diff anyway (maxDiffLines);
+        // this rule records the same outcome as a green, measured skip.
+        id: "oversized",
+        when: { changes: { lines: { gt: 8000 } } },
+        run: false,
+      },
+      {
         id: "docs-maintainer",
         context: "maintainer",
         when: { paths: ["docs/**"] },
         posture: "maintainer",
         instruction: ".github/action-agents/review/postures/docs.md",
         intensity: { strictness: "low" },
+      },
     ],
   },
 

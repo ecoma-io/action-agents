@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": ""
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "synchronize",
+    "payload": {
+      "action": "synchronize",
+      "pull_request": {
+        "number": 7,
+        "user": { "login": "dep-bumper[bot]", "type": "Bot" },
+        "author_association": "NONE",
+        "head": {
+          "ref": "dep-bumper/npm-vite-8.x",
+          "sha": "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+          "repo": { "full_name": "ecoma-io/action-agents" }
+        },
+        "base": {
+          "ref": "main",
+          "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 7,
+    "title": "chore(deps): update vite to 8.2.1",
+    "body": "Dependency bump by the repository's dependency automation. Synthetic body.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": "{\"schemaVersion\":1,\"applicability\":{\"bots\":[],\"rules\":[{\"id\":\"unlisted-bots\",\"when\":{\"author\":{\"isBot\":true}},\"run\":false}]}}",
+      ".github/action-agents/review/instruction.md": null
+    }
+  },
+  "headFiles": {
+    "package.json": "{\n  \"name\": \"widgets\",\n  \"version\": \"1.0.0\",\n  \"devDependencies\": {\n    \"vite\": \"8.2.1\"\n  }\n}\n"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": { "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a" },
+    "getPullRequest": {
+      "number": 7,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "chore(deps): update vite to 8.2.1",
+      "body": "Dependency bump by the repository's dependency automation. Synthetic body.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "dep-bumper/npm-vite-8.x",
+        "sha": "b2c3d4e5f60718293a4b5c6d7e8f901234567890"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+      }
+    },
+    "listPullRequestFiles": [],
+    "listComments": [],
+    "whoami": { "login": "github-actions[bot]" }
+  }
+}

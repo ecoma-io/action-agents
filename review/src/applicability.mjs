@@ -11,6 +11,13 @@
  * branch and paths are values to match, never instruction; the model is
  * nowhere in this module; and every refusal is red at startup, before the
  * first model call.
+ *
+ * Eligibility vs scope: this module answers "should this pull request
+ * consume a review run at all"; the scope layer (`ignore`, `maxDiffLines`,
+ * the inventory) answers "what should the reviewer inspect once it does".
+ * The two never borrow each other's semantics — a size condition here reads
+ * the whole pre-ignore change (the eligibility question), the budget there
+ * reads the post-ignore universe (the scope question).
  */
 
 import { matchGlob } from "#core/glob.mjs";
@@ -62,13 +69,69 @@ const WRITE_CLASS_ASSOCIATIONS = /** @type {const} */ (["OWNER", "MEMBER", "COLL
  */
 
 /**
+ * @typedef {object} WhenAuthor the author condition family, exact and
+ * attestation-first: `isBot` is only ever `true`, because bot-ness is
+ * something GitHub attests (`user.type === "Bot"`) while not-bot-ness is
+ * not, and only an attestation may ride a skip decision; `equals` matches
+ * the login exactly and case-sensitively — a narrowing, never an anchor.
+ * @property {true} [isBot]
+ * @property {string[]} [equals]
+ */
+
+/**
+ * @typedef {object} LineGuard
+ * @property {number} gt strictly more than this many
+ */
+
+/**
+ * @typedef {object} WhenChanges the size condition family, read off the
+ * whole pre-ignore change: `lines` counts additions plus deletions across
+ * every changed file, `files` counts changed files. The one comparator is
+ * `gt`, the one direction a resource guard needs — a pull request bigger
+ * than this. The scope layer's `maxDiffLines` budget is a different
+ * question on a different set and stays exactly where it is.
+ * @property {LineGuard} [lines]
+ * @property {LineGuard} [files]
+ */
+
+/**
+ * @typedef {object} WhenConditions a validated `when` — every family
+ * present is a conjunct.
+ * @property {RegExp} [title]
+ * @property {RegExp} [branch]
+ * @property {RegExp} [base] the base branch ref
+ * @property {string[]} [paths] globs over the post-ignore changed paths
+ * @property {string[]} [labels] any-of, exact, case-sensitive
+ * @property {WhenAuthor} [author]
+ * @property {WhenChanges} [changes]
+ */
+
+/**
+ * @typedef {object} AuthorFacts the author facts the evaluator matches
+ * against, extracted from the same event payload the context derivation
+ * reads. `isBot` is the GitHub-attested type, not an inference from the
+ * login; a missing type proves nothing and reads as false, which costs
+ * more review, never less.
+ * @property {string} login
+ * @property {boolean} isBot
+ */
+
+/**
+ * @typedef {object} ChangeFacts the pre-ignore size of the change, from
+ * the same files listing the inventory consumes. Absent when no rule
+ * carries a size or paths condition and no listing was fetched.
+ * @property {number} files
+ * @property {number} lines
+ */
+
+/**
  * @typedef {object} ApplicabilityRule a validated rule: `context` plus
  * `when` conditions combine conjunctively; `run` defaults true. A
  * non-standard `posture` is the same pipeline with a mode-scoped document,
  * so `posture` and `instruction` appear together or not at all.
  * @property {string} id the name the audit record carries
  * @property {ExecutionContext} [context] absent matches every derived context
- * @property {{ title?: RegExp, branch?: RegExp, paths?: string[] }} when compiled conditions
+ * @property {WhenConditions} when compiled conditions
  * @property {boolean} run the applicability axis value
  * @property {Exclude<Posture, "standard">} [posture] the posture axis value, present only when a deviation is declared
  * @property {string} [instruction] the posture document's path on the policy source, alongside a non-standard posture
@@ -174,22 +237,52 @@ export function classifyContext(inputs) {
  * The matched rule's posture rides the verdict with its document path, so
  * the caller never re-finds the rule; `instruction` is set exactly when the
  * posture is not standard, and `intensity` exactly when the rule declares
- * the strictness override. `title`, `branch` and the changed paths are
- * match values, never instruction; the paths globs speak the one
- * configuration dialect and run over the post-ignore inventory.
+ * the strictness override. `title`, `branch`, the changed paths and every
+ * eligibility fact are match values, never instruction; the paths globs
+ * speak the one configuration dialect and run over the post-ignore
+ * inventory, while the size condition reads the pre-ignore totals.
+ *
+ * A fact the caller did not supply (`base`, `labels`, `author`,
+ * `changes` absent, or `changes` null) fails the conditions that need it —
+ * a fact gap can never make a pull request more skippable, only more
+ * reviewed, which is the safe direction by construction.
  *
  * @param {object} input
  * @param {ApplicabilityPolicy} input.policy the validated policy
  * @param {ExecutionContext} input.context the derived context
  * @param {string} input.title the pull request's title
  * @param {string} input.branch the head ref name
+ * @param {string[] | undefined} [input.labels] the pull request's labels, exact names
+ * @param {string | undefined} [input.base] the base ref name
+ * @param {AuthorFacts | undefined} [input.author] the author facts from the event payload
+ * @param {ChangeFacts | null | undefined} [input.changes] the pre-ignore change totals, or null when no listing was fetched
  * @param {string[] | null} input.paths the post-ignore changed paths, or null when no rule carries a paths condition and no listing was fetched
  * @returns {{ applicable: boolean, matchedRule: string | null, basis: "rule" | "default", posture: Posture, instruction: string | undefined, intensity: RuleIntensity | undefined }}
  */
-export function evaluateApplicability({ policy, context, title, branch, paths }) {
+export function evaluateApplicability({
+  policy,
+  context,
+  title,
+  branch,
+  base,
+  labels,
+  author,
+  changes,
+  paths,
+}) {
+  /** @type {RuleFacts} */
+  const facts = {
+    title,
+    branch,
+    ...(base !== undefined ? { base } : {}),
+    ...(labels !== undefined ? { labels } : {}),
+    ...(author !== undefined ? { author } : {}),
+    ...(changes !== undefined ? { changes } : {}),
+    paths,
+  };
   for (const rule of policy.rules) {
     if (rule.context !== undefined && rule.context !== context) continue;
-    if (!conditionsHold(rule.when, title, branch, paths)) continue;
+    if (!conditionsHold(rule.when, facts)) continue;
     return {
       applicable: rule.run,
       matchedRule: rule.id,
@@ -210,17 +303,72 @@ export function evaluateApplicability({ policy, context, title, branch, paths })
 }
 
 /**
- * @param {{ title?: RegExp, branch?: RegExp, paths?: string[] }} when
- * @param {string} title
- * @param {string} branch
- * @param {string[] | null} paths
+ * The pre-ignore size of a change: additions plus deletions across every
+ * file the listing reported, and the file count. The eligibility level's
+ * own measure — the scope layer's post-ignore budget is computed
+ * elsewhere, on a different set, and never borrows these numbers.
+ *
+ * @param {import("#core/forge.mjs").PullRequestFile[]} files the full files listing
+ * @returns {ChangeFacts}
+ */
+export function changeTotals(files) {
+  const lines = files.reduce((total, file) => total + file.additions + file.deletions, 0);
+  return { files: files.length, lines };
+}
+
+/**
+ * @typedef {object} RuleFacts the run's fact sheet the rule conditions read,
+ * one field per condition family plus the always-present match values. A
+ * missing field is honest absence: the conditions that need it fail, and a
+ * failed condition costs more review, never less.
+ * @property {string} title
+ * @property {string} branch
+ * @property {string | undefined} [base]
+ * @property {string[] | undefined} [labels]
+ * @property {AuthorFacts | undefined} [author]
+ * @property {ChangeFacts | null | undefined} [changes] null when no listing was fetched
+ * @property {string[] | null} paths null when no rule carries a paths condition
+ */
+/**
+ * Every family present is a conjunct; an absent fact fails the condition
+ * that needs it, toward more review.
+ *
+ * @param {WhenConditions} when the rule's compiled conditions
+ * @param {RuleFacts} facts the run's fact sheet
  * @returns {boolean}
  */
-function conditionsHold(when, title, branch, paths) {
-  if (when.title !== undefined && !when.title.test(title)) return false;
-  if (when.branch !== undefined && !when.branch.test(branch)) return false;
+function conditionsHold(when, facts) {
+  if (when.title !== undefined && !when.title.test(facts.title)) return false;
+  if (when.branch !== undefined && !when.branch.test(facts.branch)) return false;
+  if (when.base !== undefined) {
+    if (facts.base === undefined || !when.base.test(facts.base)) return false;
+  }
   if (when.paths !== undefined) {
-    if (paths === null || !paths.some((path) => matchGlob(when.paths ?? [], path))) return false;
+    if (facts.paths === null || !facts.paths.some((path) => matchGlob(when.paths ?? [], path))) {
+      return false;
+    }
+  }
+  if (when.labels !== undefined) {
+    if (facts.labels === undefined || !facts.labels.some((label) => when.labels?.includes(label))) {
+      return false;
+    }
+  }
+  if (when.author !== undefined) {
+    if (when.author.isBot === true && facts.author?.isBot !== true) return false;
+    if (when.author.equals !== undefined) {
+      if (facts.author === undefined || !when.author.equals.includes(facts.author.login)) {
+        return false;
+      }
+    }
+  }
+  if (when.changes !== undefined) {
+    if (facts.changes == null) return false;
+    if (when.changes.lines !== undefined && !(facts.changes.lines > when.changes.lines.gt)) {
+      return false;
+    }
+    if (when.changes.files !== undefined && !(facts.changes.files > when.changes.files.gt)) {
+      return false;
+    }
   }
   return true;
 }
@@ -349,19 +497,38 @@ function validateRule(entry, index, ids, fileStrictness) {
     }
     run = declared;
   }
-  // The eligibility doctrine, enforced here rather than by review discipline:
-  // the external context is frozen, and a convention never governs alone.
-  if (!run && context === undefined) {
-    throw new Error(
-      `${label} sets run: false without a context — a rule built from title, branch or paths ` +
-        `conventions never governs alone; it must declare an immune context`,
-    );
+
+  // `when` is validated before the anchor law reads it — grammar errors
+  // surface before doctrine errors.
+  /** @type {WhenConditions} */
+  let when = {};
+  if (raw["when"] !== undefined) {
+    when = validateWhen(raw["when"], label);
   }
+  // The eligibility doctrine, enforced here rather than by review discipline:
+  // the external context is frozen, and a convention never governs alone —
+  // with exactly two attestation-or-measurement anchors besides a pinned
+  // context: GitHub-attested bot authorship (`when.author.isBot`), and the
+  // measured size of the change itself (`when.changes`), whose no-review
+  // outcome already exists in the scope layer as the maxDiffLines refusal.
+  // A login list (`equals`) narrows, it never anchors; a convention — title,
+  // branch, base, paths, labels — never governs alone.
   if (!run && context === "external") {
     throw new Error(
       `${label} skips an external pull request — the external context is frozen; ` +
         `full review is what an untrusted contribution is for`,
     );
+  }
+  if (!run && context === undefined) {
+    const botAnchored = when.author?.isBot === true;
+    const sizeAnchored = when.changes !== undefined;
+    if (!botAnchored && !sizeAnchored) {
+      throw new Error(
+        `${label} sets run: false without a context — a rule built from title, branch or paths ` +
+          `conventions never governs alone; it must declare an immune context, anchor on ` +
+          `when.author.isBot, or measure the change with when.changes`,
+      );
+    }
   }
 
   // The posture axis: the mode set is fixed in code, the default restated
@@ -438,10 +605,6 @@ function validateRule(entry, index, ids, fileStrictness) {
   if (raw["intensity"] !== undefined) {
     intensity = validateIntensity(raw["intensity"], label, fileStrictness, context, run);
   }
-  let when = {};
-  if (raw["when"] !== undefined) {
-    when = validateWhen(raw["when"], label);
-  }
   /** @type {ApplicabilityRule} */
   const rule = { id, ...(context !== undefined ? { context } : {}), when, run };
   if (posture !== undefined && instruction !== undefined) {
@@ -512,23 +675,41 @@ function validateIntensity(value, label, fileStrictness, context, run) {
 }
 
 /**
+ * Validates a rule's `when` — the eligibility conditions grammar. Every
+ * family present is a conjunct. Unknown keys refuse; each family present
+ * must be non-empty — an empty family could only ever match nothing, which
+ * is dormancy worn as a condition. An absent or empty `when` is legal: it
+ * constrains nothing, and the rule then stands or falls on its anchor
+ * alone.
+ *
  * @param {unknown} value
  * @param {string} label
- * @returns {{ title?: RegExp, branch?: RegExp, paths?: string[] }}
+ * @returns {WhenConditions}
  */
+
 function validateWhen(value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${label}.when must be an object with title, branch and paths`);
+    throw new Error(
+      `${label}.when must be an object with title, branch, base, paths, labels, author and changes`,
+    );
   }
   const raw = /** @type {Record<string, unknown>} */ (value);
   for (const key of Object.keys(raw)) {
-    if (key !== "title" && key !== "branch" && key !== "paths") {
+    if (
+      key !== "title" &&
+      key !== "branch" &&
+      key !== "base" &&
+      key !== "paths" &&
+      key !== "labels" &&
+      key !== "author" &&
+      key !== "changes"
+    ) {
       throw new Error(`${label}.when holds unknown key '${key}'`);
     }
   }
-  /** @type {{ title?: RegExp, branch?: RegExp, paths?: string[] }} */
+  /** @type {WhenConditions} */
   const when = {};
-  for (const key of ["title", "branch"]) {
+  for (const key of ["title", "branch", "base"]) {
     const declared = raw[key];
     if (declared === undefined) continue;
     if (typeof declared !== "string" || declared === "") {
@@ -537,7 +718,7 @@ function validateWhen(value, label) {
     try {
       // No flags, ever: a consumer's pattern selects values, it never
       // changes what matching means.
-      when[/** @type {"title" | "branch"} */ (key)] = new RegExp(declared);
+      when[/** @type {"title" | "branch" | "base"} */ (key)] = new RegExp(declared);
     } catch {
       throw new Error(
         `${label}.when.${key} does not compile as a regular expression: '${String(declared)}'`,
@@ -558,7 +739,125 @@ function validateWhen(value, label) {
     }
     when.paths = /** @type {string[]} */ (declared);
   }
+  if (raw["labels"] !== undefined) {
+    const declared = raw["labels"];
+    if (!Array.isArray(declared) || declared.length === 0) {
+      throw new Error(`${label}.when.labels must be a non-empty array of label names`);
+    }
+    for (const labelName of declared) {
+      if (typeof labelName !== "string" || labelName === "") {
+        throw new Error(`${label}.when.labels holds a non-string or empty label name`);
+      }
+    }
+    when.labels = /** @type {string[]} */ (declared);
+  }
+  if (raw["author"] !== undefined) {
+    when.author = validateWhenAuthor(raw["author"], label);
+  }
+  if (raw["changes"] !== undefined) {
+    when.changes = validateWhenChanges(raw["changes"], label);
+  }
   return when;
+}
+
+/**
+ * The author family: `isBot` may only state `true` — bot-ness is something
+ * GitHub attests while not-bot-ness is not, and only an attestation may
+ * ride a skip decision; `equals` is a non-empty list of exact, case-
+ * sensitive logins. The family itself must not be empty.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {WhenAuthor}
+ */
+function validateWhenAuthor(value, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label}.when.author must be an object holding isBot and equals`);
+  }
+  const raw = /** @type {Record<string, unknown>} */ (value);
+  for (const key of Object.keys(raw)) {
+    if (key !== "isBot" && key !== "equals") {
+      throw new Error(`${label}.when.author holds unknown key '${key}'`);
+    }
+  }
+  if (Object.keys(raw).length === 0) {
+    throw new Error(
+      `${label}.when.author must not be empty — it carries isBot, or equals, or both`,
+    );
+  }
+  /** @type {WhenAuthor} */
+  const author = {};
+  if (raw["isBot"] !== undefined) {
+    const declared = raw["isBot"];
+    if (declared !== true) {
+      throw new Error(
+        `${label}.when.author.isBot must be true when present — bot-ness is a GitHub ` +
+          `attestation; the negation states nothing GitHub proves`,
+      );
+    }
+    author.isBot = true;
+  }
+  if (raw["equals"] !== undefined) {
+    const declared = raw["equals"];
+    if (!Array.isArray(declared) || declared.length === 0) {
+      throw new Error(`${label}.when.author.equals must be a non-empty array of logins`);
+    }
+    for (const login of declared) {
+      if (typeof login !== "string" || login === "") {
+        throw new Error(`${label}.when.author.equals holds a non-string or empty login`);
+      }
+    }
+    author.equals = /** @type {string[]} */ (declared);
+  }
+  return author;
+}
+
+/**
+ * The size family: `gt` is the one comparator, a whole number ≥ 0 — the one
+ * direction a resource guard needs. `gt: 0` is legal and means strictly
+ * more than zero, so an empty change never matches. The family itself must
+ * not be empty.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {WhenChanges}
+ */
+function validateWhenChanges(value, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label}.when.changes must be an object holding lines and files`);
+  }
+  const raw = /** @type {Record<string, unknown>} */ (value);
+  for (const sub of Object.keys(raw)) {
+    if (sub !== "lines" && sub !== "files") {
+      throw new Error(`${label}.when.changes holds unknown key '${sub}'`);
+    }
+  }
+  if (Object.keys(raw).length === 0) {
+    throw new Error(
+      `${label}.when.changes must not be empty — it carries lines, or files, or both`,
+    );
+  }
+  /** @type {WhenChanges} */
+  const changes = {};
+  for (const dimension of ["lines", "files"]) {
+    const declared = raw[dimension];
+    if (declared === undefined) continue;
+    if (typeof declared !== "object" || declared === null || Array.isArray(declared)) {
+      throw new Error(`${label}.when.changes.${dimension} must be an object holding gt`);
+    }
+    const guardKeys = Object.keys(declared);
+    if (guardKeys.length !== 1 || guardKeys[0] !== "gt") {
+      throw new Error(`${label}.when.changes.${dimension} carries only gt`);
+    }
+    const gt = /** @type {Record<string, unknown>} */ (declared)["gt"];
+    if (typeof gt !== "number" || !Number.isInteger(gt) || gt < 0) {
+      throw new Error(
+        `${label}.when.changes.${dimension}.gt must be a whole number ≥ 0 — got '${String(gt)}'`,
+      );
+    }
+    changes[/** @type {"lines" | "files"} */ (dimension)] = { gt };
+  }
+  return changes;
 }
 
 /**
