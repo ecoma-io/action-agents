@@ -83,11 +83,11 @@ jobs:
           # Live: publishes one upserted marker comment plus the gate's
           # check run.
           dry-run: "false"
-          # Observe: the verdict lands as a `neutral` `review gate` check
-          # run — recorded, enforcing nothing. A ruleset that makes the
-          # check required only starts enforcing after this flips to
-          # `required`, whose BLOCK renders `failure`.
-          gate-mode: "observe"
+          # Required: PASS renders success and BLOCK renders failure —
+          # the conclusion a branch ruleset enforcing the `review gate`
+          # check reads. This scratch branch is the dogfood for exactly
+          # that enforcement path.
+          gate-mode: "required"
 
       # The run artifact — policy, risk table, findings with verification
       # states, gate outcomes, coverage, phase log — as a downloadable file.
