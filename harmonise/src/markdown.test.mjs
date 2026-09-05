@@ -137,6 +137,34 @@ describe("maskDestinations", () => {
     expect(masked).toHaveLength(line.length);
     expect(blanked).toBe("<https://x.repository/a>".length + "https://y.repository/commit".length);
   });
+
+  it("starts a bare URL's mask at the scheme's first letter, never earlier", () => {
+    // The scheme may not begin with a digit or `+ - .`, and a delimiter with
+    // nothing riding after it is not a URL: the backward-anchored scan must
+    // prove exactly the extents the forward regex proved.
+    expect(maskDestinations("123abc://x tail")).toBe(
+      "123" + "\u0000".repeat("abc://x".length) + " tail",
+    );
+    expect(maskDestinations("9a://x y")).toBe("9" + "\u0000".repeat("a://x".length) + " y");
+    expect(maskDestinations("....://x")).toBe("....://x");
+    expect(maskDestinations("1://x")).toBe("1://x");
+    expect(maskDestinations("://x")).toBe("://x");
+    expect(maskDestinations("a://")).toBe("a://");
+    expect(maskDestinations("a:// ")).toBe("a:// ");
+  });
+
+  it("stays linear on a scheme-less line the length of a hostile answer", () => {
+    // A multi-megabyte line of letters with no `://` anywhere is the shape a
+    // hostile model answer takes: the mask must return the line unchanged —
+    // completing at all is the bound, because the scheme-anchored scan this
+    // replaces retried every letter as a start and was quadratic.
+    const hostile = "a".repeat(2 * 2 ** 20);
+    expect(maskDestinations(hostile)).toBe(hostile);
+    // The same line with a delimiter at its end is one giant URL — the
+    // scheme run reaches back to the first letter, exactly as the forward
+    // regex read it — so the whole line is machinery and masks whole.
+    expect(maskDestinations(hostile + "://x")).toBe("\u0000".repeat(hostile.length + 4));
+  });
 });
 
 describe("structuralProfile", () => {
