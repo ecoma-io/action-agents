@@ -488,6 +488,26 @@ A pair whose links do not match fails with one violation line per difference: a 
 
 This is not a generic Markdown transformation framework. It implements only the validation necessary for `harmonise` to work correctly.
 
+## The script gate
+
+Before anything is restored, the tokenised answer is judged by
+`harmonise/src/script-gate.mjs`: `judgeScript(text, languageTag)` counts the
+candidate's letters per Unicode script — `\p{L}` membership with
+`\p{Script=…}` tests, the machinery's own `[[harmonise:…]]` token spellings
+excluded — and refuses the pair unless the configured target language's
+scripts hold strictly more than half of the counted letters; the refusal
+sentence names the target subtag, the winning foreign script and the
+fraction, byte-deterministically. The expected scripts come from a curated
+table keyed by the language tag's primary subtag (`en` → Latin, `ja` →
+Han + Hiragana + Katakana, `ko` → Hangul + Han), judged as a union. The table
+is code, not configuration — a tag joins it when its script is
+uncontroversial, by a reviewed decision in this repository, never a consumer
+setting — and a primary subtag the table does not know leaves the pair
+unjudged by this gate rather than guessed at: a fail-open strictly narrower
+than a wrong default. A candidate with no counted letters passes, and a
+violation is a refusal like every answer-contract failure: raised in
+`judgeAnswer`, never retried.
+
 ## The prompt
 
 One request per pair, assembled in one order:
@@ -834,7 +854,7 @@ The failure line records the verdict — `… (classified transport, exhausted)`
 An answer that violates the answer contract is a **refusal**: raised where the answer is judged (`plan`'s `judgeAnswer`) and never retried — a second identical call would return an identical answer.
 
 - Malformed JSON, or content that is empty or whitespace only → refusal, no retry;
-- Placeholder corruption (glossary or skip), a lost protected token, forged or tampered frontmatter → refusal, no retry;
+- Placeholder corruption (glossary or skip), a lost protected token, forged or tampered frontmatter, an answer in the wrong script → refusal, no retry;
 - Structural or link validation failure → refusal, no retry;
 - A provider error object at HTTP 200 → unknown, one retry under the policy;
 
@@ -905,6 +925,7 @@ The specification is living text, and changes to it are recorded here rather tha
 - **Correctness hardening:** Glossary detection is specified as whole-word — a term flanked by a letter, digit or underscore never matches — and its scope excludes link machinery: inline link and image destinations, reference-definition destinations, angle autolinks, and bare scheme URLs. Newline handling is pinned by test: protected content round-trips byte-for-byte under LF, CRLF, mixed newlines, and a missing final newline. Document resolution is answered from the inventory's own index rather than a per-link scan of `pairs`.
 - **Title customization (#30):** The commit subject and pull-request title — one line, always — may be renamed by the repository through the optional `pullRequest.title` config key. `{n}` and `{sourceLanguage}` are its only placeholders, substituted deterministically at publish time; absent, the built-in convention stands byte-for-byte unchanged. The pull-request body stays action-authored.
 - **Recovery wiring (#107):** The pair loop's fixed two-attempt retry is replaced by the deterministic recovery policy. Every failure is classified — refusal, transport, auth, unknown — and the class decides the retry: transport faults retry twice (up to three model calls per pair), unknown failures once, and refusals and auth failures never. Answer-contract violations — malformed JSON, empty content, placeholder corruption, lost protected tokens, structural and link validation failures, frontmatter tampering — are refusals: the one-retry allowance link and structural failures had is withdrawn, and the second call an unfixable answer used to spend is no longer made.
+- **Script gate (#354):** The tokenised answer is judged before restoration by a script floor — `plan`'s `judgeScript`, counting letters per Unicode script against a curated primary-subtag table — and the pair refuses unless the target language's scripts hold strictly more than half of the counted letters. The violation joins the answer-contract refusals: raised in `judgeAnswer`, never retried. A language the table does not know is not judged by the gate, and a same-script wrong-language answer still passes — a script floor, not language identification.
 
 ## Acceptance criteria
 

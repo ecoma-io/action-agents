@@ -346,6 +346,26 @@ describe("translatePair", () => {
     expect(chat.calls()).toBe(1);
   });
 
+  it("refuses an answer in the wrong script on the first attempt, tagged refusal", async () => {
+    const prepared = prepare();
+    const foreign = proposes("# 開発ガイド\n\nAPI を参照してください。\n");
+    const chat = chatWith([foreign]);
+    const pending = translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    await expect(pending).rejects.toThrowError(
+      /script gate: target language "vi" requires Latin to hold the majority/,
+    );
+    await expect(pending).rejects.toBeInstanceOf(RefusalError);
+    expect(chat.calls()).toBe(1);
+  });
   it("keeps a protection refusal's typed class for the boundary", async () => {
     const prepared = preparePair({
       slug: "dev",

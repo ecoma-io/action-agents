@@ -389,6 +389,33 @@ text inside a fenced code block or mid-line is content, not a directive, and is
 never validated as one. The full validation rules are on the
 [development page](../development/harmonise.md#skip-directives).
 
+## What a translated answer must pass
+
+The model's answer is judged by deterministic gates before it can become a
+proposal: parse, the script gate, placeholder restoration, the byte cap,
+frontmatter identity, structural preservation and link identity. A refusal is
+never retried — the same answer fails the same way.
+
+The **script gate** checks that the answer's prose is written in the target
+language's script: a `vi` target must come back in Latin letters, a `ja`
+target in Japanese writing. The expected scripts must hold more than half of
+the candidate's counted letters, and an answer that fails the majority is
+refused. What the gate accepts by design:
+
+- **Same-script wrong-language answers pass.** An English answer for an `es`
+  target is Latin on Latin; the gate is a script floor, not language
+  identification.
+- **Frontmatter keys, inline HTML tag names and code carried in prose skew
+  the counts slightly.** They are letters in the candidate and vote like any
+  other letter; the action's own placeholder spellings never vote.
+- **A target language the gate does not know is not judged.** A language
+  whose primary subtag is absent from the gate's built-in table leaves the
+  pair unjudged by this gate — a fail-open deliberately narrower than a wrong
+  default that would refuse correct translations wholesale.
+
+The table of known languages is part of the action, not your configuration —
+there is nothing to set for it.
+
 ## Cost and budget controls
 
 | Control              | Default  | Effect                                                  |

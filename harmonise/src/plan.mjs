@@ -15,6 +15,7 @@ import { rewriteLinks } from "./links.mjs";
 import { collectLinks, validateLinkGraph } from "./link-graph.mjs";
 import { protectDocument } from "./protect.mjs";
 import { restoreDocument } from "./protect.mjs";
+import { judgeScript } from "./script-gate.mjs";
 import { planBlocks, summarizePlan } from "./blocks.mjs";
 import {
   DEFAULT_FRONTMATTER_POLICY,
@@ -258,12 +259,12 @@ export async function translatePair(input) {
   const { content } = await input.chat.complete({ model: input.model, messages });
 
   // Everything from the answer's arrival to the verdict is the answer's
-  // contract surface: parse, restoration, the byte cap, frontmatter,
-  // structure, links. A failure inside it is a deterministic refusal of
-  // this answer — the same answer refuses again — so it raises tagged
-  // `refusal` and the recovery policy never spends a model call re-asking
-  // it. The request above stays outside the frame: a transport fault keeps
-  // its own class.
+  // contract surface: parse, the script gate, restoration, the byte cap,
+  // frontmatter, structure, links. A failure inside any of them is a
+  // deterministic refusal of this answer — the same answer refuses again —
+  // so it raises tagged `refusal` and the recovery policy never spends a
+  // model call re-asking it. The request above stays outside the frame: a
+  // transport fault keeps its own class.
   try {
     return judgeAnswer(content, input);
   } catch (cause) {
@@ -278,9 +279,9 @@ export async function translatePair(input) {
  * Judges one arrived answer against the contract the pair's preparation
  * fixed, and returns the verdict: a proposal to carry onward, or a noop
  * when the answer legitimately changed nothing. Throws on any contract
- * failure — parse, restoration, the byte cap, frontmatter, structure,
- * links; `translatePair` retags what this raises as a `RefusalError` on
- * the way out — a typed refusal keeps its class.
+ * failure — parse, the script gate, restoration, the byte cap, frontmatter,
+ * structure, links; `translatePair` retags what this raises as a
+ * `RefusalError` on the way out — a typed refusal keeps its class.
  *
  * @param {string} content The model's answer content.
  * @param {Parameters<typeof translatePair>[0]} input
@@ -300,6 +301,13 @@ function judgeAnswer(content, input) {
   if (input.existingText !== undefined && answer.content === input.existingText) {
     return { outcome: "noop", summary: answer.summary };
   }
+
+  // The script gate (run-contract I17) judges the tokenised candidate — the
+  // bytes the model actually returned, machinery tokens and all — so the
+  // vote measures the translatable prose; the gate itself excludes the
+  // pipeline's token spellings, which would otherwise vote as letters.
+  const scriptRefusal = judgeScript(answer.content, input.prepared.lang);
+  if (scriptRefusal !== null) throw new Error(scriptRefusal);
 
   // Restoration is validation: counts must match and no unknown token may
   // wear this run's namespace, or this throws and the pair fails.
