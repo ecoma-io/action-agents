@@ -82,7 +82,7 @@ describe("readInputs", () => {
     expect(inputs.model).toBe("review");
     expect(inputs.maxTurns).toBe(30);
     expect(inputs.contextWindow).toBe(128_000);
-    expect(inputs.requestTimeoutMs).toBe(30_000);
+    expect(inputs.requestTimeoutMs).toBe(120_000);
     expect(inputs.dryRun).toBe(false);
     expect(inputs.configPath).toBe("");
   });

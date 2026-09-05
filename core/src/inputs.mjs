@@ -43,7 +43,7 @@ export function readSharedInputs(env = process.env) {
     apiUrl,
     apiKey: getInput("api-key", {}, env),
     model: getInput("model", { required: true }, env),
-    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 30_000, min: 1_000 }, env),
+    requestTimeoutMs: getNumberInput("request-timeout-ms", { default: 120_000, min: 1_000 }, env),
   };
 }
 

@@ -23,9 +23,9 @@ inputs:
     description: >-
       Per-attempt timeout in milliseconds for one provider call. The attempt
       must complete the whole completion; raise it for endpoints that
-      legitimately take longer than 30 seconds to answer in full.
+      legitimately take longer than two minutes to answer in full.
     required: false
-    default: "30000"
+    default: "120000"
   config-path:
     description: Overrides `.github/action-agents/review/review.json5` / `.json`, read from the resolved policy source (the default branch, or a pull request's base branch). When set, only that path is read and the default locations are not consulted; a path that does not exist there is a startup error. # consumer path
     required: false

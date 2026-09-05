@@ -49,7 +49,7 @@ All inputs listed below. Shared inputs are documented in the
 | `api-url`            | yes      | —                  | Base URL of an OpenAI-compatible endpoint.                |
 | `api-key`            | no       | —                  | Key for that endpoint. Leave unset for keyless endpoints. |
 | `model`              | yes      | —                  | Model id to ask.                                          |
-| `request-timeout-ms` | no       | `30000`            | Per-attempt timeout in milliseconds.                      |
+| `request-timeout-ms` | no       | `120000`           | Per-attempt timeout in milliseconds.                      |
 | `config-path`        | no       | `""`               | Override the config file location.                        |
 | `max-turns`          | no       | `30`               | Ceiling on agent turns.                                   |
 | `context-window`     | no       | `128000`           | Token budget of the configured model.                     |
@@ -361,7 +361,7 @@ artifact to keep them across runs:
 | `context-window`     | `128000` | Token budget before compaction. Match to your model.                |
 | `maxDiffLines`       | `5000`   | Ceiling on diff size. Large diffs stop before the first model call. |
 | `dry-run`            | `false`  | Review and log, comment nothing. Model calls still count.           |
-| `request-timeout-ms` | `30000`  | Per-attempt timeout for one provider call.                          |
+| `request-timeout-ms` | `120000` | Per-attempt timeout for one provider call.                          |
 
 The agent loop reads one file per tool call. The number of model calls depends
 on the diff size and the model's decisions about what to read. The `max-turns`

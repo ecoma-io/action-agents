@@ -422,8 +422,8 @@ describe("readInputs", () => {
     expect(readInputs({ ...runner, INPUT_VERIFY: "true" }).verify).toBe(true);
   });
 
-  it("defaults request-timeout-ms to 30000 when the input is absent", () => {
-    expect(readInputs(runner).requestTimeoutMs).toBe(30_000);
+  it("defaults request-timeout-ms to 120000 when the input is absent", () => {
+    expect(readInputs(runner).requestTimeoutMs).toBe(120_000);
   });
 
   it("refuses a request-timeout-ms that is not a number", () => {
