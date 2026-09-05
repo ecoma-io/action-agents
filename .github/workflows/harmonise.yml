@@ -16,12 +16,15 @@ name: Harmonise
 # harmonise run may write is already pinned in code: files inside the
 # configured language patterns, one branch of its own naming, nothing else.
 #
-# The verification phase is complete: the first real pull request (README →
-# README.vi.md) was inspected against the safety checklist — source
-# untouched, links and badges intact, glossary preserved, structure held —
-# and merged through the queue with every check green. The weekly schedule
-# is what keeps the mirror in step without anyone asking; dispatch remains
-# for out-of-band runs, real or dry.
+# Status: the mirror's history is mixed — the harmonise action generated the
+# initial README.vi.md translation (PR #26, merged by hand), later updates
+# landed as human commits (#56, #216, #223) — but no harmonise state or
+# translation-memory file was ever committed on any ref, so the action has no
+# verified base for the pair today. A real run would classify it as unrecorded
+# and refuse it, leaving the disk untouched, until a maintainer adopts the
+# mirror through the action's own history. The weekly schedule therefore runs
+# dry-run by default (`inputs.dry-run || 'true'`): it reports drift and
+# proposes nothing; dispatch remains for out-of-band runs, real or dry.
 
 on:
   schedule:
