@@ -1222,14 +1222,20 @@ one of two shapes:
 
 - `refused` — the throw carries the typed `DeterministicRefusalError`
   (`src/refusal.mjs`), the class of the run's own ceilings declining to act:
-  a config that does not validate (F-02), a posture document that is not
-  one, the diff-line budget and the prompt-headroom ceiling (F-11), and the
-  twice-failed output contract (F-09). Every one of these fires before the
-  first repository write, so a `refused` record can never name a comment.
+  a config that does not validate (F-02), the diff-line budget and the
+  prompt-headroom ceiling (F-11), and the twice-failed output contract
+  (F-09). Every one of these fires before the first repository write, so a
+  `refused` record can never name a comment.
 - `failed` — every other undeclared throw: transport and auth, a policy
-  resolution that fails (F-03), a reader-level config refusal, the loop's
-  coverage-accounting and gate-table invariants. The boundary pins F-15 —
-  an internal unknown is recorded as itself, never smoothed into a refusal.
+  resolution that fails (F-03), a reader-level config refusal, an absent or
+  oversized posture document (the loader's own plain error — the posture
+  failures a consumer actually sees), and the loop's coverage-accounting and
+  gate-table invariants. The orchestrator's map-miss guard beside the loader
+  ("a posture document that did not survive loading") is not a reachable
+  refusal: the loader reads every declared posture instruction as required,
+  so the guard stands as an internal invariant in F-15's tier, kept for the
+  day a code path breaks that promise. The boundary pins F-15 — an internal
+  unknown is recorded as itself, never smoothed into a refusal.
 
 The record is the reduced family's shape with an `outcome` of
 `{ classification, reason }`. The reason is the thrown error's own sentence,

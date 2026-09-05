@@ -183,7 +183,9 @@ function breakMentions(text) {
  */
 function cap(text, maxChars, notes) {
   if (text.length <= maxChars) return text;
-  notes.push(`truncated model text from ${String(text.length)} to ${String(maxChars)} characters`);
+  // "text", not "model text": the cap serves surfaces beyond model output —
+  // a thrown error's message rides it on the red-reason path.
+  notes.push(`truncated text from ${String(text.length)} to ${String(maxChars)} characters`);
   let cut = Math.max(0, maxChars - TRUNCATION_MARK.length);
   if (
     cut > 0 &&

@@ -2139,12 +2139,24 @@ describe("buildRedArtifact", () => {
     expect(JSON.parse(serialiseArtifact(record)).headRef).toBeNull();
   });
 
-  it("carries the comment id when one landed before the run died red", () => {
-    const round = JSON.parse(serialiseArtifact(buildRedArtifact(redInput({ commentId: 101 }))));
+  it("carries the comment id when one landed before the run died red — failed records only", () => {
+    const round = JSON.parse(
+      serialiseArtifact(buildRedArtifact(redInput({ outcome: "failed", commentId: 101 }))),
+    );
     expect(round.provenance).toEqual({ commentId: 101 });
     expect(Object.keys(round).sort()).toEqual(
       ["headRef", "outcome", "provenance", "pullRequest", "repository", "schemaVersion"].sort(),
     );
+  });
+
+  it("refuses a comment id on a refused classification — the law the docs state, encoded here", () => {
+    expect(() => buildRedArtifact(redInput({ commentId: 101 }))).toThrow(
+      /a refused record cannot name a comment/,
+    );
+    // The failed classification keeps the id — the asymmetry is the law.
+    expect(buildRedArtifact(redInput({ outcome: "failed", commentId: 101 })).provenance).toEqual({
+      commentId: 101,
+    });
   });
 
   it("carries the applicability context when the classification ran", () => {
@@ -2153,7 +2165,11 @@ describe("buildRedArtifact", () => {
     );
     expect(round.applicability).toBe("automation");
     const both = JSON.parse(
-      serialiseArtifact(buildRedArtifact(redInput({ commentId: 9, applicability: "maintainer" }))),
+      serialiseArtifact(
+        buildRedArtifact(
+          redInput({ outcome: "failed", commentId: 9, applicability: "maintainer" }),
+        ),
+      ),
     );
     expect(both.provenance).toEqual({ commentId: 9 });
     expect(both.applicability).toBe("maintainer");

@@ -1126,6 +1126,173 @@ describe("the red boundary (#355)", () => {
     }
   });
 
+  it("a throw with no message still records — the fixed sentence stands in for the empty reason", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      // The builder refuses an empty reason, so before the fallback this
+      // exit wrote no artifact at all — a third unrecorded red exit. The
+      // fixed sentence keeps the boundary recording.
+      for (const message of ["", " \t "]) {
+        const root = mkdtempSync(p.join(tmpdir(), "red-wordless-"));
+        const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+        const breakage = new Error(message);
+        const cause = await run(readInputs(env), readContext(env), {
+          forge: openForge({
+            getPullRequest: async () => {
+              throw breakage;
+            },
+          }),
+          chat: junkChat,
+          now: () => 0,
+          info: () => undefined,
+        }).then(
+          () => null,
+          (error) => error,
+        );
+        expect(cause).toBe(breakage);
+        const files = readdirSync(p.join(root, ".review-artifact"));
+        expect(files).toEqual(["review-artifact-failed-no-head.json"]);
+        const record = JSON.parse(
+          readFileSync(p.join(root, ".review-artifact", files[0] ?? ""), "utf8"),
+        );
+        expect(record.outcome.classification).toBe("failed");
+        expect(record.outcome.reason).toBe("the run failed without a message");
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a refused record never names a comment — the refusal arms write nothing first", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    /** @type {string[]} */
+    const writes = [];
+    /**
+     * A write op the refusal paths must never reach; reaching it fails loudly.
+     *
+     * @param {string} name
+     * @returns {(...args: unknown[]) => Promise<never>}
+     */
+    const counting =
+      (name) =>
+      async (..._args) => {
+        writes.push(name);
+        throw new Error(`the refusal path never calls ${name}`);
+      };
+    try {
+      // Arm 1: the twice-failed output contract.
+      {
+        const root = mkdtempSync(p.join(tmpdir(), "red-nowrite-1-"));
+        const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+        const cause = await run(readInputs(env), readContext(env), {
+          forge: openForge({
+            createComment: counting("createComment"),
+            updateComment: counting("updateComment"),
+            deleteComment: counting("deleteComment"),
+          }),
+          chat: junkChat,
+          now: () => 0,
+          info: () => undefined,
+        }).then(
+          () => null,
+          (error) => error,
+        );
+        expect(cause).toBeInstanceOf(DeterministicRefusalError);
+        const record = JSON.parse(
+          readFileSync(
+            p.join(root, ".review-artifact", `review-artifact-refused-${"a".repeat(40)}.json`),
+            "utf8",
+          ),
+        );
+        expect(record.outcome.classification).toBe("refused");
+        expect(record.provenance).toBeUndefined();
+      }
+      // Arm 2: the diff-line budget — one file past the 5000-line default.
+      {
+        const root = mkdtempSync(p.join(tmpdir(), "red-nowrite-2-"));
+        const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+        const cause = await run(readInputs(env), readContext(env), {
+          forge: openForge({
+            listPullRequestFiles: async () => [
+              /** @type {any} */ ({
+                filename: "src/huge.mjs",
+                status: "modified",
+                additions: 6001,
+                deletions: 0,
+                patch: "@@ -1 +1,2 @@\n+x",
+              }),
+            ],
+            createComment: counting("createComment"),
+            updateComment: counting("updateComment"),
+            deleteComment: counting("deleteComment"),
+          }),
+          chat: junkChat,
+          now: () => 0,
+          info: () => undefined,
+        }).then(
+          () => null,
+          (error) => error,
+        );
+        expect(cause).toBeInstanceOf(DeterministicRefusalError);
+        expect(/** @type {Error} */ (cause).message).toMatch(/against a 5000-line budget/);
+        const record = JSON.parse(
+          readFileSync(
+            p.join(root, ".review-artifact", `review-artifact-refused-${"a".repeat(40)}.json`),
+            "utf8",
+          ),
+        );
+        expect(record.outcome.classification).toBe("refused");
+        expect(record.provenance).toBeUndefined();
+      }
+      // Every write op on the forge, across both arms: zero.
+      expect(writes).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a skip record's failed write is red and unrecorded — the boundary never fires for it", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "red-skip-write-"));
+    const env = runnerEnv({
+      extra: { GITHUB_WORKSPACE: root, "INPUT_ARTIFACT-PATH": "../outside" },
+    });
+    try {
+      // A draft pull request — the cheapest skip that carries a record. The
+      // record IS the skip's whole outcome, so the escaping artifact-path
+      // propagates its refusal; and because that throw leaves the run after
+      // the boundary's try, no red artifact is written beside the loss.
+      await expect(
+        run(readInputs(env), readContext(env), {
+          forge: openForge({
+            getPullRequest: async () => ({
+              number: 41,
+              state: "open",
+              draft: true,
+              merged: false,
+              mergeable: null,
+              mergeableState: "unknown",
+              title: "",
+              body: "",
+              head: { ref: "x", sha: "a".repeat(40) },
+              labels: [],
+              base: { ref: "main", sha: "b".repeat(40) },
+            }),
+            whoami: async () => {
+              throw new Error("the draft path never reads the token's identity");
+            },
+          }),
+          chat: junkChat,
+          now: () => 0,
+          info: () => undefined,
+        }),
+      ).rejects.toThrow(/outside the workspace/);
+      expect(existsSync(p.join(root, ".review-artifact"))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("a green run writes no red artifact — the boundary never fires on a resolution", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const root = mkdtempSync(p.join(tmpdir(), "red-green-"));
