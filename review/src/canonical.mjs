@@ -3,10 +3,13 @@
  * from (ADR 004). The comment, the SARIF upload and the merge gate are
  * projections; none of them records state this shape does not carry, and
  * none of them is authoritative. The constructor is the only way in: it
- * validates the closed vocabularies, recomputes every fingerprint against
- * the reviewed bytes' own spelling, collapses claims that share the full
- * identity key, and freezes what it returns — so a canonical result that
- * exists is one that checks out.
+ * validates the closed vocabularies, recomputes every fingerprint from the
+ * tuple it is given, collapses claims that share the full identity key, and
+ * deep-freezes what it returns. The tuple's provenance — the subject
+ * captured from the reviewed snapshot, never written by the model — is
+ * enforced by the integration boundary that reads the snapshot; this
+ * constructor never touches the filesystem. A stored fingerprint is
+ * verified against the recomputed tuple, nothing more.
  */
 
 import { SEVERITIES } from "./answer.mjs";
@@ -42,7 +45,7 @@ export class CanonicalResultError extends Error {}
  * @property {number} line the 1-based anchor line in the reviewed snapshot — never an identity input
  * @property {"concern" | "nit"} severity the finding's grade — never an identity input
  * @property {string} message the claim as answered — a rendering input, never an identity input
- * @property {string} subject the normalised code span from the reviewed bytes the claim anchors — an identity input whose provenance is the snapshot, not the model
+ * @property {string} subject the normalised code span the claim anchors — given, never captured here; its provenance (read from the reviewed snapshot by the integration boundary, never model-written) is enforced upstream of this module
  * @property {import("./verify.mjs").PublishedLifecycle} lifecycle the publication state
  * @property {import("./verify.mjs").Verdict} [verdict] the verifier's raw verdict, when verified
  * @property {string} [reason] the capped verdict reason, when verified
@@ -172,7 +175,7 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
     const fingerprint = findingFingerprint({ file, kind, subject });
     if (finding.fingerprint !== undefined && finding.fingerprint !== fingerprint) {
       throw new CanonicalResultError(
-        `${label}: stored fingerprint does not match the reviewed bytes' own spelling`,
+        `${label}: stored fingerprint does not match the tuple this result recomputes`,
       );
     }
     /** @type {CanonicalFinding} */
@@ -189,7 +192,14 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
         ? { verdict: /** @type {import("./verify.mjs").Verdict} */ (finding.verdict) }
         : {}),
       ...(finding.reason !== undefined ? { reason: finding.reason } : {}),
-      ...(finding.evidence !== undefined ? { evidence: finding.evidence } : {}),
+      ...(finding.evidence !== undefined
+        ? {
+            evidence: Object.freeze({
+              digest: finding.evidence.digest,
+              excerpt: finding.evidence.excerpt,
+            }),
+          }
+        : {}),
     });
     const earlier = kept.get(fingerprint);
     if (earlier !== undefined) {
@@ -209,6 +219,16 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
     }),
     findings: Object.freeze(canonicalFindings),
     collapsed: Object.freeze(collapsed),
-    ...(coverage !== undefined ? { coverage } : {}),
+    ...(coverage !== undefined
+      ? {
+          coverage: /** @type {import("./coverage.mjs").CoverageReport} */ (
+            Object.freeze({
+              covered: Object.freeze([...coverage.covered]),
+              uncovered: Object.freeze([...coverage.uncovered]),
+              total: coverage.total,
+            })
+          ),
+        }
+      : {}),
   });
 }

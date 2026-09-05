@@ -224,7 +224,10 @@ give the shape its authority:
   versioned digest over its normalized path, its claim kind — a closed,
   code-validated vocabulary the verification pass binds from evidence, as
   epistemic as the verdicts themselves — and the code span the reviewed bytes
-  carry at its anchor. Line moves, message rewrites and severity re-grades
+  carry at its anchor, captured by the integration boundary that reads the
+  snapshot (the canonical constructor verifies a stored fingerprint against
+  the recomputed tuple; it never reads files). Line moves, message rewrites
+  and severity re-grades
   keep the identity; a rewritten span, a new file or a reclassified claim is
   a new finding — churn reconciliation records, never enforcement drift,
   since the gate reads the current set. Claims sharing the full key in one

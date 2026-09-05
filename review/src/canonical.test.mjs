@@ -149,7 +149,9 @@ describe("createCanonicalResult", () => {
         }),
       ],
     });
-    expect(isDigest(bound.findings[0]?.evidence?.digest)).toBe(true);
+    const boundFinding = bound.findings[0];
+    expect(isDigest(boundFinding?.evidence?.digest)).toBe(true);
+    expect(Object.isFrozen(boundFinding?.evidence)).toBe(true);
   });
 
   it("builds the nothing-to-review result", () => {
@@ -158,10 +160,20 @@ describe("createCanonicalResult", () => {
     expect(result.collapsed).toEqual([]);
   });
 
-  it("carries the coverage report when the run has one", () => {
-    const coverage = { complete: true, expected: [], read: [] };
+  it("clones and deep-freezes the coverage report it carries", () => {
+    const coverage = { covered: ["src/a.mjs"], uncovered: [], total: 1 };
     const result = build({ coverage });
-    expect(result.coverage).toBe(coverage);
+    const carried = result.coverage;
+    if (!carried) {
+      throw new Error("the carried coverage report is missing");
+    }
+    expect(carried).toEqual({ covered: ["src/a.mjs"], uncovered: [], total: 1 });
+    expect(carried).not.toBe(coverage);
+    expect(Object.isFrozen(carried)).toBe(true);
+    expect(Object.isFrozen(carried.covered)).toBe(true);
+    expect(Object.isFrozen(carried.uncovered)).toBe(true);
+    coverage.covered.push("src/b.mjs");
+    expect(carried.covered).toEqual(["src/a.mjs"]);
     expect("coverage" in build()).toBe(false);
   });
 });

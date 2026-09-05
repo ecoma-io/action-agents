@@ -33,7 +33,11 @@ reads as a different finding, a re-worded one can duplicate.
    vocabulary, bound by the verification pass from evidence the way it
    binds the verdict, and trusted to exactly that degree. The span is
    captured from the reviewed bytes by code, never written by the model,
-   and stored so the fingerprint is recomputable. A moved, re-worded or
+   and stored so the fingerprint is recomputable. That capture is the
+   integration boundary that reads the snapshot: the canonical constructor
+   itself never touches the filesystem — it verifies a stored fingerprint
+   against the recomputed tuple, and the boundary rejects a span the
+   reviewed bytes do not spell. A moved, re-worded or
    re-graded finding keeps its identity; a rewritten span or a new file
    mints a new one. A reclassified claim does too — the one identity
    change kind can mint — and its consequence is reconciliation churn
