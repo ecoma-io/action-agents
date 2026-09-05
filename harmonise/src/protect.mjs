@@ -110,8 +110,8 @@ export function protectDocument(source, { glossary = [], newId = defaultId }) {
 
 /**
  * Restores a translated document: validates every placeholder this run minted
- * appears exactly as often as it must and nothing unknown wears the
- * namespace, then substitutes the original bytes.
+ * appears exactly as often as it must and in the order it was minted, that
+ * nothing unknown wears the namespace, then substitutes the original bytes.
  *
  * @param {string} candidate the translated text
  * @param {Protection} protection what `protectDocument` returned
@@ -134,6 +134,31 @@ export function restoreDocument(candidate, protection) {
           (actual === 0 ? " — the translation lost protected content" : ""),
       );
     }
+  }
+  // Order: a token required once has exactly one place in the candidate, and
+  // that place must respect the order the placeholders were minted in — two
+  // swapped tokens would restore to text with the protected bytes
+  // transposed. The key is each token's first occurrence in the protected
+  // document itself, not Map iteration order: the skip spans above are
+  // pushed bottom-up, so Map order is not document order. A token required
+  // more than once has no single order; counts alone govern it.
+  /** @type {[number, string][]} */
+  const singletonOrder = [];
+  for (const [token, expected] of protection.counts) {
+    if (expected === 1) singletonOrder.push([protection.text.indexOf(token), token]);
+  }
+  singletonOrder.sort((a, b) => a[0] - b[0]);
+  let previousAt = -1;
+  let previousToken = "";
+  for (const [, token] of singletonOrder) {
+    const at = candidate.indexOf(token);
+    if (at < previousAt) {
+      throw new DeterministicRefusalError(
+        `placeholder ${token} appears before ${previousToken} — the translation transposed protected content`,
+      );
+    }
+    previousAt = at;
+    previousToken = token;
   }
   let restored = candidate;
   for (const [token, original] of protection.spans) {

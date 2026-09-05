@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { protectDocument, restoreDocument } from "./protect.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 /** A stable run id so tests can name tokens exactly. @returns {string} */
 const fixedId = () => "0123456789abcdef";
@@ -359,5 +360,87 @@ describe("restoration", () => {
 
     expect(protection.glossaryHits).toBe(1);
     expect(restoreDocument(protection.text, protection)).toBe(source);
+  });
+});
+
+describe("placeholder order", () => {
+  /** @param {number} n @returns {string} */
+  const g = (n) => `[[harmonise:0123456789abcdef:g${String(n)}]]`;
+  /** @param {number} n @returns {string} */
+  const s = (n) => `[[harmonise:0123456789abcdef:s${String(n)}]]`;
+
+  it("refuses a candidate that swaps two single-occurrence placeholders", () => {
+    const { protection } = protect("Alpha keeps logs 30 days. Beta must ship weekly.\n", {
+      glossary: ["logs 30 days", "ship weekly"],
+    });
+    const candidate = `Alpha keeps ${g(2)}. Beta must ${g(1)}.\n`;
+    expect(() => restoreDocument(candidate, protection)).toThrow(
+      `placeholder ${g(2)} appears before ${g(1)} — the translation transposed protected content`,
+    );
+    expect(() => restoreDocument(candidate, protection)).toThrow(DeterministicRefusalError);
+  });
+
+  it("refuses the issue's transposition repro", () => {
+    const { protection } = protect("Alpha keeps logs 30 days. Beta must ship weekly.", {
+      glossary: ["logs 30 days", "ship weekly"],
+    });
+    const swapped = protection.text
+      .replace(g(1), "@@A@@")
+      .replace(g(2), g(1))
+      .replace("@@A@@", g(2));
+    expect(() => restoreDocument(swapped, protection)).toThrow(
+      `placeholder ${g(2)} appears before ${g(1)} — the translation transposed protected content`,
+    );
+  });
+
+  it("restores an in-order candidate byte-for-byte", () => {
+    const source = "Alpha keeps logs 30 days. Beta must ship weekly.\n";
+    const { protection } = protect(source, { glossary: ["logs 30 days", "ship weekly"] });
+    expect(restoreDocument(`Alpha keeps ${g(1)}. Beta must ${g(2)}.\n`, protection)).toBe(source);
+  });
+
+  it("governs a repeated token by counts alone, wherever it lands", () => {
+    const { protection } = protect(
+      "Alpha keeps logs 30 days. Beta must logs 30 days. Gamma will ship weekly.\n",
+      { glossary: ["logs 30 days", "ship weekly"] },
+    );
+    const candidate = `First ${g(2)}. Then ${g(1)} and ${g(1)}.\n`;
+    expect(restoreDocument(candidate, protection)).toBe(
+      "First ship weekly. Then logs 30 days and logs 30 days.\n",
+    );
+  });
+
+  it("refuses transposed skip placeholders and passes in-order ones", () => {
+    const source =
+      "<!-- harmonise:skip -->\nfirst kept\n\nprose\n\n<!-- harmonise:skip -->\nsecond kept\n";
+    const { protection } = protect(source);
+    const swapped = protection.text
+      .replace(s(1), "@@A@@")
+      .replace(s(2), s(1))
+      .replace("@@A@@", s(2));
+    expect(() => restoreDocument(swapped, protection)).toThrow(
+      `placeholder ${s(2)} appears before ${s(1)} — the translation transposed protected content`,
+    );
+    expect(restoreDocument(protection.text, protection)).toBe(source);
+  });
+
+  it("keeps one order across skip and glossary placeholders", () => {
+    const source = "<!-- harmonise:skip -->\nkept verbatim\n\nThe repository grows.\n";
+    const { protection } = protect(source, { glossary: ["repository"] });
+    const swapped = `The ${g(1)} grows.\n\n${s(1)}\n`;
+    expect(() => restoreDocument(swapped, protection)).toThrow(
+      `placeholder ${g(1)} appears before ${s(1)} — the translation transposed protected content`,
+    );
+    expect(restoreDocument(`${s(1)}\n\nThe ${g(1)} grows tall.\n`, protection)).toBe(
+      "<!-- harmonise:skip -->\nkept verbatim\n\nThe repository grows tall.\n",
+    );
+  });
+
+  it("pins the order key: the protected text is document order, the spans map is not", () => {
+    const { protection } = protect(
+      "<!-- harmonise:skip -->\na\n\nx\n\n<!-- harmonise:skip -->\nb\n",
+    );
+    expect(protection.text.indexOf(s(1))).toBeLessThan(protection.text.indexOf(s(2)));
+    expect([...protection.spans.keys()]).toEqual([s(2), s(1)]);
   });
 });

@@ -2,8 +2,8 @@
  * `harmonise` deterministic failure/recovery policy — after a pair fails,
  * decide from a declared failure class and the attempt index whether to
  * retry, and which delay to name first. A pure module: no I/O, no timers,
- * nothing read from the run — its one import is the transport layer's own
- * retryable-status set, a compile-time fact mirrored by construction.
+ * nothing read from the run — its imports are the transport layer's own
+ * retryable-status set and the typed refusal class it classifies.
  *
  * Doctrine:
  *
@@ -39,6 +39,7 @@
  */
 
 import { RETRYABLE_STATUS } from "#core/transport-errors.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 /**
  * The declared failure classes, in the order the doctrine states them.
@@ -250,6 +251,8 @@ const DELAY_TABLE = deepFreeze({
 /**
  * Classifies any thrown value into exactly one declared failure class.
  * Total: never throws, for any input, including `undefined` and primitives.
+ * The typed deterministic refusal classifies as `refusal`: the same
+ * never-re-asked verdict under the run boundary's name.
  * Conservative: a value carrying no tag this module declared — an untagged
  * `Error`, a foreign tag value, a non-object — classifies as `unknown`
  * rather than being guessed into a retryable class. An instance of a
@@ -263,6 +266,9 @@ export function classifyFailure(error) {
   if (error instanceof TransportError) return "transport";
   if (error instanceof AuthError) return "auth";
   if (error instanceof RefusalError) return "refusal";
+  // The run boundary's typed refusal (#347) is the same verdict under its
+  // own name — the run's ceiling declining to act, never re-asked.
+  if (error instanceof DeterministicRefusalError) return "refusal";
   const tag =
     typeof error === "object" && error !== null
       ? /** @type {{ failureClass?: unknown }} */ (error).failureClass

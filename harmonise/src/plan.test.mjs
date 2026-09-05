@@ -22,6 +22,7 @@ import {
   translatePair,
 } from "./plan.mjs";
 import { RefusalError } from "./recovery.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 describe("sanitizeTranslationHtml", () => {
   it("strips script tags from prose", () => {
@@ -342,6 +343,40 @@ describe("translatePair", () => {
       /link validation failed: line 3: link destination changed: 'api\.md' → 'https:\/\/evil\.example'/,
     );
     await expect(pending).rejects.toBeInstanceOf(RefusalError);
+    expect(chat.calls()).toBe(1);
+  });
+
+  it("keeps a protection refusal's typed class for the boundary", async () => {
+    const prepared = preparePair({
+      slug: "dev",
+      lang: "vi",
+      sourcePath: "manual/dev.md",
+      target: { path: "manual/vi/dev.md", state: "missing" },
+      sourceText: "Alpha keeps logs 30 days. Beta must ship weekly.\n",
+      inventory: inventoryFor(["manual/dev.md"]),
+      config: /** @type {import("./config.mjs").HarmoniseConfig} */ ({
+        ...config,
+        glossary: ["logs 30 days", "ship weekly"],
+      }),
+    });
+    const [first, second] = /** @type {[string, string]} */ ([...prepared.protection.spans.keys()]);
+    const transposed = prepared.protectedText
+      .replace(first, "@@A@@")
+      .replace(second, first)
+      .replace("@@A@@", second);
+    const chat = chatWith([proposes(transposed), proposes(transposed)]);
+    const pending = translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    await expect(pending).rejects.toBeInstanceOf(DeterministicRefusalError);
+    await expect(pending).rejects.toThrowError(/transposed protected content/);
     expect(chat.calls()).toBe(1);
   });
 

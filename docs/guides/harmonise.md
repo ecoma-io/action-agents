@@ -172,6 +172,10 @@ glossary: [
 Control characters (`\0`, newlines, tabs) are refused at startup — they are never
 an intentional glossary entry.
 
+Restoration checks order as well as counts: a candidate that places two
+single-occurrence placeholders in each other's positions is refused — protected
+content is never restored transposed.
+
 #### `instructions`
 
 Paths to instruction documents on the resolved policy source.
