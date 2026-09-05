@@ -113,6 +113,13 @@ export function maskCodeSpans(line) {
   return out;
 }
 
+/** A scheme's own characters, after its mandatory first letter. */
+const SCHEME_FOLLOWER = /[a-zA-Z0-9+.-]/;
+/** The letter a scheme must start with. */
+const SCHEME_LETTER = /[a-zA-Z]/;
+/** The non-space character a URL's body is made of. */
+const NON_SPACE = /\S/;
+
 /**
  * Masks the machinery half of one line so prose-only scanners (the glossary)
  * never match inside it: inline link and image destinations, reference
@@ -152,8 +159,25 @@ export function maskDestinations(line) {
   }
 
   // Bare scheme URLs riding in prose (`https://…` with no bracket around).
-  for (const match of line.matchAll(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/g)) {
-    ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  // The scan anchors on the `://` delimiter and walks the scheme backwards
+  // rather than matching scheme letters forward: a forward regex tries every
+  // letter in a long run as a start and backtracks through the whole rest of
+  // the run when no delimiter follows — quadratic on a scheme-less line,
+  // which a hostile answer or a merely large document can be. The extent is
+  // the same one the regex proved: the maximal scheme run ending at the
+  // delimiter, started at the run's first letter (a scheme may not begin
+  // with a digit or `+ - .`), plus the non-space run after the delimiter —
+  // one non-space character at least, or nothing rides here at all.
+  for (const found of line.matchAll(/:\/\//g)) {
+    const delimiterAt = found.index ?? 0;
+    let start = delimiterAt;
+    while (start > 0 && SCHEME_FOLLOWER.test(line[start - 1] ?? "")) start--;
+    while (start < delimiterAt && !SCHEME_LETTER.test(line[start] ?? "")) start++;
+    if (start === delimiterAt) continue;
+    let end = delimiterAt + 3;
+    while (end < line.length && NON_SPACE.test(line[end] ?? "")) end++;
+    if (end === delimiterAt + 3) continue;
+    ranges.push([start, end]);
   }
 
   // Inline link/image destinations: every `]( … )`, paren-depth aware, the
@@ -238,7 +262,7 @@ export function destinationEnd(masked, start) {
  * @param {string[]} lines
  * @returns {{present: boolean, lines: number, end: number}}
  */
-function frontmatterExtent(lines) {
+export function frontmatterExtent(lines) {
   if (lines.length < 2 || lines[0]?.trim() !== "---") {
     return { present: false, lines: 0, end: -1 };
   }

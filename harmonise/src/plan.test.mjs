@@ -346,7 +346,7 @@ describe("translatePair", () => {
     expect(chat.calls()).toBe(1);
   });
 
-  it("refuses an answer in the wrong script on the first attempt, tagged refusal", async () => {
+  it("refuses an answer in the wrong script on the first attempt, typed refusal for the boundary", async () => {
     const prepared = prepare();
     const foreign = proposes("# 開発ガイド\n\nAPI を参照してください。\n");
     const chat = chatWith([foreign]);
@@ -363,7 +363,10 @@ describe("translatePair", () => {
     await expect(pending).rejects.toThrowError(
       /script gate: target language "vi" requires Latin to hold the majority/,
     );
-    await expect(pending).rejects.toBeInstanceOf(RefusalError);
+    // The typed class is the record's outcome: an all-pairs wrong-script set
+    // records `refused`, and this same-answer-never-retries verdict is a
+    // refusal under the recovery policy either way.
+    await expect(pending).rejects.toBeInstanceOf(DeterministicRefusalError);
     expect(chat.calls()).toBe(1);
   });
   it("keeps a protection refusal's typed class for the boundary", async () => {

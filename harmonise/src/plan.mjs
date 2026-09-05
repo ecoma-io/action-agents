@@ -303,11 +303,12 @@ function judgeAnswer(content, input) {
   }
 
   // The script gate (run-contract I17) judges the tokenised candidate — the
-  // bytes the model actually returned, machinery tokens and all — so the
-  // vote measures the translatable prose; the gate itself excludes the
-  // pipeline's token spellings, which would otherwise vote as letters.
+  // bytes the model actually returned — counting only its translatable
+  // prose: frontmatter, code and link machinery never vote. A violation is
+  // the typed deterministic refusal, so the run's boundary records an
+  // all-pairs wrong-script set as `refused`, never as a defect.
   const scriptRefusal = judgeScript(answer.content, input.prepared.lang);
-  if (scriptRefusal !== null) throw new Error(scriptRefusal);
+  if (scriptRefusal !== null) throw new DeterministicRefusalError(scriptRefusal);
 
   // Restoration is validation: counts must match and no unknown token may
   // wear this run's namespace, or this throws and the pair fails.

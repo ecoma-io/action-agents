@@ -1,25 +1,39 @@
 /**
- * The script gate — run-contract invariant I17: a published pair's
+ * The script gate — run-contract invariant I17: an arriving candidate's
  * translatable prose carries the configured target language's script, and a
  * violation is a deterministic refusal of the pair.
  *
  * The gate is a script floor, not language identification. It counts the
- * candidate's letters per Unicode script and refuses when the expected set
- * does not hold more than half of them. What it accepts, by design:
+ * candidate's translatable-prose letters per Unicode script and refuses when
+ * the expected set does not hold more than half of them. What it accepts, by
+ * design:
  *
  * - **Same-script wrong-language passes.** An `en` answer for an `es` target
  *   is Latin on Latin — the gate has no opinion about the language itself.
- * - **Frontmatter keys, inline HTML tag names and code carried in prose skew
- *   the counts slightly.** They are letters in the candidate and vote like
- *   any other letter; only the machinery's own token spellings are excluded.
+ * - **Non-prose letters never vote.** The leading frontmatter block, fenced
+ *   code blocks, inline code spans and link machinery (destinations,
+ *   autolinks, bare URLs) are excluded with the same masking utilities the
+ *   protection layer masks with; the machinery's own token spellings are
+ *   excluded too. Inline HTML tag names in prose are the accepted residual —
+ *   they vote, because no HTML parser exists here and none is being built.
  * - **A primary subtag absent from the table means the gate is not applied.**
  *   A documented fail-open, strictly narrower than a wrong default, which
- *   would refuse correct translations wholesale.
+ *   would refuse correct translations wholesale. `sr` is the standing
+ *   precedent: a tag whose script is contested (Serbian is legally Cyrillic,
+ *   commonly Latin) stays out of the table, and the gate is off for it.
  *
  * The table is code, not configuration: there is no new input surface, and
  * extending it is a reviewed decision about a language's script, not a
  * consumer setting.
  */
+
+import {
+  fenceMask,
+  frontmatterExtent,
+  maskCodeSpans,
+  maskDestinations,
+  splitLines,
+} from "./markdown.mjs";
 
 /**
  * Every Unicode script the table can expect, in one fixed evaluation order.
@@ -59,8 +73,13 @@ const SCRIPT_TESTS = new Map(
  * hold the majority of a candidate's counted letters. Kept curated, not
  * exhaustive — a common tag is added when its script is uncontroversial, and
  * a tag left out leaves the pair unjudged by this gate rather than guessed
- * at. Multi-script targets (`ja`, `ko`) expect the union of their everyday
- * scripts; the majority is measured on the union, not per script.
+ * at. `sr` is the standing precedent for leaving one out: Serbian is
+ * officially Cyrillic and commonly Latin, so a single expected script would
+ * refuse one of the two correct spellings wholesale, and the gate stays off
+ * instead. (`sr-Cyrl`/`sr-Latn` both reduce to `sr`, so the region of the
+ * tag cannot disambiguate.) Multi-script targets (`ja`, `ko`) expect the
+ * union of their everyday scripts; the majority is measured on the union,
+ * not per script.
  *
  * @type {Map<string, string[]>}
  */
@@ -93,7 +112,8 @@ const SCRIPTS_BY_PRIMARY_SUBTAG = new Map(
     ru: ["Cyrillic"],
     uk: ["Cyrillic"],
     bg: ["Cyrillic"],
-    sr: ["Cyrillic"],
+    mk: ["Cyrillic"],
+    be: ["Cyrillic"],
     // Han script.
     zh: ["Han"],
     // Japanese draws on three scripts together; Korean on Hangul with Han.
@@ -156,11 +176,39 @@ function expectedList(scripts) {
 }
 
 /**
+ * The candidate's translatable prose: the text the script count is measured
+ * over. Everything that is not prose is removed with the masking machinery
+ * the protection layer already masks with — never reimplemented here —
+ * because the same bytes are machinery to both: the leading frontmatter
+ * block (values are already f-tokens, but keys are source-language words),
+ * fenced code blocks, inline code spans, and link machinery (inline and
+ * reference destinations, angle autolinks, bare scheme URLs), plus the
+ * pipeline's own token spellings. What the masks blank out becomes NUL
+ * characters, which no `\p{L}` test matches, so the masks need no second
+ * pass to strip.
+ *
+ * @param {string} text the tokenised answer content
+ * @returns {string} the countable prose
+ */
+function translatableProse(text) {
+  const lines = splitLines(text);
+  const frontmatter = frontmatterExtent(lines);
+  const fences = fenceMask(lines);
+  return lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ index }) => frontmatter.end < index && fences[index] !== true)
+    .map(({ line }) => maskDestinations(maskCodeSpans(line)))
+    .join("\n")
+    .replace(HARMONISE_TOKEN, "");
+}
+
+/**
  * Judges one candidate's prose against the configured target language's
- * script. Letters are counted per Unicode script with `\p{L}` membership and
- * `\p{Script=…}` tests — punctuation, digits, whitespace, markdown markup
- * and the machinery's own token spellings carry no votes. The expected set
- * must hold strictly more than half of all counted letters.
+ * script. Translatable-prose letters are counted per Unicode script with
+ * `\p{L}` membership and `\p{Script=…}` tests — punctuation, digits,
+ * whitespace, markdown markup, frontmatter, code and link machinery carry no
+ * votes. The expected set must hold strictly more than half of all counted
+ * letters.
  *
  * @param {string} text the candidate — the tokenised answer content, so the
  *   vote measures exactly the translatable prose
@@ -178,8 +226,7 @@ export function judgeScript(text, languageTag) {
 
   const counts = new Map();
   let total = 0;
-  const withoutTokens = text.replace(HARMONISE_TOKEN, "");
-  for (const character of withoutTokens) {
+  for (const character of translatableProse(text)) {
     if (!LETTER.test(character)) continue;
     total++;
     for (const [script, test] of SCRIPT_TESTS) {
