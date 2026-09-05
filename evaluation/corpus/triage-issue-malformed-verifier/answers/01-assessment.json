@@ -1,0 +1,5 @@
+{
+  "content": "{\"labels\":[\"bug\",\"docs\"],\"rationale\":\"The importer crash is a defect and the stale reference name is a documentation gap.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

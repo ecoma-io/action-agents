@@ -547,16 +547,16 @@ test("loadCorpus refuses malformed JSON", async () => {
 test("evaluate replays the real corpus and clears every loose threshold", async () => {
   const result = await evaluate({ corpusRoot: CORPUS_ROOT });
   assert.deepEqual(result.defects, []);
-  assert.deepEqual(result.corpusCounts, { triage: 4, review: 3, harmonise: 2 });
-  assert.deepEqual(result.replayed, { triage: 4, review: 3, harmonise: 2 });
+  assert.deepEqual(result.corpusCounts, { triage: 6, review: 3, harmonise: 3 });
+  assert.deepEqual(result.replayed, { triage: 6, review: 3, harmonise: 3 });
   const byMetric = new Map(result.rows.map((row) => [row.metric, row]));
   const refusal = byMetric.get("triage refusal-rate");
-  assert.ok(refusal && refusal.value !== null && Math.abs(refusal.value - 2 / 3) < 1e-12);
+  assert.ok(refusal && refusal.value !== null && Math.abs(refusal.value - 3 / 5) < 1e-12);
   const harmoniseRefusal = byMetric.get("harmonise validation-refusal-rate");
   assert.ok(
     harmoniseRefusal &&
       harmoniseRefusal.value !== null &&
-      Math.abs(harmoniseRefusal.value - 0.5) < 1e-12,
+      Math.abs(harmoniseRefusal.value - 1 / 3) < 1e-12,
   );
   assert.equal(harmoniseRefusal.threshold, "unbounded (reported)");
   assert.equal(harmoniseRefusal.met, true);
@@ -574,11 +574,11 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
     assert.equal(row.met, true, `${name} must clear its threshold`);
   }
   assert.deepEqual(result.mutationCounts, {
-    "harmonise.createBlob": 3,
-    "harmonise.createCommit": 1,
-    "harmonise.createTree": 1,
-    "harmonise.upsertBranch": 1,
-    "harmonise.upsertPullRequest": 1,
+    "harmonise.createBlob": 6,
+    "harmonise.createCommit": 2,
+    "harmonise.createTree": 2,
+    "harmonise.upsertBranch": 2,
+    "harmonise.upsertPullRequest": 2,
     "review.createComment": 2,
     "triage.addLabels": 3,
   });
@@ -758,7 +758,7 @@ test("pinHarmonise pins the op sequence and a refused run's exact message", () =
 test("the harmonise seed entries replay green and pin their terminal states", async () => {
   const entries = await loadCorpus(CORPUS_ROOT);
   const harmoniseEntries = entries.filter((entry) => entry.kind === "harmonise");
-  assert.equal(harmoniseEntries.length, 2);
+  assert.equal(harmoniseEntries.length, 3);
   for (const entry of harmoniseEntries) {
     const replay = await replayHarmonise(entry);
     pinHarmonise(entry, replay);
@@ -771,6 +771,15 @@ test("the harmonise seed entries replay green and pin their terminal states", as
   const published = harmoniseEntries.find((entry) => entry.expected["outcome"] === "published");
   assert.ok(published, "the seed holds no published harmonise entry");
   assert.deepEqual((await replayHarmonise(/** @type {never} */ (published))).outcome, "published");
+  // A partial run publishes, writes its record, THEN throws the failure
+  // report — the replay's thrown path must preserve the asks count the run
+  // actually made and read the terminal state from the record, not from the
+  // throw.
+  const partial = harmoniseEntries.find((entry) => entry.expected["outcome"] === "partial");
+  assert.ok(partial, "the seed holds no partial harmonise entry");
+  const partialReplay = await replayHarmonise(/** @type {never} */ (partial));
+  assert.equal(partialReplay.outcome, "partial");
+  assert.equal(partialReplay.asks, partial.answers.length);
 });
 
 test("the corpus on disk is the seed the floor demands", () => {

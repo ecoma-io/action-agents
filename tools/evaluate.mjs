@@ -140,6 +140,7 @@ import { contentDigest } from "../review/src/digest.mjs";
 import { normaliseReadPath } from "../review/src/coverage.mjs";
 
 import { run as runHarmonise } from "../harmonise/src/index.mjs";
+import { validateHarmoniseRecord } from "../harmonise/src/run-record.mjs";
 
 /** The repository the corpus describes, as the replay's forge context names it. */
 const OWNER = "ecoma-io";
@@ -512,7 +513,7 @@ export function validateExpected(expected, entryName, kind) {
   } else if (kind === "harmonise") {
     assertKeys(record, ["outcome", "writes"], where, ["refusal"]);
     const outcome = asText(record["outcome"], `${where}.outcome`);
-    if (!["published", "partial", "refused", "failed"].includes(outcome)) {
+    if (!["published", "partial", "refused", "failed", "skip"].includes(outcome)) {
       throw new CorpusDefect(`${where}.outcome is not a harmonise terminal state`);
     }
     if (!Array.isArray(record["writes"])) {
@@ -1115,14 +1116,61 @@ export async function replayReview(entry) {
 }
 
 /**
+ * Reads the harmonise run record a replay's workspace holds, if the run
+ * wrote one. Harmonise records every resolved terminal point — `published`,
+ * `partial` and `skip` — and ends before any record exists on its refusal
+ * paths, so an absent record is the absence of a terminal point, not a
+ * defect; the caller decides which the absence is. A record directory that
+ * holds anything but exactly one record, and a record that fails its own
+ * module's validator, are corpus defects.
+ *
+ * @param {string} entryName
+ * @param {string} recordDir
+ * @returns {import("../harmonise/src/run-record.mjs").HarmoniseRecord | null}
+ */
+function readHarmoniseRecord(entryName, recordDir) {
+  if (!existsSync(recordDir)) {
+    return null;
+  }
+  const files = readdirSync(recordDir).sort();
+  if (files.length !== 1) {
+    throw new CorpusDefect(
+      `${entryName}: the replay wrote ${files.length} run records, expected exactly one`,
+    );
+  }
+  try {
+    return validateHarmoniseRecord(JSON.parse(readFileSync(p.join(recordDir, files[0]), "utf8")));
+  } catch (error) {
+    if (error instanceof CorpusDefect) {
+      throw error;
+    }
+    throw new CorpusDefect(
+      `${entryName}: the replay's run record failed its own validator: ${/** @type {Error} */ (error).message}`,
+    );
+  }
+}
+
+/**
+ * The harmonise terminal states a replay may report, in the run contract's
+ * vocabulary — `published`, `partial` and `skip` derived from the run's own
+ * validated record, `refused` and `failed` for the paths that end before
+ * any record exists.
+ * @typedef {"published" | "partial" | "refused" | "failed" | "skip"} HarmoniseReplayOutcome
+ */
+
+/**
  * Replays one harmonise entry through `harmonise/src/index.mjs`. A run that
- * resolves published; a run that throws is classified against the run
- * contract's deterministic refusal signatures — the config-absent refusal,
- * the protection refusals, and the every-pair-failed report — before it is
- * called `failed`. Every other message is a genuine failure, not a refusal.
+ * resolves derives its terminal state from its own validated record —
+ * published, partial or skip. A run that throws is classified by its
+ * message against the deterministic refusal signatures — the config-absent
+ * refusal, the protection refusals, and the every-pair-failed report — only
+ * when no record was written; when a record exists it is the terminal
+ * state's authority (a partial run publishes, writes its record, then
+ * throws the failure report), so the replay reads it the same way. Every
+ * replay pins the asks count against the recording in both paths.
  *
  * @param {CorpusEntry} entry
- * @returns {Promise<{outcome: "published" | "refused" | "failed", writes: WriteOp[], asks: number, message: string | null}>}
+ * @returns {Promise<{outcome: HarmoniseReplayOutcome, writes: WriteOp[], asks: number, message: string | null}>}
  */
 export async function replayHarmonise(entry) {
   const snapshot = entry.snapshot;
@@ -1131,11 +1179,16 @@ export async function replayHarmonise(entry) {
   /** @type {WriteOp[]} */
   const writes = [];
   const root = mkdtempSync(p.join(tmpdir(), "eval-harmonise-"));
+  // The record-path input resolves against the run's workspace root; the
+  // replay reads the record back from the same directory on both of the
+  // replay's paths — the resolved one and the thrown one. The chat double is
+  // hoisted for the same reason: the thrown path still reads its ask count.
+  const recordDir = p.join(root, "workspace", ".harmonise-record");
+  const chat = makeChat(entry.name, entry.answers);
   try {
     const workspace = p.join(root, "workspace");
     mkdirSync(workspace, { recursive: true });
     writeFileSync(p.join(root, "event.json"), JSON.stringify(event["payload"]), "utf8");
-    const chat = makeChat(entry.name, entry.answers);
     await withoutNetwork(() =>
       quietly(
         () =>
@@ -1147,6 +1200,7 @@ export async function replayHarmonise(entry) {
                 sourceLanguage: /** @type {string} */ (inputs["sourceLanguage"]),
                 documents: /** @type {string[]} */ (inputs["documents"]),
                 dryRun: /** @type {boolean} */ (inputs["dryRun"]),
+                recordPath: p.join("workspace", ".harmonise-record"),
                 apiUrl: "https://api.github.invalid",
                 apiKey: "sk-eval-placeholder",
                 githubToken: "ghs_eval-placeholder",
@@ -1182,27 +1236,47 @@ export async function replayHarmonise(entry) {
           ),
       ),
     );
+    const record = readHarmoniseRecord(entry.name, recordDir);
+    if (record === null) {
+      throw new CorpusDefect(
+        `${entry.name}: the replay ended without writing a run record — every resolved terminal point writes one`,
+      );
+    }
     const asks = chat.asks();
     if (asks !== entry.answers.length) {
       throw new CorpusDefect(
         `${entry.name}: the run made ${asks} asks but the recording holds ${entry.answers.length}`,
       );
     }
-    return { outcome: "published", writes, asks, message: null };
+    return { outcome: record.outcome, writes, asks, message: null };
   } catch (error) {
     if (error instanceof CorpusDefect) {
       throw error;
     }
+    const asks = chat.asks();
+    if (asks !== entry.answers.length) {
+      throw new CorpusDefect(
+        `${entry.name}: the run made ${asks} asks but the recording holds ${entry.answers.length}`,
+      );
+    }
     const message = error instanceof Error ? error.message : String(error);
+    const record = readHarmoniseRecord(entry.name, recordDir);
+    // When a record exists it is the terminal state's authority: a partial
+    // run publishes, writes its record, then throws the failure report.
+    if (record !== null) {
+      return { outcome: record.outcome, writes, asks, message };
+    }
+    // No record means the run ended before any terminal point was recorded —
+    // the only place the deterministic refusal signatures apply.
     const refused =
       message.startsWith("no config file exists ") ||
       message.includes("protection refused:") ||
       message.startsWith("every pair failed:") ||
       message.startsWith("every pair skipped:");
     if (refused) {
-      return { outcome: "refused", writes, asks: 0, message };
+      return { outcome: "refused", writes, asks, message };
     }
-    return { outcome: "failed", writes, asks: 0, message };
+    return { outcome: "failed", writes, asks, message };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

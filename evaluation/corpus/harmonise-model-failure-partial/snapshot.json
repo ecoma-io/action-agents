@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "kind": "harmonise",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "event": {
+    "name": "workflow_dispatch",
+    "action": "",
+    "payload": {
+      "ref": "refs/heads/main"
+    }
+  },
+  "inputs": {
+    "configPath": "",
+    "sourceLanguage": "en",
+    "documents": [],
+    "dryRun": false
+  },
+  "files": {
+    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": {
+      ".github/action-agents/harmonise/harmonise.json5": "{\n  \"sourceLanguage\": \"en\",\n  \"languages\": {\n    \"en\": \"manual/{document}.md\",\n    \"vi\": \"manual/vi/{document}.md\"\n  },\n  \"concurrency\": 1\n}\n",
+      ".github/action-agents/harmonise/instruction.md": null,
+      ".github/action-agents/harmonise/state.en.json": null,
+      ".github/action-agents/harmonise/state.json": null,
+      ".github/action-agents/harmonise/tm.en.json": null,
+      ".github/action-agents/harmonise/tm.json": null,
+      "manual/dev.md": "# Dev guide\n\nInstall the toolkit, then run the checks.\n",
+      ".github/action-agents/harmonise/harmonise.json": null,
+      "manual/setup.md": "## Setup\n\nInstall the toolchain, then run the checks.\n"
+    }
+  },
+  "world": {
+    "getRef": {
+      "main": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "listTree": [
+      {
+        "path": ".github/action-agents/harmonise/harmonise.json5",
+        "type": "blob"
+      },
+      {
+        "path": "manual/dev.md",
+        "type": "blob"
+      },
+      {
+        "path": "manual/setup.md",
+        "type": "blob"
+      }
+    ]
+  }
+}
