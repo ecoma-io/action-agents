@@ -22,7 +22,7 @@ action's own history.
 Add a workflow file under `.github/workflows/`. The minimal form:
 
 ```yaml
-- uses: ecoma-io/action-agents/harmonise@v0.5
+- uses: ecoma-io/action-agents/harmonise@v0.9
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     api-url: ${{ vars.LLM_API_URL }}
@@ -31,7 +31,7 @@ Add a workflow file under `.github/workflows/`. The minimal form:
     source-language: en
 ```
 
-Pin to a floating minor (`@v0.5`), an exact version (`@v0.5.0`) or a commit SHA.
+Pin to a floating minor (`@v0.9`), an exact version (`@v0.9.0`) or a commit SHA.
 See [Getting started](getting-started.md#pinning) for the tradeoffs.
 
 The action is referenced as the directory `harmonise` in the repository.
@@ -327,18 +327,24 @@ applies once on upgrade, when the digest gains the identity fields.
 ## Manual-edit protection
 
 A target document that was edited by hand outside the action's own history is
-protected from being overwritten. The action detects drift by comparing the
-target against the base the translation memory proves: if the target's current
-content differs from what the action last wrote, the merge cannot be proven and
-the pair fails closed — the action reports the conflict and moves on.
+protected from being overwritten. Drift is detected by comparing the target
+against the base the translation memory verifies: if the target's current
+content differs from that base, the pair is classified as target drift and
+marked preserve-required — your edits will not be silently overwritten.
 
-This means a human can edit a translated document and the action will not
-silently overwrite those edits. Resolve the conflict manually, then the next run
-sees the new base and proceeds.
+Whether the pair then merges or refuses depends on the base. When a verified
+base exists — a translation-memory entry whose bytes hash exactly to the
+recorded translation fingerprint — the action runs a deterministic three-way
+merge whose inputs are that verified last-translated base, the current target,
+and the fresh rendition the model just produced. Human edits win ties: a clean
+merge adopts them and the pair publishes as usual. The source document is not a
+merge input — the merge reconciles your edits with the new rendition, not with
+the source text.
 
-The three-way merge is deterministic and code-owned: the action reads the
-original source, the last-translated target, and the current target, and
-produces a merged result or a refusal. The development page has the full
+The pair fails closed only when the merge conflicts or when no verified base
+exists: the action reports the failed pair and moves on. Resolving a refusal is
+a human decision — restore the translation memory or the recorded fingerprint,
+or adopt or delete the file by hand. The development page has the full
 algorithm.
 
 ## Skip directives
@@ -453,7 +459,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_KEY }}
 
-      - uses: ecoma-io/action-agents/harmonise@v0.5
+      - uses: ecoma-io/action-agents/harmonise@v0.9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -467,7 +473,7 @@ jobs:
 Verify what a run would change without touching anything.
 
 ```yaml
-- uses: ecoma-io/action-agents/harmonise@v0.5
+- uses: ecoma-io/action-agents/harmonise@v0.9
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     api-url: ${{ vars.LLM_API_URL }}
