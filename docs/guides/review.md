@@ -259,6 +259,19 @@ without reading any review content:
         run: false,
       },
       {
+        // Any GitHub-attested bot not in the allowlist above.
+        id: "unlisted-bots",
+        when: { author: { isBot: true } },
+        run: false,
+      },
+      {
+        // Larger than the scope budget would ever review; recorded as a
+        // skip instead of refused as a half-reviewed monster.
+        id: "oversized",
+        when: { changes: { lines: { gt: 8000 } } },
+        run: false,
+      },
+      {
         id: "stricter-external",
         context: "external",
         posture: "standard",
@@ -273,17 +286,23 @@ without reading any review content:
 
 #### Rule fields
 
-| Field         | Required | What it does                                                                                         |
-| ------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `id`          | yes      | Name the audit record carries.                                                                       |
-| `context`     | no       | Matches only this execution context. Absent matches every context.                                   |
-| `when`        | no       | Conditions: `title` (regex), `branch` (regex), `paths` (glob array). Combined conjunctively.         |
-| `run`         | no       | Whether review applies. Defaults to `true`.                                                          |
-| `posture`     | no       | Non-standard posture: `"maintainer"` or `"automation"`. Present only with a deviation from standard. |
-| `instruction` | no       | The posture document's path alongside a non-standard posture.                                        |
-| `intensity`   | no       | The strictness override: `{ strictness: "high" }`.                                                   |
+| Field         | Required | What it does                                                                                                                                                                                                                                                       |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`          | yes      | Name the audit record carries.                                                                                                                                                                                                                                     |
+| `context`     | no       | Matches only this execution context. Absent matches every context.                                                                                                                                                                                                 |
+| `when`        | no       | Conditions: `title`, `branch` and `base` (regex sources), `paths` (glob array), `labels` (exact names, any-of), `author` (`isBot: true` and/or `equals` logins), `changes` (`lines`/`files`, each `{ gt: N }` over the pre-ignore totals). Combined conjunctively. |
+| `run`         | no       | Whether review applies. Defaults to `true`.                                                                                                                                                                                                                        |
+| `posture`     | no       | Non-standard posture: `"maintainer"` or `"automation"`. Present only with a deviation from standard.                                                                                                                                                               |
+| `instruction` | no       | The posture document's path alongside a non-standard posture.                                                                                                                                                                                                      |
+| `intensity`   | no       | The strictness override: `{ strictness: "high" }`.                                                                                                                                                                                                                 |
 
-A rule that sets `run: false` skips review entirely. A rule that sets a
+A rule that sets `run: false` skips review entirely — but only when the rule
+is anchored: a pinned non-`external` `context`, `when.author.isBot: true`
+(bot-ness is GitHub's own attestation — `user.type` — and cannot be faked by
+a pull request's contents), or `when.changes` (a pull request bigger than
+the scope budget would refuse anyway; the skip records that outcome honestly
+instead). A skip rule naming `external` or anchored only on a title, branch,
+base, path or label convention is refused at startup. A rule that sets a
 non-standard `posture` must also set an `instruction` path for that posture's
 document.
 
@@ -418,7 +437,7 @@ match `^build\(deps\)`.
 ```json5
 {
   applicability: {
-    bots: ["dependabot[bot]"],
+    bots: ["deploy-key-rotation[bot]"],
     rules: [
       {
         id: "skip-dependabot",
@@ -427,6 +446,71 @@ match `^build\(deps\)`.
           title: "^build\\(deps\\)",
         },
         run: false,
+      },
+    ],
+  },
+}
+```
+
+### Skip every bot you do not allowlist
+
+`author.isBot` reads the GitHub-attested `user.type` — not a title convention,
+not a login guess — so one rule covers dependabot, release tooling and anything
+else GitHub classifies as a bot. Allowlisted bots never reach this rule: the
+`automation` context matches first via `bots`.
+
+```json5
+{
+  applicability: {
+    bots: [],
+    rules: [
+      {
+        id: "unlisted-bots",
+        when: { author: { isBot: true } },
+        run: false,
+      },
+    ],
+  },
+}
+```
+
+### Skip oversized pull requests
+
+Without this rule, a diff over `maxDiffLines` is refused — red, half-reviewed
+monster never shown. With it, the same pull request ends green with a skip
+record naming the rule and its measured totals (`9000 changed lines across 12
+files`). The guard reads the **pre-ignore** totals; `maxDiffLines` counts the
+post-ignore universe.
+
+```json5
+{
+  maxDiffLines: 5000,
+  applicability: {
+    rules: [
+      {
+        id: "oversized",
+        when: { changes: { lines: { gt: 8000 } } },
+        run: false,
+      },
+    ],
+  },
+}
+```
+
+### Label-gated review for draft-quality branches
+
+Exact, case-sensitive label names matched any-of. A pull request missing
+labels does not match — absence costs review, never saves it.
+
+```json5
+{
+  applicability: {
+    rules: [
+      {
+        id: "triaged-only",
+        context: "maintainer",
+        when: { labels: ["needs-review"] },
+        intensity: { strictness: "high" },
       },
     ],
   },

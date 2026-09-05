@@ -19,7 +19,7 @@ Every run ends in exactly one terminal state:
 | `partial`   | some of the run's operations applied before the run stopped — recorded, never replayed                                                                               |
 | `refused`   | the action's own ceilings declined to act — off-sheet answer, config absent, unsupported event                                                                       |
 | `abandoned` | a fresher state superseded this one — a newer run, or the thread changed while this run was in flight; abandonment can follow a write, so state alone proves nothing |
-| `skip`      | the run had nothing to do — event out of scope, dry-run, nothing to review                                                                                           |
+| `skip`      | the run had nothing to do — event out of scope, dry-run, nothing to review, an eligibility rule matched with `run: false`                                            |
 | `failed`    | a defect or an environment break; the class below names which                                                                                                        |
 
 And every run carries a verdict: `pass`, `fail`, or `unknown`.
@@ -35,22 +35,23 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 
 ## What today's outcomes map to
 
-| Action      | Today's outcome                                                     | Contract state                                                                |
-| ----------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `triage`    | green run with writes                                               | `published`                                                                   |
-| `triage`    | dry-run, event-gate exit                                            | `skip`                                                                        |
-| `triage`    | red run                                                             | `failed` or `refused` per the class                                           |
-| `triage`    | the write withheld — the thread changed while the run was in flight | `abandoned`                                                                   |
-| `review`    | `nothing-to-review`                                                 | `published` (the marker-clearing write still happens)                         |
-| `review`    | `published`                                                         | `published`                                                                   |
-| `review`    | `published-without-artifact`                                        | `published` with verdict `unknown` on the archive                             |
-| `review`    | `dry-run`                                                           | `skip`                                                                        |
-| `review`    | `abandoned`                                                         | `abandoned`                                                                   |
-| `harmonise` | commit + pull request                                               | `published`                                                                   |
-| `harmonise` | some pairs applied, run stopped                                     | `partial`                                                                     |
-| `harmonise` | dry run, or every pair already in step                              | `skip`                                                                        |
-| `harmonise` | a pair the preparation refuses                                      | `partial` when other pairs published; a `skip` record and a red run otherwise |
-| `harmonise` | config-absent, or any throw the run did not declare                 | red run, no record — the carve-out below                                      |
+| Action      | Today's outcome                                                               | Contract state                                                                |
+| ----------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `triage`    | green run with writes                                                         | `published`                                                                   |
+| `triage`    | dry-run, event-gate exit                                                      | `skip`                                                                        |
+| `triage`    | red run                                                                       | `failed` or `refused` per the class                                           |
+| `triage`    | the write withheld — the thread changed while the run was in flight           | `abandoned`                                                                   |
+| `review`    | `nothing-to-review`                                                           | `published` (the marker-clearing write still happens)                         |
+| `review`    | `published`                                                                   | `published`                                                                   |
+| `review`    | `published-without-artifact`                                                  | `published` with verdict `unknown` on the archive                             |
+| `review`    | `dry-run`                                                                     | `skip`                                                                        |
+| `review`    | an applicability rule matched with `run: false` (bot attestation, size guard) | `skip`                                                                        |
+| `review`    | `abandoned`                                                                   | `abandoned`                                                                   |
+| `harmonise` | commit + pull request                                                         | `published`                                                                   |
+| `harmonise` | some pairs applied, run stopped                                               | `partial`                                                                     |
+| `harmonise` | dry run, or every pair already in step                                        | `skip`                                                                        |
+| `harmonise` | a pair the preparation refuses                                                | `partial` when other pairs published; a `skip` record and a red run otherwise |
+| `harmonise` | config-absent, or any throw the run did not declare                           | red run, no record — the carve-out below                                      |
 
 ## Failure taxonomy
 
