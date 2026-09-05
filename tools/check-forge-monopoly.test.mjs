@@ -171,5 +171,5 @@ test("GOLDEN: the real forge surface equals the frozen manifest", () => {
     readFileSync(new URL("../security/forge-ops.json", import.meta.url), "utf8"),
   );
   assert.deepEqual(extractForgeOps(forgeSource), manifest.ops);
-  assert.equal(manifest.ops.length, 25);
+  assert.equal(manifest.ops.length, 26);
 });

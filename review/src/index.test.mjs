@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -27,9 +28,13 @@ import {
   main,
   readEvent,
   readInputs,
+  renderGateCheckRun,
   run,
   writeRunArtifact,
+  writeSarifFile,
 } from "./index.mjs";
+import { createCanonicalResult } from "./canonical.mjs";
+import { toSarif } from "./sarif.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
 import {
   buildAbandonedArtifact,
@@ -43,6 +48,9 @@ import {
 
 /** @type {string} */
 let eventDir;
+
+/** A no-op check-run double for stubs whose runs never reach the gate surfaces. */
+const noopCheckRun = async () => ({ id: 501 });
 
 /**
  * A runner-shaped env for a same-repo pull_request run whose event payload
@@ -260,6 +268,7 @@ describe("run over injected io", () => {
           async whoami() {
             throw new Error("the draft path never reads the token's identity");
           },
+          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
@@ -538,6 +547,7 @@ describe("writeRunArtifact", () => {
       findings: [
         {
           severity: "concern",
+          kind: "correctness",
           file: "src/a.mjs",
           line: 2,
           message: "off-by-one",
@@ -782,6 +792,7 @@ describe("run writes the artifact only after publication", () => {
           async whoami() {
             throw new Error("the draft path never reads the token's identity");
           },
+          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
@@ -864,6 +875,7 @@ describe("run writes the artifact only after publication", () => {
           async whoami() {
             return { login: "github-actions[bot]" };
           },
+          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({
@@ -937,6 +949,9 @@ describe("the red boundary (#355)", () => {
     },
     async whoami() {
       return { login: "github-actions[bot]" };
+    },
+    async createCheckRun() {
+      return { id: 501 };
     },
     ...over,
   });
@@ -1322,5 +1337,347 @@ describe("the red boundary (#355)", () => {
 describe("the action constant", () => {
   it("is review — the marker namespace everything downstream assumes", () => {
     expect(ACTION).toBe("review");
+  });
+});
+
+describe("the gate surfaces", () => {
+  /** A minimal canonical record: published, passing, nothing standing. */
+  const canonical = createCanonicalResult({
+    head: "a".repeat(40),
+    run: { state: "published", verdict: "pass" },
+    findings: [],
+  });
+  const gatePass = { verdict: /** @type {const} */ ("PASS"), reasons: [] };
+  const gateBlock = {
+    verdict: /** @type {const} */ ("BLOCK"),
+    reasons: ["1 of 1 changed file was never read: src/a.mjs."],
+  };
+
+  it("writeSarifFile lands byte-identical JSON under the runner temp, never the workspace", () => {
+    const temp = mkdtempSync(p.join(tmpdir(), "gate-sarif-"));
+    const file = writeSarifFile({ tempDir: temp, canonical });
+    expect(p.basename(file)).toBe(`review-sarif-${"a".repeat(40)}.json`);
+    expect(file.startsWith(realpathSync(temp))).toBe(true);
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).toBe(JSON.stringify(toSarif(canonical)));
+    // No timestamps, no run id: two projections of one record are one file.
+    const again = writeSarifFile({ tempDir: temp, canonical });
+    expect(readFileSync(again, "utf8")).toBe(bytes);
+  });
+
+  it("writeSarifFile refuses to guess where to land without RUNNER_TEMP", () => {
+    expect(() => writeSarifFile({ tempDir: undefined, canonical })).toThrow(
+      /RUNNER_TEMP is not set/,
+    );
+    expect(() => writeSarifFile({ tempDir: "", canonical })).toThrow(/RUNNER_TEMP is not set/);
+  });
+
+  it("renderGateCheckRun: required turns a BLOCK into failure and a PASS into success", () => {
+    const blocked = renderGateCheckRun({ gate: gateBlock, gateMode: "required" });
+    expect(blocked).toMatchObject({ name: "review gate", conclusion: "failure" });
+    expect(blocked.summary).toContain("1 of 1 changed file was never read: src/a.mjs.");
+    expect(renderGateCheckRun({ gate: gatePass, gateMode: "required" }).conclusion).toBe("success");
+  });
+
+  it("renderGateCheckRun: observe renders neutral whatever the verdict — recorded, enforcing nothing", () => {
+    expect(renderGateCheckRun({ gate: gateBlock, gateMode: "observe" }).conclusion).toBe("neutral");
+    expect(renderGateCheckRun({ gate: gatePass, gateMode: "observe" }).conclusion).toBe("neutral");
+    const observe = renderGateCheckRun({ gate: gateBlock, gateMode: "observe" });
+    expect(observe.title).toBe("review gate: BLOCK");
+  });
+
+  it("readInputs reads gate-mode against the closed pair", () => {
+    expect(readInputs(runnerEnv()).gateMode).toBe("observe");
+    expect(readInputs(runnerEnv({ extra: { "INPUT_GATE-MODE": "required" } })).gateMode).toBe(
+      "required",
+    );
+    expect(() => readInputs(runnerEnv({ extra: { "INPUT_GATE-MODE": "wat" } }))).toThrow(
+      /gate-mode/,
+    );
+  });
+
+  /**
+   * A forge stub over the published-run path, recording check runs.
+   *
+   * @param {{ gateMode?: string, runnerTemp?: string, checkBoom?: boolean }} [options]
+   * @returns {{ env: ReturnType<typeof runnerEnv>, root: string, checkCalls: Array<Record<string, unknown>>, upserts: Array<{ id?: number, body?: string }>, forge: any }}
+   */
+  function publishedForge(options = {}) {
+    const root = mkdtempSync(p.join(tmpdir(), "gate-run-"));
+    mkdirSync(p.join(root, "src"));
+    writeFileSync(p.join(root, "src", "a.mjs"), "line1\nline2\nline3\n");
+    /** @type {Array<Record<string, unknown>>} */
+    const checkCalls = [];
+    /** @type {Array<{ id?: number, body?: string }>} */
+    const upserts = [];
+    const env = runnerEnv({
+      extra: {
+        GITHUB_WORKSPACE: root,
+        ...(options.gateMode !== undefined ? { "INPUT_GATE-MODE": options.gateMode } : {}),
+        ...(options.runnerTemp !== undefined ? { RUNNER_TEMP: options.runnerTemp } : {}),
+      },
+    });
+    return {
+      env,
+      root,
+      checkCalls,
+      upserts,
+      /** @type {any} */
+      forge: {
+        async getPullRequest() {
+          return {
+            number: 41,
+            state: "open",
+            draft: false,
+            merged: false,
+            mergeable: true,
+            mergeableState: "clean",
+            title: "Test PR",
+            body: "",
+            head: { ref: "x", sha: "a".repeat(40) },
+            labels: [],
+            base: { ref: "main", sha: "b".repeat(40) },
+          };
+        },
+        async getRepository() {
+          return { defaultBranch: "main", name: "widgets", description: "" };
+        },
+        async getRef() {
+          return { sha: "c".repeat(40) };
+        },
+        async listPullRequestFiles() {
+          return [
+            {
+              filename: "src/a.mjs",
+              status: "modified",
+              additions: 1,
+              deletions: 0,
+              patch: "@@ -1,3 +1,3 @@\n-line1\n+line1 changed",
+            },
+          ];
+        },
+        async listComments() {
+          return [];
+        },
+        /** @param {number} _number @param {string} body */
+        async createComment(_number, body) {
+          upserts.push({ body });
+          return { id: 101 };
+        },
+        async updateComment() {},
+        async deleteComment() {},
+        async getContents() {
+          return null;
+        },
+        async whoami() {
+          return { login: "github-actions[bot]" };
+        },
+        /** @param {{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }} input */
+        async createCheckRun(input) {
+          checkCalls.push(input);
+          if (options.checkBoom === true) throw new Error("checks are down");
+          return { id: 501 };
+        },
+      },
+    };
+  }
+
+  it("a published run writes the gate outputs, the SARIF file, and the check run — BLOCK exits green in observe", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const { env, root, checkCalls, forge } = publishedForge({ runnerTemp: temp });
+    /** @type {string[]} */
+    const log = [];
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge,
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: (message) => log.push(message),
+      });
+      expect(result.outcome).toBe("published");
+      // BLOCK never fails the job — enforcement is the check run's job.
+      const outputs = readFileSync(outFile, "utf8");
+      expect(outputs).toContain("gate-verdict=OBSERVE-BLOCK\n");
+      const sarifLine = outputs
+        .split("\n")
+        .find((line) => line.startsWith("sarif-path="))
+        ?.slice("sarif-path=".length);
+      expect(sarifLine).toBeDefined();
+      expect(readFileSync(/** @type {string} */ (sarifLine), "utf8")).toBe(
+        JSON.stringify(toSarif(/** @type {any} */ (result).canonical)),
+      );
+      expect(p.dirname(/** @type {string} */ (sarifLine))).not.toContain(p.basename(root));
+      // The check run records the verdict, neutral because the mode observes.
+      expect(checkCalls).toEqual([
+        {
+          headSha: "a".repeat(40),
+          name: "review gate",
+          conclusion: "neutral",
+          output: {
+            title: "review gate: BLOCK",
+            summary: "1 of 1 changed file was never read: src/a.mjs.",
+          },
+        },
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("gate-mode required names the verdict bare and turns the BLOCK into a failing check run", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const { env, checkCalls, forge } = publishedForge({ gateMode: "required", runnerTemp: temp });
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge,
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: () => undefined,
+      });
+      expect(result.outcome).toBe("published");
+      expect(readFileSync(outFile, "utf8")).toContain("gate-verdict=BLOCK\n");
+      expect(checkCalls[0]?.conclusion).toBe("failure");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a fully covered clean run passes the gate — OBSERVE-PASS and a neutral check run", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const { env, checkCalls, forge } = publishedForge({ runnerTemp: temp });
+    let turn = 0;
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge,
+        chat: {
+          async complete() {
+            turn++;
+            if (turn === 1) {
+              return {
+                content: "",
+                toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+                finishReason: "tool_calls",
+              };
+            }
+            return {
+              content: '{"findings":[],"summary":"clean"}',
+              toolCalls: [],
+              finishReason: "stop",
+            };
+          },
+        },
+        now: () => 0,
+        info: () => undefined,
+      });
+      expect(result.outcome).toBe("published");
+      expect(readFileSync(outFile, "utf8")).toContain("gate-verdict=OBSERVE-PASS\n");
+      expect(checkCalls).toEqual([
+        {
+          headSha: "a".repeat(40),
+          name: "review gate",
+          conclusion: "neutral",
+          output: {
+            title: "review gate: PASS",
+            summary:
+              "Every finding in the closed vocabulary is either absent or below the gate's bar.",
+          },
+        },
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a SARIF write failure is a logged loss — the verdict output stands, no path is named", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    // No RUNNER_TEMP anywhere: the projection has nowhere to land.
+    const { env, forge } = publishedForge();
+    /** @type {string[]} */
+    const log = [];
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge,
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: (message) => log.push(message),
+      });
+      expect(result.outcome).toBe("published");
+      expect(log.some((line) => line.includes("the SARIF projection was not written"))).toBe(true);
+      const outputs = readFileSync(outFile, "utf8");
+      expect(outputs).toContain("gate-verdict=OBSERVE-BLOCK\n");
+      expect(outputs).not.toContain("sarif-path=");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a check-run failure is a logged loss — the run stays green and the outputs stand", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const { env, checkCalls, forge } = publishedForge({ runnerTemp: temp, checkBoom: true });
+    /** @type {string[]} */
+    const log = [];
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge,
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: (message) => log.push(message),
+      });
+      expect(result.outcome).toBe("published");
+      expect(log.some((line) => line.includes("the gate check run was not created"))).toBe(true);
+      expect(checkCalls).toHaveLength(1);
+      expect(readFileSync(outFile, "utf8")).toContain("gate-verdict=OBSERVE-BLOCK\n");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
   });
 });

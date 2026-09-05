@@ -205,8 +205,8 @@ Write your findings' prose in the language tagged "{language}".
 Answer with ONLY a JSON object in exactly this shape:
 {
   "findings": [
-    { "severity": "concern" | "nit", "file": "repository-relative/path", "line": 42, "message": "one finding, specific and verifiable" }
+    { "severity": "concern" | "nit", "kind": "correctness" | "security" | "performance" | "api-misuse" | "resource-safety" | "style" | "test-gap" | "documentation", "file": "repository-relative/path", "line": 42, "message": "one finding, specific and verifiable" }
   ],
   "summary": "one line"
 }
-Severity vocabulary is exactly "concern" (a real problem worth fixing before merge) and "nit" (a small observation). Anchors must name changed files from the inventory and lines that exist in the new version. No verdicts, no approvals, no extra keys.`;
+Severity vocabulary is exactly "concern" (a real problem worth fixing before merge) and "nit" (a small observation). Kind vocabulary is exactly "correctness", "security", "performance", "api-misuse", "resource-safety", "style", "test-gap", "documentation" — name the domain the finding belongs to. Anchors must name changed files from the inventory and lines that exist in the new version. No verdicts, no approvals, no extra keys.`;

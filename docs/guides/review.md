@@ -43,18 +43,19 @@ re-worded description does not change the code under review. There is no
 All inputs listed below. Shared inputs are documented in the
 [development configuration page](../development/configuration.md).
 
-| Input                | Required | Default            | What it does                                              |
-| -------------------- | -------- | ------------------ | --------------------------------------------------------- |
-| `github-token`       | yes      | —                  | Token for GitHub API calls.                               |
-| `api-url`            | yes      | —                  | Base URL of an OpenAI-compatible endpoint.                |
-| `api-key`            | no       | —                  | Key for that endpoint. Leave unset for keyless endpoints. |
-| `model`              | yes      | —                  | Model id to ask.                                          |
-| `request-timeout-ms` | no       | `120000`           | Per-attempt timeout in milliseconds.                      |
-| `config-path`        | no       | `""`               | Override the config file location.                        |
-| `max-turns`          | no       | `30`               | Ceiling on agent turns.                                   |
-| `context-window`     | no       | `128000`           | Token budget of the configured model.                     |
-| `dry-run`            | no       | `false`            | Review and log, comment nothing.                          |
-| `artifact-path`      | no       | `.review-artifact` | Directory for the machine-readable run record.            |
+| Input                | Required | Default            | What it does                                                                                                                                           |
+| -------------------- | -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `github-token`       | yes      | —                  | Token for GitHub API calls.                                                                                                                            |
+| `api-url`            | yes      | —                  | Base URL of an OpenAI-compatible endpoint.                                                                                                             |
+| `api-key`            | no       | —                  | Key for that endpoint. Leave unset for keyless endpoints.                                                                                              |
+| `model`              | yes      | —                  | Model id to ask.                                                                                                                                       |
+| `request-timeout-ms` | no       | `120000`           | Per-attempt timeout in milliseconds.                                                                                                                   |
+| `config-path`        | no       | `""`               | Override the config file location.                                                                                                                     |
+| `max-turns`          | no       | `30`               | Ceiling on agent turns.                                                                                                                                |
+| `context-window`     | no       | `128000`           | Token budget of the configured model.                                                                                                                  |
+| `dry-run`            | no       | `false`            | Review and log, comment nothing.                                                                                                                       |
+| `artifact-path`      | no       | `.review-artifact` | Directory for the machine-readable run record.                                                                                                         |
+| `gate-mode`          | no       | `observe`          | What the merge gate does with its verdict: `observe` records it and blocks nothing; `required` renders a check run a branch ruleset can make required. |
 
 **`max-turns`**: the agent loop reads files (tools), reflects, and decides what
 to read next. Reaching the ceiling ends the review and says so in the comment;
@@ -369,6 +370,43 @@ uploads as `review-artifact-refused-<head sha>.json` or
 `review-artifact-failed-<head sha>.json`, and a run that died before it
 resolved a head writes `no-head` in the sha's place — retention tooling that
 parses shas out of these names must tolerate `no-head`.
+
+**Job outputs** (after a published review): `gate-verdict` — the merge gate's
+verdict as surfaced, `PASS` or `BLOCK` in `required` mode and `OBSERVE-PASS`
+or `OBSERVE-BLOCK` in `observe` mode — and `sarif-path`, the SARIF projection
+of the same record, written under the runner's temp directory (never inside
+the workspace, which the checkout owns). `sarif-path` is present when the
+write succeeded; a failed write is a logged loss that never disguises itself
+as success.
+
+**Merge gate**: the gate is code's deterministic decision over the published
+record — a finding the verification confirmed or could not resolve blocks,
+under every kind in the vocabulary, and a refuted finding never blocks.
+`gate-mode` chooses whether the verdict enforces:
+
+- `observe` (the default) — the verdict lands on the outputs and a `neutral`
+  `review gate` check run, and blocks nothing. Roll out with this first.
+- `required` — the check run's conclusion is `success` on a PASS and
+  `failure` on a BLOCK: the run a branch ruleset can make required.
+
+The action's own exit never fails on a BLOCK — enforcement is the check
+run's and the ruleset's job, so a BLOCK is still a published, green run with
+its outputs standing. The SARIF upload is the consumer's step:
+
+```yaml
+- id: review
+  uses: ecoma-io/action-agents/review@v0.10
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    api-url: ${{ vars.LLM_API_URL }}
+    api-key: ${{ secrets.LLM_API_KEY }}
+    model: ${{ vars.LLM_MODEL }}
+- name: Upload the SARIF projection
+  if: always()
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: ${{ steps.review.outputs.sarif-path }}
+```
 
 ## Cost and budget controls
 

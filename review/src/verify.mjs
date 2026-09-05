@@ -34,7 +34,12 @@ import { contentDigest } from "./digest.mjs";
 import { json5Parse } from "#core/json5-parse.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
-import { PUBLISHED_LIFECYCLE_STATES, VERDICTS } from "./vocabulary.mjs";
+import {
+  FINDING_KINDS,
+  PUBLISHED_LIFECYCLE_STATES,
+  VERDICTS,
+  isFindingKind,
+} from "./vocabulary.mjs";
 
 export { PUBLISHED_LIFECYCLE_STATES, VERDICTS };
 
@@ -124,11 +129,10 @@ const EXCERPT_CUT = "…[truncated]";
  * One verdict bound to a finding by id — the id attached by code from the
  * plan, never read out of the model's answer.
  *
- * @typedef {object} VerdictEntry
  * @property {string} id
  * @property {Verdict} verdict
  * @property {string} reason sanitised and capped
- */
+ * @property {import("./vocabulary.mjs").FindingKind} [kind] the kind the answer stated — present whenever an answer survived parsing, undefined when the verdict is a wire defect, a refusal, or a transport failure
 
 /**
  * The finding lifecycle. `candidate` is a validated finding awaiting its
@@ -185,10 +189,21 @@ export const LIFECYCLE_OF_VERDICT = Object.freeze({
  */
 
 /**
- * @typedef {{ ok: true, verdict: Verdict, reason: string }} ParsedVerdict
- * @typedef {{ ok: false, defect: string }} RefusedVerdict
+ * One recorded verdict keyed to a plan id. `kind` is present only when an
+ * answer survived parsing — the kind the verifier judged; its absence keeps
+ * the pre-kind shape so a legacy record still applies.
+ *
+ * @typedef {object} VerdictEntry
+ * @property {string} id the plan item the verdict binds to
+ * @property {Verdict} verdict the verifier's disposition
+ * @property {import("./vocabulary.mjs").FindingKind} [kind] the kind the verifier judged
+ * @property {string} reason the verifier's bounded, sanitised reason
  */
 
+/**
+ * @typedef {{ ok: true, verdict: Verdict, kind: import("./vocabulary.mjs").FindingKind, reason: string }} ParsedVerdict
+ * @typedef {{ ok: false, defect: string }} RefusedVerdict
+ */
 /**
  * Selects the deterministic subset of findings that must be verified before
  * publication. Pure: the plan is a function of the findings' order, the
@@ -290,6 +305,7 @@ export function verifierMessages(item, evidence = createEvidence()) {
   const claim =
     `finding id: ${item.id}\n` +
     `severity: ${item.finding.severity}\n` +
+    `claimed kind: ${item.finding.kind}\n` +
     `location: ${item.evidence.path}:${String(item.evidence.lineStart)}-${String(item.evidence.lineEnd)}` +
     ` (the finding anchors at line ${String(item.finding.line)})\n` +
     `claim: ${item.finding.message}`;
@@ -318,14 +334,18 @@ const VERIFIER_CONTRACT =
   '- "confirmed": the evidence you gathered supports the claim.\n' +
   '- "refuted": the evidence you gathered contradicts the claim — name what contradicts it.\n' +
   '- "uncertain": the evidence is insufficient to decide — name what is missing.\n' +
+  "Also state the finding's kind — the domain the claim belongs to, judged from the evidence, " +
+  "not copied from the claim's wording. The vocabulary is closed: correctness, security, " +
+  "performance, api-misuse, resource-safety, style, test-gap, documentation.\n" +
   "Answer with only this JSON object and no prose around it: " +
-  '{"verdict":"confirmed"|"refuted"|"uncertain","reason":"<one sentence>"}';
+  '{"verdict":"confirmed"|"refuted"|"uncertain","kind":"<kind>","reason":"<one sentence>"}';
 
 /**
- * Parses one verifier answer against the strict contract. The exact two keys,
- * the exact vocabulary, a non-empty string reason — everything else is
- * refused, never coerced. The reason is sanitised and capped here, so a
- * refused-then-logged reason carries the same posture as any comment text.
+ * Parses one verifier answer against the strict contract. The exact three
+ * keys, the exact verdict vocabulary, a kind from the closed finding-kind
+ * vocabulary, a non-empty string reason — everything else is refused, never
+ * coerced. The reason is sanitised and capped here, so a refused-then-logged
+ * reason carries the same posture as any comment text.
  *
  * @param {string} text the answer's content
  * @returns {ParsedVerdict | RefusedVerdict}
@@ -345,12 +365,13 @@ export function parseVerdict(text) {
   }
   const record = /** @type {Record<string, unknown>} */ (value);
   const keys = Object.keys(record);
-  const unknown = keys.filter((key) => key !== "verdict" && key !== "reason");
+  const unknown = keys.filter((key) => key !== "verdict" && key !== "kind" && key !== "reason");
   if (unknown.length > 0) {
     return { ok: false, defect: `the answer holds unknown key '${unknown[0]}'` };
   }
   if (record["verdict"] === undefined)
     return { ok: false, defect: "the answer is missing 'verdict'" };
+  if (record["kind"] === undefined) return { ok: false, defect: "the answer is missing 'kind'" };
   if (record["reason"] === undefined)
     return { ok: false, defect: "the answer is missing 'reason'" };
   const verdict = record["verdict"];
@@ -360,12 +381,24 @@ export function parseVerdict(text) {
       defect: `'${oneLine(String(verdict), { maxChars: 120, stripControlChars: true })}' is outside the verdict vocabulary`,
     };
   }
+  const rawKind = record["kind"];
+  if (!isFindingKind(rawKind)) {
+    return {
+      ok: false,
+      defect: `'${oneLine(String(rawKind), { maxChars: 120, stripControlChars: true })}' is outside the finding-kind vocabulary`,
+    };
+  }
   const rawReason = record["reason"];
   if (typeof rawReason !== "string" || rawReason.trim() === "") {
     return { ok: false, defect: "the answer's reason is empty or not a string" };
   }
   const reason = sanitiseCommentText(rawReason, { maxChars: VERDICT_REASON_CHARS }).text;
-  return { ok: true, verdict, reason };
+  return {
+    ok: true,
+    verdict,
+    kind: /** @type {import("./vocabulary.mjs").FindingKind} */ (rawKind),
+    reason,
+  };
 }
 
 /**
@@ -376,7 +409,11 @@ export function parseVerdict(text) {
  * finding shows, `uncertain` publishes as unresolved. A planned finding with
  * no recorded verdict — a crash, a lost record — fails closed to
  * `unresolved`, never to silence. A verdict naming an id outside the plan is
- * refused fail-closed — it never maps onto a finding by guess. Pure: the
+ * refused fail-closed — it never maps onto a finding by guess. A verdict
+ * naming a kind other than the claim's own never confirms either: the
+ * verified kind is bound into the finding and the finding is demoted to
+ * `unresolved` — the answer did not confirm the claim as made, and code
+ * never remaps one domain onto another to make it confirm. Pure: the
  * same findings, verdicts and plan always yield the same states in the same
  * order, and no model-authored text can move a state — only a parsed verdict
  * in the closed vocabulary can.
@@ -404,6 +441,12 @@ export function applyVerdicts(findings, verdicts, plan) {
       refusals.push(`the verdict for finding ${entry.id} is outside the vocabulary — refused`);
       continue;
     }
+    if (entry.kind !== undefined && !FINDING_KINDS.includes(entry.kind)) {
+      refusals.push(
+        `the verdict for finding ${entry.id} names a kind outside the vocabulary — refused`,
+      );
+      continue;
+    }
     decided.set(entry.id, entry);
   }
   /** Finding identity → the plan's disposition for that finding, so the mapping is value-exact and duplicate-proof. */
@@ -421,6 +464,20 @@ export function applyVerdicts(findings, verdicts, plan) {
           id,
           lifecycle: "unresolved",
           reason: "no verdict was recorded for this finding",
+        });
+        continue;
+      }
+      if (entry.kind !== undefined && entry.kind !== finding.kind) {
+        refusals.push(
+          `the verdict for finding ${entry.id} names kind '${entry.kind}' where the answer claimed '${finding.kind}' — ` +
+            `refused, never mapped onto a claim it does not name`,
+        );
+        published.push({
+          ...finding,
+          kind: entry.kind,
+          id,
+          lifecycle: "unresolved",
+          reason: `the answer claimed kind '${finding.kind}' but the verifier judged kind '${entry.kind}'`,
         });
         continue;
       }

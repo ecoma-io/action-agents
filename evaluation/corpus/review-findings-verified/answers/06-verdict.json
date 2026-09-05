@@ -1,5 +1,5 @@
 {
-  "content": "{\"verdict\":\"confirmed\",\"reason\":\"the loop re-adds batch.length without tracking which batches were retried.\"}",
+  "content": "{\"verdict\":\"confirmed\",\"kind\":\"correctness\",\"reason\":\"the loop re-adds batch.length without tracking which batches were retried.\"}",
   "toolCalls": [],
   "finishReason": "stop"
 }

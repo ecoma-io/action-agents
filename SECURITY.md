@@ -42,7 +42,7 @@ engineering makes that text trustworthy, so the design does not try.
 
 The question a ceiling answers is therefore not _how do we stop a model being
 talked into something_, which has no reliable answer, but **what is the worst a
-model that has already been talked into something can reach.** Four ceilings
+model that has already been talked into something can reach.** Five ceilings
 answer it, and each is enforced in code rather than asked for in a prompt:
 
 1. **Model output never composes an API call. It may only choose from a set a
@@ -126,6 +126,29 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    with. A path escape here is a direct route from an injected instruction to
    the runner's secrets, which is why it is treated as a vulnerability rather
    than as a robustness bug.
+
+5. **The model never decides a consequence; code does, deterministically, from
+   the canonical record.** This is the merge gate's ceiling (#362), and it
+   bounds what a talked-into model can do to a merge decision. A review's
+   published findings are bound at a capture boundary: code reads the reviewed
+   bytes at each finding's anchor and stores the digest and excerpt its
+   fingerprint is recomputable from, and a capture the tree cannot honour — a
+   file that is gone, a line past its end, a path outside the workspace —
+   refuses the run rather than publishing a finding whose evidence confirms
+   nothing. The finding kinds ride the same discipline: the answer must name
+   a kind from the closed vocabulary, the verification pass binds the kind
+   from its own evidence, and a verdict naming a kind the answer did not
+   claim demotes the finding instead of confirming it. What follows — the
+   merge gate's verdict, the `review gate` check run, the SARIF projection —
+   is a pure function of the canonical record and a policy no model writes:
+   `decideReviewGate` reads nothing else and throws on a `blockKinds` entry
+   outside the vocabulary instead of silently narrowing, and `gate-mode`
+   chooses only whether the recorded verdict enforces (a check run a ruleset
+   can make required) or merely observes (a `neutral` check run, the job exit
+   staying green — enforcement is the check run's job, never the action's
+   exit code). The check run's name, conclusion and rendered text are
+   code-pinned, and the SARIF bytes are byte-identical for the same record.
+   Fixtures: `security/fixtures/canonical-gate/`.
 
 ## Scope
 

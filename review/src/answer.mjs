@@ -25,6 +25,7 @@ import { json5Parse } from "#core/json5-parse.mjs";
 import { oneLine } from "#core/one-line.mjs";
 
 import { utf8Compare } from "./order.mjs";
+import { isFindingKind } from "./vocabulary.mjs";
 import { BINARY_SNIFF_BYTES, MAX_READ_BYTES } from "./tools.mjs";
 
 /** @typedef {import("./inventory.mjs").ChangedFile} ChangedFile */
@@ -40,10 +41,10 @@ const MAX_ANCHOR_READ_BYTES = MAX_READ_BYTES;
 /**
  * @typedef {object} Finding
  * @property {"concern" | "nit"} severity
+ * @property {import("./vocabulary.mjs").FindingKind} kind the finding's domain, validated against the closed vocabulary — the claim the verification pass confirms or demotes
  * @property {string} file repository-relative path, as the inventory spells it
  * @property {number} line 1-based line in the new file
  * @property {string} message
- */
 
 /**
  * @typedef {object} ValidatedAnswer
@@ -91,17 +92,24 @@ export function parseAnswer(content) {
     }
     const finding = /** @type {Record<string, unknown>} */ (raw);
     for (const key of Object.keys(finding)) {
-      if (key !== "severity" && key !== "file" && key !== "line" && key !== "message") {
+      if (
+        key !== "severity" &&
+        key !== "kind" &&
+        key !== "file" &&
+        key !== "line" &&
+        key !== "message"
+      ) {
         return { ok: false, defect: `a finding holds unknown key '${key}'` };
       }
     }
     if (
       typeof finding["severity"] !== "string" ||
+      typeof finding["kind"] !== "string" ||
       typeof finding["file"] !== "string" ||
       typeof finding["message"] !== "string" ||
       !Number.isInteger(finding["line"])
     ) {
-      return { ok: false, defect: "a finding is missing severity, file, line or message" };
+      return { ok: false, defect: "a finding is missing severity, kind, file, line or message" };
     }
   }
   return {
@@ -140,6 +148,13 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
       );
       continue;
     }
+    const kind = finding["kind"];
+    if (!isFindingKind(kind)) {
+      rejections.push(
+        `kind '${oneLine(String(kind), { maxChars: 120, stripControlChars: true })}' is outside the vocabulary: ${describe}`,
+      );
+      continue;
+    }
     const file = finding["file"];
     if (typeof file !== "string") continue; // unreachable past parse; kept type-safe
     const entry = byPath.get(file);
@@ -169,7 +184,7 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
       rejections.push(`the message is empty: ${describe}`);
       continue;
     }
-    kept.push({ severity, file, line, message });
+    kept.push({ severity, kind, file, line, message });
   }
   // Only exact logical duplicates collapse — identity includes the message,
   // so two genuine findings sharing a line both survive. The same identity
@@ -202,7 +217,7 @@ export function validateAnswer({ rawFindings, summary, reviewed, workspace }) {
  * anchor and the same trimmed message. `applyVerdicts` binds verdicts by it,
  * so a verdict hits exactly one finding.
  *
- * @param {Finding} finding
+ * @param {Pick<Finding, "severity" | "file" | "line" | "message">} finding the identity is deliberately kind-independent — a verified reclassification mints a new fingerprint downstream, but dedup and verdict binding stay anchored to the claim
  * @returns {string}
  */
 export function findingIdentity(finding) {

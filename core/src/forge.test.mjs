@@ -1402,3 +1402,69 @@ describe("searchIssues", () => {
     expect(error.message).toMatch(/not shaped like an issue/);
   });
 });
+
+describe("check run writes", () => {
+  it("creates a completed check run with the rendered output and returns its id", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge("o", "r", { "POST /repos/o/r/check-runs": json({ id: 9001 }) }, recorder);
+
+    await expect(
+      client.createCheckRun({
+        headSha: "a".repeat(40),
+        name: "review gate",
+        conclusion: "neutral",
+        output: { title: "review gate: BLOCK", summary: "one reason." },
+      }),
+    ).resolves.toEqual({ id: 9001 });
+    expect(recorder.calls?.[0]?.body).toBe(
+      JSON.stringify({
+        name: "review gate",
+        head_sha: "a".repeat(40),
+        status: "completed",
+        conclusion: "neutral",
+        output: { title: "review gate: BLOCK", summary: "one reason." },
+      }),
+    );
+  });
+
+  it("refuses a conclusion outside the closed set before any request is made", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge("o", "r", {}, recorder);
+    const error = await client
+      .createCheckRun({
+        headSha: "a".repeat(40),
+        name: "review gate",
+        conclusion: /** @type {any} */ ("maybe"),
+        output: { title: "t", summary: "s" },
+      })
+      .catch((/** @type {unknown} */ cause) => cause);
+    expect(error).toBeInstanceOf(ForgeError);
+    expect(/** @type {ForgeError} */ (error).message).toMatch(
+      /'maybe' is not a check-run conclusion/,
+    );
+    expect(recorder.calls).toEqual([]);
+  });
+
+  it("makes a single attempt — a retried POST would duplicate the check run", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const client = forge(
+      "o",
+      "r",
+      { "POST /repos/o/r/check-runs": () => new Response("unavailable", { status: 503 }) },
+      recorder,
+    );
+
+    await expect(
+      client.createCheckRun({
+        headSha: "a".repeat(40),
+        name: "review gate",
+        conclusion: "failure",
+        output: { title: "t", summary: "s" },
+      }),
+    ).rejects.toBeInstanceOf(ForgeError);
+    expect(recorder.calls).toHaveLength(1);
+  });
+});

@@ -24,6 +24,7 @@ import {
   RELEASE_AUTOMATION,
 } from "./applicability.fixtures.mjs";
 import { findingIdentity } from "./answer.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { VERIFIER_MAX_EVIDENCE_BYTES, VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
 const HEAD = "a".repeat(40);
@@ -69,7 +70,7 @@ function snapshot(over = {}) {
  * A forge stub covering the reads a full happy-path run makes.
  *
  * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot, whoamiLogin?: string, whoamiError?: Error, documents?: Record<string, string> }} [options]
- * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }> } }}
+ * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }>, checkRuns: Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }> } }}
  */
 function forgeStub(options = {}) {
   const calls = {
@@ -77,6 +78,8 @@ function forgeStub(options = {}) {
     getPullRequests: [],
     /** @type {Array<{ id?: number, body?: string }> } */
     upserts: [],
+    /** @type {Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }> } */
+    checkRuns: [],
   };
   return {
     calls,
@@ -94,7 +97,6 @@ function forgeStub(options = {}) {
       if (branch !== "main") throw new Error(`unexpected ref lookup '${branch}'`);
       return { sha: "7".repeat(40) };
     },
-    /** @param {string} path */
     /** @param {string} path @returns {Promise<{ content: string } | null>} */
     async getContents(path) {
       if (options.documents !== undefined && options.documents[path] !== undefined) {
@@ -141,6 +143,11 @@ function forgeStub(options = {}) {
       calls.upserts.push({ id, body });
     },
     async deleteComment() {},
+    /** @param {{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }} input */
+    async createCheckRun(input) {
+      calls.checkRuns.push(input);
+      return { id: 501 };
+    },
   };
 }
 
@@ -154,7 +161,7 @@ function chatStub(finalAnswer) {
       return {
         content:
           finalAnswer ??
-          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
         toolCalls: [],
         finishReason: "stop",
       };
@@ -412,7 +419,7 @@ describe("publication", () => {
       },
       {
         content:
-          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
       },
     ]);
     const result = await reviewPullRequest({
@@ -496,8 +503,8 @@ describe("dry run", () => {
 
 describe("strictness policy and strategy", () => {
   const MIXED_ANSWER =
-    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
-    '{"severity":"nit","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"mixed"}';
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+    '{"severity":"nit","kind":"style","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"mixed"}';
 
   it("at low, nits leave the published set: concerns only, each drop logged", async () => {
     /** @type {string[]} */
@@ -1151,7 +1158,7 @@ describe("risk lanes", () => {
 
 describe("adversarial verification pass", () => {
   const CONCERN_ANSWER =
-    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
   const READ =
     /** @type {{ content: string, toolCalls: { id: string, name: string, arguments: string }[] }} */ ({
       content: "",
@@ -1195,7 +1202,7 @@ describe("adversarial verification pass", () => {
   function answerWith(message, summary = "one concern") {
     return {
       content:
-        `{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":` +
+        `{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":` +
         `"${message}"}],"summary":"${summary}"}`,
     };
   }
@@ -1237,7 +1244,7 @@ describe("adversarial verification pass", () => {
     const chat = scriptedChat([
       READ,
       { content: CONCERN_ANSWER },
-      { content: '{"verdict":"refuted","reason":"the line is correct"}' },
+      { content: '{"verdict":"refuted","kind":"correctness","reason":"the line is correct"}' },
     ]);
     /** @type {string[]} */
     const logged = [];
@@ -1270,13 +1277,139 @@ describe("adversarial verification pass", () => {
     expect(user?.content).toContain("[evidence:");
   });
 
+  it("binds the canonical record and a PASS verdict when only a refuted finding stands", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      { content: '{"verdict":"refuted","kind":"correctness","reason":"the line is correct"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: () => undefined },
+    });
+    expect(result.outcome).toBe("published");
+    const row = result.canonical?.findings[0];
+    expect(result.canonical?.head).toBe(HEAD);
+    expect(result.canonical?.run).toEqual({ state: "published", verdict: "pass" });
+    expect(row).toMatchObject({
+      kind: "correctness",
+      file: "src/a.mjs",
+      line: 2,
+      lifecycle: "refuted",
+      subject: "line2",
+    });
+    expect(row?.evidence?.digest).toBe(contentDigest("line2"));
+    // Refuted findings never block: the gate passes, with no reasons.
+    expect(result.gate).toEqual({ verdict: "PASS", reasons: [] });
+    // The check run is the entrypoint's surface, not the run's.
+    expect(forge.calls.checkRuns).toEqual([]);
+  });
+
+  it("a confirmed finding BLOCKS the gate under the all-kinds default policy", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      { content: '{"verdict":"confirmed","kind":"correctness","reason":"the guard is real"}' },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: () => undefined },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "confirmed" });
+    expect(result.gate?.verdict).toBe("BLOCK");
+    expect(result.gate?.reasons).toEqual(["confirmed correctness finding at src/a.mjs:2."]);
+  });
+
+  it("an unresolved finding BLOCKS — a hollow pass is a defect", async () => {
+    const forge = forgeStub();
+    const chat = scriptedChat([
+      READ,
+      { content: CONCERN_ANSWER },
+      {
+        content:
+          '{"verdict":"uncertain","kind":"correctness","reason":"the excerpt alone cannot decide"}',
+      },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: () => undefined },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "unresolved" });
+    expect(result.gate?.verdict).toBe("BLOCK");
+    expect(result.gate?.reasons).toEqual(["unresolved correctness finding at src/a.mjs:2."]);
+  });
+
+  it("a capture that cannot be honoured refuses the run RED — never skip-and-continue", async () => {
+    const forge = forgeStub();
+    /** @type {import("#core/chat.mjs").ChatMessage[][]} */
+    const calls = [];
+    let turn = 0;
+    const chat = /** @type {import("#core/chat.mjs").Chat} */ ({
+      async complete() {
+        calls.push([]);
+        turn++;
+        // The checkout shrinks between anchor validation and the capture
+        // boundary — the window every real capture refusal rides in on.
+        if (turn === 3) {
+          writeFileSync(p.join(wsRoot, "src", "a.mjs"), "line1\n");
+        }
+        if (turn === 1) {
+          return { content: "", toolCalls: READ.toolCalls, finishReason: "tool_calls" };
+        }
+        if (turn === 2) {
+          return { content: CONCERN_ANSWER, toolCalls: [], finishReason: "stop" };
+        }
+        return {
+          content: '{"verdict":"confirmed","kind":"correctness","reason":"holds"}',
+          toolCalls: [],
+          finishReason: "stop",
+        };
+      },
+    });
+    let thrown;
+    try {
+      await reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: { forge, chat, now: () => 0, info: () => undefined },
+      });
+    } catch (cause) {
+      thrown = cause;
+    } finally {
+      writeFileSync(p.join(wsRoot, "src", "a.mjs"), A_CONTENT);
+    }
+    expect(thrown).toBeInstanceOf(DeterministicRefusalError);
+    expect(/** @type {Error} */ (thrown).message).toBe(
+      "capture refused for src/a.mjs:2 — the reviewed file carries 1 line(s)",
+    );
+  });
+
   it("verifies only planned findings — a skim-lane nit at standard strategy never reaches a verdict call", async () => {
     const forge = forgeStub();
     const chat = scriptedChat([
       READ,
       {
         content:
-          '{"findings":[{"severity":"nit","file":"src/a.mjs","line":2,"message":"a nit"}],"summary":"one nit"}',
+          '{"findings":[{"severity":"nit","kind":"style","file":"src/a.mjs","line":2,"message":"a nit"}],"summary":"one nit"}',
       },
     ]);
     const result = await reviewPullRequest({
@@ -1316,7 +1449,7 @@ describe("adversarial verification pass", () => {
     const chat = scriptedChat([
       READ,
       { content: CONCERN_ANSWER },
-      { content: '{"verdict":"confirmed","reason":"ok","extra":1}' },
+      { content: '{"verdict":"confirmed","kind":"correctness","reason":"ok","extra":1}' },
     ]);
     /** @type {string[]} */
     const logged = [];
@@ -1339,10 +1472,10 @@ describe("adversarial verification pass", () => {
       READ,
       {
         content:
-          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},{"severity":"nit","file":"src/a.mjs","line":3,"message":"a nit"}],"summary":"two"}',
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},{"severity":"nit","kind":"style","file":"src/a.mjs","line":3,"message":"a nit"}],"summary":"two"}',
       },
-      { content: '{"verdict":"uncertain","reason":"insufficient"}' },
-      { content: '{"verdict":"uncertain","reason":"insufficient"}' },
+      { content: '{"verdict":"uncertain","kind":"correctness","reason":"insufficient"}' },
+      { content: '{"verdict":"uncertain","kind":"style","reason":"insufficient"}' },
     ]);
     /** @type {string[]} */
     const logged = [];
@@ -1377,7 +1510,7 @@ describe("adversarial verification pass", () => {
       READ,
       {
         content:
-          '{"findings":[{"severity":"nit","file":"src/a.mjs","line":2,"message":"a nit"}],"summary":"one nit"}',
+          '{"findings":[{"severity":"nit","kind":"style","file":"src/a.mjs","line":2,"message":"a nit"}],"summary":"one nit"}',
       },
     ]);
     /** @type {string[]} */
@@ -1405,7 +1538,10 @@ describe("adversarial verification pass", () => {
       READ,
       answerWith("guard() is never called anywhere in the repository"),
       { toolCalls: [{ id: "v1", name: "search", arguments: '{"query":"guard("}' }] },
-      { content: '{"verdict":"confirmed","reason":"search finds the definition and no call"}' },
+      {
+        content:
+          '{"verdict":"confirmed","kind":"correctness","reason":"search finds the definition and no call"}',
+      },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -1440,7 +1576,10 @@ describe("adversarial verification pass", () => {
       answerWith("there is no guard() definition anywhere in the workspace"),
       { toolCalls: [{ id: "v1", name: "search", arguments: '{"query":"guard("}' }] },
       { toolCalls: [verifyRead("v2", "src/helper.mjs")] },
-      { content: '{"verdict":"refuted","reason":"the definition exists in src/helper.mjs"}' },
+      {
+        content:
+          '{"verdict":"refuted","kind":"correctness","reason":"the definition exists in src/helper.mjs"}',
+      },
     ]);
     /** @type {string[]} */
     const logged = [];
@@ -1468,7 +1607,10 @@ describe("adversarial verification pass", () => {
     const chat = scriptedChat([
       READ,
       answerWith("off-by-one"),
-      { content: '{"verdict":"uncertain","reason":"the excerpt alone cannot decide"}' },
+      {
+        content:
+          '{"verdict":"uncertain","kind":"correctness","reason":"the excerpt alone cannot decide"}',
+      },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -1495,7 +1637,9 @@ describe("adversarial verification pass", () => {
     // The last turn asks twice: the first executes, the second is answered
     // unexecuted — the conversation stays well-formed past the ceiling.
     script.push({ toolCalls: [verifyRead("v-last-1"), verifyRead("v-last-2")] });
-    script.push({ content: '{"verdict":"uncertain","reason":"the budget was spent"}' });
+    script.push({
+      content: '{"verdict":"uncertain","kind":"correctness","reason":"the budget was spent"}',
+    });
     const chat = scriptedChat(script);
     /** @type {string[]} */
     const logged = [];
@@ -1529,7 +1673,10 @@ describe("adversarial verification pass", () => {
       answerWith("off-by-one"),
       { toolCalls: [verifyRead("v1", "big.txt")] },
       { toolCalls: [verifyRead("v2", "big.txt")] },
-      { content: '{"verdict":"confirmed","reason":"the evidence settled it before the cut"}' },
+      {
+        content:
+          '{"verdict":"confirmed","kind":"correctness","reason":"the evidence settled it before the cut"}',
+      },
     ]);
     /** @type {string[]} */
     const logged = [];
@@ -1620,7 +1767,8 @@ describe("adversarial verification pass", () => {
     writeFileSync(p.join(wsRoot, "measure.txt"), MEASURE);
     const forge = forgeStub();
     const chat = exactEvidenceChat(VERIFIER_MAX_EVIDENCE_BYTES - 1, {
-      content: '{"verdict":"refuted","reason":"settled with the last byte below the ceiling"}',
+      content:
+        '{"verdict":"refuted","kind":"correctness","reason":"settled with the last byte below the ceiling"}',
     });
     /** @type {string[]} */
     const logged = [];
@@ -1653,7 +1801,7 @@ describe("adversarial verification pass", () => {
     writeFileSync(p.join(wsRoot, "measure.txt"), MEASURE);
     const forge = forgeStub();
     const chat = exactEvidenceChat(VERIFIER_MAX_EVIDENCE_BYTES, {
-      content: '{"verdict":"uncertain","reason":"the budget was spent"}',
+      content: '{"verdict":"uncertain","kind":"correctness","reason":"the budget was spent"}',
     });
     /** @type {string[]} */
     const logged = [];
@@ -1695,7 +1843,10 @@ describe("adversarial verification pass", () => {
           verifyRead("d4", "ignored.log"),
         ],
       },
-      { content: '{"verdict":"confirmed","reason":"the refusals say the claim holds"}' },
+      {
+        content:
+          '{"verdict":"confirmed","kind":"correctness","reason":"the refusals say the claim holds"}',
+      },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -1726,7 +1877,7 @@ describe("adversarial verification pass", () => {
         toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
       },
       answerWith("off-by-one", "SECRET-SUMMARY musings"),
-      { content: '{"verdict":"confirmed","reason":"the claim holds"}' },
+      { content: '{"verdict":"confirmed","kind":"correctness","reason":"the claim holds"}' },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -1807,15 +1958,18 @@ describe("adversarial verification pass", () => {
       READ,
       {
         content:
-          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"first problem"},' +
-          '{"severity":"concern","file":"src/a.mjs","line":3,"message":"second problem"}],"summary":"two"}',
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"first problem"},' +
+          '{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":3,"message":"second problem"}],"summary":"two"}',
       },
       // Finding 1's verifier reaches outside the root: refused, corrected.
       { toolCalls: [verifyRead("v1", "../outside.txt")] },
-      { content: '{"verdict":"uncertain","reason":"the refusal was the answer"}' },
+      {
+        content:
+          '{"verdict":"uncertain","kind":"correctness","reason":"the refusal was the answer"}',
+      },
       // Finding 2's verifier reads and confirms.
       { toolCalls: [verifyRead("v2", "src/helper.mjs")] },
-      { content: '{"verdict":"confirmed","reason":"the read settled it"}' },
+      { content: '{"verdict":"confirmed","kind":"correctness","reason":"the read settled it"}' },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -1840,7 +1994,10 @@ describe("adversarial verification pass", () => {
       READ,
       answerWith("off-by-one"),
       { toolCalls: [{ id: "v1", name: "delete_file", arguments: '{"path":"src/a.mjs"}' }] },
-      { content: '{"verdict":"refuted","reason":"corrected after the refused call"}' },
+      {
+        content:
+          '{"verdict":"refuted","kind":"correctness","reason":"corrected after the refused call"}',
+      },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -1898,8 +2055,8 @@ describe("evidence provenance", () => {
       io: {
         forge,
         chat: chatStub(
-          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
-            '{"severity":"nit","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"two findings"}',
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+            '{"severity":"nit","kind":"style","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"two findings"}',
         ),
         now: () => 0,
         info: (m) => logged.push(m),
@@ -2078,10 +2235,10 @@ describe("run gates", () => {
       },
       {
         content:
-          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
-          '{"severity":"nit","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"mixed"}',
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+          '{"severity":"nit","kind":"style","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"mixed"}',
       },
-      { content: '{"verdict":"confirmed","reason":"visible in the read"}' },
+      { content: '{"verdict":"confirmed","kind":"correctness","reason":"visible in the read"}' },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2110,9 +2267,9 @@ describe("run gates", () => {
       },
       {
         content:
-          '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
       },
-      { content: '{"verdict":"refuted","reason":"the line is correct"}' },
+      { content: '{"verdict":"refuted","kind":"correctness","reason":"the line is correct"}' },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2133,7 +2290,7 @@ describe("run gates", () => {
 
 describe("the run artifact", () => {
   const CONCERN =
-    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
   const READ = {
     content: "",
     toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
@@ -2150,7 +2307,7 @@ describe("the run artifact", () => {
     const chat = readingChat([
       READ,
       { content: CONCERN },
-      { content: '{"verdict":"confirmed","reason":"the guard is real"}' },
+      { content: '{"verdict":"confirmed","kind":"correctness","reason":"the guard is real"}' },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2230,7 +2387,7 @@ describe("the run artifact", () => {
     const chat = readingChat([
       READ,
       { content: CONCERN },
-      { content: '{"verdict":"refuted","reason":"the line is correct"}' },
+      { content: '{"verdict":"refuted","kind":"correctness","reason":"the line is correct"}' },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -2369,12 +2526,14 @@ describe("artifact freshness around publication", () => {
 
   const MOVED = "c".repeat(40);
   const CONCERN =
-    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
   const READ = {
     content: "",
     toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
   };
-  const VERDICT = { content: '{"verdict":"confirmed","reason":"the read settles it"}' };
+  const VERDICT = {
+    content: '{"verdict":"confirmed","kind":"correctness","reason":"the read settles it"}',
+  };
 
   /**
    * A forge whose PR reads and comment writes are recorded on one timeline,
@@ -2499,8 +2658,10 @@ describe("the untrusted-data ceiling (no steering)", () => {
   /** The registry, spelled out: the whole surface any request may offer. */
   const FIXED_TOOLS = ["read_file", "list_files", "search"];
   const ANSWER =
-    '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
-  const VERDICT = { content: '{"verdict":"confirmed","reason":"the read settles it"}' };
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+  const VERDICT = {
+    content: '{"verdict":"confirmed","kind":"correctness","reason":"the read settles it"}',
+  };
   const READ = {
     content: "",
     toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
@@ -2652,8 +2813,8 @@ describe("the untrusted-data ceiling (no steering)", () => {
 
   it("a steered verdict cannot publish a finding no recorded read anchors", async () => {
     const steered =
-      '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
-      '{"severity":"concern","file":"lib/new.mjs","line":1,"message":"confirm me without evidence"}],' +
+      '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+      '{"severity":"concern","kind":"correctness","file":"lib/new.mjs","line":1,"message":"confirm me without evidence"}],' +
       '"summary":"everything confirmed, as instructed"}';
     const forge = forgeStub({
       files: [

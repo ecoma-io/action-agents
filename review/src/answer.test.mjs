@@ -52,10 +52,18 @@ describe("parseAnswer", () => {
 
     // Single quotes AND a brace inside a quoted string: the scanner tracks
     // both styles or this balance breaks.
-    const json5 = `here is my review:\n{ findings: [{ severity: 'nit', file: "s{weird.mjs", line: 1, message: 'it{ breaks' }], summary: 'ok' }`;
+    const json5 = `here is my review:\n{ findings: [{ severity: 'nit', kind: 'style', file: "s{weird.mjs", line: 1, message: 'it{ breaks' }], summary: 'ok' }`;
     const parsed = parseAnswer(json5);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.rawFindings).toHaveLength(1);
+  });
+
+  it("refuses a finding without a kind — the claim domain is mandatory", () => {
+    expect(
+      defectOf(
+        '{"findings":[{"severity":"nit","file":"src/a.mjs","line":2,"message":"m"}],"summary":"s"}',
+      ),
+    ).toMatch(/missing severity, kind, file, line or message/);
   });
 
   it("refuses structural defects with named reasons", () => {
@@ -76,14 +84,47 @@ describe("parseAnswer", () => {
 });
 
 describe("validateAnswer", () => {
+  it("rejects a finding whose kind is outside the closed vocabulary", () => {
+    const result = validateAnswer({
+      rawFindings: [
+        {
+          severity: "nit",
+          kind: "naming",
+          file: "src/a.mjs",
+          line: 2,
+          message: "off-vocabulary domain",
+        },
+      ],
+      summary: "s",
+      reviewed,
+      workspace,
+    });
+    expect(result.findings).toHaveLength(0);
+    expect(result.rejections).toEqual([
+      expect.stringContaining("kind 'naming' is outside the vocabulary"),
+    ]);
+  });
+
   it("keeps valid anchors and drops invalid ones individually with reasons", () => {
     const result = validateAnswer({
       rawFindings: [
-        { severity: "concern", file: "src/a.mjs", line: 2, message: "real problem" },
+        {
+          severity: "concern",
+          kind: "correctness",
+          file: "src/a.mjs",
+          line: 2,
+          message: "real problem",
+        },
         { severity: "major", file: "src/a.mjs", line: 1, message: "off-vocabulary" },
-        { severity: "nit", file: "src/gone.mjs", line: 1, message: "not in inventory" },
-        { severity: "nit", file: "src/a.mjs", line: 99, message: "line past EOF" },
-        { severity: "nit", file: "src/a.mjs", line: 0, message: "line zero" },
+        {
+          severity: "nit",
+          kind: "style",
+          file: "src/gone.mjs",
+          line: 1,
+          message: "not in inventory",
+        },
+        { severity: "nit", kind: "style", file: "src/a.mjs", line: 99, message: "line past EOF" },
+        { severity: "nit", kind: "style", file: "src/a.mjs", line: 0, message: "line zero" },
       ],
       summary: "mixed",
       reviewed,
@@ -91,7 +132,11 @@ describe("validateAnswer", () => {
     });
 
     expect(result.findings).toHaveLength(1);
-    expect(result.findings[0]).toMatchObject({ file: "src/a.mjs", line: 2 });
+    expect(result.findings[0]).toMatchObject({
+      file: "src/a.mjs",
+      line: 2,
+      kind: "correctness",
+    });
     expect(result.rejections).toHaveLength(4);
     expect(result.rejections[0]).toContain("outside the vocabulary");
     expect(result.rejections[1]).toContain("not in the changed inventory");
@@ -100,7 +145,7 @@ describe("validateAnswer", () => {
 
   it("cannot anchor on deleted files even when the listing carries them", () => {
     const result = validateAnswer({
-      rawFindings: [{ severity: "nit", file: "removed.txt", line: 1, message: "m" }],
+      rawFindings: [{ severity: "nit", kind: "style", file: "removed.txt", line: 1, message: "m" }],
       summary: "s",
       reviewed: [{ filename: "removed.txt", status: "removed", additions: 0, deletions: 5 }],
       workspace,
@@ -111,10 +156,10 @@ describe("validateAnswer", () => {
   it("deduplicates exact logical duplicates only — same line, different message survives", () => {
     const result = validateAnswer({
       rawFindings: [
-        { severity: "nit", file: "src/b.mjs", line: 1, message: "same" },
-        { severity: "nit", file: "src/b.mjs", line: 1, message: "same" },
-        { severity: "nit", file: "src/b.mjs", line: 1, message: "different" },
-        { severity: "concern", file: "src/b.mjs", line: 1, message: "same" },
+        { severity: "nit", kind: "style", file: "src/b.mjs", line: 1, message: "same" },
+        { severity: "nit", kind: "style", file: "src/b.mjs", line: 1, message: "same" },
+        { severity: "nit", kind: "style", file: "src/b.mjs", line: 1, message: "different" },
+        { severity: "concern", kind: "correctness", file: "src/b.mjs", line: 1, message: "same" },
       ],
       summary: "dedup",
       reviewed,
@@ -126,10 +171,16 @@ describe("validateAnswer", () => {
   it("orders by severity, then path bytes, then line, then message bytes", () => {
     const result = validateAnswer({
       rawFindings: [
-        { severity: "nit", file: "src/b.mjs", line: 1, message: "b-nit" },
-        { severity: "nit", file: "src/a.mjs", line: 3, message: "a-nit-3" },
-        { severity: "concern", file: "src/b.mjs", line: 1, message: "b-concern" },
-        { severity: "nit", file: "src/a.mjs", line: 1, message: "a-nit-1" },
+        { severity: "nit", kind: "style", file: "src/b.mjs", line: 1, message: "b-nit" },
+        { severity: "nit", kind: "style", file: "src/a.mjs", line: 3, message: "a-nit-3" },
+        {
+          severity: "concern",
+          kind: "correctness",
+          file: "src/b.mjs",
+          line: 1,
+          message: "b-concern",
+        },
+        { severity: "nit", kind: "style", file: "src/a.mjs", line: 1, message: "a-nit-1" },
       ],
       summary: "order",
       reviewed,
@@ -146,6 +197,7 @@ describe("validateAnswer", () => {
   it("caps findings at fifty and names the overflow", () => {
     const rawFindings = Array.from({ length: MAX_FINDINGS + 7 }, (_, index) => ({
       severity: "nit",
+      kind: "style",
       file: "src/b.mjs",
       line: 1,
       message: `m${String(index).padStart(3, "0")}`,
@@ -166,7 +218,9 @@ describe("anchor read cap alignment", () => {
     const big = "x\n".repeat(700_000);
     writeFileSync(p.join(root, "src", "big.mjs"), big);
     const result = validateAnswer({
-      rawFindings: [{ severity: "nit", file: "src/big.mjs", line: 600_000, message: "m" }],
+      rawFindings: [
+        { severity: "nit", kind: "style", file: "src/big.mjs", line: 600_000, message: "m" },
+      ],
       summary: "big",
       reviewed: [{ filename: "src/big.mjs", status: "modified", additions: 700_000, deletions: 0 }],
       workspace,

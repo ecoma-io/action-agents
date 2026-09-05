@@ -217,7 +217,7 @@ run judged), **policy** (what the configuration allows), **human-workflow**
 
 A review's verified publication set is canonical: one shape, built once by
 `createCanonicalResult`, that the comment, the SARIF upload and the merge gate
-all project from ([ADR 004](adr/004-canonical-review-result.md)). Three rules
+all project from ([ADR 004](adr/004-canonical-review-result.md)). Five rules
 give the shape its authority:
 
 - **Finding identity is content, not position.** A finding's fingerprint is a
@@ -241,6 +241,29 @@ give the shape its authority:
   pass; a confirmed finding the policy blocks on blocks the gate. The model
   names no consequence, and no projection — comment or SARIF — is ever read
   back as input.
+- **Evidence is captured, never claimed.** Before publication, code reads the
+  reviewed bytes at each finding's (file, line) anchor and stores the digest
+  and capped excerpt the fingerprint is recomputable from — the capture
+  boundary the constructor's no-I/O rule leaves outside it. A capture the
+  tree cannot honour — file unreadable or outside the workspace, line out of
+  range, an empty file — refuses the finding's evidence and with it the run:
+  a `refused` record and the red error, naming file and line, never a
+  skip-and-continue that publishes a finding whose digest confirms nothing.
+- **The gate's verdict lands as surfaces, and none of them is the job's
+  exit.** The verdict is `PASS` or `BLOCK`. `gate-mode` chooses only whether
+  it enforces: `observe` (the default — a rollout must never start on the
+  enforcing mode) records `OBSERVE-<verdict>` on the `gate-verdict` output and
+  a `neutral` check run; `required` names the verdict bare and renders
+  `success` on PASS, `failure` on BLOCK — the check run a ruleset makes
+  required. A BLOCK never fails the action's exit: the run stays green with
+  its outputs standing. The SARIF projection is written under `runner.temp`
+  — never the workspace — byte-identical for the same record, surfaced
+  through `sarif-path`; the upload is the consumer's step. Each surface is a
+  logged loss on its own failure (F-14's posture): a SARIF write or check-run
+  call that does not land is reported, never a red run, and never a disguise.
+  A gate policy that names a kind outside the closed vocabulary is a defect,
+  not a preference: it throws, and the run ends `failed` — fail closed, fail
+  loud, never a silent narrowing.
 
 ## The seventeen invariants
 

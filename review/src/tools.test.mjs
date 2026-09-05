@@ -235,7 +235,13 @@ describe("read_file", () => {
       // Seam proof: planVerification plans a finding on the inventory path
       /** @type {import("./answer.mjs").Finding[]} */
       const findings = [
-        { file: "realdir/file.mjs", line: 2, severity: "concern", message: "off-by-one" },
+        {
+          file: "realdir/file.mjs",
+          line: 2,
+          severity: "concern",
+          kind: "correctness",
+          message: "off-by-one",
+        },
       ];
       const plan = planVerification(findings, {
         strategy: "adversarial",
