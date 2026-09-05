@@ -6,6 +6,11 @@
  * the real io; `main` is the only place that touches process state. An event
  * that is not a `pull_request` is a red refusal here, exactly as a thread
  * that is neither issue nor pull request is in `triage`.
+ *
+ * `run` is also the red boundary (#355), the twin of harmonise's (#347): a
+ * throw out of `reviewPullRequest` still leaves the run's one artifact —
+ * `refused` for a typed deterministic refusal, `failed` otherwise — before
+ * the original error fails the step.
  */
 
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -15,6 +20,8 @@ import * as p from "node:path";
 import { createChat } from "#core/chat.mjs";
 import { createForge } from "#core/forge.mjs";
 import { readSharedInputs } from "#core/inputs.mjs";
+import { oneLine } from "#core/one-line.mjs";
+import { sanitiseCommentText } from "#core/sanitise.mjs";
 import {
   getBooleanInput,
   getNumberInput,
@@ -27,7 +34,8 @@ import {
 } from "#core/runtime.mjs";
 
 import { reviewPullRequest } from "./run.mjs";
-import { serialiseArtifact } from "./artifact.mjs";
+import { buildRedArtifact, RED_REASON_CHARS, serialiseArtifact } from "./artifact.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -125,40 +133,85 @@ export function readEvent(eventName, eventPath) {
  */
 export async function run(inputs, context, io = {}) {
   const event = readEvent(context.eventName, /** @type {string} */ (context.eventPath));
-  const result = await reviewPullRequest({
-    inputs: {
-      model: inputs.model,
-      maxTurns: inputs.maxTurns,
-      contextWindow: inputs.contextWindow,
-      dryRun: inputs.dryRun,
-      configPath: inputs.configPath,
-    },
-    context: { owner: context.owner, repo: context.repo, workspace: context.workspace },
-    pullRequestNumber: event.pullRequestNumber,
-    eventName: event.eventName,
-    event: event.event,
-    io: {
-      forge:
-        io.forge ??
-        createForge({
-          owner: context.owner,
-          repo: context.repo,
-          token: inputs.githubToken,
-          apiUrl: context.apiUrl,
-        }),
-      chat:
-        io.chat ??
-        createChat({
-          apiUrl: inputs.apiUrl,
-          apiKey: inputs.apiKey,
-          timeoutMs: inputs.requestTimeoutMs,
-          ...(io.fetchImpl !== undefined ? { fetchImpl: io.fetchImpl } : {}),
-        }),
-      now: io.now ?? (() => Date.now()),
-      info: io.info ?? ((message) => info(message)),
-    },
-  });
   const log = io.info ?? ((message) => info(message));
+  // The red-run facts the orchestrator stashes as it lands them; a `null`
+  // head is the honest "died before the snapshot read" (#355).
+  /** @type {import("./run.mjs").ReviewRedFacts} */
+  const red = { headRef: null };
+  let result;
+  try {
+    result = await reviewPullRequest({
+      inputs: {
+        model: inputs.model,
+        maxTurns: inputs.maxTurns,
+        contextWindow: inputs.contextWindow,
+        dryRun: inputs.dryRun,
+        configPath: inputs.configPath,
+      },
+      context: { owner: context.owner, repo: context.repo, workspace: context.workspace },
+      pullRequestNumber: event.pullRequestNumber,
+      eventName: event.eventName,
+      event: event.event,
+      io: {
+        forge:
+          io.forge ??
+          createForge({
+            owner: context.owner,
+            repo: context.repo,
+            token: inputs.githubToken,
+            apiUrl: context.apiUrl,
+          }),
+        chat:
+          io.chat ??
+          createChat({
+            apiUrl: inputs.apiUrl,
+            apiKey: inputs.apiKey,
+            timeoutMs: inputs.requestTimeoutMs,
+            ...(io.fetchImpl !== undefined ? { fetchImpl: io.fetchImpl } : {}),
+          }),
+        now: io.now ?? (() => Date.now()),
+        info: io.info ?? ((message) => info(message)),
+      },
+      red,
+    });
+  } catch (cause) {
+    // The red boundary (#355): a run that ends red before its own write
+    // site still leaves its one artifact — `refused` when the throw carries
+    // the typed deterministic-refusal class (the run's own ceilings
+    // declining to act: the diff-line budget, the prompt-headroom ceiling,
+    // the output contract, the config validator, the posture-document
+    // guard), `failed` for every other undeclared throw — and the original
+    // error still fails the step; the record never masks the throw it
+    // records. A failure of this artifact write itself is a logged loss,
+    // never a replacement error (F-14: the write site's tier, not the
+    // boundary's). The event read above this try is the carve-out — a
+    // death before the run holds the facts an artifact is built from
+    // stays unrecorded.
+    const classification = cause instanceof DeterministicRefusalError ? "refused" : "failed";
+    try {
+      const artifact = buildRedArtifact({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequest: event.pullRequestNumber,
+        headRef: red.headRef,
+        outcome: classification,
+        reason: redReason(cause, log),
+        ...(red.commentId !== undefined ? { commentId: red.commentId } : {}),
+        ...(red.applicability !== undefined ? { applicability: red.applicability } : {}),
+      });
+      const file = writeRunArtifact({
+        workspace: context.workspace,
+        directory: inputs.artifactPath,
+        artifact,
+      });
+      log(`review: ${classification} run artifact written to ${file}`);
+    } catch (recordCause) {
+      log(
+        `review: the ${classification} run's artifact was not written: ` +
+          `${recordCause instanceof Error ? recordCause.message : String(recordCause)}`,
+      );
+    }
+    throw cause;
+  }
   log(`review: ${result.reason}`);
 
   if (result.artifact !== undefined) {
@@ -184,6 +237,29 @@ export async function run(inputs, context, io = {}) {
     }
   }
   return result;
+}
+
+/**
+ * The red artifact's reason: the thrown error's own sentence, flattened to
+ * one line and passed through the comment sanitiser under the red record's
+ * declared cap. It is the one review reason that interpolates a thrown
+ * message, and a thrown message can interpolate repository text — a file
+ * name past the diff budget's break — so it enters the record only through
+ * the sanitiser (I14, I16), the same posture harmonise's red record keeps.
+ * The sanitiser's notes go to the run log, exactly where the comment
+ * builders' notes go.
+ *
+ * @param {unknown} cause what the run threw
+ * @param {(message: string) => void} log the run's log sink
+ * @returns {string}
+ */
+function redReason(cause, log) {
+  const sentence = cause instanceof Error ? cause.message : String(cause);
+  const result = sanitiseCommentText(oneLine(sentence), { maxChars: RED_REASON_CHARS });
+  for (const note of result.notes) {
+    log(`review: sanitiser: ${note}`);
+  }
+  return result.text;
 }
 
 /**
@@ -239,9 +315,12 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
     }
   }
   // A skip record names its kind so a durable skip never reads as a reviewed
-  // run; abandonment and dry-run artifacts are similarly distinguished so a
-  // consumer reading the file name knows the outcome before opening it.
-  // All names sit inside the upload glob `review-artifact-*.json`.
+  // run; abandonment, dry-run and the red terminals' refused/failed records
+  // are similarly distinguished so a consumer reading the file name knows
+  // the outcome before opening it. All names sit inside the upload glob
+  // `review-artifact-*.json`; a red run that died before the snapshot read
+  // has no head to name, and writes `no-head` in its place — one
+  // deterministic name that never collides with a pinned run's 40 hex.
   const classification = /** @type {Record<string, unknown>} */ (artifact.outcome).classification;
   const prefix =
     "kind" in artifact
@@ -250,8 +329,12 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
         ? "review-artifact-abandoned"
         : classification === "dry-run"
           ? "review-artifact-dry-run"
-          : "review-artifact";
-  const name = `${prefix}-${artifact.headRef}.json`;
+          : classification === "refused"
+            ? "review-artifact-refused"
+            : classification === "failed"
+              ? "review-artifact-failed"
+              : "review-artifact";
+  const name = `${prefix}-${artifact.headRef ?? "no-head"}.json`;
   const file = p.join(real, name);
   writeFileSync(file, serialiseArtifact(artifact), "utf8");
   return file;

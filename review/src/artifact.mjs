@@ -7,7 +7,10 @@
  * The run builds it from the final run facts — the same set the comment is
  * rendered from — and the action writes the serialised JSON inside the
  * workspace, named after the reviewed head. The comment is the projection;
- * this file is the contract.
+ * this file is the contract. A run that ends red before its own write site
+ * still leaves one: the entrypoint's boundary writer builds the reduced
+ * red-terminal artifact here (#355), so a failed run's account outlives its
+ * runner log exactly a published one's does.
  *
  * Doctrine: every value in the artifact is a fact the code already computed —
  * the outcome classification, the findings with their identities, lifecycle
@@ -46,18 +49,38 @@ import {
   VERDICT_REASON_CHARS,
 } from "./verify.mjs";
 
-/** The artifact schema a run without an applicability fact emits. Bumped only on a breaking shape change. */
-export const reviewArtifactSchemaVersion = 4;
+/**
+ * The artifact schema a run without an applicability fact emits. Bumped only on a breaking shape change.
+ * Version 5 added the red-terminal shapes (#355): the `refused` and `failed` artifacts the run
+ * boundary builds when the run ends red before its own write site — a vocabulary extension a
+ * consumer pinned to 4 must be able to refuse, so the whole family re-stamps.
+ */
+export const reviewArtifactSchemaVersion = 5;
 
-/** The schema version once a run records an applicability fact — the full shape and the skipped shape alike. */
-export const applicabilityArtifactSchemaVersion = 5;
+/**
+ * The schema version once a run records an applicability fact — the full shape and the skipped
+ * shape alike. Moves in lockstep with the bare family to keep the two numbers disjoint: the bare
+ * family's 4 → 5 move (#355) pushes this 5 → 6, so an old applicability record stamped 5 can
+ * never be mistaken for one of the new bare-family shapes.
+ */
+export const applicabilityArtifactSchemaVersion = 6;
 
 /** @typedef {import("./risk.mjs").RiskLevel} RiskLevel */
 /** @typedef {import("./lanes.mjs").AttentionLane} AttentionLane */
 /** @typedef {import("./gates.mjs").GateName} GateName */
 /** @typedef {import("./verify.mjs").PublishedLifecycle} PublishedLifecycle */
 
-const CLASSIFICATIONS = /** @type {const} */ (["published", "abandoned", "refused", "dry-run"]);
+const CLASSIFICATIONS = /** @type {const} */ ([
+  "published",
+  "abandoned",
+  "refused",
+  "failed",
+  "dry-run",
+]);
+/** The classifications a red-terminal artifact may carry — the boundary writer's two words. */
+const RED_CLASSIFICATIONS = /** @type {const} */ (["refused", "failed"]);
+/** The red artifact's reason cap — the one review reason that interpolates a thrown message, so it is sanitised and capped at its build site (I14). */
+export const RED_REASON_CHARS = 300;
 const RISKS = /** @type {const} */ (["low", "medium", "high", "critical"]);
 const ATTENTION_LANES = /** @type {const} */ (["deep", "standard", "skim"]);
 const HEAD_REF = /^[0-9a-f]{40}$/;
@@ -181,6 +204,36 @@ const DRY_RUN_WITH_APPLICABILITY_KEYS = new Set([
   "outcome",
   "applicability",
 ]);
+/** The exact key set a red-terminal artifact without provenance or applicability serialises with. */
+const RED_CORE_KEYS = new Set(["schemaVersion", "repository", "pullRequest", "headRef", "outcome"]);
+/** The exact key set a red-terminal artifact with provenance but no applicability — the run died red after its comment landed. */
+const RED_WITH_PROVENANCE_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "provenance",
+]);
+/** The exact key set a red-terminal artifact with applicability but no provenance — the policy classification ran before the run died. */
+const RED_WITH_APPLICABILITY_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "applicability",
+]);
+/** The exact key set a red-terminal artifact with both — a classified run that died red after its comment landed. */
+const RED_FULL_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "provenance",
+  "applicability",
+]);
 const APPLICABILITY_SECTION_KEYS = new Set([
   "context",
   "applicable",
@@ -202,7 +255,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * The outcome the code already classified for this run.
  *
  * @typedef {object} RunOutcome
- * @property {"published" | "abandoned" | "refused" | "dry-run"} classification published wrote the comment; abandoned the subject moved mid-run; refused a code-owned guard fired (budget, prompt overflow, output contract); dry-run the run was under the dry-run flag
+ * @property {"published" | "abandoned" | "refused" | "failed" | "dry-run"} classification published wrote the comment; abandoned the subject moved mid-run; refused a code-owned guard fired — the typed deterministic refusal the boundary records (budget, prompt overflow, output contract, config validator, posture document) (#355); failed an undeclared throw the boundary records — a transport break, a defect; dry-run the run was under the dry-run flag
  * @property {string} reason the code-composed sentence, uncapped — it is logged, not rendered
  */
 
@@ -492,8 +545,28 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability fact's context, when the policy is on
  */
 
+/**
+ * The reduced artifact a red run's boundary writes (#355) — the record for a
+ * run that ended red before its own write site, so it names only the
+ * identity and the outcome the throw's class decides. `headRef` is the
+ * honest `null` of a run that died before the snapshot read; `provenance`
+ * carries the comment id when one landed before the run died red; the
+ * applicability context rides along when the policy classification ran. No
+ * policy, risk, findings or coverage: the classification vocabulary those
+ * sections serve never reached a terminal point.
+ *
+ * @typedef {object} RedRunArtifact
+ * @property {typeof reviewArtifactSchemaVersion} schemaVersion
+ * @property {string} repository
+ * @property {number} pullRequest
+ * @property {string | null} headRef the head the run pinned to, or null before the snapshot read
+ * @property {{ classification: "refused" | "failed", reason: string }} outcome the classification the throw's class decided; the reason is sanitised and capped at the build site — the one review reason that interpolates a thrown message
+ * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability fact's context, when the policy was active
+ * @property {{ commentId?: number }} [provenance] the comment identity when one landed before the run died red
+ */
+
 /** Every serialisable shape this module emits. */
-/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord | AbandonedRunArtifact | DryRunRunArtifact} AnyRunArtifact */
+/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord | AbandonedRunArtifact | DryRunRunArtifact | RedRunArtifact} AnyRunArtifact */
 
 /**
  * The typed refusal. Every refusal this module raises is one of these, so a
@@ -1318,6 +1391,68 @@ export function buildDryRunArtifact({ repository, pullRequest, headRef, reason, 
 }
 
 /**
+ * Builds the reduced artifact a red run's boundary writer leaves behind
+ * (#355) — the record for a run that ended red before its own write site.
+ * The classification is the throw's class decided: `refused` for a typed
+ * deterministic refusal, `failed` for every other undeclared throw. The
+ * reason arrives sanitised, one-lined and capped at the build site — it
+ * interpolates a thrown message, the one review reason that can carry
+ * repository text — and this builder only refuses what exceeds the declared
+ * cap, the module's standing posture. Partial facts ride only when the run
+ * already held them: a `headRef` the snapshot read pinned, the applicability
+ * context the classification derived, the comment id an upsert returned.
+ *
+ * @param {object} red
+ * @param {string} red.repository "owner/repo", as the forge names it
+ * @param {number} red.pullRequest the pull request number
+ * @param {string | null} red.headRef the head the run pinned to, or null when it died before the snapshot read
+ * @param {"refused" | "failed"} red.outcome the classification the throw's class decided
+ * @param {string} red.reason the thrown error's sentence, sanitised and capped at the build site
+ * @param {number} [red.commentId] the comment's id, when one landed before the run died red
+ * @param {import("./applicability.mjs").ExecutionContext} [red.applicability] the applicability context, when the classification ran
+ * @throws {ArtifactError} on any malformed field
+ * @returns {RedRunArtifact}
+ */
+export function buildRedArtifact({
+  repository,
+  pullRequest,
+  headRef,
+  outcome,
+  reason,
+  commentId,
+  applicability,
+}) {
+  const repo = asNonEmptyString(repository, "red run.repository");
+  const number = asPositiveInt(pullRequest, "red run.pullRequest");
+  const classification = asEnum(outcome, RED_CLASSIFICATIONS, "red run.outcome");
+  const sentence = asBoundedString(reason, "red run.reason", RED_REASON_CHARS);
+  if (headRef !== null) {
+    const ref = asNonEmptyString(headRef, "red run.headRef");
+    if (!HEAD_REF.test(ref)) {
+      throw new ArtifactError("red run.headRef must be a 40-char hex commit sha — refused");
+    }
+  }
+  /** @type {{ commentId?: number }} */
+  const provenance = {};
+  if (commentId !== undefined) {
+    provenance.commentId = asPositiveInt(commentId, "red run.commentId");
+  }
+  const context =
+    applicability !== undefined
+      ? asEnum(applicability, EXECUTION_CONTEXTS, "red run.applicability")
+      : undefined;
+  return deepFreeze({
+    schemaVersion: reviewArtifactSchemaVersion,
+    repository: repo,
+    pullRequest: number,
+    headRef,
+    outcome: { classification, reason: sentence },
+    ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
+    ...(context !== undefined ? { applicability: context } : {}),
+  });
+}
+
+/**
  * Validates one applicability section, fail-closed. Beyond per-field
  * vocabulary it enforces the cross-field law: basis 'rule' names a rule and
  * only a rule decision does; a full-shape artifact refuses the state basis
@@ -1491,7 +1626,8 @@ export function serialiseArtifact(artifact) {
   const record = asRecord(artifact, "artifact");
   if (record.schemaVersion === reviewArtifactSchemaVersion) {
     // The review-artifact family's shapes: the full published shape, the
-    // reduced abandonment shapes, and the reduced dry-run shapes.
+    // reduced abandonment shapes, the reduced dry-run shapes, and the
+    // reduced red-terminal shapes the boundary writer builds (#355).
     if (
       !hasExactKeys(record, ARTIFACT_KEYS) &&
       !hasExactKeys(record, ABANDONED_CORE_KEYS) &&
@@ -1499,7 +1635,11 @@ export function serialiseArtifact(artifact) {
       !hasExactKeys(record, ABANDONED_WITH_APPLICABILITY_KEYS) &&
       !hasExactKeys(record, ABANDONED_FULL_KEYS) &&
       !hasExactKeys(record, DRY_RUN_CORE_KEYS) &&
-      !hasExactKeys(record, DRY_RUN_WITH_APPLICABILITY_KEYS)
+      !hasExactKeys(record, DRY_RUN_WITH_APPLICABILITY_KEYS) &&
+      !hasExactKeys(record, RED_CORE_KEYS) &&
+      !hasExactKeys(record, RED_WITH_PROVENANCE_KEYS) &&
+      !hasExactKeys(record, RED_WITH_APPLICABILITY_KEYS) &&
+      !hasExactKeys(record, RED_FULL_KEYS)
     ) {
       throw new ArtifactError("artifact keys fit no schema of this version — refused");
     }

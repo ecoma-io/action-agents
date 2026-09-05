@@ -30,6 +30,7 @@ import {
   run,
   writeRunArtifact,
 } from "./index.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import {
   buildAbandonedArtifact,
   buildArtifact,
@@ -567,7 +568,7 @@ describe("writeRunArtifact", () => {
     expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-${SHA}.json`));
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(artifactFixture()));
-    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 4, headRef: SHA });
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 5, headRef: SHA });
   });
 
   it("names a skip record inside the artifact upload glob", () => {
@@ -595,7 +596,7 @@ describe("writeRunArtifact", () => {
     expect(p.basename(file)).toMatch(/^review-artifact-.*\.json$/);
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(record));
-    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 5, kind: "state", headRef: SHA });
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 6, kind: "state", headRef: SHA });
   });
 
   it("names an abandoned run's reduced artifact inside the upload glob, comment id included", () => {
@@ -617,7 +618,7 @@ describe("writeRunArtifact", () => {
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(artifact));
     expect(JSON.parse(bytes)).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       outcome: { classification: "abandoned" },
       provenance: { commentId: 101 },
       headRef: SHA,
@@ -640,7 +641,7 @@ describe("writeRunArtifact", () => {
     expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-dry-run-${SHA}.json`));
     expect(p.basename(file)).toMatch(/^review-artifact-.*\.json$/);
     expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       outcome: { classification: "dry-run" },
     });
   });
@@ -882,6 +883,269 @@ describe("run writes the artifact only after publication", () => {
       expect(result.reason).toContain("not written");
       // The failure is logged.
       expect(log.some((line) => line.includes("not written"))).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+describe("the red boundary (#355)", () => {
+  /** The working orchestrator double — the post-publication test's shape. */
+  const openForge = (over = {}) => ({
+    async getPullRequest() {
+      return {
+        number: 41,
+        state: "open",
+        draft: false,
+        merged: false,
+        mergeable: true,
+        mergeableState: "clean",
+        title: "Test PR",
+        body: "",
+        head: { ref: "x", sha: "a".repeat(40) },
+        labels: [],
+        base: { ref: "main", sha: "b".repeat(40) },
+      };
+    },
+    async getRepository() {
+      return { defaultBranch: "main", name: "widgets", description: "" };
+    },
+    async getRef() {
+      return { sha: "c".repeat(40) };
+    },
+    async listPullRequestFiles() {
+      return [
+        /** @type {any} */ ({
+          filename: "src/a.mjs",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -1 +1,2 @@\n+x",
+        }),
+      ];
+    },
+    async listComments() {
+      return [];
+    },
+    async createComment() {
+      return { id: 101 };
+    },
+    async updateComment() {},
+    async deleteComment() {},
+    async getContents() {
+      return null;
+    },
+    async whoami() {
+      return { login: "github-actions[bot]" };
+    },
+    ...over,
+  });
+  /** A chat that never satisfies the output contract — the refusal fixture. */
+  const junkChat = {
+    complete: async () => ({
+      content: "this is not the JSON object the contract specifies",
+      toolCalls: [],
+      finishReason: "stop",
+    }),
+  };
+
+  it("an output-contract refusal writes the refused artifact and rethrows the original error", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "red-refused-"));
+    const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+    try {
+      const cause = await run(readInputs(env), readContext(env), {
+        forge: openForge(),
+        chat: junkChat,
+        now: () => 0,
+        info: () => undefined,
+      }).then(
+        () => null,
+        (error) => error,
+      );
+      // The original error still fails the step — the record never masks
+      // the throw it records.
+      expect(cause).toBeInstanceOf(Error);
+      expect(/** @type {Error} */ (cause).message).toMatch(/failed the output contract twice/);
+      // The guard is the typed deterministic refusal, so the boundary
+      // records it `refused`, not `failed`.
+      expect(cause).toBeInstanceOf(DeterministicRefusalError);
+      const files = readdirSync(p.join(root, ".review-artifact"));
+      expect(files).toEqual([`review-artifact-refused-${"a".repeat(40)}.json`]);
+      const record = JSON.parse(
+        readFileSync(p.join(root, ".review-artifact", files[0] ?? ""), "utf8"),
+      );
+      expect(record.schemaVersion).toBe(5);
+      expect(record.repository).toBe("acme/widgets");
+      expect(record.pullRequest).toBe(41);
+      expect(record.headRef).toBe("a".repeat(40));
+      expect(record.outcome.classification).toBe("refused");
+      expect(record.outcome.reason).toMatch(/failed the output contract twice/);
+      expect(Object.keys(record).sort()).toEqual(
+        ["headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a transport break on the snapshot read writes the failed artifact with the honest null head", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "red-failed-"));
+    const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+    const breakage = new TransportError("https://api.github.com/prs/41", "connection reset");
+    try {
+      const cause = await run(readInputs(env), readContext(env), {
+        forge: openForge({
+          getPullRequest: async () => {
+            throw breakage;
+          },
+        }),
+        chat: junkChat,
+        now: () => 0,
+        info: () => undefined,
+      }).then(
+        () => null,
+        (error) => error,
+      );
+      // The very error that broke the run, not a replacement.
+      expect(cause).toBe(breakage);
+      const files = readdirSync(p.join(root, ".review-artifact"));
+      expect(files).toEqual(["review-artifact-failed-no-head.json"]);
+      const record = JSON.parse(
+        readFileSync(p.join(root, ".review-artifact", files[0] ?? ""), "utf8"),
+      );
+      expect(record.outcome.classification).toBe("failed");
+      // The run died before the snapshot pinned a head — the honest null,
+      // never a guessed sha.
+      expect(record.headRef).toBeNull();
+      expect(record.outcome.reason).toMatch(/connection reset/);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a red run whose comment already stands records the comment it leaves behind", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "red-after-comment-"));
+    const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+    /** @type {Array<{ id?: number, body?: string }>} */
+    const upserts = [];
+    // getPullRequest is read four times on the publishing path — snapshot,
+    // pre-publication freshness, pre-comment, write-time freshness — and the
+    // fourth failing is a run that published and then died red.
+    let reads = 0;
+    try {
+      const cause = await run(readInputs(env), readContext(env), {
+        forge: openForge({
+          async getPullRequest() {
+            reads += 1;
+            if (reads > 3) {
+              throw new TransportError("https://api.github.com/prs/41", "connection reset");
+            }
+            return {
+              number: 41,
+              state: "open",
+              draft: false,
+              merged: false,
+              mergeable: true,
+              mergeableState: "clean",
+              title: "Test PR",
+              body: "",
+              head: { ref: "x", sha: "a".repeat(40) },
+              labels: [],
+              base: { ref: "main", sha: "b".repeat(40) },
+            };
+          },
+          /** @param {number} _number @param {string} body */
+          async createComment(_number, body) {
+            upserts.push({ body });
+            return { id: 101 };
+          },
+        }),
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: () => undefined,
+      }).then(
+        () => null,
+        (error) => error,
+      );
+      // The comment stands — the upsert happened before the break.
+      expect(upserts).toHaveLength(1);
+      expect(cause).toBeInstanceOf(TransportError);
+      const files = readdirSync(p.join(root, ".review-artifact"));
+      expect(files).toEqual([`review-artifact-failed-${"a".repeat(40)}.json`]);
+      const record = JSON.parse(
+        readFileSync(p.join(root, ".review-artifact", files[0] ?? ""), "utf8"),
+      );
+      expect(record.outcome.classification).toBe("failed");
+      expect(record.provenance).toEqual({ commentId: 101 });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a failed boundary artifact write is a logged loss — the original error still fails the step", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "red-write-loss-"));
+    const env = runnerEnv({
+      extra: { GITHUB_WORKSPACE: root, "INPUT_ARTIFACT-PATH": "../outside" },
+    });
+    /** @type {string[]} */
+    const log = [];
+    const breakage = new TransportError("https://api.github.com/prs/41", "connection reset");
+    try {
+      const cause = await run(readInputs(env), readContext(env), {
+        forge: openForge({
+          getPullRequest: async () => {
+            throw breakage;
+          },
+        }),
+        chat: junkChat,
+        now: () => 0,
+        info: (message) => log.push(message),
+      }).then(
+        () => null,
+        (error) => error,
+      );
+      // The transport break, not the record write's failure: the carve-out
+      // keeps the write-loss tier with the write site (F-14).
+      expect(cause).toBe(breakage);
+      expect(log.some((line) => line.includes("the failed run's artifact was not written"))).toBe(
+        true,
+      );
+      expect(existsSync(p.join(root, ".review-artifact"))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a green run writes no red artifact — the boundary never fires on a resolution", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const root = mkdtempSync(p.join(tmpdir(), "red-green-"));
+    const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge: openForge(),
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: () => undefined,
+      });
+      expect(result.outcome).toBe("published");
+      const files = readdirSync(p.join(root, ".review-artifact"));
+      expect(files).toEqual([`review-artifact-${"a".repeat(40)}.json`]);
     } finally {
       vi.restoreAllMocks();
     }
