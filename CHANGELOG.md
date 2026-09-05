@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4](https://github.com/ecoma-io/action-agents/compare/v0.8.3...v0.8.4) (2026-09-05)
+
+
+### Bug Fixes
+
+* **harmonise:** sanitise and cap the run record's terminal reason ([#336](https://github.com/ecoma-io/action-agents/issues/336)) ([5d70c61](https://github.com/ecoma-io/action-agents/commit/5d70c61f4c5b2b0ec007d19877d02f6670176f9f)), closes [#332](https://github.com/ecoma-io/action-agents/issues/332)
+* **triage:** the record validator refuses a verification block the contract does not specify ([#334](https://github.com/ecoma-io/action-agents/issues/334)) ([fa00a9e](https://github.com/ecoma-io/action-agents/commit/fa00a9e14c14e368d4b98c19f9daa9e8a707fbc2))
+
 ## [0.8.3](https://github.com/ecoma-io/action-agents/compare/v0.8.2...v0.8.3) (2026-09-05)
 
 
