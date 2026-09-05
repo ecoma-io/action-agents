@@ -15,8 +15,10 @@ import {
   buildAbandonedArtifact,
   buildArtifact,
   buildDryRunArtifact,
+  buildRedArtifact,
   buildSkippedArtifact,
   buildSkipRecord,
+  RED_REASON_CHARS,
   reviewArtifactSchemaVersion,
   serialiseArtifact,
   withCommentId,
@@ -117,7 +119,7 @@ describe("buildArtifact", () => {
   it("builds the expected artifact from valid facts", () => {
     const artifact = buildArtifact(facts());
     expect(artifact.schemaVersion).toBe(reviewArtifactSchemaVersion);
-    expect(artifact.schemaVersion).toBe(4);
+    expect(artifact.schemaVersion).toBe(5);
     expect(artifact.repository).toBe("octocat/example");
     expect(artifact.pullRequest).toBe(7);
     expect(artifact.headRef).toBe(HEAD);
@@ -1357,7 +1359,7 @@ describe("serialiseArtifact", () => {
   });
 
   it("includes the schema version", () => {
-    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":4');
+    expect(serialiseArtifact(buildArtifact(facts()))).toContain('"schemaVersion":5');
   });
 
   it("serialises to valid JSON that parses back to the artifact", () => {
@@ -1505,12 +1507,15 @@ describe("serialiseArtifact", () => {
   });
 
   it("refuses a record stamped with a schema version either family has retired", () => {
-    // The bare family moved 3 → 4 and the applicability family 4 → 5. A
-    // full-shape record still wearing the retired bare-family number 3 names
-    // no schema this module emits; the applicability family's shape wearing
-    // its own retired 4 fails its version's key sets instead — both refused.
+    // The bare family moved 4 → 5 and the applicability family 5 → 6, in
+    // lockstep, when the red-terminal shapes joined the bare family (#355).
+    // A full-shape record still wearing the retired bare-family number 4
+    // names no schema this module emits; the applicability family's shape
+    // wearing its own retired 5 — the bare family's live number now — fails
+    // that version's key sets instead, which is exactly the collision the
+    // lockstep move exists to prevent — both refused.
     expect(() =>
-      serialiseArtifact(/** @type {any} */ ({ ...buildArtifact(facts()), schemaVersion: 3 })),
+      serialiseArtifact(/** @type {any} */ ({ ...buildArtifact(facts()), schemaVersion: 4 })),
     ).toThrow(/does not match a schema this module emits/);
     const withApplicability = buildArtifact(
       facts({
@@ -1525,7 +1530,7 @@ describe("serialiseArtifact", () => {
       }),
     );
     expect(() =>
-      serialiseArtifact(/** @type {any} */ ({ ...withApplicability, schemaVersion: 4 })),
+      serialiseArtifact(/** @type {any} */ ({ ...withApplicability, schemaVersion: 5 })),
     ).toThrow(/fit no schema of this version/);
   });
 });
@@ -1595,7 +1600,7 @@ describe("the applicability fact and the skipped-run record", () => {
       inputs: { association: "MEMBER", head: "same-repo", authorType: "human" },
     });
 
-  it("carries the applicability fact on schema version 4, exact keys", () => {
+  it("carries the applicability fact on its own schema version, exact keys", () => {
     const bytes = serialiseArtifact(buildArtifact(facts({ applicability: ruleSection() })));
     const round = JSON.parse(bytes);
     expect(round.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
@@ -1628,7 +1633,7 @@ describe("the applicability fact and the skipped-run record", () => {
     });
   });
 
-  it("keeps schema version 4 byte-for-byte when no applicability fact is present", () => {
+  it("keeps the bare family's schema version byte-for-byte when no applicability fact is present", () => {
     const bytes = serialiseArtifact(buildArtifact(facts()));
     expect(JSON.parse(bytes).schemaVersion).toBe(reviewArtifactSchemaVersion);
     expect(bytes).not.toContain("applicability");
@@ -2091,5 +2096,125 @@ describe("buildDryRunArtifact", () => {
     expect(() =>
       buildDryRunArtifact(dryInput({ applicability: /** @type {any} */ ("enterprise") })),
     ).toThrow(/outside the vocabulary/);
+  });
+});
+
+describe("buildRedArtifact", () => {
+  /** A red-terminal record's inputs — the shape the boundary writer hands over. */
+  const redInput = (over = {}) => ({
+    repository: "acme/widgets",
+    pullRequest: 41,
+    headRef: HEAD,
+    outcome: /** @type {"refused" | "failed"} */ ("refused"),
+    reason: "the final answer failed the output contract twice: the answer was empty",
+    ...over,
+  });
+
+  it("builds the refused shape — the bare family's version, exact keys, no policy or findings", () => {
+    const record = buildRedArtifact(redInput());
+    expect(record.schemaVersion).toBe(reviewArtifactSchemaVersion);
+    expect(record.schemaVersion).toBe(5);
+    expect(record.headRef).toBe(HEAD);
+    expect(record.outcome).toEqual({
+      classification: "refused",
+      reason: "the final answer failed the output contract twice: the answer was empty",
+    });
+    const round = JSON.parse(serialiseArtifact(record));
+    expect(Object.keys(round).sort()).toEqual(
+      ["headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
+    );
+  });
+
+  it("builds the failed shape — the other word of the boundary's two", () => {
+    const record = buildRedArtifact(
+      redInput({ outcome: "failed", reason: "request to https://api.github.com failed: reset" }),
+    );
+    expect(record.outcome.classification).toBe("failed");
+    expect(serialiseArtifact(record)).toContain('"classification":"failed"');
+  });
+
+  it("carries the honest null head of a run that died before the snapshot read", () => {
+    const record = buildRedArtifact(redInput({ headRef: null }));
+    expect(record.headRef).toBeNull();
+    expect(JSON.parse(serialiseArtifact(record)).headRef).toBeNull();
+  });
+
+  it("carries the comment id when one landed before the run died red — failed records only", () => {
+    const round = JSON.parse(
+      serialiseArtifact(buildRedArtifact(redInput({ outcome: "failed", commentId: 101 }))),
+    );
+    expect(round.provenance).toEqual({ commentId: 101 });
+    expect(Object.keys(round).sort()).toEqual(
+      ["headRef", "outcome", "provenance", "pullRequest", "repository", "schemaVersion"].sort(),
+    );
+  });
+
+  it("refuses a comment id on a refused classification — the law the docs state, encoded here", () => {
+    expect(() => buildRedArtifact(redInput({ commentId: 101 }))).toThrow(
+      /a refused record cannot name a comment/,
+    );
+    // The failed classification keeps the id — the asymmetry is the law.
+    expect(buildRedArtifact(redInput({ outcome: "failed", commentId: 101 })).provenance).toEqual({
+      commentId: 101,
+    });
+  });
+
+  it("carries the applicability context when the classification ran", () => {
+    const round = JSON.parse(
+      serialiseArtifact(buildRedArtifact(redInput({ applicability: "automation" }))),
+    );
+    expect(round.applicability).toBe("automation");
+    const both = JSON.parse(
+      serialiseArtifact(
+        buildRedArtifact(
+          redInput({ outcome: "failed", commentId: 9, applicability: "maintainer" }),
+        ),
+      ),
+    );
+    expect(both.provenance).toEqual({ commentId: 9 });
+    expect(both.applicability).toBe("maintainer");
+    expect(Object.keys(both).sort()).toEqual(
+      [
+        "applicability",
+        "headRef",
+        "outcome",
+        "provenance",
+        "pullRequest",
+        "repository",
+        "schemaVersion",
+      ].sort(),
+    );
+  });
+
+  it("serialises byte-deterministically — same inputs, identical bytes", () => {
+    const first = serialiseArtifact(buildRedArtifact(redInput()));
+    const second = serialiseArtifact(buildRedArtifact(redInput()));
+    expect(first).toBe(second);
+  });
+
+  it("refuses a foreign classification, a bad head sha and out-of-cap text — fail-closed", () => {
+    expect(() => buildRedArtifact(redInput({ outcome: /** @type {any} */ ("published") }))).toThrow(
+      /outside the vocabulary/,
+    );
+    expect(() => buildRedArtifact(redInput({ headRef: "main" }))).toThrow(
+      /red run\.headRef must be a 40-char hex commit sha/,
+    );
+    expect(() => buildRedArtifact(redInput({ repository: "" }))).toThrow(ArtifactError);
+    expect(() => buildRedArtifact(redInput({ pullRequest: 0 }))).toThrow(ArtifactError);
+    expect(() => buildRedArtifact(redInput({ reason: "x".repeat(RED_REASON_CHARS + 1) }))).toThrow(
+      /exceeds/,
+    );
+    expect(() =>
+      buildRedArtifact(redInput({ applicability: /** @type {any} */ ("enterprise") })),
+    ).toThrow(/outside the vocabulary/);
+  });
+
+  it("refuses a red record grown past its key sets — the serialiser holds the family's line", () => {
+    const built = buildRedArtifact(redInput());
+    for (const grownKey of ["policy", "findings", "risk", "kind"]) {
+      const grown = /** @type {any} */ (structuredClone(built));
+      grown[grownKey] = grownKey === "findings" || grownKey === "risk" ? [] : {};
+      expect(() => serialiseArtifact(grown)).toThrow(ArtifactError);
+    }
   });
 });

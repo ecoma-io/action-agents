@@ -78,7 +78,7 @@ describe("rule 4 — length caps, visibly", () => {
 
     expect(text.endsWith("…[truncated]")).toBe(true);
     expect(text.length).toBe(20);
-    expect(notes[0]).toMatch(/truncated model text from 50 to 20/);
+    expect(notes[0]).toMatch(/truncated text from 50 to 20/);
   });
 
   it("keeps text at the cap untouched", () => {
@@ -95,7 +95,7 @@ describe("rule 4 — length caps, visibly", () => {
 
     expect(text.length).toBe(20);
     expect(text.endsWith("…[truncated]")).toBe(true);
-    expect(notes[0]).toMatch(/truncated model text from 400 to 20/);
+    expect(notes[0]).toMatch(/truncated text from 400 to 20/);
   });
 
   it("never splits a surrogate pair at the cut (#347)", () => {

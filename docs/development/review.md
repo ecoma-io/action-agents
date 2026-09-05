@@ -304,10 +304,11 @@ policy source: event=pull_request basis=base branch=main sha=<sha> path=.github/
 ```
 
 Dry run suppresses every skip record: absolute zero mutation means zero.
-The artifact schema moves to `schemaVersion: 4` only when a run has an
+The artifact schema moves to `schemaVersion: 6` only when a run has an
 applicability fact to carry; skip records ride the applicability family's
-`schemaVersion` (`5`) with a `kind` field, and the three shapes never mix in
-one record.
+`schemaVersion` with a `kind` field, and the shapes never mix in
+one record. The bare family's own `schemaVersion` is `5` — it moved there
+from `4` when the red-terminal artifacts joined it (#355).
 
 ## Inputs
 
@@ -1037,9 +1038,11 @@ Every run ends in exactly one of three states:
 - **FAILED** — provider failure, invalid configuration, a pull request past
   the changed-file ceiling, a prompt past the initial budget, a broken
   conversation protocol, or a persistently malformed final answer — any
-  unrecoverable error. Write nothing. The previous complete review, if one
-  exists, stays exactly as it is — a failed re-review must never destroy the
-  last known-good record.
+  unrecoverable error. Write nothing to the repository. The previous complete
+  review, if one exists, stays exactly as it is — a failed re-review must
+  never destroy the last known-good record. The run's own account still
+  lands: a red exit leaves its one artifact behind (see
+  [the red boundary](#the-red-boundary)).
 
 One window exists where a published review can end without its artifact: the
 artifact file is written after the comment is upserted, and a write that
@@ -1138,7 +1141,7 @@ contract a human reads; both are projections of the same final facts, and
 neither can drift from the other, because both are built from the same
 values in the same pass.
 
-The schema is versioned (`schemaVersion: 4`; `5` once a run carries an
+The schema is versioned (`schemaVersion: 5`; `6` once a run carries an
 applicability fact, and the shapes never mix in one record) and the builder is
 fail-closed:
 a fact outside the declared key sets, a vocabulary word the code does not
@@ -1159,7 +1162,7 @@ a typed `ArtifactError`, never a coerced field. The fields:
 | `coverage`                             | the read/unread partition of the expected set, byte-wise sorted                                                                                                                                                                                                                                                                            |
 | `phases`                               | the loop's phase transitions, in order                                                                                                                                                                                                                                                                                                     |
 | `provenance`                           | the marker comment's id and, when the policy was active, the execution context — no timestamp, no run id                                                                                                                                                                                                                                   |
-| `applicability`                        | schema version 5 only, the applicability family's version — the derived context, its inputs, the decision and what decided it, the posture and the resolved intensity; see [the applicability axis](#the-applicability-axis)                                                                                                               |
+| `applicability`                        | schema version 6 only, the applicability family's version — the derived context, its inputs, the decision and what decided it, the posture and the resolved intensity; see [the applicability axis](#the-applicability-axis)                                                                                                               |
 
 Byte-determinism is a property, not a style: identical facts serialise to
 identical bytes (`serialiseArtifact`), so two runs of the same review differ
@@ -1179,7 +1182,10 @@ their reduced artifacts — the run identity and the outcome sentence, plus the
 comment id when a comment stands; a skip always leaves a record (see
 [what a skip leaves behind](#what-a-skip-leaves-behind)): the reduced
 skipped-run record when a policy is present, a `kind`-carrying skip record
-otherwise. The newer-head rule extends to every record:
+otherwise; and a run that ends red leaves its one artifact at the boundary
+rather than the builder's (see [the red boundary](#the-red-boundary)) —
+the two carve-outs below are the only exits that write nothing. The newer-head
+rule extends to every declared record:
 `assertFreshArtifact` compares
 the artifact's head against a forge read taken before the comment exists, so
 a refusal there writes nothing at all, and again against a second read taken
@@ -1192,12 +1198,64 @@ The write is confined like every read. The `artifact-path` input (default
 `.review-artifact`) is resolved inside `GITHUB_WORKSPACE` or refused; `.git`
 is refused outright; a symlinked branch of the tree cannot carry the write
 out. The file is named `review-artifact-<head sha>.json`; a skip record is
-named `review-artifact-skip-<head sha>.json`, and both sit inside the upload
+named `review-artifact-skip-<head sha>.json`; the abandonment, dry-run and
+red terminals carry their own prefixes — `review-artifact-abandoned-`,
+`review-artifact-dry-run-`, `review-artifact-refused-`,
+`review-artifact-failed-` — so a consumer reading the directory knows the
+outcome before opening a file, and a red run that died before the snapshot
+read writes `no-head` in the sha's place. All sit inside the upload
 glob `.review-artifact/review-artifact-*.json`. The shipped
 workflow uploads it with `actions/upload-artifact` after the review step,
 `if: always()` so a failed comment step still leaves its record, and
-`if-no-files-found: ignore` because an unpublished run has no file — the
-upload notifies nobody and grants nothing.
+`if-no-files-found: ignore` because the carve-outs — a death before the run
+holds the facts an artifact is built from, and a failed artifact write
+itself — leave no file; every red exit that reached the boundary leaves one.
+The upload notifies nobody and grants nothing.
+
+### The red boundary
+
+The twin of harmonise's boundary (#347, #355): a run that ends red — any
+throw out of `reviewPullRequest` — still leaves its one artifact, and then
+the original error still fails the step; the record never masks the throw it
+records. `run` in `src/index.mjs` holds the boundary, and it writes exactly
+one of two shapes:
+
+- `refused` — the throw carries the typed `DeterministicRefusalError`
+  (`src/refusal.mjs`), the class of the run's own ceilings declining to act:
+  a config that does not validate (F-02), the diff-line budget and the
+  prompt-headroom ceiling (F-11), and the twice-failed output contract
+  (F-09). Every one of these fires before the first repository write, so a
+  `refused` record can never name a comment.
+- `failed` — every other undeclared throw: transport and auth, a policy
+  resolution that fails (F-03), a reader-level config refusal, an absent or
+  oversized posture document (the loader's own plain error — the posture
+  failures a consumer actually sees), and the loop's coverage-accounting and
+  gate-table invariants. The orchestrator's map-miss guard beside the loader
+  ("a posture document that did not survive loading") is not a reachable
+  refusal: the loader reads every declared posture instruction as required,
+  so the guard stands as an internal invariant in F-15's tier, kept for the
+  day a code path breaks that promise. The boundary pins F-15 — an internal
+  unknown is recorded as itself, never smoothed into a refusal.
+
+The record is the reduced family's shape with an `outcome` of
+`{ classification, reason }`. The reason is the thrown error's own sentence,
+flattened to one line and passed through the comment sanitiser under the
+red record's declared cap of 300 characters — the one review reason that
+interpolates a thrown message, and a thrown message can interpolate
+repository text, so it enters the record only through the sanitiser (I14,
+I16). The facts the boundary can still name it does: the head when the
+snapshot read landed (null, `no-head`, when it did not), the comment id when
+the comment was already published — only a `failed` record carries one, and
+the run's account then says so — and the applicability context when it was
+derived. The boundary never re-reads the forge to check freshness: it records
+the run as the run died, from the facts it died holding.
+
+Two carve-outs stay unrecorded, both deliberately. A throw before the
+boundary — the event read — is a death before the run holds any fact an
+artifact is built from, and inventing them would be worse than the silence.
+And a failure of the record write itself is a logged loss, never a
+replacement error: the red run stays red for its own reason (F-14 — the
+write site's tier, not the boundary's to overrule).
 
 ## Dry run
 
@@ -1232,7 +1290,9 @@ a config that does not validate — red, not green-on-nothing. Startup
 validation precedes the first model call. A finding refused for being
 off-vocabulary or off-snapshot is logged with the finding that produced it. A
 failed run never deletes and never overwrites: the last complete review
-survives every failure that comes after it.
+survives every failure that comes after it. And a red exit still leaves its
+one artifact behind — `refused` or `failed`, at
+[the red boundary](#the-red-boundary) — before the error fails the step.
 
 ## What `review` never does
 

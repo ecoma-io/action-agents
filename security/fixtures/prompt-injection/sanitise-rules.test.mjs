@@ -128,7 +128,7 @@ describe("the core sanitiser keeps model text inert", () => {
     const capped = sanitiseCommentText(long, { maxChars: 40 });
     assert.equal([...capped.text].length, 40, "the visible cap is exact once marked");
     assert.ok(capped.text.endsWith("…[truncated]"), "the cut carries the truncation mark");
-    assert.equal(hasNote(capped.notes, "truncated model text") ? 1 : 0, 1, "the cut is logged");
+    assert.equal(hasNote(capped.notes, "truncated text") ? 1 : 0, 1, "the cut is logged");
 
     const within = sanitiseCommentText("short");
     assert.equal(within.text, "short");
