@@ -185,6 +185,9 @@ describe("validateHarmoniseRecord", () => {
     expect(() =>
       validateHarmoniseRecord(cloneFixture({ outcome: "failed", pairs: null, headSha: null })),
     ).not.toThrow();
+    expect(() =>
+      validateHarmoniseRecord(cloneFixture({ outcome: "refused", pairs: null, headSha: null })),
+    ).not.toThrow();
     expect(() => validateHarmoniseRecord(cloneFixture({ headSha: "abc" }))).toThrow(/headSha/);
     expect(() =>
       validateHarmoniseRecord(cloneFixture({ pairs: { selected: 2, proposed: 1 } })),

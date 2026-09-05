@@ -3033,6 +3033,8 @@ describe("run with a bounded-concurrency pool", () => {
 });
 
 describe("the run record (#297)", () => {
+  const SOURCE = "# Dev\n\nProse.\n";
+  const TRANSLATED = "# Dev\n\nTraduit.\n";
   it("a published run writes its record — the terminal state, the pair accounting and the pull request", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const forgeDouble = forge(makeRepo());
@@ -3244,7 +3246,7 @@ describe("the run record (#297)", () => {
     expect(forgeDouble.writes.map((/** @type {{ op: string }} */ w) => w.op)).toHaveLength(0);
   });
 
-  it("a red run writes one failed record, then the original error still fails the step (#344)", async () => {
+  it("a pure-refusal red run records refused, then the original error still fails the step (#344, #347)", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const forgeDouble = forge(
       makeRepo({ documents: { "manual/dev.md": "" } }),
@@ -3257,7 +3259,9 @@ describe("the run record (#297)", () => {
     );
     expect(ioDouble.records).toHaveLength(1);
     const record = ioDouble.records[0];
-    expect(record.outcome).toBe("failed");
+    // Every red line is a deterministic refusal — a skipped-to-nothing run
+    // — so the boundary writer records the typed refusal's outcome (#347).
+    expect(record.outcome).toBe("refused");
     // The thrown message, sanitised and one-lined at the record's build site.
     expect(record.reason).toMatch(/every pair skipped.*the source document is empty/);
     expect(record.pairs).toEqual({ selected: 1, proposed: 0, unchanged: 0, skipped: 1, failed: 0 });
@@ -3278,6 +3282,62 @@ describe("the run record (#297)", () => {
     expect(record.outcome).toBe("failed");
     expect(record.pairs).toEqual({ selected: 1, proposed: 0, unchanged: 0, skipped: 0, failed: 1 });
     expect(record.reason).toMatch(/every pair failed.*the model refused the pair/);
+  });
+
+  it("a protection-refused red run records refused — its one line is a deterministic refusal (#347)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The corrupt state degrades to absent (advisory), so the drifted target
+    // is human work with no record and manual-edit protection refuses the
+    // pair before any model call: the red set's one line is a ceiling
+    // verdict, and the record carries the refusal, not a failure.
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: "{ this is not json",
+      }),
+    );
+    const ioDouble = io(forgeDouble);
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/every pair failed[\s\S]*manual-edit protection refused/);
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toMatch(/manual-edit protection refused/);
+    expect(record.pairs).toEqual({ selected: 1, proposed: 0, unchanged: 0, skipped: 0, failed: 1 });
+    expect(record.headSha).toBe(forgeDouble.baseSha);
+  });
+
+  it("one defect line in the red set fails the run's record — the mapping stays a function (#347)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Two pairs: one manual-edit protection refusal (a deterministic line)
+    // and one model call whose provider answers junk (a defect line). The
+    // worst line decides — a red set carrying any defect records `failed`,
+    // never `refused`.
+    const forgeDouble = forge(
+      makeRepo({
+        documents: {
+          "manual/dev.md": SOURCE,
+          "manual/vi/dev.md": TRANSLATED,
+          "manual/other.md": SOURCE,
+        },
+      }),
+      makeInventory(["manual/dev.md", "manual/vi/dev.md", "manual/other.md"]),
+    );
+    const ioDouble = io(forgeDouble, [new Error("the model refused the pair")]);
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/manual-edit protection refused/);
+    expect(error.message).toMatch(/the model refused the pair/);
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("failed");
+    expect(record.pairs).toEqual({ selected: 2, proposed: 0, unchanged: 0, skipped: 0, failed: 2 });
   });
 
   it("an undeclared mid-run defect writes the failed record and propagates the original error (#344)", async () => {
