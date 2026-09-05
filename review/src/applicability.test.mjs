@@ -725,3 +725,354 @@ describe("the intensity axis", () => {
     });
   });
 });
+
+describe("the eligibility conditions", () => {
+  /**
+   * Evaluates a policy against the standard fact sheet, overridden per test.
+   *
+   * @param {import("./applicability.mjs").ApplicabilityPolicy} policy
+   * @param {Partial<import("./applicability.mjs").RuleFacts> & { context?: import("./applicability.mjs").ExecutionContext }} [over]
+   */
+  const evaluated = (policy, over = {}) => {
+    const facts = {
+      context: "external",
+      title: "the change",
+      branch: "feature",
+      base: "main",
+      labels: ["triage"],
+      author: { login: "someone", isBot: false },
+      changes: { files: 4, lines: 300 },
+      paths: null,
+      ...over,
+    };
+    return evaluateApplicability({ policy, ...facts });
+  };
+
+  /** A rule factory: id plus when, run: false unless said otherwise. */
+  /** @param {import("./applicability.mjs").WhenConditions} when @param {string} [id] */
+  const skipRule = (when, id = "skip-rule") => ({ id, when, run: false });
+
+  it("skips on the GitHub-attested bot type, allowlist not required", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [skipRule({ author: { isBot: true } })] },
+      "medium",
+    );
+    const result = evaluated(policy, { author: { login: "renovate[bot]", isBot: true } });
+    expect(result.applicable).toBe(false);
+    expect(result.matchedRule).toBe("skip-rule");
+    expect(result.basis).toBe("rule");
+  });
+
+  it("never matches isBot on a missing or non-bot type — a gap costs more review", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [skipRule({ author: { isBot: true } })] },
+      "medium",
+    );
+    expect(evaluated(policy, { author: { login: "someone", isBot: false } }).applicable).toBe(true);
+    expect(evaluated(policy, { author: undefined }).applicable).toBe(true);
+  });
+
+  it("matches author.equals exactly and case-sensitively", () => {
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: [],
+        rules: [
+          {
+            id: "mine",
+            context: "maintainer",
+            when: { author: { equals: ["someone"] } },
+            run: false,
+          },
+        ],
+      },
+      "medium",
+    );
+    expect(
+      evaluated(policy, { context: "maintainer", author: { login: "someone", isBot: false } })
+        .applicable,
+    ).toBe(false);
+    expect(
+      evaluated(policy, { context: "maintainer", author: { login: "Someone", isBot: false } })
+        .applicable,
+    ).toBe(true);
+  });
+
+  it("matches the base ref by flag-less regex", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [{ id: "main-only", when: { base: "^main$" } }] },
+      "medium",
+    );
+    expect(evaluated(policy, { base: "main" }).matchedRule).toBe("main-only");
+    expect(evaluated(policy, { base: "release" }).matchedRule).toBeNull();
+  });
+
+  it("matches labels any-of, exact and case-sensitively", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [{ id: "labelled", when: { labels: ["No-Review"] } }] },
+      "medium",
+    );
+    expect(evaluated(policy, { labels: ["triage", "No-Review"] }).matchedRule).toBe("labelled");
+    expect(evaluated(policy, { labels: ["triage", "no-review"] }).matchedRule).toBeNull();
+    expect(evaluated(policy, { labels: [] }).matchedRule).toBeNull();
+    expect(evaluated(policy, { labels: undefined }).matchedRule).toBeNull();
+  });
+
+  it("guards size strictly — gt is a strict more-than, at the eligibility level", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [skipRule({ changes: { lines: { gt: 299 }, files: { gt: 3 } } })] },
+      "medium",
+    );
+    expect(evaluated(policy, { changes: { files: 4, lines: 300 } }).applicable).toBe(false);
+    expect(evaluated(policy, { changes: { files: 4, lines: 299 } }).applicable).toBe(true);
+    expect(evaluated(policy, { changes: { files: 3, lines: 300 } }).applicable).toBe(true);
+  });
+
+  it("combines families conjunctively — one false conjunct skips the rule, not the run", () => {
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: [],
+        rules: [skipRule({ author: { isBot: true }, changes: { lines: { gt: 100 } } })],
+      },
+      "medium",
+    );
+    expect(
+      evaluated(policy, {
+        author: { login: "b[bot]", isBot: true },
+        changes: { files: 9, lines: 101 },
+      }).applicable,
+    ).toBe(false);
+    expect(
+      evaluated(policy, {
+        author: { login: "b[bot]", isBot: true },
+        changes: { files: 9, lines: 100 },
+      }).applicable,
+    ).toBe(true);
+  });
+
+  it("fails every family on honest absence of the fact it needs", () => {
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: [],
+        rules: [
+          skipRule(
+            { base: "main", labels: ["x"], author: { isBot: true }, changes: { lines: { gt: 0 } } },
+            "needs-everything",
+          ),
+        ],
+      },
+      "medium",
+    );
+    expect(evaluated(policy, { base: undefined }).applicable).toBe(true);
+    expect(evaluated(policy, { labels: undefined }).applicable).toBe(true);
+    expect(evaluated(policy, { author: undefined }).applicable).toBe(true);
+    expect(evaluated(policy, { changes: null }).applicable).toBe(true);
+  });
+
+  it("keeps first-match order across old and new families", () => {
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: [],
+        rules: [
+          { id: "first", when: { base: "^nope" }, run: true },
+          skipRule({ author: { isBot: true } }, "second"),
+        ],
+      },
+      "medium",
+    );
+    const result = evaluated(policy, { author: { login: "b[bot]", isBot: true } });
+    expect(result.matchedRule).toBe("second");
+    expect(result.applicable).toBe(false);
+  });
+
+  it("is deterministic — the same facts decide the same way, twice", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [skipRule({ changes: { files: { gt: 1 } } })] },
+      "medium",
+    );
+    const facts = { changes: { files: 5, lines: 10 } };
+    expect(evaluated(policy, facts)).toEqual(evaluated(policy, facts));
+  });
+
+  it("counts the pre-ignore totals with changeTotals", async () => {
+    const { changeTotals } = await import("./applicability.mjs");
+    expect(
+      changeTotals([
+        /** @type {any} */ ({ additions: 2, deletions: 1 }),
+        /** @type {any} */ ({ additions: 10, deletions: 0 }),
+        /** @type {any} */ ({ additions: 0, deletions: 4 }),
+      ]),
+    ).toEqual({ files: 3, lines: 17 });
+  });
+});
+
+describe("the eligibility grammar", () => {
+  /** @param {unknown} rule */
+  const ruleRefused = (rule) => () =>
+    validateApplicabilityPolicy({ bots: ["acme"], rules: [rule] }, "medium");
+
+  it("refuses an unknown when key", () => {
+    expect(ruleRefused({ id: "x", when: { draft: true } })).toThrow(/unknown key 'draft'/);
+  });
+
+  it("refuses malformed labels", () => {
+    expect(ruleRefused({ id: "x", when: { labels: [] } })).toThrow(
+      /non-empty array of label names/,
+    );
+    expect(ruleRefused({ id: "x", when: { labels: [42] } })).toThrow(
+      /non-string or empty label name/,
+    );
+    expect(ruleRefused({ id: "x", when: { labels: [""] } })).toThrow(
+      /non-string or empty label name/,
+    );
+  });
+
+  it("refuses an empty or unknown-keyed author family", () => {
+    expect(ruleRefused({ id: "x", when: { author: {} } })).toThrow(/author must not be empty/);
+    expect(ruleRefused({ id: "x", when: { author: { smile: true } } })).toThrow(
+      /author holds unknown key 'smile'/,
+    );
+  });
+
+  it("refuses any isBot but true — the attestation may not be negated", () => {
+    expect(ruleRefused({ id: "x", when: { author: { isBot: false } } })).toThrow(
+      /isBot must be true when present/,
+    );
+    expect(ruleRefused({ id: "x", when: { author: { isBot: "yes" } } })).toThrow(
+      /isBot must be true when present/,
+    );
+  });
+
+  it("refuses malformed equals", () => {
+    expect(ruleRefused({ id: "x", when: { author: { equals: [] } } })).toThrow(
+      /non-empty array of logins/,
+    );
+    expect(ruleRefused({ id: "x", when: { author: { equals: [""] } } })).toThrow(
+      /non-string or empty login/,
+    );
+  });
+
+  it("refuses an empty or unknown-keyed changes family", () => {
+    expect(ruleRefused({ id: "x", when: { changes: {} } })).toThrow(/changes must not be empty/);
+    expect(ruleRefused({ id: "x", when: { changes: { total: { gt: 1 } } } })).toThrow(
+      /unknown key 'total'/,
+    );
+  });
+
+  it("refuses a malformed lines or files guard", () => {
+    expect(ruleRefused({ id: "x", when: { changes: { lines: 80 } } })).toThrow(
+      /lines must be an object holding gt/,
+    );
+    expect(ruleRefused({ id: "x", when: { changes: { files: { gt: 1, atLeast: 1 } } } })).toThrow(
+      /files carries only gt/,
+    );
+  });
+
+  it("refuses a gt that is negative, fractional, or not a number", () => {
+    expect(ruleRefused({ id: "x", when: { changes: { lines: { gt: -1 } } } })).toThrow(
+      /whole number/,
+    );
+    expect(ruleRefused({ id: "x", when: { changes: { lines: { gt: 1.5 } } } })).toThrow(
+      /whole number/,
+    );
+    expect(ruleRefused({ id: "x", when: { changes: { files: { gt: "80" } } } })).toThrow(
+      /whole number/,
+    );
+  });
+
+  it("accepts gt 0 — strictly more than zero, an empty change never matches", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [{ id: "x", when: { changes: { files: { gt: 0 } } } }] },
+      "medium",
+    );
+    expect(policy.rules[0]?.when.changes).toEqual({ files: { gt: 0 } });
+  });
+
+  it("accepts the full eligibility grammar in one policy", () => {
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: ["ecoma-io"],
+        rules: [
+          { id: "bots", when: { author: { isBot: true } }, run: false },
+          {
+            id: "mine",
+            context: "maintainer",
+            when: { author: { equals: ["johnitvn"] }, labels: ["no-review"], base: "^release/" },
+            run: false,
+          },
+          {
+            id: "oversized",
+            when: { changes: { lines: { gt: 8000 }, files: { gt: 200 } } },
+            run: false,
+          },
+        ],
+      },
+      "medium",
+    );
+    expect(policy.rules).toHaveLength(3);
+  });
+});
+
+describe("the anchor law", () => {
+  /** @param {unknown} rule */
+  const ruleRefused = (rule) => () =>
+    validateApplicabilityPolicy({ bots: ["acme"], rules: [rule] }, "medium");
+
+  it("accepts a bot-anchored contextless skip — the attestation is the anchor", () => {
+    const policy = validateApplicabilityPolicy(
+      { bots: [], rules: [{ id: "bots", when: { author: { isBot: true } }, run: false }] },
+      "medium",
+    );
+    expect(policy.rules[0]?.run).toBe(false);
+  });
+
+  it("accepts a size-anchored contextless skip — the measurement is the anchor", () => {
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: [],
+        rules: [{ id: "oversized", when: { changes: { lines: { gt: 8000 } } }, run: false }],
+      },
+      "medium",
+    );
+    expect(policy.rules[0]?.run).toBe(false);
+  });
+
+  it("refuses an equals-only contextless skip — a login list narrows, it never anchors", () => {
+    expect(
+      ruleRefused({ id: "x", when: { author: { equals: ["someuser"] } }, run: false }),
+    ).toThrow(/without a context/);
+  });
+
+  it("refuses label- and base-anchored contextless skips — conventions never govern alone", () => {
+    expect(ruleRefused({ id: "x", when: { labels: ["no-review"] }, run: false })).toThrow(
+      /without a context/,
+    );
+    expect(ruleRefused({ id: "x", when: { base: "^release/" }, run: false })).toThrow(
+      /without a context/,
+    );
+  });
+
+  it("refuses the frozen external context even with the new anchors", () => {
+    expect(
+      ruleRefused({ id: "x", context: "external", when: { author: { isBot: true } }, run: false }),
+    ).toThrow(/external context is frozen/);
+    expect(
+      ruleRefused({
+        id: "x",
+        context: "external",
+        when: { changes: { lines: { gt: 1 } } },
+        run: false,
+      }),
+    ).toThrow(/external context is frozen/);
+  });
+
+  it("keeps a pinned non-external context sufficient on its own", () => {
+    const policy = validateApplicabilityPolicy(
+      {
+        bots: ["acme"],
+        rules: [{ id: "x", context: "automation", when: { labels: ["x"] }, run: false }],
+      },
+      "medium",
+    );
+    expect(policy.rules[0]?.run).toBe(false);
+  });
+});

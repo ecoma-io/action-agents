@@ -3413,3 +3413,162 @@ describe("the intensity axis", () => {
     expect(chat.captured).toHaveLength(0);
   });
 });
+
+describe("the eligibility axis", () => {
+  /** The fixtures' base repo, so the derivation lands where the test says. */
+  const ELIG_CONTEXT = { ...CONTEXT, owner: "ecoma-io", repo: "action-agents" };
+
+  /** The eligibility dogfood policy: bot- and size-anchored skips, no allowlist needed. */
+  const ELIGIBILITY_CONFIG = JSON.stringify({
+    schemaVersion: 1,
+    applicability: {
+      bots: [],
+      rules: [
+        { id: "unlisted-bots", when: { author: { isBot: true } }, run: false },
+        { id: "oversized", when: { changes: { lines: { gt: 8000 } } }, run: false },
+      ],
+    },
+  });
+
+  /** The payload for a fixture: its author, head and base, the stub's number. */
+  /** @param {typeof import("./applicability.fixtures.mjs").RELEASE_AUTOMATION} fixture */
+  const eligEvent = (fixture) => ({
+    action: "synchronize",
+    pull_request: { ...fixture, number: 7, base: { ref: "main", sha: "8".repeat(40) } },
+  });
+
+  /** @param {number[]} sink @returns {import("#core/chat.mjs").Chat} */
+  const countingChat = (sink) => ({
+    async complete() {
+      sink.push(1);
+      return {
+        content: '{"findings":[],"summary":"nothing to report"}',
+        toolCalls: [],
+        finishReason: "stop",
+      };
+    },
+  });
+
+  /** @param {ReturnType<typeof forgeStub>} forge @returns {number[]} */
+  const countedListings = (forge) => {
+    /** @type {number[]} */
+    const sink = [];
+    const inner = forge.listPullRequestFiles.bind(forge);
+    forge.listPullRequestFiles = async () => {
+      sink.push(1);
+      return inner(7);
+    };
+    return sink;
+  };
+
+  it("skips an unallowlisted bot on the isBot anchor — recorded, zero model calls, zero writes", async () => {
+    const forge = forgeStub({
+      config: ELIGIBILITY_CONFIG,
+      snapshotOverride: snapshot({
+        title: "chore(deps): update vite to 8.2.1",
+        head: { ref: "renovate/vite-8.x", sha: HEAD },
+      }),
+    });
+    const listings = countedListings(forge);
+    /** @type {number[]} */
+    const chatCalls = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: ELIG_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: eligEvent(RELEASE_AUTOMATION),
+      io: io(forge, countingChat(chatCalls)),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(result.reason).toContain("unlisted-bots");
+    expect(forge.calls.upserts).toHaveLength(0);
+    expect(listings).toHaveLength(1);
+    expect(chatCalls).toHaveLength(0);
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.outcome.classification).toBe("skip");
+    expect(record.applicability).toEqual({
+      context: "external",
+      applicable: false,
+      posture: "standard",
+      intensity: {},
+      matchedRule: "unlisted-bots",
+      basis: "rule",
+      inputs: { association: "NONE", head: "same-repo", authorType: "bot-unlisted" },
+    });
+  });
+
+  it("skips an oversized PR on the changes anchor with its measured numbers in the reason", async () => {
+    const bigFiles = Array.from({ length: 400 }, (_unused, index) => ({
+      filename: `src/generated-${String(index)}.mjs`,
+      status: "modified",
+      additions: 15,
+      deletions: 10,
+      patch: "@@ -1 +1,2 @@\n+x",
+    }));
+    const forge = forgeStub({
+      config: ELIGIBILITY_CONFIG,
+      files: bigFiles,
+    });
+    const listings = countedListings(forge);
+    /** @type {number[]} */
+    const chatCalls = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: ELIG_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: eligEvent(MAINTAINER_DOCS),
+      io: io(forge, countingChat(chatCalls)),
+    });
+    expect(result.outcome).toBe("skip");
+    expect(result.reason).toContain("oversized");
+    expect(result.reason).toContain("10000 changed lines across 400 files");
+    expect(forge.calls.upserts).toHaveLength(0);
+    expect(listings).toHaveLength(1);
+    expect(chatCalls).toHaveLength(0);
+  });
+
+  it("keeps a small PR on the eligible path when a changes rule exists but does not match", async () => {
+    const forge = forgeStub({
+      config: ELIGIBILITY_CONFIG,
+      snapshotOverride: snapshot({
+        title: MAINTAINER_DOCS.title,
+        head: { ref: MAINTAINER_DOCS.head.ref, sha: HEAD },
+      }),
+    });
+    const listings = countedListings(forge);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: ELIG_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: eligEvent(MAINTAINER_DOCS),
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    expect(listings).toHaveLength(1);
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("suppresses the new-anchor skips under dry-run — logged, nothing written", async () => {
+    const forge = forgeStub({
+      config: ELIGIBILITY_CONFIG,
+      snapshotOverride: snapshot({
+        title: RELEASE_AUTOMATION.title,
+        head: { ref: RELEASE_AUTOMATION.head.ref, sha: HEAD },
+      }),
+    });
+    const result = await reviewPullRequest({
+      inputs: { ...INPUTS, dryRun: true },
+      context: ELIG_CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: eligEvent(RELEASE_AUTOMATION),
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("dry-run");
+    expect(result.artifact?.outcome.classification).toBe("dry-run");
+    expect(forge.calls.upserts).toHaveLength(0);
+  });
+});

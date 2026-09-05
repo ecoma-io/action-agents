@@ -547,8 +547,8 @@ test("loadCorpus refuses malformed JSON", async () => {
 test("evaluate replays the real corpus and clears every loose threshold", async () => {
   const result = await evaluate({ corpusRoot: CORPUS_ROOT });
   assert.deepEqual(result.defects, []);
-  assert.deepEqual(result.corpusCounts, { triage: 6, review: 3, harmonise: 3 });
-  assert.deepEqual(result.replayed, { triage: 6, review: 3, harmonise: 3 });
+  assert.deepEqual(result.corpusCounts, { triage: 6, review: 5, harmonise: 3 });
+  assert.deepEqual(result.replayed, { triage: 6, review: 5, harmonise: 3 });
   const byMetric = new Map(result.rows.map((row) => [row.metric, row]));
   const refusal = byMetric.get("triage refusal-rate");
   assert.ok(refusal && refusal.value !== null && Math.abs(refusal.value - 3 / 5) < 1e-12);

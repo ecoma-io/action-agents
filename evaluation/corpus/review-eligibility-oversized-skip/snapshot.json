@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": ""
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "opened",
+    "payload": {
+      "action": "opened",
+      "pull_request": {
+        "number": 8,
+        "user": { "login": "johnitvn", "type": "User" },
+        "author_association": "MEMBER",
+        "head": {
+          "ref": "codegen/regenerate-all",
+          "sha": "c4d5e6f70819293a4b5c6d7e8f9012345678901a",
+          "repo": { "full_name": "ecoma-io/action-agents" }
+        },
+        "base": {
+          "ref": "main",
+          "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 8,
+    "title": "chore: regenerate the generated modules",
+    "body": "A full regeneration sweep: 30 modules rewritten end to end. Synthetic body.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": "{\"schemaVersion\":1,\"applicability\":{\"bots\":[],\"rules\":[{\"id\":\"oversized\",\"when\":{\"changes\":{\"lines\":{\"gt\":8000}}},\"run\":false}]}}",
+      ".github/action-agents/review/instruction.md": null
+    }
+  },
+  "headFiles": {
+    "src/generated-000.mjs": "// synthetic generated module stand-in: no real generated output is reproduced\nexport const part = 0;\n"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": { "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a" },
+    "getPullRequest": {
+      "number": 8,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "chore: regenerate the generated modules",
+      "body": "A full regeneration sweep: 30 modules rewritten end to end. Synthetic body.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "codegen/regenerate-all",
+        "sha": "c4d5e6f70819293a4b5c6d7e8f9012345678901a"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+      }
+    },
+    "listPullRequestFiles": [
+      {
+        "filename": "src/generated-000.mjs",
+        "status": "modified",
+        "additions": 9000,
+        "deletions": 0,
+        "patch": "@@ -1,1 +1,9001 @@\n+// synthetic stand-in lines"
+      }
+    ],
+    "listComments": [],
+    "whoami": { "login": "github-actions[bot]" }
+  }
+}
