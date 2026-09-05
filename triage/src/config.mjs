@@ -445,6 +445,21 @@ export function effectiveSheet({
     sheet.set(name, gloss);
   }
   if (narrowing.length > 0) {
+    // Every narrowing name is declared — the check above settled that — but a
+    // declared label can still sit outside the offered sheet: a size rung, a
+    // priority role, a workflow marker, a triage-owned label, the
+    // needsMoreInfo label. Dropping it silently would run with fewer labels
+    // than the workflow named, so the mismatch is a config error, exactly
+    // like the not-declared case one branch up.
+    for (const name of narrowing) {
+      if (!sheet.has(name)) {
+        throw new Error(
+          `the labels input names '${name}', which the config file declares but never offers — ` +
+            `markers, triage-owned labels, size rungs and the needsMoreInfo label are ` +
+            `code-maintained and cannot be narrowed to; narrow to the labels a run offers`,
+        );
+      }
+    }
     const keep = new Set(narrowing);
     for (const name of sheet.keys()) {
       if (!keep.has(name)) sheet.delete(name);
