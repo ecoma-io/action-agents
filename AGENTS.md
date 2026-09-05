@@ -106,7 +106,7 @@ stated in the security policy at the repository root:
 [`SECURITY.md`](SECURITY.md) is the longer form of all three, with the table the
 second one is read off. Every action run is also judged against a frozen
 contract — the terminal states and verdicts a run may end in, the failure
-taxonomy, the concurrency windows, the state-separation rule, and the sixteen
+taxonomy, the concurrency windows, the state-separation rule, and the seventeen
 invariants — written once in
 [docs/run-contract.md](docs/run-contract.md). Read it before changing
 anything a run's outcome rides on: a new outcome word, failure class, or

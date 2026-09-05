@@ -3336,6 +3336,60 @@ describe("the run record (#297)", () => {
     expect(record.reason).toMatch(/every pair failed.*the model refused the pair/);
   });
 
+  it("an all-pairs script-gate refusal records refused — the typed class is the outcome (I17)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The model answers in Cyrillic for the `vi` target: the script gate
+    // refuses before restoration, the typed class carries through the retry
+    // policy (a refusal, never re-asked) into the red line's column, and a
+    // red set whose every line is that refusal records `refused`.
+    const forgeDouble = forge(makeRepo(), makeInventory(["manual/dev.md", "manual/vi/dev.md"]));
+    const ioDouble = io(forgeDouble, [proposes("# Разработка\n\nТекст.\n")]);
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error).toBeInstanceOf(DeterministicRefusalError);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/script gate: target language "vi" requires Latin/);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(ioDouble.chat.calls()).toBe(1);
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toMatch(/script gate: target language "vi" requires Latin/);
+    expect(record.pairs).toEqual({ selected: 1, proposed: 0, unchanged: 0, skipped: 0, failed: 1 });
+    expect(record.headSha).toBe(forgeDouble.baseSha);
+    expect(record.pullRequest).toBeNull();
+  });
+
+  it("one defect line beside a script-gate refusal still records failed — the worst line decides (I17)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Two pairs: the first answer is wrong-script (the typed refusal), the
+    // second a provider defect. The script gate's refusal column alone does
+    // not make the run a refusal — one defect line fails the record.
+    const forgeDouble = forge(
+      makeRepo({
+        documents: {
+          "manual/dev.md": "# Dev\n\nProse.\n",
+          "manual/other.md": "# Other\n\nText.\n",
+        },
+      }),
+      makeInventory(["manual/dev.md", "manual/vi/dev.md", "manual/other.md", "manual/vi/other.md"]),
+    );
+    const ioDouble = io(forgeDouble, [
+      proposes("# Разработка\n\nТекст.\n"),
+      new Error("the provider answered junk"),
+    ]);
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    expect(error).not.toBeInstanceOf(DeterministicRefusalError);
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/script gate: target language "vi" requires Latin/);
+    expect(error.message).toMatch(/the provider answered junk/);
+    expect(ioDouble.records).toHaveLength(1);
+    const record = ioDouble.records[0];
+    expect(record.outcome).toBe("failed");
+    expect(record.pairs).toEqual({ selected: 2, proposed: 0, unchanged: 0, skipped: 0, failed: 2 });
+  });
+
   it("a protection-refused red run records refused — its one line is a deterministic refusal (#347)", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     // The corrupt state degrades to absent (advisory), so the drifted target
