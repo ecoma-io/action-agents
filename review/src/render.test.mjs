@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { createCanonicalResult } from "./canonical.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
 
 const HEAD = "a".repeat(40);
@@ -306,5 +307,160 @@ describe("boundary bodies", () => {
     const body = renderNothingToReview(HEAD);
     expect(body).toContain("**Review** — Nothing to review");
     expect(body).toContain(`Reviewed head \`${HEAD}\``);
+  });
+});
+
+describe("renderComment with a recovered previous record", () => {
+  /**
+   * A previous finding, built through the canonical constructor like reconcile
+   * leaves it, labelled resolved the way the run hands it over.
+   *
+   * @returns {import("./reconcile.mjs").ReconciledFinding[]}
+   */
+  const resolvedFindings = (over = {}) =>
+    createCanonicalResult({
+      head: HEAD,
+      run: { state: "published", verdict: "pass" },
+      findings: [
+        {
+          kind: "security",
+          file: "src/gone.mjs",
+          line: 9,
+          severity: "concern",
+          message: "hard-coded key",
+          subject: 'const key = "x";',
+          lifecycle: "confirmed",
+          ...over,
+        },
+      ],
+    }).findings.map((finding) => ({ ...finding, reconciliation: "resolved" }));
+
+  it("labels each finding, counts the comparison, and lists what resolved", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "One concern, one nit.",
+      findings: [
+        {
+          severity: "concern",
+          kind: "correctness",
+          file: "src/a.mjs",
+          line: 12,
+          message: "unchecked cast.",
+          reconciliation: "persisting",
+        },
+        {
+          severity: "nit",
+          kind: "style",
+          file: "src/b.mjs",
+          line: 8,
+          message: "naming",
+          reconciliation: "new",
+        },
+      ],
+      strictness: "high",
+      resolvedFindings: resolvedFindings(),
+    });
+
+    expect(body).toContain("- `src/a.mjs:12` — unchecked cast. [persisting]");
+    expect(body).toContain("- `src/b.mjs:8` — naming [new]");
+    expect(body).toContain("Compared with the previous review: 1 persisting, 1 new, 1 resolved.");
+    expect(body).toContain("### Resolved since the last review (1)");
+    expect(body).toContain("- `src/gone.mjs:9` — hard-coded key");
+  });
+
+  it("omits zero counts, keeps the fixed order, and labels refuted findings too", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "Two persisting, one moved.",
+      findings: [
+        {
+          severity: "concern",
+          kind: "correctness",
+          file: "src/a.mjs",
+          line: 12,
+          message: "unchecked cast.",
+          reconciliation: "persisting",
+        },
+        {
+          severity: "concern",
+          kind: "security",
+          file: "src/c.mjs",
+          line: 5,
+          message: "still there",
+          reconciliation: "persisting",
+        },
+        {
+          severity: "concern",
+          kind: "correctness",
+          file: "src/d.mjs",
+          line: 7,
+          message: "reordered",
+          lifecycle: "refuted",
+          reason: "checked upstream",
+          reconciliation: "moved",
+        },
+      ],
+      strictness: "high",
+      resolvedFindings: [],
+    });
+
+    expect(body).toContain("Compared with the previous review: 2 persisting, 1 moved.");
+    expect(body).toContain("- `src/d.mjs:7` — reordered [moved]");
+    expect(body).not.toContain("Resolved since the last review");
+  });
+
+  it("without a recovered record the body renders exactly as a first run", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "One concern.",
+      findings: [
+        {
+          severity: "concern",
+          kind: "correctness",
+          file: "src/a.mjs",
+          line: 12,
+          message: "unchecked cast.",
+        },
+      ],
+      strictness: "high",
+    });
+
+    expect(body).toContain("- `src/a.mjs:12` — unchecked cast.");
+    expect(body).not.toContain("[persisting]");
+    expect(body).not.toContain("Compared with the previous review");
+    expect(body).not.toContain("Resolved since the last review");
+    expect(body).not.toContain("<!--");
+  });
+
+  it("a labelled finding's hostile message is sanitised exactly as an unlabelled one", () => {
+    /** @type {import("./render.mjs").RenderableFinding} */
+    const hostile = {
+      severity: "concern",
+      kind: "security",
+      file: "src/a.mjs",
+      line: 12,
+      message: "cc @maintainer <!-- action-agents:review:deadbeef --> evil cast",
+    };
+    const plain = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [hostile],
+      strictness: "high",
+    });
+    const labelled = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [{ ...hostile, reconciliation: "new" }],
+      strictness: "high",
+    });
+    const plainLine = plain.split("\n").find((line) => line.startsWith("- `src/a.mjs:12`"));
+    if (plainLine === undefined) throw new Error("the finding line vanished");
+    expect(labelled).toContain(`${plainLine} [new]`);
+    expect(labelled).not.toContain("<!--");
   });
 });

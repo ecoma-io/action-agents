@@ -10,6 +10,13 @@
  * angle brackets and HTML-comment delimiters are stripped from the displayed
  * path — matching happened on the exact name; rendering happens on the
  * defanged copy.
+ *
+ * The one cross-run decoration is code-owned too: when the previous
+ * published record was recovered from the thread's marker comment, every
+ * finding carries its reconciliation label (`[new]`, `[persisting]`,
+ * `[moved]`), a count line compares the two runs, and a section lists what
+ * resolved — prose only, never a consequence (ADR 004 decision 3). Without
+ * a recovered record the body renders exactly as a first run always has.
  */
 
 import { sanitiseCommentText } from "#core/sanitise.mjs";
@@ -17,7 +24,7 @@ import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { evidenceRef } from "./provenance.mjs";
 /** @typedef {import("./answer.mjs").Finding} Finding */
 /** @typedef {import("./verify.mjs").VerifiedFinding} VerifiedFinding */
-/** @typedef {VerifiedFinding & { provenance?: Provenance }} RenderableFinding */
+/** @typedef {VerifiedFinding & { provenance?: Provenance, reconciliation?: import("./vocabulary.mjs").Reconciliation }} RenderableFinding */
 /** @typedef {import("./provenance.mjs").Provenance} Provenance */
 
 export const SUMMARY_CHARS = 300;
@@ -34,6 +41,7 @@ export const MESSAGE_CHARS = 1000;
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the deterministic read-coverage report; rendered as a count line when the expected set is non-empty
  * @property {number} [quarantinedCount] findings withheld as unanchored before publication — rendered when nothing published, so a withheld review never reads as clean
  * @property {import("#core/policy.mjs").PolicySource} [policySource] the resolved policy source — the comment's provenance line, so the verdict names the branch and commit that governed it
+ * @property {readonly import("./reconcile.mjs").ReconciledFinding[]} [resolvedFindings] the previous run's findings this run retired — present only when the previous published record was recovered, which turns on the cross-run labels, the count line and the resolved section
  */
 
 /**
@@ -50,6 +58,7 @@ export function renderComment({
   coverage,
   quarantinedCount,
   policySource,
+  resolvedFindings,
 }) {
   /** @type {string[]} */
   const lines = [];
@@ -67,6 +76,28 @@ export function renderComment({
   }
   lines.push(...header, "");
   lines.push(sanitised(summary === "" ? "(no summary)" : summary, SUMMARY_CHARS));
+
+  if (resolvedFindings !== undefined) {
+    const persisting = findings.filter((finding) => finding.reconciliation === "persisting").length;
+    const moved = findings.filter((finding) => finding.reconciliation === "moved").length;
+    const fresh = findings.filter((finding) => finding.reconciliation === "new").length;
+    const resolved = resolvedFindings.filter(
+      (finding) => finding.reconciliation === "resolved",
+    ).length;
+    /** @type {Array<[import("./vocabulary.mjs").Reconciliation, number]>} */
+    const compared = [
+      ["persisting", persisting],
+      ["moved", moved],
+      ["new", fresh],
+      ["resolved", resolved],
+    ];
+    const parts = compared
+      .filter(([, count]) => count > 0)
+      .map(([label, count]) => `${String(count)} ${label}`);
+    if (parts.length > 0) {
+      lines.push("", `Compared with the previous review: ${parts.join(", ")}.`);
+    }
+  }
 
   if (coverage !== undefined && coverage.total > 0) {
     // Numbers only — no paths, so nothing to defang or sanitise.
@@ -120,6 +151,13 @@ export function renderComment({
     lines.push("", `### Refuted during verification (${String(refuted.length)})`, "");
     for (const finding of refuted) lines.push(listingOf(finding));
   }
+  const retired = (resolvedFindings ?? []).filter(
+    (finding) => finding.reconciliation === "resolved",
+  );
+  if (retired.length > 0) {
+    lines.push("", `### Resolved since the last review (${String(retired.length)})`, "");
+    for (const finding of retired) lines.push(resolvedListing(finding));
+  }
 
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
 }
@@ -148,12 +186,15 @@ export function renderNothingToReview(headSha) {
  * `unverified:` with why the pass could not decide, or `refuted:` with why
  * the verifier contradicted the claim — code-owned labels around a
  * sanitised reason, never the model's framing. A confirmed or unscheduled
- * finding renders exactly as it always did.
+ * finding renders exactly as it always did. When the run reconciles against
+ * a recovered previous record, the first line ends in the code-owned
+ * cross-run label — `[new]`, `[persisting]` or `[moved]`.
  *
  * @param {RenderableFinding} finding
  */
 function listingOf(finding) {
-  const listing = `- \`${defang(finding.file)}:${String(finding.line)}\` — ${sanitised(finding.message, MESSAGE_CHARS)}`;
+  const label = finding.reconciliation === undefined ? "" : ` [${finding.reconciliation}]`;
+  const listing = `- \`${defang(finding.file)}:${String(finding.line)}\` — ${sanitised(finding.message, MESSAGE_CHARS)}${label}`;
   const evidence =
     finding.provenance === undefined
       ? listing
@@ -165,6 +206,19 @@ function listingOf(finding) {
     return `${evidence}\n  refuted: ${sanitised(finding.reason ?? "", MESSAGE_CHARS)}`;
   }
   return evidence;
+}
+
+/**
+ * One resolved finding's listing — the previous run's anchor and its claim,
+ * the anchor this run no longer holds. The previous lifecycle is
+ * deliberately ignored: a finding the last run could not verify still
+ * resolved when its identity is gone.
+ *
+ * @param {import("./reconcile.mjs").ReconciledFinding} finding
+ * @returns {string}
+ */
+function resolvedListing(finding) {
+  return `- \`${defang(finding.file)}:${String(finding.line)}\` — ${sanitised(finding.message, MESSAGE_CHARS)}`;
 }
 
 /**

@@ -24,6 +24,9 @@ import {
   RELEASE_AUTOMATION,
 } from "./applicability.fixtures.mjs";
 import { findingIdentity } from "./answer.mjs";
+import { createCanonicalResult } from "./canonical.mjs";
+import { embedRecordBlock, parseRecordBlock } from "./record.mjs";
+import { toSarif } from "./sarif.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
 import { VERIFIER_MAX_EVIDENCE_BYTES, VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
@@ -3776,5 +3779,230 @@ describe("the eligibility axis", () => {
     expect(result.outcome).toBe("dry-run");
     expect(result.artifact?.outcome.classification).toBe("dry-run");
     expect(forge.calls.upserts).toHaveLength(0);
+  });
+});
+describe("the cross-run reconciliation in the published comment", () => {
+  const CONCERN =
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+  const TWO =
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},{"severity":"nit","kind":"style","file":"src/b.mjs","line":2,"message":"naming"}],"summary":"two"}';
+  const READ = {
+    content: "",
+    toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+  };
+  const READS = {
+    content: "",
+    toolCalls: [
+      { id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' },
+      { id: "r2", name: "read_file", arguments: '{"path":"src/b.mjs"}' },
+    ],
+  };
+  const VERDICT = {
+    content: '{"verdict":"confirmed","kind":"correctness","reason":"the read settles it"}',
+  };
+  const GONE = {
+    kind: "security",
+    file: "src/gone.mjs",
+    line: 9,
+    severity: "concern",
+    message: "hard-coded key",
+    subject: 'const key = "x";',
+    lifecycle: "confirmed",
+  };
+  const TWO_FILES = [
+    {
+      filename: "src/a.mjs",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -1 +1,2 @@\n+x",
+    },
+    {
+      filename: "src/b.mjs",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -1 +1,2 @@\n+y",
+    },
+  ];
+
+  /**
+   * A thread comment, as the forge lists it.
+   *
+   * @param {number} id
+   * @param {string} body
+   * @param {string} [login]
+   */
+  const listed = (id, body, login = "someone-else") => ({
+    id,
+    body,
+    user: { login },
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  });
+
+  /**
+   * A published previous record, wrapped in the marker comment it rides in.
+   *
+   * @param {import("./canonical.mjs").CanonicalResult} record
+   */
+  const previousComment = (record) =>
+    listed(
+      55,
+      `<!-- action-agents:review:0badcafe:head=${record.head} -->\n**Review** — Complete\n${embedRecordBlock(record)}\n`,
+    );
+
+  /**
+   * A previous record over arbitrary findings, published cleanly.
+   *
+   * @param {Array<{
+   *   kind: string,
+   *   file: string,
+   *   line: number,
+   *   severity: string,
+   *   message: string,
+   *   subject: string,
+   *   lifecycle: string,
+   *   fingerprint?: string,
+   *   verdict?: string,
+   *   reason?: string,
+   *   evidence?: { digest: string, excerpt: string },
+   * }>} findings
+   */
+  const previousRecord = (findings) =>
+    createCanonicalResult({ head: HEAD, run: { state: "published", verdict: "pass" }, findings });
+
+  /**
+   * @param {import("./run.mjs").ReviewForge} forge
+   * @param {Array<{ content: string, toolCalls?: { id: string, name: string, arguments: string }[] }>} turns
+   */
+  const runReview = async (forge, turns) =>
+    reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge, readingChat(turns)),
+    });
+
+  it("the published comment carries its own record for the next run", async () => {
+    const forge = forgeStub();
+    const result = await runReview(forge, [READ, { content: CONCERN }, VERDICT]);
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    const carried = parseRecordBlock(body);
+    if (carried === undefined) throw new Error("the upsert carried no readable record");
+    if (result.canonical === undefined) throw new Error("a published run lost its record");
+    expect(carried.findings).toEqual(result.canonical.findings);
+    expect(carried.head).toBe(HEAD);
+    expect(body.trimEnd().endsWith("-->")).toBe(true);
+  });
+
+  it("a recovered record labels persisting findings and refreshes the block in the same upsert", async () => {
+    const script = [READS, { content: TWO }, VERDICT];
+    const first = forgeStub({ files: TWO_FILES });
+    await runReview(first, script);
+    const prior = parseRecordBlock(first.calls.upserts[0]?.body ?? "");
+    if (prior === undefined) throw new Error("the first run's record did not parse");
+
+    const forge = forgeStub({ files: TWO_FILES });
+    forge.listComments = async () => [previousComment(prior)];
+    const result = await runReview(forge, script);
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("[persisting]");
+    expect(body).toContain("Compared with the previous review: 2 persisting.");
+    expect(body).not.toContain("Resolved since the last review");
+    if (result.canonical === undefined) throw new Error("a published run lost its record");
+    expect(parseRecordBlock(body)?.findings).toEqual(result.canonical.findings);
+  });
+
+  it("a moved previous anchor and a resolved finding render where they retired", async () => {
+    const script = [READS, { content: TWO }, VERDICT];
+    const first = forgeStub({ files: TWO_FILES });
+    await runReview(first, script);
+    const prior = parseRecordBlock(first.calls.upserts[0]?.body ?? "");
+    if (prior === undefined) throw new Error("the first run's record did not parse");
+    const kept = prior.findings[0];
+    if (kept === undefined) throw new Error("the prior record lost its finding");
+
+    const forge = forgeStub({ files: TWO_FILES });
+    forge.listComments = async () => [
+      previousComment(previousRecord([{ ...kept, line: 3 }, ...prior.findings.slice(1), GONE])),
+    ];
+    const result = await runReview(forge, script);
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("[moved]");
+    expect(body).toContain("[persisting]");
+    expect(body).toContain("Compared with the previous review: 1 persisting, 1 moved, 1 resolved.");
+    expect(body).toContain("### Resolved since the last review (1)");
+    expect(body).toContain("- `src/gone.mjs:9` — hard-coded key");
+  });
+
+  it("a current finding absent from the previous record is labelled new, with the resolved count", async () => {
+    const forge = forgeStub();
+    forge.listComments = async () => [previousComment(previousRecord([GONE]))];
+    const result = await runReview(forge, [READ, { content: CONCERN }, VERDICT]);
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("[new]");
+    expect(body).toContain("Compared with the previous review: 1 new, 1 resolved.");
+    expect(body).toContain("### Resolved since the last review (1)");
+  });
+
+  it("a corrupt previous record renders a first-run comment and never fails the run", async () => {
+    const forge = forgeStub();
+    forge.listComments = async () => [
+      listed(
+        55,
+        `<!-- action-agents:review:0badcafe:head=${HEAD} -->\nold prose\n<!-- action-agents-record:review:bm90IGpzb24= -->\n`,
+      ),
+    ];
+    const result = await runReview(forge, [READ, { content: CONCERN }, VERDICT]);
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).not.toContain("[new]");
+    expect(body).not.toContain("Compared with the previous review");
+    expect(body).not.toContain("Resolved since the last review");
+    expect(parseRecordBlock(body)).toBeDefined();
+  });
+
+  it("the upsert updates the action's own comment in place, record block and all", async () => {
+    const forge = forgeStub();
+    forge.listComments = async () => [
+      { ...previousComment(previousRecord([])), user: { login: "github-actions[bot]" } },
+    ];
+    const result = await runReview(forge, [READ, { content: CONCERN }, VERDICT]);
+    expect(result.outcome).toBe("published");
+    expect(forge.calls.upserts).toEqual([{ id: 55, body: expect.any(String) }]);
+    if (result.canonical === undefined) throw new Error("a published run lost its record");
+    expect(parseRecordBlock(forge.calls.upserts[0]?.body ?? "")?.findings).toEqual(
+      result.canonical.findings,
+    );
+  });
+
+  it("labels change only the prose: record, gate verdict and SARIF bytes are identical", async () => {
+    const script = [READ, { content: CONCERN }, VERDICT];
+    const without = forgeStub();
+    const bare = await runReview(without, script);
+    const withPrevious = forgeStub();
+    withPrevious.listComments = async () => [previousComment(previousRecord([GONE]))];
+    const labelled = await runReview(withPrevious, script);
+
+    if (bare.canonical === undefined || labelled.canonical === undefined) {
+      throw new Error("a published run lost its record");
+    }
+    expect(labelled.canonical).toEqual(bare.canonical);
+    expect(labelled.gate).toEqual(bare.gate);
+    expect(JSON.stringify(toSarif(labelled.canonical))).toBe(
+      JSON.stringify(toSarif(bare.canonical)),
+    );
+    const labelledBody = withPrevious.calls.upserts[0]?.body ?? "";
+    const bareBody = without.calls.upserts[0]?.body ?? "";
+    expect(labelledBody).toContain("[new]");
+    expect(bareBody).not.toContain("[new]");
+    expect(labelledBody).not.toBe(bareBody);
   });
 });

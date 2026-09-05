@@ -89,4 +89,9 @@ in `run.mjs`, the kind-bound verification pass, gate execution behind
 `gate-mode`, and the job outputs, `runner.temp` SARIF write and `review gate`
 check run in the entrypoint) changed the runtime behavior this record only
 described. The ceiling manifest's check-run entry and the gate fixtures in
-`security/fixtures/canonical-gate/` landed with it.
+`security/fixtures/canonical-gate/` landed with it. The comment reconciliation
+(F) closed the loop across runs: the marker comment embeds the published
+run's canonical record in an inert machine-readable block, and the next run
+recovers it to render the cross-run labels `reconcile.mjs` computes —
+comment prose only, never an input to the gate, the SARIF projection or an
+exit code.
