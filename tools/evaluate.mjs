@@ -1118,11 +1118,12 @@ export async function replayReview(entry) {
 /**
  * Reads the harmonise run record a replay's workspace holds, if the run
  * wrote one. Harmonise records every resolved terminal point — `published`,
- * `partial` and `skip` — and ends before any record exists on its refusal
- * paths, so an absent record is the absence of a terminal point, not a
- * defect; the caller decides which the absence is. A record directory that
- * holds anything but exactly one record, and a record that fails its own
- * module's validator, are corpus defects.
+ * `partial` and `skip` — and its boundary writer also records `refused` and
+ * `failed` on the red paths, so a present record is the terminal state's
+ * authority; an absent record is the absence of a terminal point, not a
+ * defect, and it is what the caller's message-prefix fallback classifies.
+ * A record directory that holds anything but exactly one record, and a
+ * record that fails its own module's validator, are corpus defects.
  *
  * @param {string} entryName
  * @param {string} recordDir
@@ -1152,9 +1153,9 @@ function readHarmoniseRecord(entryName, recordDir) {
 
 /**
  * The harmonise terminal states a replay may report, in the run contract's
- * vocabulary — `published`, `partial` and `skip` derived from the run's own
- * validated record, `refused` and `failed` for the paths that end before
- * any record exists.
+ * vocabulary — every one read from the run's own validated record where the
+ * boundary writer wrote one, `refused` and `failed` classified from the
+ * message only when no record exists.
  * @typedef {"published" | "partial" | "refused" | "failed" | "skip"} HarmoniseReplayOutcome
  */
 
