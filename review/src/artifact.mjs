@@ -562,7 +562,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {string | null} headRef the head the run pinned to, or null before the snapshot read
  * @property {{ classification: "refused" | "failed", reason: string }} outcome the classification the throw's class decided; the reason is sanitised and capped at the build site — the one review reason that interpolates a thrown message
  * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability fact's context, when the policy was active
- * @property {{ commentId?: number }} [provenance] the comment identity when one landed before the run died red
+ * @property {{ commentId?: number }} [provenance] the comment identity when one landed before the run died red — a `failed` record's shape only; a `refused` record never names a comment
  */
 
 /** Every serialisable shape this module emits. */
@@ -1400,7 +1400,8 @@ export function buildDryRunArtifact({ repository, pullRequest, headRef, reason, 
  * repository text — and this builder only refuses what exceeds the declared
  * cap, the module's standing posture. Partial facts ride only when the run
  * already held them: a `headRef` the snapshot read pinned, the applicability
- * context the classification derived, the comment id an upsert returned.
+ * context the classification derived, the comment id an upsert returned —
+ * that last one only on a `failed` record, the law this builder enforces.
  *
  * @param {object} red
  * @param {string} red.repository "owner/repo", as the forge names it
@@ -1408,7 +1409,7 @@ export function buildDryRunArtifact({ repository, pullRequest, headRef, reason, 
  * @param {string | null} red.headRef the head the run pinned to, or null when it died before the snapshot read
  * @param {"refused" | "failed"} red.outcome the classification the throw's class decided
  * @param {string} red.reason the thrown error's sentence, sanitised and capped at the build site
- * @param {number} [red.commentId] the comment's id, when one landed before the run died red
+ * @param {number} [red.commentId] the comment's id, when one landed before the run died red — refused outright on a `refused` classification
  * @param {import("./applicability.mjs").ExecutionContext} [red.applicability] the applicability context, when the classification ran
  * @throws {ArtifactError} on any malformed field
  * @returns {RedRunArtifact}
@@ -1426,6 +1427,14 @@ export function buildRedArtifact({
   const number = asPositiveInt(pullRequest, "red run.pullRequest");
   const classification = asEnum(outcome, RED_CLASSIFICATIONS, "red run.outcome");
   const sentence = asBoundedString(reason, "red run.reason", RED_REASON_CHARS);
+  // The law the boundary's docs state, encoded where the family validates
+  // it: every typed refusal fires before the first repository write, so a
+  // `refused` record can never name a comment (#355).
+  if (classification === "refused" && commentId !== undefined) {
+    throw new ArtifactError(
+      "a refused record cannot name a comment — every typed refusal fires before the first write — refused",
+    );
+  }
   if (headRef !== null) {
     const ref = asNonEmptyString(headRef, "red run.headRef");
     if (!HEAD_REF.test(ref)) {

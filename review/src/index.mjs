@@ -241,13 +241,17 @@ export async function run(inputs, context, io = {}) {
 
 /**
  * The red artifact's reason: the thrown error's own sentence, flattened to
- * one line and passed through the comment sanitiser under the red record's
- * declared cap. It is the one review reason that interpolates a thrown
- * message, and a thrown message can interpolate repository text — a file
- * name past the diff budget's break — so it enters the record only through
- * the sanitiser (I14, I16), the same posture harmonise's red record keeps.
- * The sanitiser's notes go to the run log, exactly where the comment
- * builders' notes go.
+ * one line with control characters mapped to spaces — a thrown message can
+ * interpolate a pull-request author's file name, and escaped terminal
+ * sequences must not ride into the record — then passed through the comment
+ * sanitiser under the red record's declared cap. It is the one review
+ * reason that interpolates a thrown message, so it enters the record only
+ * through the sanitiser (I14, I16), the same posture harmonise's red
+ * record keeps. The sanitiser's notes go to the run log, exactly where the
+ * comment builders' notes go. A message that sanitises to nothing — empty,
+ * whitespace, nothing but structural tokens — falls back to a fixed
+ * sentence: the builder refuses an empty reason, and an unrecordable
+ * reason must not cost the run its record.
  *
  * @param {unknown} cause what the run threw
  * @param {(message: string) => void} log the run's log sink
@@ -255,11 +259,13 @@ export async function run(inputs, context, io = {}) {
  */
 function redReason(cause, log) {
   const sentence = cause instanceof Error ? cause.message : String(cause);
-  const result = sanitiseCommentText(oneLine(sentence), { maxChars: RED_REASON_CHARS });
+  const result = sanitiseCommentText(oneLine(sentence, { stripControlChars: true }), {
+    maxChars: RED_REASON_CHARS,
+  });
   for (const note of result.notes) {
     log(`review: sanitiser: ${note}`);
   }
-  return result.text;
+  return result.text === "" ? "the run failed without a message" : result.text;
 }
 
 /**

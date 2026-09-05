@@ -180,8 +180,10 @@ export async function reviewPullRequest({
     // once instead of every raise site carrying the class. The reader
     // refusals that never reach this try (a configured path that is absent,
     // a policy declared twice, a foreign schema major) stay plain errors —
-    // the same tier harmonise keeps (#347) — because the reading call
-    // interleaves transport breaks a blanket retype would mislabel.
+    // recorded `failed`, not `refused`, a deliberate difference from
+    // harmonise's loader, which retypes its reader failures too (#347) —
+    // because this reading call interleaves transport breaks a blanket
+    // retype would mislabel.
     throw new DeterministicRefusalError(cause instanceof Error ? cause.message : String(cause), {
       cause,
     });
