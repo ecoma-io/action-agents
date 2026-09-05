@@ -671,9 +671,18 @@ describe("mutate — partial-mutation accounting", () => {
       threadLabels: [],
       subject: null,
     });
-    await expect(run).rejects.toThrow(OwnLoginsError);
+    const caught = await run.then(
+      () => null,
+      (cause) => cause,
+    );
+    expect(caught).toBeInstanceOf(PartialMutationError);
+    expect(caught?.cause).toBeInstanceOf(OwnLoginsError);
+    expect(caught?.message).toContain("upsertComment classification comment failed");
     // Nothing written: a run that cannot establish its identity does not
-    // write at all — the upsert never runs on a guessed own-set.
+    // write at all — the upsert never runs on a guessed own-set. The write
+    // now flows through the executor's accounting loop, so the identity-read
+    // failure surfaces as the partial-mutation accounting, with the identity
+    // read as its cause — the same shape a label op's failure already took.
     expect(fake.writes.filter((write) => write.op !== "whoami")).toEqual([]);
   });
 });

@@ -69,7 +69,7 @@ export const VERIFICATION_VERDICTS = /** @type {const} */ (["confirmed", "refute
  * stays out of the record, its bytes checkable by whoever holds it.
  *
  * @typedef {object} VerificationAnswer
- * @property {string} opId a code-minted operation id: `add:<label>`, `remove:<label>` or `comment`
+ * @property {string} opId a code-minted operation id: `add:<label>`, `remove:<label>`, the bare `comment` or the bare `signal`
  * @property {"confirmed" | "refuted" | "uncertain"} verdict
  * @property {string} reasonDigest sha256 (lowercase hex) of the verdict's reason text
  */
@@ -98,16 +98,16 @@ export function buildVerificationBlock() {
 
 /**
  * Whether a string is a code-minted operation id as issue #274 froze the
- * vocabulary: `add:<label>`, `remove:<label>` or the bare `comment`. The
- * label part is any non-empty text after the prefix; its sheet-membership
- * is the decision's business, not the shape's.
+ * vocabulary: `add:<label>`, `remove:<label>`, the bare `comment` or the
+ * bare `signal`. The label part is any non-empty text after the prefix; its
+ * sheet-membership is the decision's business, not the shape's.
  *
  * @param {unknown} value
  * @returns {boolean}
  */
 export function isOpId(value) {
   if (typeof value !== "string") return false;
-  if (value === "comment") return true;
+  if (value === "comment" || value === "signal") return true;
   return /^add:.+/u.test(value) || /^remove:.+/u.test(value);
 }
 

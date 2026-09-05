@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { createEvidence } from "#core/untrusted.mjs";
 
+import { SIGNAL_OP_ID, decisionWriteOps } from "./decision.mjs";
 import { REASON_CHARS, isOpId, validateVerificationBlock } from "./run-record.mjs";
 import {
   REFUSAL_CHARS,
@@ -43,12 +44,12 @@ function decisionFixture(over = {}) {
   return Object.assign(decision, over);
 }
 
-/** The widest plan, as `mintVerificationPlan(decisionFixture())` spells it. */
+/** The widest plan, as `mintVerificationPlan(decisionFixture())` spells it — execution order. */
 const WIDE_PLAN = {
   ops: [
+    { opId: "remove:needs triage", description: "remove the label 'needs triage' (marker)" },
     { opId: "add:bug", description: "apply the label 'bug'" },
     { opId: "add:docs", description: "apply the label 'docs'" },
-    { opId: "remove:needs triage", description: "remove the label 'needs triage' (marker)" },
   ],
 };
 
@@ -93,11 +94,12 @@ const THREAD = {
 };
 
 describe("mintVerificationPlan", () => {
-  it("mints one id per concrete op, in decision order", () => {
+  it("mints one id per concrete op, in execution order", () => {
     const plan = mintVerificationPlan(decisionFixture());
-    expect(plan.ops.map((op) => op.opId)).toEqual(["add:bug", "add:docs", "remove:needs triage"]);
-    expect(plan.ops[0]?.description).toBe("apply the label 'bug'");
-    expect(plan.ops[2]?.description).toBe("remove the label 'needs triage' (marker)");
+    expect(plan.ops.map((op) => op.opId)).toEqual(["remove:needs triage", "add:bug", "add:docs"]);
+    expect(plan.ops[0]?.description).toBe("remove the label 'needs triage' (marker)");
+    expect(plan.ops[1]?.description).toBe("apply the label 'bug'");
+    expect(plan.ops[2]?.description).toBe("apply the label 'docs'");
   });
 
   it("a label containing a colon stays one parseable id", () => {
@@ -126,6 +128,19 @@ describe("mintVerificationPlan", () => {
   it("mints no op for a decision that proposes nothing", () => {
     const plan = mintVerificationPlan(decisionFixture({ add: [], remove: [] }));
     expect(plan.ops).toEqual([]);
+  });
+
+  it("mints the bare signal op for a decision that carries one", () => {
+    const plan = mintVerificationPlan(
+      decisionFixture({
+        add: [],
+        remove: [],
+        signal: { needsMoreInfo: [], modelJudgedQuality: true, related: null },
+      }),
+    );
+    expect(plan.ops.map((op) => op.opId)).toEqual(["signal"]);
+    expect(isOpId("signal")).toBe(true);
+    expect(plan.ops[0]?.description).toContain("signal");
   });
 });
 
@@ -175,16 +190,16 @@ describe("judgeVerificationAnswer", () => {
 
     expect(notes).toEqual([]);
     expect(judged.map((op) => [op.opId, op.verdict, op.reason])).toEqual([
+      ["remove:needs triage", "uncertain", "Cannot tell."],
       ["add:bug", "confirmed", "The report is a crash."],
       ["add:docs", "refuted", "Nothing here is about docs."],
-      ["remove:needs triage", "uncertain", "Cannot tell."],
     ]);
     expect(block.requested).toBe(true);
-    expect(block.downgraded).toEqual(["add:docs", "remove:needs triage"]);
+    expect(block.downgraded).toEqual(["remove:needs triage", "add:docs"]);
     expect(block.answers.map((answer) => answer.reasonDigest)).toEqual([
+      reasonDigest("Cannot tell."),
       reasonDigest("The report is a crash."),
       reasonDigest("Nothing here is about docs."),
-      reasonDigest("Cannot tell."),
     ]);
     // The block is the record's own frozen shape, exactly as the scaffold
     // typed it — filling it never reshapes it.
@@ -273,7 +288,7 @@ describe("judgeVerificationAnswer", () => {
     const { judged, notes, block } = judgeVerificationAnswer("no json here at all", WIDE_PLAN);
     expect(judged.map((op) => op.verdict)).toEqual(["uncertain", "uncertain", "uncertain"]);
     expect(notes.join("\n")).toContain("did not parse");
-    expect(block.downgraded).toEqual(["add:bug", "add:docs", "remove:needs triage"]);
+    expect(block.downgraded).toEqual(["remove:needs triage", "add:bug", "add:docs"]);
     expect(validateVerificationBlock(block)).toBe(block);
   });
 
@@ -360,7 +375,7 @@ describe("verifyDecision", () => {
     expect(judged.map((op) => op.verdict)).toEqual(["uncertain", "uncertain", "uncertain"]);
     expect(judged[0]?.reason).toContain("the verify call did not answer");
     expect(notes.join("\n")).toContain("the verify call did not answer");
-    expect(block.downgraded).toEqual(["add:bug", "add:docs", "remove:needs triage"]);
+    expect(block.downgraded).toEqual(["remove:needs triage", "add:bug", "add:docs"]);
     expect(validateVerificationBlock(block)).toBe(block);
   });
 });
@@ -377,18 +392,18 @@ describe("applyVerification", () => {
     const { decision, downgraded } = applyVerification(decisionFixture(), WIDE_PLAN, MIXED);
     expect(decision.add).toEqual(["bug"]);
     expect(decision.remove).toEqual([]);
-    expect(downgraded).toEqual(["add:docs", "remove:needs triage"]);
+    expect(downgraded).toEqual(["remove:needs triage", "add:docs"]);
     expect(decision.refusals).toEqual([
-      "verification downgraded 'add:docs' (refuted): Nothing here is about docs.",
       "verification downgraded 'remove:needs triage' (uncertain): Cannot tell.",
+      "verification downgraded 'add:docs' (refuted): Nothing here is about docs.",
     ]);
   });
 
   it("each downgraded op also leaves one warning log line", () => {
     const { decision } = applyVerification(decisionFixture(), WIDE_PLAN, MIXED);
     expect(decision.logs.map((log) => [log.level, log.text])).toEqual([
-      ["warning", expect.stringContaining("verification refuted 'add:docs'")],
       ["warning", expect.stringContaining("verification uncertain 'remove:needs triage'")],
+      ["warning", expect.stringContaining("verification refuted 'add:docs'")],
     ]);
   });
 
@@ -396,7 +411,7 @@ describe("applyVerification", () => {
     const { decision, downgraded } = applyVerification(decisionFixture(), WIDE_PLAN, []);
     expect(decision.add).toEqual([]);
     expect(decision.remove).toEqual([]);
-    expect(downgraded).toEqual(["add:bug", "add:docs", "remove:needs triage"]);
+    expect(downgraded).toEqual(["remove:needs triage", "add:bug", "add:docs"]);
     expect(decision.refusals.every((line) => line.includes("no valid entry"))).toBe(true);
   });
 
@@ -422,10 +437,48 @@ describe("applyVerification", () => {
     expect(JSON.parse(JSON.stringify(decision))).toEqual(before);
   });
 
-  it("a signal the decision composed rides through the filter untouched", () => {
-    const signal = { needsMoreInfo: ["steps"], modelJudgedQuality: false, related: null };
-    const { decision } = applyVerification(decisionFixture({ signal }), WIDE_PLAN, MIXED);
-    expect(decision.signal).toEqual(signal);
+  it("a signal the pass confirmed stands — the plan carries its write and the filter keeps it", () =>
+    // The write set survives exactly as the plan held it: the signal's one
+    // write stays, and the acted decision's write surface is the same one
+    // op the verifier confirmed.
+    {
+      const signal = { needsMoreInfo: ["steps"], modelJudgedQuality: false, related: null };
+      const decision = decisionFixture({ add: [], remove: [], signal });
+      const plan = mintVerificationPlan(decision);
+      const { decision: acted, downgraded } = applyVerification(decision, plan, [
+        { opId: SIGNAL_OP_ID, verdict: "confirmed", reason: "The report omits steps." },
+      ]);
+      expect(acted.signal).toEqual(signal);
+      expect(downgraded).toEqual([]);
+      expect(decisionWriteOps(acted).map((op) => op.opId)).toEqual([SIGNAL_OP_ID]);
+    });
+
+  it("a signal the pass did not confirm is dropped, and the drop is recorded", () => {
+    const signal = { needsMoreInfo: ["steps"], modelJudgedQuality: true, related: null };
+    const decision = decisionFixture({ add: [], remove: [], signal });
+    const plan = mintVerificationPlan(decision);
+    const { decision: acted, downgraded } = applyVerification(decision, plan, [
+      { opId: SIGNAL_OP_ID, verdict: "refuted", reason: "The body carries the steps." },
+    ]);
+    expect(acted.signal).toBe(null);
+    expect(downgraded).toEqual([SIGNAL_OP_ID]);
+    expect(acted.refusals).toEqual([
+      "verification downgraded 'signal' (refuted): The body carries the steps.",
+    ]);
+    // With the signal's write dropped and no adds or removals left,
+    // `decisionWriteOps` names nothing: nothing is written.
+    expect(decisionWriteOps(acted)).toEqual([]);
+  });
+
+  it("a signal with no judged entry is dropped, not written — silence is not confirmation", () => {
+    const signal = { needsMoreInfo: [], modelJudgedQuality: true, related: null };
+    const decision = decisionFixture({ add: [], remove: [], signal });
+    const plan = mintVerificationPlan(decision);
+    const { decision: acted, downgraded } = applyVerification(decision, plan, []);
+    expect(acted.signal).toBe(null);
+    expect(downgraded).toEqual([SIGNAL_OP_ID]);
+    expect(acted.refusals[0]).toContain("no valid entry");
+    expect(decisionWriteOps(acted)).toEqual([]);
   });
 });
 

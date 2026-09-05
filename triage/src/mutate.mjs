@@ -23,9 +23,10 @@ import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { oneLine } from "#core/one-line.mjs";
 import { info, warning } from "#core/runtime.mjs";
 
-import { commentBody, renderDryRun, signalBody } from "./decision.mjs";
+import { commentBody, decisionWriteOps, renderDryRun, signalBody } from "./decision.mjs";
 
 /** @typedef {import("./decision.mjs").Decision} Decision */
+/** @typedef {import("./decision.mjs").DecisionWriteOp} DecisionWriteOp */
 
 /**
  * @typedef {object} MutateInput
@@ -64,11 +65,15 @@ import { commentBody, renderDryRun, signalBody } from "./decision.mjs";
 /**
  * One operation in a mutation plan, in execution order. `removeLabel` is
  * one write per name; `addLabels` is one batched write for the whole add
- * list; `upsertComment` is the signal comment's one marker upsert.
+ * list; `upsertComment` is the classification comment's or the signal
+ * comment's one marker upsert. Each write carries the code-minted plan ids
+ * it executes, so the executor's surface and the verification plan's surface
+ * are the same list read two ways.
  *
  * @typedef {object} MutationOp
  * @property {"removeLabel" | "addLabels" | "upsertComment"} op the forge operation, as the accounting names it
  * @property {string} target what the operation acts on — the label names, or the comment's role
+ * @property {string[]} opIds the code-minted plan ids this write executes
  * @property {() => Promise<void>} apply the call itself
  */
 
@@ -204,23 +209,6 @@ export async function mutate({
   // head, and the newer-head guard simply never engages for it.
   const head = live.head === null ? undefined : live.head;
 
-  if (decision.kind === "comment") {
-    const answer = /** @type {{ classification: string, rationale: string }} */ (decision.comment);
-    const ownLogins = await resolveOwnLogins(forge);
-    const outcome = await upsertComment({
-      store: forge,
-      action,
-      issueNumber,
-      buildBody: (marker) => commentBody(answer, marker),
-      ownLogins,
-      head,
-      startedAt: now(),
-      log: info,
-    });
-    info(`classification comment ${outcome.outcome} (${String(outcome.id)})`);
-    return;
-  }
-
   // Remove-then-add, never add-then-remove. The order decides which
   // half-state a run that dies part-way leaves behind: an addition lost
   // leaves the thread without a label the decision was about to place — a
@@ -230,51 +218,93 @@ export async function mutate({
   // decision was withdrawing is the less safe half.
   /** @type {MutationOp[]} */
   const ops = [];
-  for (const removal of decision.remove) {
-    ops.push({
-      op: "removeLabel",
-      target: removal.name,
-      apply: async () => {
-        await forge.removeLabel(issueNumber, removal.name);
-      },
-    });
-  }
-  if (decision.add.length > 0) {
-    const adds = decision.add;
-    ops.push({
-      op: "addLabels",
-      target: `[${adds.join(", ")}]`,
-      apply: async () => {
-        await forge.addLabels(issueNumber, adds);
-      },
-    });
-  }
-  if (decision.signal != null) {
-    const signal = decision.signal;
-    ops.push({
-      op: "upsertComment",
-      target: "signal comment",
-      apply: async () => {
-        // A sheet-mode issue run may carry a code-composed signal:
-        // needs-more-info or a best relationship. It is a comment in the
-        // same marker namespace as the no-sheet classification, so the
-        // upsert keeps exactly one of the action's comments on the thread
-        // whichever mode the last run used. The signal is composed entirely
-        // by code — model text never reaches it.
-        const ownLogins = await resolveOwnLogins(forge);
-        const outcome = await upsertComment({
-          store: forge,
-          action,
-          issueNumber,
-          buildBody: (marker) => signalBody(signal, marker),
-          ownLogins,
-          head,
-          startedAt: now(),
-          log: info,
-        });
-        info(`signal comment ${outcome.outcome} (${String(outcome.id)})`);
-      },
-    });
+  const writeOps = decisionWriteOps(decision);
+  let index = 0;
+  while (index < writeOps.length) {
+    const entry = writeOps[index];
+    if (entry === undefined) break;
+    if (entry.write === "addLabels") {
+      /** @type {string[]} */
+      const batch = [];
+      for (;;) {
+        const next = writeOps[index];
+        if (next === undefined || next.write !== "addLabels") break;
+        batch.push(next.target);
+        index += 1;
+      }
+      const labels = batch;
+      ops.push({
+        op: "addLabels",
+        target: `[${labels.join(", ")}]`,
+        opIds: labels.map((label) => `add:${label}`),
+        apply: async () => {
+          await forge.addLabels(issueNumber, labels);
+        },
+      });
+      continue;
+    }
+    index += 1;
+    if (entry.write === "removeLabel") {
+      const name = entry.target;
+      ops.push({
+        op: "removeLabel",
+        target: name,
+        opIds: [entry.opId],
+        apply: async () => {
+          await forge.removeLabel(issueNumber, name);
+        },
+      });
+    } else if (entry.opId === "comment") {
+      const answer = /** @type {{ classification: string, rationale: string }} */ (
+        decision.comment
+      );
+      ops.push({
+        op: "upsertComment",
+        target: entry.target,
+        opIds: [entry.opId],
+        apply: async () => {
+          const ownLogins = await resolveOwnLogins(forge);
+          const outcome = await upsertComment({
+            store: forge,
+            action,
+            issueNumber,
+            buildBody: (marker) => commentBody(answer, marker),
+            ownLogins,
+            head,
+            startedAt: now(),
+            log: info,
+          });
+          info(`classification comment ${outcome.outcome} (${String(outcome.id)})`);
+        },
+      });
+    } else {
+      const signal = /** @type {NonNullable<Decision["signal"]>} */ (decision.signal);
+      ops.push({
+        op: "upsertComment",
+        target: entry.target,
+        opIds: [entry.opId],
+        apply: async () => {
+          // A sheet-mode issue run may carry a code-composed signal:
+          // needs-more-info or a best relationship. It is a comment in the
+          // same marker namespace as the no-sheet classification, so the
+          // upsert keeps exactly one of the action's comments on the thread
+          // whichever mode the last run used. The signal is composed entirely
+          // by code — model text never reaches it.
+          const ownLogins = await resolveOwnLogins(forge);
+          const outcome = await upsertComment({
+            store: forge,
+            action,
+            issueNumber,
+            buildBody: (marker) => signalBody(signal, marker),
+            ownLogins,
+            head,
+            startedAt: now(),
+            log: info,
+          });
+          info(`signal comment ${outcome.outcome} (${String(outcome.id)})`);
+        },
+      });
+    }
   }
 
   // Per-operation outcome capture. Each operation is attempted in order and

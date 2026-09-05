@@ -36,6 +36,7 @@ import { oneLine } from "#core/one-line.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 
+import { SIGNAL_OP_ID, decisionWriteOps } from "./decision.mjs";
 import { REASON_CHARS } from "./run-record.mjs";
 
 /** @typedef {import("#core/chat.mjs").ChatMessage} ChatMessage */
@@ -67,14 +68,16 @@ export const MAX_DEFECT_NOTES = 10;
  * quote, and what the operation does, in the action's own words.
  *
  * @typedef {object} VerificationPlanOp
- * @property {string} opId `add:<label>`, `remove:<label>` or the bare `comment`
+ * @property {string} opId `add:<label>`, `remove:<label>`, the bare `comment` or the bare `signal`
  * @property {string} description
  */
 
 /**
  * The plan the pass verifies: one op per concrete write the decision names,
- * in decision order. Deterministic and replayable — the same decision always
- * mints the same plan.
+ * in execution order. Minted from `decision.mjs`'s `decisionWriteOps` — the
+ * single source the executor builds its forge calls from — so the plan and
+ * the execution can never diverge. Deterministic and replayable: the same
+ * decision always mints the same plan.
  *
  * @typedef {object} VerificationPlan
  * @property {VerificationPlanOp[]} ops in plan order
@@ -126,32 +129,20 @@ const VERIFIER_CONTRACT =
 
 /**
  * Mints the plan from the decision: one id per concrete op, composed by code
- * from the decision's own fields and never read out of model text. The
- * grammar is `add:`- and `remove:`-prefixed with the label verbatim after it,
- * so a label containing a colon — `priority: high` — stays one parseable id.
+ * from the decision's own fields and never read out of model text. The plan
+ * is `decisionWriteOps(decision)` mapped to its verifiable face — the same
+ * list, the same order, the same ids the executor builds its forge calls
+ * from. The grammar is `add:`- and `remove:`-prefixed with the label
+ * verbatim after it, so a label containing a colon — `priority: high` —
+ * stays one parseable id.
  *
  * @param {Decision} decision
  * @returns {VerificationPlan}
  */
 export function mintVerificationPlan(decision) {
-  /** @type {VerificationPlanOp[]} */
-  const ops = [];
-  for (const label of decision.add) {
-    ops.push({ opId: `add:${label}`, description: `apply the label '${label}'` });
-  }
-  for (const removal of decision.remove) {
-    ops.push({
-      opId: `remove:${removal.name}`,
-      description: `remove the label '${removal.name}' (${removal.reason})`,
-    });
-  }
-  if (decision.kind === "comment") {
-    ops.push({
-      opId: "comment",
-      description: "upsert the classification comment the decision composed",
-    });
-  }
-  return { ops };
+  return {
+    ops: decisionWriteOps(decision).map(({ opId, description }) => ({ opId, description })),
+  };
 }
 
 /**
@@ -327,8 +318,11 @@ export function judgeVerificationAnswer(content, plan) {
  * what the verifier declined — and leaves the plan; a `confirmed` op stands.
  * Pure: the input decision is untouched, and an op with no judged entry is
  * dropped rather than written — and recorded as downgraded, so "downgraded"
- * and "not written" never diverge. A verdict can never add, widen or enable
- * a write.
+ * and "not written" never diverge. The post-filter decision's write set is
+ * the confirmed subset of the plan's: a `signal` the pass did not confirm is
+ * dropped, and a `comment` decision whose comment op was not confirmed is
+ * reduced to a no-write plan, so an operation that was not confirmed is
+ * impossible to execute. A verdict can never add, widen or enable a write.
  *
  * @param {Decision} decision the decision `decide()` reached
  * @param {VerificationPlan} plan the plan minted from that same decision
@@ -363,16 +357,24 @@ export function applyVerification(decision, plan, judged) {
       })}`,
     });
   }
-  return {
-    decision: {
-      ...decision,
-      add: decision.add.filter((label) => confirmed(`add:${label}`)),
-      remove: decision.remove.filter((removal) => confirmed(`remove:${removal.name}`)),
-      refusals,
-      logs,
-    },
-    downgraded,
+  // The post-filter decision carries only the writes that stood. A downgraded
+  // `signal` is dropped outright — its write is gone. A `comment` decision
+  // whose comment op did not stand is reduced to a no-write `labels` plan:
+  // the comment's write is gone, and the shape the executor consumes —
+  // `decisionWriteOps` — names nothing for it.
+  const commentStands = decision.kind !== "comment" || confirmed("comment");
+  /** @type {Decision} */
+  const acted = {
+    ...decision,
+    kind: commentStands ? decision.kind : "labels",
+    comment: commentStands ? decision.comment : undefined,
+    add: decision.add.filter((label) => confirmed(`add:${label}`)),
+    remove: decision.remove.filter((removal) => confirmed(`remove:${removal.name}`)),
+    refusals,
+    logs,
   };
+  if (acted.signal != null && !confirmed(SIGNAL_OP_ID)) acted.signal = null;
+  return { decision: acted, downgraded };
 }
 
 /**
