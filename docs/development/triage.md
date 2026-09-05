@@ -431,9 +431,10 @@ decision, exactly as without the input.
 
 The pass checks operations; it does not propose any. The plan is minted by
 code from the decision — `add:<label>` per entry in `add`, `remove:<label>`
-per entry in `remove`, and the bare `comment` when the decision's kind is the
-comment — so the verifier can neither invent nor merge an operation: a
-verdict naming an id outside the plan confirms nothing. The prompt restates
+per entry in `remove`, the bare `comment` when the decision's kind is the
+comment, and the bare `signal` when the decision composed a signal comment —
+so the verifier can neither invent nor merge an operation: a verdict naming
+an id outside the plan confirms nothing. The prompt restates
 that plan against the same evidence snapshot the decision was derived from —
 the thread's title, body and labels, wrapped as untrusted data, never
 re-read — and asks for one JSON array with one entry per operation:
@@ -473,9 +474,9 @@ but consistent — a model that confirms every operation regardless of the
 evidence, with well-formed reasons — reads exactly like a verification. The
 pass is a second opinion, not a proof; the ceilings it strengthens are the
 sheet and the sanitiser, which verification cannot weaken. Also by design:
-the code-composed signal comment is not a verified operation (the action's
-own words, no model wording to verify), and verification failure is never
-run failure.
+the code-composed signal comment's write is verified like every other write
+(issue #325) — a signal the pass does not confirm is dropped outright — and
+verification failure is never run failure.
 
 ### The run record
 
