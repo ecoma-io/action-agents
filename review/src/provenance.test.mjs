@@ -18,7 +18,14 @@ import {
  * @returns {import("./answer.mjs").Finding}
  */
 function finding(over = {}) {
-  return { severity: "concern", file: "src/a.mjs", line: 2, message: "off-by-one", ...over };
+  return {
+    severity: "concern",
+    kind: "correctness",
+    file: "src/a.mjs",
+    line: 2,
+    message: "off-by-one",
+    ...over,
+  };
 }
 
 /** The captured content behind the default read fixture — four lines, hence endLine 4. */

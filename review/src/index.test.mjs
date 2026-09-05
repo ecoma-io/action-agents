@@ -44,6 +44,9 @@ import {
 /** @type {string} */
 let eventDir;
 
+/** A no-op check-run double for stubs whose runs never reach the gate surfaces. */
+const noopCheckRun = async () => ({ id: 501 });
+
 /**
  * A runner-shaped env for a same-repo pull_request run whose event payload
  * is a real file — no module mocking anywhere.
@@ -260,6 +263,7 @@ describe("run over injected io", () => {
           async whoami() {
             throw new Error("the draft path never reads the token's identity");
           },
+          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
@@ -538,6 +542,7 @@ describe("writeRunArtifact", () => {
       findings: [
         {
           severity: "concern",
+          kind: "correctness",
           file: "src/a.mjs",
           line: 2,
           message: "off-by-one",
@@ -782,6 +787,7 @@ describe("run writes the artifact only after publication", () => {
           async whoami() {
             throw new Error("the draft path never reads the token's identity");
           },
+          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
@@ -864,6 +870,7 @@ describe("run writes the artifact only after publication", () => {
           async whoami() {
             return { login: "github-actions[bot]" };
           },
+          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({
@@ -937,6 +944,9 @@ describe("the red boundary (#355)", () => {
     },
     async whoami() {
       return { login: "github-actions[bot]" };
+    },
+    async createCheckRun() {
+      return { id: 501 };
     },
     ...over,
   });

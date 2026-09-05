@@ -37,7 +37,7 @@ import {
 } from "./applicability.mjs";
 import { GATES } from "./gates.mjs";
 import { PHASES } from "./phases.mjs";
-import { STRATEGY } from "./vocabulary.mjs";
+import { FINDING_KINDS, STRATEGY } from "./vocabulary.mjs";
 import { VERDICTS } from "./verify.mjs";
 import { utf8Compare } from "./order.mjs";
 import { MESSAGE_CHARS } from "./render.mjs";
@@ -105,6 +105,7 @@ const RISK_KEYS = new Set(["path", "risk", "lane"]);
 const FINDING_KEYS = new Set([
   "id",
   "severity",
+  "kind",
   "file",
   "line",
   "message",
@@ -114,7 +115,7 @@ const FINDING_KEYS = new Set([
   "provenance",
   "evidence",
 ]);
-const FINDING_MANDATORY = new Set(["severity", "file", "line", "message", "provenance"]);
+const FINDING_MANDATORY = new Set(["severity", "kind", "file", "line", "message", "provenance"]);
 const READ_KEYS = new Set(["path", "startLine", "endLine", "digest"]);
 /** The evidence a bound verdict carries — exactly the digest and the bounded retention excerpt. */
 const EVIDENCE_KEYS = new Set(["digest", "excerpt"]);
@@ -312,6 +313,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {"confirmed" | "refuted" | "uncertain"} [verdict]
  * @property {string} [reason]
  * @property {"concern" | "nit"} severity
+ * @property {import("./vocabulary.mjs").FindingKind} kind the finding's claim domain
  * @property {string} file repository-relative path, as the inventory spells it
  * @property {number} line 1-based line in the new file
  * @property {string} message sanitised upstream, capped at MESSAGE_CHARS
@@ -416,6 +418,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {"confirmed" | "refuted" | "uncertain"} [verdict] present iff a verdict bound to the finding
  * @property {string} [reason] present iff the pass resolved the finding
  * @property {"concern" | "nit"} severity
+ * @property {import("./vocabulary.mjs").FindingKind} kind
  * @property {string} file
  * @property {number} line
  * @property {string} message
@@ -879,6 +882,7 @@ export function buildArtifact(runFacts) {
     const finding = asRecord(raw, label);
     assertExactKeys(finding, label, FINDING_KEYS, FINDING_MANDATORY);
     const severity = asEnum(finding.severity, SEVERITIES, `${label}.severity`);
+    const kind = asEnum(finding.kind, FINDING_KINDS, `${label}.kind`);
     const file = asNonEmptyString(finding.file, `${label}.file`);
     const line = asPositiveInt(finding.line, `${label}.line`);
     const message = asBoundedString(finding.message, `${label}.message`, MESSAGE_CHARS);
@@ -970,6 +974,7 @@ export function buildArtifact(runFacts) {
     findingsOut.push({
       identity,
       severity,
+      kind,
       file,
       line,
       message,

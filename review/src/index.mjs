@@ -31,10 +31,13 @@ import {
   maskSecret,
   readContext,
   setFailed,
+  setOutput,
 } from "#core/runtime.mjs";
 
 import { reviewPullRequest } from "./run.mjs";
 import { buildRedArtifact, RED_REASON_CHARS, serialiseArtifact } from "./artifact.mjs";
+import { toSarif } from "./sarif.mjs";
+import { VERDICT_REASON_CHARS } from "./verify.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
@@ -43,7 +46,7 @@ import { DeterministicRefusalError } from "./refusal.mjs";
 export const ACTION = "review";
 
 /**
- * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string }} Inputs
+ * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string, gateMode: "observe" | "required" }} Inputs
  */
 
 /**
@@ -61,7 +64,27 @@ export function readInputs(env = process.env) {
     // Where inside the workspace the run artifact lands. The default agrees
     // with the manifest; the write is confined below either way.
     artifactPath: getInput("artifact-path", { default: ".review-artifact" }, env),
+    // The merge gate's mode: `observe` (the default) records the verdict on
+    // the run's surfaces and blocks nothing; `required` lets the check run
+    // gate. Never defaulting to `required` is the rollout safety property.
+    gateMode: readGateMode(env),
   };
+}
+
+/**
+ * Reads `gate-mode`. Unknown values are a startup failure, not a silent
+ * `observe`: an operator who misspells `required` must not get a run that
+ * enforces nothing while looking enforced.
+ *
+ * @param {Env} env
+ * @returns {"observe" | "required"}
+ */
+function readGateMode(env) {
+  const value = getInput("gate-mode", { default: "observe" }, env);
+  if (value !== "observe" && value !== "required") {
+    throw new Error(`gate-mode must be 'observe' or 'required' — got '${oneLine(value)}'`);
+  }
+  return value;
 }
 
 /**
@@ -134,6 +157,16 @@ export function readEvent(eventName, eventPath) {
 export async function run(inputs, context, io = {}) {
   const event = readEvent(context.eventName, /** @type {string} */ (context.eventPath));
   const log = io.info ?? ((message) => info(message));
+  // One forge for the run and for the gate surfaces the entrypoint writes
+  // after it — the check run is the same client's write, never a second one.
+  const forge =
+    io.forge ??
+    createForge({
+      owner: context.owner,
+      repo: context.repo,
+      token: inputs.githubToken,
+      apiUrl: context.apiUrl,
+    });
   // The red-run facts the orchestrator stashes as it lands them; a `null`
   // head is the honest "died before the snapshot read" (#355).
   /** @type {import("./run.mjs").ReviewRedFacts} */
@@ -153,14 +186,7 @@ export async function run(inputs, context, io = {}) {
       eventName: event.eventName,
       event: event.event,
       io: {
-        forge:
-          io.forge ??
-          createForge({
-            owner: context.owner,
-            repo: context.repo,
-            token: inputs.githubToken,
-            apiUrl: context.apiUrl,
-          }),
+        forge,
         chat:
           io.chat ??
           createChat({
@@ -236,7 +262,103 @@ export async function run(inputs, context, io = {}) {
       log(`review: ${result.reason}`);
     }
   }
+
+  // ── Gate surfaces: the SARIF projection, the job outputs, the check run ──
+  // Only a published run has a canonical record and a verdict. Each surface
+  // is a logged loss on its own failure (F-14 posture for write sites that
+  // are not the run's record): the review's verdict stands on the comment
+  // and the artifact; a SARIF file or a check run that could not be written
+  // is reported, never disguised as success, and never replaces the verdict.
+  if (result.canonical !== undefined && result.gate !== undefined) {
+    try {
+      const sarifPath = writeSarifFile({
+        tempDir: context.runnerTemp,
+        canonical: result.canonical,
+      });
+      setOutput("sarif-path", sarifPath);
+    } catch (cause) {
+      log(
+        `review: the SARIF projection was not written: ` +
+          `${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+    const verdictName =
+      inputs.gateMode === "observe" ? `OBSERVE-${result.gate.verdict}` : result.gate.verdict;
+    setOutput("gate-verdict", verdictName);
+    try {
+      const check = renderGateCheckRun({ gate: result.gate, gateMode: inputs.gateMode });
+      await forge.createCheckRun({
+        headSha: result.canonical.head,
+        name: check.name,
+        conclusion: check.conclusion,
+        output: { title: check.title, summary: check.summary },
+      });
+    } catch (cause) {
+      log(
+        `review: the gate check run was not created: ` +
+          `${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
   return result;
+}
+
+/**
+ * Writes the gate's SARIF projection under the runner's temp directory —
+ * never inside the workspace, which the checkout owns and a later step may
+ * `git clean`. The bytes are exactly `JSON.stringify(toSarif(canonical))`:
+ * no timestamps, no run id, so two projections of the same canonical record
+ * are byte-identical and a diff of two runs is a diff of verdicts.
+ *
+ * @param {object} input
+ * @param {string | undefined} input.tempDir the runner's `RUNNER_TEMP`
+ * @param {import("./canonical.mjs").CanonicalResult} input.canonical
+ * @returns {string} the written file's path
+ */
+export function writeSarifFile({ tempDir, canonical }) {
+  if (tempDir === undefined || tempDir === "") {
+    throw new Error(
+      "RUNNER_TEMP is not set — the SARIF projection has nowhere runner-scoped to land",
+    );
+  }
+  const file = p.join(realpathSync(tempDir), `review-sarif-${canonical.head}.json`);
+  writeFileSync(file, JSON.stringify(toSarif(canonical)), "utf8");
+  return file;
+}
+
+/**
+ * Renders the merge gate's check run. The conclusion mapping is the whole
+ * enforcement story: `required` turns a BLOCK into `failure` (what a
+ * branch ruleset reads), a PASS into `success`; `observe` renders `neutral`
+ * whatever the verdict — recorded, enforcing nothing. Every rendered string
+ * goes through the comment sanitiser even though the reasons are structural,
+ * because the discipline is cheaper than the exception.
+ *
+ * @param {object} input
+ * @param {import("./merge-gate.mjs").ReviewGateDecision} input.gate
+ * @param {"observe" | "required"} input.gateMode
+ * @returns {{ name: string, conclusion: "success" | "failure" | "neutral", title: string, summary: string }}
+ */
+export function renderGateCheckRun({ gate, gateMode }) {
+  const observe = gateMode === "observe";
+  const title = sanitiseCommentText(oneLine(`review gate: ${gate.verdict}`), {
+    maxChars: RED_REASON_CHARS,
+  }).text;
+  const reasons = gate.reasons.map(
+    (reason) => sanitiseCommentText(oneLine(reason), { maxChars: VERDICT_REASON_CHARS }).text,
+  );
+  const summary =
+    gate.verdict === "PASS"
+      ? "Every finding in the closed vocabulary is either absent or below the gate's bar."
+      : reasons.length === 0
+        ? "The gate blocked without naming a reason — this sentence is the refusal to guess one."
+        : reasons.join("\n");
+  return {
+    name: "review gate",
+    conclusion: observe ? "neutral" : gate.verdict === "PASS" ? "success" : "failure",
+    title: title === "" ? "review gate" : title,
+    summary,
+  };
 }
 
 /**

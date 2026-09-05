@@ -37,7 +37,14 @@ function makePolicy({ strategy = "standard", lanes = {}, reads = READS } = {}) {
  * @returns {import("./answer.mjs").Finding}
  */
 function finding(over = {}) {
-  return { severity: "concern", file: "src/a.mjs", line: 2, message: "off-by-one", ...over };
+  return {
+    severity: "concern",
+    kind: "correctness",
+    file: "src/a.mjs",
+    line: 2,
+    message: "off-by-one",
+    ...over,
+  };
 }
 
 describe("planVerification", () => {
@@ -159,29 +166,40 @@ describe("planVerification", () => {
 
 describe("parseVerdict", () => {
   it("accepts a well-formed verdict", () => {
-    const parsed = parseVerdict('{"verdict":"confirmed","reason":"the line is correct"}');
-    expect(parsed).toEqual({ ok: true, verdict: "confirmed", reason: "the line is correct" });
+    const parsed = parseVerdict(
+      '{"verdict":"confirmed","kind":"correctness","reason":"the line is correct"}',
+    );
+    expect(parsed).toEqual({
+      ok: true,
+      verdict: "confirmed",
+      kind: "correctness",
+      reason: "the line is correct",
+    });
   });
 
   it("accepts a fenced verdict", () => {
-    const parsed = parseVerdict('```json\n{"verdict":"refuted","reason":"no"}\n```');
-    expect(parsed).toEqual({ ok: true, verdict: "refuted", reason: "no" });
+    const parsed = parseVerdict(
+      '```json\n{"verdict":"refuted","kind":"correctness","reason":"no"}\n```',
+    );
+    expect(parsed).toEqual({ ok: true, verdict: "refuted", kind: "correctness", reason: "no" });
   });
 
   it("refuses an unknown key", () => {
-    const parsed = parseVerdict('{"verdict":"confirmed","reason":"ok","confidence":1}');
+    const parsed = parseVerdict(
+      '{"verdict":"confirmed","kind":"correctness","reason":"ok","confidence":1}',
+    );
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(parsed.defect).toContain("confidence");
   });
 
   it("refuses a missing reason", () => {
-    const parsed = parseVerdict('{"verdict":"confirmed"}');
+    const parsed = parseVerdict('{"verdict":"confirmed","kind":"correctness"}');
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(parsed.defect).toContain("reason");
   });
 
   it("refuses a verdict outside the vocabulary", () => {
-    const parsed = parseVerdict('{"verdict":"partially","reason":"x"}');
+    const parsed = parseVerdict('{"verdict":"partially","kind":"correctness","reason":"x"}');
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(parsed.defect).toContain("vocabulary");
   });
@@ -192,12 +210,14 @@ describe("parseVerdict", () => {
   });
 
   it("refuses an empty reason", () => {
-    const parsed = parseVerdict('{"verdict":"confirmed","reason":"   "}');
+    const parsed = parseVerdict('{"verdict":"confirmed","kind":"correctness","reason":"   "}');
     expect(parsed.ok).toBe(false);
   });
 
   it("sanitises the reason — mentions broken, tags escaped", () => {
-    const parsed = parseVerdict('{"verdict":"confirmed","reason":"@user said <b>hi</b>"}');
+    const parsed = parseVerdict(
+      '{"verdict":"confirmed","kind":"correctness","reason":"@user said <b>hi</b>"}',
+    );
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.reason).toContain("@\u200Cuser");
@@ -206,7 +226,9 @@ describe("parseVerdict", () => {
   });
 
   it("caps a long reason at the declared bound, marked not silent", () => {
-    const parsed = parseVerdict(`{"verdict":"confirmed","reason":"${"r".repeat(1000)}"}`);
+    const parsed = parseVerdict(
+      `{"verdict":"confirmed","kind":"correctness","reason":"${"r".repeat(1000)}"}`,
+    );
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.reason.length).toBeLessThanOrEqual(

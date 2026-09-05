@@ -376,6 +376,7 @@ const PER_PAGE = 100;
  *   createCommit: (message: string, treeSha: string, parentCommitSha: string) => Promise<{ sha: string }>,
  *   upsertBranch: (branch: string, commitSha: string, expectedCurrentSha: string | null) => Promise<void>,
  *   upsertPullRequest: (input: { base: string, head: string, title: string, body: string }) => Promise<{ number: number, created: boolean }>,
+ *   createCheckRun: (input: { headSha: string, name: string, conclusion: typeof CHECK_RUN_CONCLUSIONS[number], output: { title: string, summary: string } }) => Promise<{ id: number }>,
  * }}
  */
 export function createForge(config) {
@@ -1260,6 +1261,45 @@ export function createForge(config) {
         }),
       );
       return { number: existing.number, created: false };
+    },
+
+    /**
+     * Creates one completed check run at a head. The review action's
+     * merge gate reports here: `required` is what makes the gate able to
+     * block a merge, and `neutral` is the honest conclusion for an
+     * `observe` verdict — recorded, enforcing nothing. Creation is not
+     * idempotent, so it makes a single attempt, like comment creation.
+     *
+     * @param {object} input
+     * @param {string} input.headSha the head the verdict was decided at
+     * @param {string} input.name the check run's name
+     * @param {typeof CHECK_RUN_CONCLUSIONS[number]} input.conclusion
+     * @param {{ title: string, summary: string }} input.output the rendered output text
+     * @returns {Promise<{ id: number }>}
+     */
+    async createCheckRun({ headSha, name, conclusion, output }) {
+      const operation = `creating the '${name}' check run`;
+      if (!CHECK_RUN_CONCLUSIONS.includes(conclusion)) {
+        throw new ForgeError(operation, new Error(`'${conclusion}' is not a check-run conclusion`));
+      }
+      const json = await call(operation, () =>
+        http.request(`${root}/check-runs`, {
+          method: "POST",
+          maxAttempts: 1,
+          body: {
+            name,
+            head_sha: headSha,
+            status: "completed",
+            conclusion,
+            output: { title: output.title, summary: output.summary },
+          },
+        }),
+      );
+      const id = asRecord(json)?.["id"];
+      if (typeof id !== "number") {
+        throw new ForgeError(operation, new Error("the response has no check run id"));
+      }
+      return { id };
     },
   };
 

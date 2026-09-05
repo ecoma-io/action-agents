@@ -41,6 +41,9 @@ import {
   VERIFIER_MAX_EVIDENCE_BYTES,
   VERIFIER_MAX_TOOL_CALLS,
 } from "./verify.mjs";
+import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
+import { createCanonicalResult } from "./canonical.mjs";
+import { decideReviewGate } from "./merge-gate.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { renderComment, renderNothingToReview } from "./render.mjs";
 import {
@@ -61,15 +64,16 @@ import {
  *
  * @typedef {object} ReviewForge
  * @property {() => Promise<{ defaultBranch: string, name: string, description: string }>} getRepository
- * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestSnapshot>} getPullRequest
  * @property {(branch: string) => Promise<{ sha: string }>} getRef resolves a branch tip, for the policy source
+ * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestSnapshot>} getPullRequest
  * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestFile[]>} listPullRequestFiles
+ * @property {(path: string) => Promise<{ content: string } | null>} getContents reads the resolved policy source
  * @property {(number: number) => Promise<import("#core/forge.mjs").CommentEntry[]>} listComments
  * @property {(number: number, body: string) => Promise<{ id: number }>} createComment
  * @property {(id: number, body: string) => Promise<void>} updateComment
- * @property {(path: string) => Promise<{ content: string } | null>} getContents reads the resolved policy source
  * @property {(id: number) => Promise<void>} deleteComment
  * @property {() => Promise<{ login: string }>} whoami the token's writing identity
+ * @property {(input: { headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }) => Promise<{ id: number }>} createCheckRun created by the entrypoint after a published run — the merge gate's surface
  */
 
 /** The chat seam is the whole client; its shape is the protocol's. */
@@ -115,6 +119,8 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {number} [commentId]
  * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact | import("./artifact.mjs").SkipRecord | import("./artifact.mjs").AbandonedRunArtifact | import("./artifact.mjs").DryRunRunArtifact} [artifact] the machine-readable run record — present when the run published, when a policy recorded a skipped run (the record is the skip's whole outcome), when a skip path with no applicability fact left its durable record, or when an abandonment or dry-run wrote its reduced artifact; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
  * @property {import("./artifact.mjs").ApplicabilitySection} [applicability] the applicability fact, present when the review policy is active
+ * @property {import("./canonical.mjs").CanonicalResult} [canonical] the canonical record the projections project from — present when the run published
+ * @property {import("./merge-gate.mjs").ReviewGateDecision} [gate] the merge gate's deterministic verdict over the canonical record — present when the run published
  */
 /**
  * @param {object} input
@@ -619,6 +625,51 @@ export async function reviewPullRequest({
   const status = report.mayPublish
     ? { label: "Complete" }
     : { label: "Partial", reason: report.failed[0]?.reason ?? "the run's gates did not all pass" };
+
+  // ── The canonical result: one record, bound at the capture boundary ──
+  // Every finding the run will carry gets its evidence captured from the
+  // working tree at its own (file, line) anchor — the integration point
+  // [ADR 004](../../docs/adr/004-canonical-review-result.md) left outside
+  // the pure constructor, because the constructor does no I/O. A refused
+  // capture refuses the run RED, never skip-and-continue: a finding whose
+  // anchor cannot be captured has no digest, and a finding without a
+  // digest is not confirmed by anything.
+  const canonicalFindings = published.map((finding) => {
+    let captured;
+    try {
+      captured = captureFindingEvidence({ workspace, file: finding.file, line: finding.line });
+    } catch (cause) {
+      if (cause instanceof CaptureRefusal) {
+        throw new DeterministicRefusalError(cause.message, { cause });
+      }
+      throw cause;
+    }
+    return {
+      kind: finding.kind,
+      file: finding.file,
+      line: finding.line,
+      severity: finding.severity,
+      message: finding.message,
+      subject: captured.subject,
+      lifecycle: finding.lifecycle ?? "unresolved",
+      ...(finding.verdict !== undefined ? { verdict: finding.verdict } : {}),
+      reason: finding.reason ?? "the verification policy did not schedule this finding",
+      evidence: { digest: captured.digest, excerpt: captured.excerpt },
+    };
+  });
+  const canonical = createCanonicalResult({
+    head: headSha,
+    run: { state: "published", verdict: report.mayPublish ? "pass" : "fail" },
+    findings: canonicalFindings,
+    coverage: outcome.coverage,
+  });
+  // The merge gate: a deterministic verdict over the canonical record.
+  // Empty policy — every kind in the closed vocabulary blocks, the ADR 004
+  // default; `gate-mode` decides whether the verdict enforces (surfaces)
+  // or only records. `required` never blocks here: enforcement is the
+  // check run's and the ruleset's job, not the action's exit code.
+  const gate = decideReviewGate(canonical);
+
   const body = renderComment({
     status: status.label,
     headSha,
@@ -773,6 +824,8 @@ export async function reviewPullRequest({
     reason,
     commentId: upsert.id,
     artifact: record,
+    canonical,
+    gate,
   };
 }
 
@@ -924,7 +977,7 @@ const VERIFIER_BUDGET_INSTRUCTION =
  *  - transport failure is `uncertain` (existing rule).
  *
  * @param {{ item: import("./verify.mjs").VerificationItem, chat: import("#core/chat.mjs").Chat, model: string, workspace: import("#core/workspace.mjs").Workspace, ignore: string[], info: (line: string) => void }} input
- * @returns {Promise<{ verdict: import("./verify.mjs").Verdict, reason: string }>}
+ * @returns {Promise<{ verdict: import("./verify.mjs").Verdict, reason: string, kind?: import("./vocabulary.mjs").FindingKind }>}
  */
 async function oneVerdict({ item, chat, model, workspace, ignore, info }) {
   const evidence = createEvidence();
@@ -1001,10 +1054,10 @@ async function oneVerdict({ item, chat, model, workspace, ignore, info }) {
  * @param {import("./verify.mjs").VerificationItem} item
  * @param {import("./verify.mjs").ParsedVerdict | import("./verify.mjs").RefusedVerdict} parsed
  * @param {(line: string) => void} info
- * @returns {{ verdict: import("./verify.mjs").Verdict, reason: string }}
+ * @returns {{ verdict: import("./verify.mjs").Verdict, reason: string, kind?: import("./vocabulary.mjs").FindingKind }}
  */
 function settle(item, parsed, info) {
-  if (parsed.ok) return { verdict: parsed.verdict, reason: parsed.reason };
+  if (parsed.ok) return { verdict: parsed.verdict, kind: parsed.kind, reason: parsed.reason };
   info(
     `verification pass — the answer to finding ${item.id} was refused (${parsed.defect}); ` +
       `it counts as uncertain`,

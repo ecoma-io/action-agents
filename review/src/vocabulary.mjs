@@ -56,5 +56,13 @@ export const RECONCILIATIONS = /** @type {const} */ ([
  */
 
 /**
+ * @param {unknown} value
+ * @returns {value is FindingKind}
+ */
+export function isFindingKind(value) {
+  return typeof value === "string" && FINDING_KINDS.includes(/** @type {FindingKind} */ (value));
+}
+
+/**
  * @typedef {typeof RECONCILIATIONS[number]} Reconciliation
  */

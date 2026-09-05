@@ -18,7 +18,7 @@
  * literal instead of mutating the process they run in.
  */
 
-import { realpathSync } from "node:fs";
+import { appendFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /* eslint-disable no-console -- stdout IS the interface here: workflow commands are read by the runner, not by a human. */
@@ -156,6 +156,28 @@ export function info(message) {
   console.log(message);
 }
 
+/**
+ * Publishes one job output the way the runner reads it: an
+ * `name=value` line appended to the file `GITHUB_OUTPUT` names. The value is
+ * escaped through the runner's own data encoding and must be single-line —
+ * a multi-line value needs the heredoc form, which no action here uses.
+ * Outside a runner (no `GITHUB_OUTPUT`) the pair is logged instead, so a
+ * local run still shows what it would have published.
+ *
+ * @param {string} name
+ * @param {string} value
+ * @param {Env} [env]
+ * @returns {void}
+ */
+export function setOutput(name, value, env = process.env) {
+  const file = env["GITHUB_OUTPUT"];
+  if (file === undefined || file === "") {
+    info(`output ${name}=${value}`);
+    return;
+  }
+  appendFileSync(realpathSync(file), `${name}=${encodeData(value)}\n`, "utf8");
+}
+
 /** @param {string} message @returns {void} */
 export function debug(message) {
   console.log(formatCommand("debug", {}, message));
@@ -198,7 +220,7 @@ export function setFailed(cause) {
  * inside a request.
  *
  * @param {Env} [env]
- * @returns {{ workspace: string, owner: string, repo: string, eventName: string, eventPath: string, apiUrl: string }}
+ * @returns {{ workspace: string, owner: string, repo: string, eventName: string, eventPath: string, apiUrl: string, runnerTemp?: string }}
  */
 export function readContext(env = process.env) {
   const repository = required("GITHUB_REPOSITORY", env);
@@ -213,6 +235,7 @@ export function readContext(env = process.env) {
     eventName: required("GITHUB_EVENT_NAME", env),
     eventPath: required("GITHUB_EVENT_PATH", env),
     apiUrl: env["GITHUB_API_URL"] ?? "https://api.github.com",
+    ...(env["RUNNER_TEMP"] !== undefined ? { runnerTemp: env["RUNNER_TEMP"] } : {}),
   };
 }
 

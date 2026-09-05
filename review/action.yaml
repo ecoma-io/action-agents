@@ -52,6 +52,21 @@ inputs:
       workspace. When the review publishes nothing, no file is written.
     required: false
     default: ".review-artifact"
+  gate-mode:
+    description: >-
+      What the review's merge gate does with its verdict. `observe` (the
+      default) records the verdict on the job outputs and a neutral check
+      run and blocks nothing; `required` renders the check run's conclusion
+      from the verdict (`success` on PASS, `failure` on BLOCK) so a branch
+      ruleset can gate on it. The action's own step never fails on BLOCK.
+    required: false
+    default: "observe"
+
+outputs:
+  gate-verdict:
+    description: The merge gate's verdict as surfaced — `PASS` or `BLOCK` in `required` mode, `OBSERVE-PASS` or `OBSERVE-BLOCK` in `observe` mode. Present after a published review.
+  sarif-path:
+    description: Path to the review's SARIF projection, written under the runner's temp directory. Present after a published review whose SARIF write succeeded.
 
 runs:
   using: node24
