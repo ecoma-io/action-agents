@@ -1,0 +1,6 @@
+{
+  "$comment": "The pins every covered document may show a consumer, in one place, judged by tools/check-action-pins.mjs. floating is the current minor line the examples pin; exact is the exact-release example the pinning tables in README.md and docs/guides/getting-started.md show; rootExact is the release the root-stub section of README.md cites. Bump all three on every release — the checker fails any covered document left behind, and any declared pin no document shows. A 40-hex SHA needs no entry: it is immutable by definition. Illustrative or historical pins are exempted with a `<!-- historical ref -->` marker on their line, the same mechanism check-uses-refs uses for `roadmap ref`. The covered list lives in DOC_PATHS in tools/check-action-pins.mjs.",
+  "floating": "v0.10",
+  "exact": "v0.10.0",
+  "rootExact": "v0.10.0"
+}
