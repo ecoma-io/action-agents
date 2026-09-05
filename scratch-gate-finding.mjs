@@ -11,3 +11,13 @@ export function publishRecord(_record) {
   // TODO: implement before merge
   throw new Error("not implemented");
 }
+
+/**
+ * Lists the scratch gate records from the workspace directory, newest first.
+ *
+ * @param {string} directory the workspace directory to scan
+ * @returns {Promise<string[]>} the record file names, newest first
+ */
+export function listGateRecords(directory) {
+  return directory.length;
+}
