@@ -21,7 +21,7 @@ refuted and unresolved findings publish in their own sections.
 Add a workflow file under `.github/workflows/`. The minimal form:
 
 ```yaml
-- uses: ecoma-io/action-agents/review@v0.5
+- uses: ecoma-io/action-agents/review@v0.10
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     api-url: ${{ vars.LLM_API_URL }}
@@ -29,7 +29,7 @@ Add a workflow file under `.github/workflows/`. The minimal form:
     model: ${{ vars.LLM_MODEL }}
 ```
 
-Pin to a floating minor (`@v0.5`), an exact version (`@v0.5.0`) or a commit SHA.
+Pin to a floating minor (`@v0.10`), an exact version (`@v0.10.0`) or a commit SHA.
 See [Getting started](getting-started.md#pinning) for the tradeoffs.
 
 The action is referenced as the directory `review` in the repository.
@@ -420,7 +420,7 @@ The action runs with built-in defaults: strictness `medium`, strategy `standard`
 language `en`. No config file needed.
 
 ```yaml
-- uses: ecoma-io/action-agents/review@v0.5
+- uses: ecoma-io/action-agents/review@v0.10
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     api-url: ${{ vars.LLM_API_URL }}

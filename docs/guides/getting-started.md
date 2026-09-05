@@ -32,11 +32,11 @@ for what belongs where.
 Every `uses:` reference takes a ref that controls what code runs. Three shapes,
 in order of safety:
 
-| Ref                  | Example                                 | What it resolves to                                                    |
-| -------------------- | --------------------------------------- | ---------------------------------------------------------------------- |
-| `v0.5` (floating)    | `ecoma-io/action-agents/review@v0.5`    | The latest patch release in the `v0.5` line. Gets fixes automatically. |
-| `v0.5.0` (exact)     | `ecoma-io/action-agents/review@v0.5.0`  | Exactly that release. Never moves.                                     |
-| `<sha>` (SHA-pinned) | `ecoma-io/action-agents/review@abc123…` | Exactly those bytes. Immutable.                                        |
+| Ref                  | Example                                 | What it resolves to                                                     |
+| -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
+| `v0.10` (floating)   | `ecoma-io/action-agents/review@v0.10`   | The latest patch release in the `v0.10` line. Gets fixes automatically. |
+| `v0.10.0` (exact)    | `ecoma-io/action-agents/review@v0.10.0` | Exactly that release. Never moves.                                      |
+| `<sha>` (SHA-pinned) | `ecoma-io/action-agents/review@abc123…` | Exactly those bytes. Immutable.                                         |
 
 Floating tags deliver patches without a workflow edit — that is usually what you
 want. Exact tags deliver reproducibility — that is what you want when it is. A
@@ -116,7 +116,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: ecoma-io/action-agents/triage@v0.5
+      - uses: ecoma-io/action-agents/triage@v0.10
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -162,7 +162,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: ecoma-io/action-agents/review@v0.5
+      - uses: ecoma-io/action-agents/review@v0.10
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -216,7 +216,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: ecoma-io/action-agents/harmonise@v0.5
+      - uses: ecoma-io/action-agents/harmonise@v0.10
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}

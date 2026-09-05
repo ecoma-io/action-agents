@@ -76,7 +76,7 @@ jobs:
       # review reads the working tree, so it needs a checkout
       - uses: actions/checkout@v5
 
-      - uses: ecoma-io/action-agents/review@v0.5
+      - uses: ecoma-io/action-agents/review@v0.10
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -89,11 +89,11 @@ jobs:
 Every `uses:` reference takes a ref that controls what code runs. Three shapes,
 in order of safety:
 
-| Ref                  | Example                                 | What it resolves to                                                    |
-| -------------------- | --------------------------------------- | ---------------------------------------------------------------------- |
-| `v0.5` (floating)    | `ecoma-io/action-agents/review@v0.5`    | The latest patch release in the `v0.5` line. Gets fixes automatically. |
-| `v0.5.0` (exact)     | `ecoma-io/action-agents/review@v0.5.0`  | Exactly that release. Never moves.                                     |
-| `<sha>` (SHA-pinned) | `ecoma-io/action-agents/review@abc123…` | Exactly those bytes. Immutable.                                        |
+| Ref                  | Example                                 | What it resolves to                                                     |
+| -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
+| `v0.10` (floating)   | `ecoma-io/action-agents/review@v0.10`   | The latest patch release in the `v0.10` line. Gets fixes automatically. |
+| `v0.10.0` (exact)    | `ecoma-io/action-agents/review@v0.10.0` | Exactly that release. Never moves.                                      |
+| `<sha>` (SHA-pinned) | `ecoma-io/action-agents/review@abc123…` | Exactly those bytes. Immutable.                                         |
 
 Floating tags (`v0.1`, `v0.2`) deliver patches without a workflow edit — that is
 usually what you want. Exact tags deliver reproducibility — that is what you
@@ -133,7 +133,7 @@ is a vulnerability in **your** repository, and no action can fix it for you.
 ### The root action
 
 The repository root contains an `action.yml`, but it is **not a runnable
-action**. It exists so that `uses: ecoma-io/action-agents@v0.5.0` resolves
+action**. It exists so that `uses: ecoma-io/action-agents@v0.10.0` resolves
 against a tag rather than failing with a missing-manifest error. When invoked,
 it immediately fails with an error naming the three real actions and telling you
 to pick one. This follows the pattern established by
