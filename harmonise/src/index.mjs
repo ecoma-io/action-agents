@@ -46,6 +46,7 @@ import {
   loadInstructions,
   validateConfig,
 } from "./config.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { buildInventory } from "./inventory.mjs";
 import { detectDrift } from "./drift.mjs";
 import { contentFingerprint, policyFingerprint, TRANSFORMATION_VERSION } from "./fingerprint.mjs";
@@ -245,13 +246,81 @@ function realIo(inputs, context, overrides = {}) {
  */
 
 /**
+ * One red-ledger line with its class declared at the push: `refusal` marks a
+ * deterministic refusal — a protection verdict or a ceiling — and `false` a
+ * defect: provider, transport, or plain code bug. The red aggregate reads
+ * the column, never the text, and the run boundary reads the class: a
+ * pure-refusal red set records `refused`, one defect line fails the run
+ * (F-09's mapping stays a function).
+ *
+ * @typedef {{ text: string, refusal: boolean }} PairLine
+ */
+/**
  * One pooled pair's settled result, identified by pair — never by completion
  * order: the outcome on success, the report line on failure.
  *
- * @typedef {{ ok: true, outcome: PairOutcome, sourceFingerprint: string } | { ok: false, line: string }} PairResult
+ * @typedef {{ ok: true, outcome: PairOutcome, sourceFingerprint: string } | { ok: false, line: PairLine }} PairResult
  */
 
 /**
+ * The red-run facts `harmoniseRun` has landed so far, stashed as they become
+ * true. A `null` means the run died before the fact existed — never that
+ * there was none — and is what the boundary writer records.
+ *
+ * @typedef {object} RedFacts
+ * @property {string | null} headSha the base commit the reads pinned to, once the policy source resolved
+ * @property {import("./run-record.mjs").RecordPairs | null} pairs the pair accounting, once the schedule was finalised
+ * @property {import("./run-record.mjs").RecordPullRequest | null} pullRequest the pull request, once the upsert landed
+ * @property {import("./run-record.mjs").HarmoniseRecord | null} record a declared terminal's built record its own write could not land; the boundary writer's first choice (#347)
+ * @property {boolean} recorded whether a declared terminal point already wrote this run's one record
+ */
+
+/**
+ * The red terminal for an every-pair red set. The message text is identical
+ * either way; the class is the record's outcome: every line a deterministic
+ * refusal makes the set the typed refusal (#347), one defect line makes it
+ * a plain failure — the mapping stays a function of the worst line (F-09).
+ *
+ * @param {string} name
+ * @param {PairLine[]} lines
+ * @returns {Error}
+ */
+function redSetTerminal(name, lines) {
+  const message = `${name}:\n${lines.map((line) => `- ${line.text}`).join("\n")}`;
+  return lines.every((line) => line.refusal)
+    ? new DeterministicRefusalError(message)
+    : new Error(message);
+}
+/**
+ * A declared record write that failed: the loss is logged — the run log is
+ * where a record loss lives — and the built record is stashed, so a red
+ * exit re-attempts that record instead of relabelling the terminal from
+ * the throw (#347). Whether the loss keeps the run's verdict or reddens a
+ * run whose only outcome was the record is the write site's tier, not this
+ * helper's (F-14).
+ *
+ * @param {RedFacts} red
+ * @param {import("./run-record.mjs").HarmoniseRecord} record
+ * @param {unknown} cause
+ * @returns {void}
+ */
+function loseRecord(red, record, cause) {
+  red.record = record;
+  info(
+    `harmonise: the run record was not written: ${cause instanceof Error ? cause.message : String(cause)}`,
+  );
+}
+
+/**
+ * Runs one harmonise pass and, when it ends red, writes the run's one red
+ * record before the original error fails the step (#344): `refused` when the
+ * throw is a typed deterministic refusal, `failed` for every other
+ * undeclared throw (#347). The record never masks the throw it records, and
+ * its own failure is a logged loss, not a replacement error; a declared
+ * terminal point that already wrote — a skip record, the published or
+ * partial record — is never overwritten, and one whose write failed is
+ * re-attempted exactly as it was built (#347).
+ *
  * @param {Inputs} inputs
  * @param {ReturnType<typeof readContext>} context
  * @param {Partial<Io> & { fetchImpl?: typeof globalThis.fetch }} [io] injectable for tests; real clients omit it, and realIo builds every member
@@ -260,6 +329,52 @@ function realIo(inputs, context, overrides = {}) {
 export async function run(inputs, context, io) {
   /** @type {Io} */
   const world = realIo(inputs, context, io ?? {});
+  /** @type {RedFacts} */
+  const red = { headSha: null, pairs: null, pullRequest: null, record: null, recorded: false };
+  try {
+    await harmoniseRun(inputs, context, world, red);
+  } catch (cause) {
+    if (!red.recorded) {
+      // The stashed record a declared terminal built comes first: a write
+      // that failed must never relabel the terminal it was written for
+      // (#347). The fallback build is for a throw no declared point saw.
+      const record =
+        red.record ??
+        buildHarmoniseRecord({
+          repository: `${context.owner}/${context.repo}`,
+          eventName: context.eventName,
+          sourceLanguage: inputs.sourceLanguage,
+          dryRun: inputs.dryRun,
+          outcome: cause instanceof DeterministicRefusalError ? "refused" : "failed",
+          reason: cause instanceof Error ? cause.message : String(cause),
+          pairs: red.pairs,
+          pullRequest: red.pullRequest,
+          headSha: red.headSha,
+        });
+      try {
+        world.writeRecord({ record });
+      } catch (recordCause) {
+        info(
+          `harmonise: ${red.record === null ? "the failed-run" : "the run"} record was not written: ` +
+            `${recordCause instanceof Error ? recordCause.message : String(recordCause)}`,
+        );
+      }
+    }
+    throw cause;
+  }
+}
+
+/**
+ * The run body: everything between the event read and the final verdict,
+ * parameterised over the io world and the red-facts holder it stashes into.
+ *
+ * @param {Inputs} inputs
+ * @param {ReturnType<typeof readContext>} context
+ * @param {Io} world
+ * @param {RedFacts} red
+ * @returns {Promise<void>}
+ */
+async function harmoniseRun(inputs, context, world, red) {
   const event = await world.readEvent();
 
   // The policy source is resolved once, from the execution context: for a
@@ -272,14 +387,28 @@ export async function run(inputs, context, io) {
     event: /** @type {Record<string, unknown>} */ (event),
     forge: world.forge,
   });
+  // The red-run stash begins: from here on, a red exit names the commit it
+  // was judging.
+  red.headSha = source.sha;
   const policy = { getContents: policyReader(world.forge, source) };
   const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
-  let config = validateConfig(loaded.raw);
+  let config;
+  try {
+    config = validateConfig(loaded.raw);
+  } catch (cause) {
+    // validateConfig is pure over the parsed file (config.mjs's contract):
+    // every throw reaching here — its own or the pattern validators' — is a
+    // startup refusal, so the boundary retypes it once instead of every
+    // raise site carrying the class.
+    throw new DeterministicRefusalError(cause instanceof Error ? cause.message : String(cause), {
+      cause,
+    });
+  }
   info(policySourceAuditLine({ eventName: context.eventName, source, path: loaded.path }));
 
   const requested = inputs.sourceLanguage;
   if (!Object.hasOwn(config.languages, requested)) {
-    throw new Error(
+    throw new DeterministicRefusalError(
       `source-language '${requested}' is not a language the config declares ` +
         `(${Object.keys(config.languages).join(", ")})`,
     );
@@ -377,7 +506,7 @@ export async function run(inputs, context, io) {
   });
 
   if (inventory.pairs.length === 0) {
-    throw new Error(
+    throw new DeterministicRefusalError(
       `no document matches the source language '${config.sourceLanguage}' on ` +
         `'${source.branch}' — nothing to keep in step`,
     );
@@ -396,7 +525,7 @@ export async function run(inputs, context, io) {
     if (entry === "" || entry.startsWith("!")) continue;
     const alive = inventory.pairs.some((pair) => matchGlob([entry], pair.sourcePath));
     if (!alive) {
-      throw new Error(
+      throw new DeterministicRefusalError(
         `the documents input names '${entry}', which matches none of the ` +
           `${String(inventory.pairs.length)} source documents on '${source.branch}' — ` +
           `a positive glob must name at least one document`,
@@ -409,7 +538,7 @@ export async function run(inputs, context, io) {
       ? inventory.pairs
       : inventory.pairs.filter((pair) => matchGlob(inputs.documents, pair.sourcePath));
   if (selected.length === 0) {
-    throw new Error(
+    throw new DeterministicRefusalError(
       `the documents input (${inputs.documents.join(", ")}) narrows ` +
         `${String(inventory.pairs.length)} source documents to none — narrowing to nothing ` +
         `is a misconfiguration, not an empty schedule`,
@@ -431,9 +560,9 @@ export async function run(inputs, context, io) {
   /** Re-pinned record per noop destination — the pair's carried record made current. */
   /** @type {Map<string, import("./state.mjs").SyncStateRecord>} */
   const rePinned = new Map();
-  /** @type {string[]} */
+  /** @type {PairLine[]} */
   const failedLines = [];
-  /** @type {string[]} */
+  /** @type {PairLine[]} */
   const skippedLines = [];
   /** @type {PairJob[]} */
   const jobs = [];
@@ -450,9 +579,12 @@ export async function run(inputs, context, io) {
       // line per source-and-language, so the source's every language fails
       // here, exactly as any other failed pair is reported.
       for (const target of pair.targets) {
-        failedLines.push(
-          `${target.lang} ${pair.sourcePath}: gone from the branch since the tree was listed`,
-        );
+        failedLines.push({
+          text: `${target.lang} ${pair.sourcePath}: gone from the branch since the tree was listed`,
+          // A source vanished between the tree listing and its read — a race,
+          // a defect of timing, not a ceiling.
+          refusal: false,
+        });
       }
       continue;
     }
@@ -461,7 +593,10 @@ export async function run(inputs, context, io) {
     const refusal = preparationRefusal(file.content);
     if (refusal !== null) {
       for (const target of pair.targets) {
-        skippedLines.push(`${target.lang} ${pair.sourcePath}: ${refusal}`);
+        skippedLines.push({
+          text: `${target.lang} ${pair.sourcePath}: ${refusal}`,
+          refusal: true,
+        });
       }
       continue;
     }
@@ -472,9 +607,10 @@ export async function run(inputs, context, io) {
     const frontmatter = planFrontmatterGuard(file.content);
     if (frontmatter.kind === "refused") {
       for (const target of pair.targets) {
-        skippedLines.push(
-          `${target.lang} ${pair.sourcePath}: frontmatter protection refused: ${frontmatter.message}`,
-        );
+        skippedLines.push({
+          text: `${target.lang} ${pair.sourcePath}: frontmatter protection refused: ${frontmatter.message}`,
+          refusal: true,
+        });
       }
       continue;
     }
@@ -507,11 +643,13 @@ export async function run(inputs, context, io) {
           // view.
           const existingBytes = new TextEncoder().encode(existing).byteLength;
           if (existingBytes > MAX_SOURCE_BYTES) {
-            skippedLines.push(
-              `${target.lang} ${pair.sourcePath}: the existing translation is ` +
+            skippedLines.push({
+              text:
+                `${target.lang} ${pair.sourcePath}: the existing translation is ` +
                 `${String(existingBytes)} bytes, past the ${String(MAX_SOURCE_BYTES)}-byte cap — ` +
                 `shrink or split it first`,
-            );
+              refusal: true,
+            });
             continue;
           }
         }
@@ -567,10 +705,12 @@ export async function run(inputs, context, io) {
           mergeBase =
             existing !== undefined ? recordedMergeBase(recorded, target.lang, memory) : undefined;
           if (mergeBase === undefined) {
-            failedLines.push(
-              `${target.lang} ${pair.sourcePath}: manual-edit protection refused: ` +
+            failedLines.push({
+              text:
+                `${target.lang} ${pair.sourcePath}: manual-edit protection refused: ` +
                 protectionRefusalReason(drift, existing !== undefined),
-            );
+              refusal: true,
+            });
             continue;
           }
         }
@@ -590,9 +730,10 @@ export async function run(inputs, context, io) {
         });
         slots.push(undefined);
       } catch (cause) {
-        failedLines.push(
-          `${target.lang} ${pair.sourcePath}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
+        failedLines.push({
+          text: `${target.lang} ${pair.sourcePath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          refusal: cause instanceof DeterministicRefusalError,
+        });
       }
     }
   }
@@ -650,9 +791,15 @@ export async function run(inputs, context, io) {
         if (action !== "retry") {
           return {
             ok: false,
-            line: `${job.lang} ${job.sourcePath}: ${
-              cause instanceof Error ? cause.message : String(cause)
-            } (classified ${failureClass}, ${action})`,
+            line: {
+              text: `${job.lang} ${job.sourcePath}: ${
+                cause instanceof Error ? cause.message : String(cause)
+              } (classified ${failureClass}, ${action})`,
+              // The model path's failures are provider defects or junk
+              // answers — F-09's other arm fails — never the run's own
+              // ceilings, so the line never carries the refusal class.
+              refusal: false,
+            },
           };
         }
         await world.sleep(DELAY_MS[delayClass(failureClass, attempt)]);
@@ -687,12 +834,15 @@ export async function run(inputs, context, io) {
       } else {
         return {
           ok: false,
-          line:
-            `${job.lang} ${job.sourcePath}: three-way merge refused: ` +
-            `${String(merged.conflicts.length)} conflict region(s), first at merged line ` +
-            `${String(first.startLine)} — the manual edit and the fresh translation disagree ` +
-            `(manual: "${oneLine(first.manualExcerpt)}", fresh: "${oneLine(first.freshExcerpt)}"); ` +
-            `resolve by hand`,
+          line: {
+            text:
+              `${job.lang} ${job.sourcePath}: three-way merge refused: ` +
+              `${String(merged.conflicts.length)} conflict region(s), first at merged line ` +
+              `${String(first.startLine)} — the manual edit and the fresh translation disagree ` +
+              `(manual: "${oneLine(first.manualExcerpt)}", fresh: "${oneLine(first.freshExcerpt)}"); ` +
+              `resolve by hand`,
+            refusal: true,
+          },
         };
       }
     }
@@ -726,7 +876,8 @@ export async function run(inputs, context, io) {
   // in depth for one that does, mapped back onto its pair like any failure.
   for (const error of errors) {
     const job = jobs[error.index];
-    if (job !== undefined) failedLines.push(`${job.lang} ${job.sourcePath}: ${error.message}`);
+    if (job !== undefined)
+      failedLines.push({ text: `${job.lang} ${job.sourcePath}: ${error.message}`, refusal: false });
   }
 
   // Assembly in input order — the stable pair identity, never completion
@@ -785,14 +936,33 @@ export async function run(inputs, context, io) {
     if (entry !== undefined) outcomes.push(entry);
   }
 
+  const proposed = outcomes.filter((entry) => entry.outcome === "proposed");
+  // The run's pair accounting, as the record carries it. The unit is the
+  // pair-target — one source document against one language — the unit every
+  // path above lands a pair in, and `selected` is that schedule's size for
+  // this run. `proposed`, `unchanged`, `skipped` and `failed` partition it,
+  // totalling it exactly, and the record validator refuses a record where
+  // they do not. `unchanged` gathers both noop verdicts — a proven-in-step
+  // skip and a model's endorsement — the two faces of "already in step".
+  const unchangedCount = outcomes.filter(
+    (entry) => entry.outcome === "unchanged" || entry.outcome === "unchanged-skipped",
+  ).length;
+  const pairCounts = {
+    selected: selected.reduce((total, pair) => total + pair.targets.length, 0),
+    proposed: proposed.length,
+    unchanged: unchangedCount,
+    skipped: skippedLines.length,
+    failed: failedLines.length,
+  };
+  // The red-run stash: once the accounting exists, a red exit records it.
+  red.pairs = pairCounts;
   // Every pair failing or skipping is red: work existed and none of it was
   // attempted successfully. Some failing or skipping is reported and carried.
-  const proposed = outcomes.filter((entry) => entry.outcome === "proposed");
   if (outcomes.length === 0 && skippedLines.length === 0 && failedLines.length > 0) {
-    throw new Error(`every pair failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`);
+    throw redSetTerminal("every pair failed", failedLines);
   }
   if (outcomes.length === 0 && failedLines.length === 0 && skippedLines.length > 0) {
-    throw new Error(`every pair skipped:\n${skippedLines.map((line) => `- ${line}`).join("\n")}`);
+    throw redSetTerminal("every pair skipped", skippedLines);
   }
 
   info(`harmonise report — ${context.owner}/${context.repo} at ${source.sha.slice(0, 12)}`);
@@ -817,8 +987,8 @@ export async function run(inputs, context, io) {
         (entry.summary !== undefined ? ` — ${oneLine(entry.summary)}` : ""),
     );
   }
-  for (const line of failedLines) info(`failed ${line}`);
-  for (const line of skippedLines) info(`skipped ${line}`);
+  for (const line of failedLines) info(`failed ${line.text}`);
+  for (const line of skippedLines) info(`skipped ${line.text}`);
   if (inventory.orphanTranslations.length === 0) {
     info("orphans: none");
   } else {
@@ -832,26 +1002,9 @@ export async function run(inputs, context, io) {
   // ordering: successful proposals publish FIRST, then the run exits red.
   const failureReport =
     failedLines.length > 0
-      ? `${String(failedLines.length)} pair(s) failed:\n${failedLines.map((line) => `- ${line}`).join("\n")}`
+      ? `${String(failedLines.length)} pair(s) failed:\n${failedLines.map((line) => `- ${line.text}`).join("\n")}`
       : "";
 
-  // The run's pair accounting, as the record carries it. The unit is the
-  // pair-target — one source document against one language — the unit every
-  // path above lands a pair in, and `selected` is that schedule's size for
-  // this run. `proposed`, `unchanged`, `skipped` and `failed` partition it,
-  // totalling it exactly, and the record validator refuses a record where
-  // they do not. `unchanged` gathers both noop verdicts — a proven-in-step
-  // skip and a model's endorsement — the two faces of "already in step".
-  const unchangedCount = outcomes.filter(
-    (entry) => entry.outcome === "unchanged" || entry.outcome === "unchanged-skipped",
-  ).length;
-  const pairCounts = {
-    selected: selected.reduce((total, pair) => total + pair.targets.length, 0),
-    proposed: proposed.length,
-    unchanged: unchangedCount,
-    skipped: skippedLines.length,
-    failed: failedLines.length,
-  };
   const recordBase = {
     repository: `${context.owner}/${context.repo}`,
     eventName: context.eventName,
@@ -869,7 +1022,12 @@ export async function run(inputs, context, io) {
       reason: "dry run — nothing was written",
       pullRequest: null,
     });
-    world.writeRecord({ record });
+    try {
+      world.writeRecord({ record });
+      red.recorded = true;
+    } catch (cause) {
+      loseRecord(red, record, cause);
+    }
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -885,7 +1043,12 @@ export async function run(inputs, context, io) {
       reason: "nothing to propose — no branch, no commit, no pull request",
       pullRequest: null,
     });
-    world.writeRecord({ record });
+    try {
+      world.writeRecord({ record });
+      red.recorded = true;
+    } catch (cause) {
+      loseRecord(red, record, cause);
+    }
     if (failureReport !== "") throw new Error(failureReport);
     return;
   }
@@ -979,8 +1142,8 @@ export async function run(inputs, context, io) {
       summary: proposal.summary,
     })),
     orphans: inventory.orphanTranslations,
-    skipped: skippedLines,
-    failures: failedLines,
+    skipped: skippedLines.map((line) => line.text),
+    failures: failedLines.map((line) => line.text),
   });
   const pullRequest = await world.forge.upsertPullRequest({
     base: source.branch,
@@ -988,6 +1151,7 @@ export async function run(inputs, context, io) {
     title,
     body,
   });
+  red.pullRequest = { number: pullRequest.number, created: pullRequest.created };
 
   info(
     pullRequest.created
@@ -1011,10 +1175,9 @@ export async function run(inputs, context, io) {
   });
   try {
     world.writeRecord({ record });
+    red.recorded = true;
   } catch (cause) {
-    info(
-      `harmonise: the run record was not written: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
+    loseRecord(red, record, cause);
   }
 
   // Published first, red second — exactly the specification's ordering.

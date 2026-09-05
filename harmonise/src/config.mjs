@@ -12,6 +12,7 @@
  */
 
 import { loadConfigFile as loadConfigFileCore, MAX_CONFIG_BYTES } from "#core/config-file.mjs";
+import { ForgeError } from "#core/forge.mjs";
 
 import {
   MAX_ASSET_LAYOUTS,
@@ -19,6 +20,8 @@ import {
   parseLanguagePattern,
   validateLanguagePattern,
 } from "./patterns.mjs";
+
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 /**
  * The operations the config loaders need — a slice of the forge client, so a
@@ -100,28 +103,42 @@ const DEFAULT_INSTRUCTION_PATHS = {
  * @param {import("#core/policy.mjs").PolicySource} input.source the resolved policy source
  * @returns {Promise<{ raw: Record<string, unknown>, path: string }>}
  */
-export function loadConfigFile({ forge, configPath, source }) {
-  // `absent: "refuse"` guarantees the resolved file is never null, so the
-  // narrowed return type is the promise's only inhabitant.
-  return /** @type {Promise<{ raw: Record<string, unknown>, path: string }>} */ (
-    loadConfigFileCore({
-      forge,
-      configPath,
-      source,
-      locations: DEFAULT_LOCATIONS,
-      absent: "refuse",
-      absentMessage:
-        `no config file exists — expected one of ${DEFAULT_LOCATIONS.join(" or ")} on ` +
-        `${source.branch} at ${source.sha}, the policy source resolved for this run. ` +
-        `harmonise keeps no documents in step without a map of them`,
-      supportedMajor: SCHEMA_MAJOR,
-    })
-  );
+export async function loadConfigFile({ forge, configPath, source }) {
+  try {
+    // `absent: "refuse"` guarantees the resolved file is never null, so the
+    // narrowed return type is the promise's only inhabitant.
+    return /** @type {{ raw: Record<string, unknown>, path: string }} */ (
+      await loadConfigFileCore({
+        forge,
+        configPath,
+        source,
+        locations: DEFAULT_LOCATIONS,
+        absent: "refuse",
+        absentMessage:
+          `no config file exists — expected one of ${DEFAULT_LOCATIONS.join(" or ")} on ` +
+          `${source.branch} at ${source.sha}, the policy source resolved for this run. ` +
+          `harmonise keeps no documents in step without a map of them`,
+        supportedMajor: SCHEMA_MAJOR,
+      })
+    );
+  } catch (cause) {
+    // The forge read is the core loader's only defect surface — every reader
+    // failure arrives wrapped in ForgeError — so anything else it raises is
+    // one of the deterministic startup refusals (absent, declared twice,
+    // byte cap, parse, shape, schema major). Retyped, never reworded.
+    if (cause instanceof ForgeError) throw cause;
+    throw new DeterministicRefusalError(cause instanceof Error ? cause.message : String(cause), {
+      cause,
+    });
+  }
 }
 
 /**
  * Validates the parsed file into a `HarmoniseConfig`. Every refusal here is a
- * startup refusal: a config half-accepted would be half-run.
+ * startup refusal: a config half-accepted would be half-run. The function is
+ * pure over the parsed file — its throws, and the pattern validators' it
+ * delegates to, are all deterministic refusals (F-02), which is what lets the
+ * run boundary retype one catch instead of every raise site.
  *
  * @param {Record<string, unknown>} raw
  * @returns {HarmoniseConfig}
@@ -479,7 +496,7 @@ async function readInstruction(forge, path) {
   if (file === null) return null;
   const bytes = new TextEncoder().encode(file.content).byteLength;
   if (bytes > MAX_INSTRUCTION_BYTES) {
-    throw new Error(
+    throw new DeterministicRefusalError(
       `'${path}' is ${String(bytes)} bytes, past the ${String(MAX_INSTRUCTION_BYTES)}-byte ` +
         `cap — an instruction document that overflows is refused rather than truncated`,
     );

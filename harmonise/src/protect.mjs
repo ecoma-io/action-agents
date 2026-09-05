@@ -27,6 +27,8 @@ import { randomBytes } from "node:crypto";
 
 import { fenceMask, maskCodeSpans, maskDestinations, splitLines } from "./markdown.mjs";
 
+import { DeterministicRefusalError } from "./refusal.mjs";
+
 /** The shape of every placeholder this module mints. Case-insensitive on purpose: a token the model re-cased must be named as an unknown, never pass for prose. */
 const TOKEN_PATTERN = /\[\[harmonise:([0-9a-f]{16}):([gs])([1-9][0-9]*)\]\]/gi;
 
@@ -169,7 +171,7 @@ function collectSkipRanges(lines) {
       // to swallow the fence and whatever follows it.
       const unsettled = pending[0];
       if (unsettled !== undefined) {
-        throw new Error(
+        throw new DeterministicRefusalError(
           `harmonise:skip on line ${String(unsettled + 1)} would target a fenced code block — ` +
             `wrap the block in harmonise:skip-start / harmonise:skip-end instead`,
         );
@@ -191,7 +193,7 @@ function collectSkipRanges(lines) {
 
     const kind = DIRECTIVE_LINE.exec(line)?.[1];
     if (kind === undefined) {
-      throw new Error(
+      throw new DeterministicRefusalError(
         `line ${String(index + 1)}: '${line}' addresses harmonise but is not one of ` +
           `harmonise:skip, harmonise:skip-start, harmonise:skip-end`,
       );
@@ -201,7 +203,7 @@ function collectSkipRanges(lines) {
       pending.push(index);
     } else if (kind === "skip-start") {
       if (openRegion !== undefined) {
-        throw new Error(
+        throw new DeterministicRefusalError(
           `line ${String(index + 1)}: harmonise:skip-start opens a region while another ` +
             `(line ${String(openRegion + 1)}) is already open — nested regions are not supported`,
         );
@@ -211,18 +213,20 @@ function collectSkipRanges(lines) {
       ranges.push([openRegion, index]);
       openRegion = undefined;
     } else {
-      throw new Error(
+      throw new DeterministicRefusalError(
         `line ${String(index + 1)}: harmonise:skip-end with no open harmonise:skip-start`,
       );
     }
   }
 
   if (openRegion !== undefined) {
-    throw new Error(`harmonise:skip-start on line ${String(openRegion + 1)} is never closed`);
+    throw new DeterministicRefusalError(
+      `harmonise:skip-start on line ${String(openRegion + 1)} is never closed`,
+    );
   }
   const unsettled = pending[0];
   if (unsettled !== undefined) {
-    throw new Error(
+    throw new DeterministicRefusalError(
       `harmonise:skip on line ${String(unsettled + 1)} has no following line to preserve`,
     );
   }
@@ -365,7 +369,7 @@ function chooseId(source, newId) {
     const id = newId();
     if (!source.includes(`[[harmonise:${id}:`)) return id;
   }
-  throw new Error(
+  throw new DeterministicRefusalError(
     `the document contains text colliding with ${String(MAX_ID_ATTEMPTS)} consecutive ` +
       `placeholder ids — refused rather than risk token ambiguity`,
   );

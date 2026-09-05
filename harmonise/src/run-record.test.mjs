@@ -52,7 +52,7 @@ function cloneFixture(over = {}) {
 describe("buildHarmoniseRecord", () => {
   it("builds the expected record from valid run facts", () => {
     expect(recordFixture()).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       repository: "octocat/example",
       eventName: "workflow_dispatch",
       sourceLanguage: "en",
@@ -69,6 +69,45 @@ describe("buildHarmoniseRecord", () => {
     const record = recordFixture({ outcome: "skip", pullRequest: null, dryRun: true });
     expect(record.pullRequest).toBeNull();
     expect(() => validateHarmoniseRecord(record)).not.toThrow();
+  });
+  it("carries the honest nulls of a red run that died before its facts (#344)", () => {
+    const record = recordFixture({
+      outcome: "failed",
+      reason: "every pair failed: vi manual/dev.md: the model refused",
+      pairs: null,
+      headSha: null,
+      pullRequest: null,
+    });
+    expect(record.pairs).toBeNull();
+    expect(record.headSha).toBeNull();
+    expect(() => validateHarmoniseRecord(record)).not.toThrow();
+    expect(Object.isFrozen(record)).toBe(true);
+  });
+  it("caps an astral-plane reason by UTF-16 length — the validator's own metric (#347)", () => {
+    // 200 emoji are 200 code points but 400 UTF-16 units: a cap that counted
+    // code points passed the reason whole and the validator refused it —
+    // the red run left no record at all.
+    const record = recordFixture({
+      outcome: "failed",
+      reason: "\u{1F600}".repeat(200),
+      pullRequest: null,
+    });
+    expect(record.reason.length).toBe(REASON_CHARS);
+    expect(record.reason.endsWith("…[truncated]")).toBe(true);
+  });
+
+  it("caps an astral reason the code-point count would have passed untouched (#347)", () => {
+    // 177 emoji: 177 code points — under the cap, so uncapped — but 354
+    // UTF-16 units, over the validator's bound. The mismatch threw with no
+    // truncation note anywhere.
+    const record = recordFixture({ reason: "\u{1F600}".repeat(177) });
+    expect(record.reason.length).toBe(REASON_CHARS);
+    expect(record.reason.endsWith("…[truncated]")).toBe(true);
+  });
+
+  it("keeps an exactly-at-bound astral reason without a cut", () => {
+    const record = recordFixture({ reason: "\u{1F600}".repeat(150) });
+    expect(record.reason).toBe("\u{1F600}".repeat(150));
   });
 
   it("carries an updated pull request without pretending it was created", () => {
@@ -112,7 +151,7 @@ describe("buildHarmoniseRecord", () => {
       sourceLanguage: "en",
       eventName: "workflow_dispatch",
       repository: "octocat/example",
-      schemaVersion: 2,
+      schemaVersion: 3,
     };
     expect(serialiseHarmoniseRecord(validateHarmoniseRecord(shuffled))).toBe(
       serialiseHarmoniseRecord(recordFixture()),
@@ -138,8 +177,8 @@ describe("validateHarmoniseRecord", () => {
   });
 
   it("refuses a wrong schemaVersion", () => {
-    expect(() => validateHarmoniseRecord(cloneFixture({ schemaVersion: 3 }))).toThrow(
-      /schemaVersion is not 2/,
+    expect(() => validateHarmoniseRecord(cloneFixture({ schemaVersion: 4 }))).toThrow(
+      /schemaVersion is not 3/,
     );
   });
 
@@ -147,7 +186,7 @@ describe("validateHarmoniseRecord", () => {
     const v1 = cloneFixture();
     v1["schemaVersion"] = 1;
     v1["pairs"] = { proposed: 3, unchanged: 1, skipped: 2, failed: 0 };
-    expect(() => validateHarmoniseRecord(v1)).toThrow(/schemaVersion is not 2/);
+    expect(() => validateHarmoniseRecord(v1)).toThrow(/schemaVersion is not 3/);
   });
 
   it("refuses an outcome outside the run contract's terminal states", () => {
@@ -164,6 +203,21 @@ describe("validateHarmoniseRecord", () => {
     expect(() => validateHarmoniseRecord(cloneFixture({ headSha: SHA.toUpperCase() }))).toThrow(
       /headSha/,
     );
+  });
+  it("accepts the red record's nulls, and nothing looser (#344)", () => {
+    // `null` is the one shape a red run may carry in their place: a run
+    // that died before pinning a base or finalising its accounting. A
+    // present-but-garbage value is still refused exactly as before.
+    expect(() =>
+      validateHarmoniseRecord(cloneFixture({ outcome: "failed", pairs: null, headSha: null })),
+    ).not.toThrow();
+    expect(() =>
+      validateHarmoniseRecord(cloneFixture({ outcome: "refused", pairs: null, headSha: null })),
+    ).not.toThrow();
+    expect(() => validateHarmoniseRecord(cloneFixture({ headSha: "abc" }))).toThrow(/headSha/);
+    expect(() =>
+      validateHarmoniseRecord(cloneFixture({ pairs: { selected: 2, proposed: 1 } })),
+    ).toThrow(/missing 'unchanged'/);
   });
 
   it("refuses a pairs block that is not five non-negative integers", () => {
@@ -252,6 +306,15 @@ describe("harmoniseRecordFilename", () => {
   it("names a record after the base commit the run pinned to", () => {
     expect(harmoniseRecordFilename(recordFixture())).toBe(`harmonise-record-${SHA}.json`);
   });
+  it("names a run that died before pinning a base, still inside the upload glob", () => {
+    const name = harmoniseRecordFilename(
+      recordFixture({ outcome: "failed", pairs: null, headSha: null }),
+    );
+    expect(name).toBe("harmonise-record-no-base.json");
+    expect(/^harmonise-record-.+\.json$/.test(name)).toBe(true);
+    // Never a collision with a pinned run's 40-hex name.
+    expect(name).not.toMatch(/^harmonise-record-[0-9a-f]{40}\.json$/);
+  });
 
   it("keeps every name inside the workflow's upload glob", () => {
     for (const outcome of HARMONISE_OUTCOMES) {
@@ -267,7 +330,7 @@ describe("the record's vocabulary", () => {
   });
 
   it("pins the schema version the docs state", () => {
-    expect(harmoniseRecordSchemaVersion).toBe(2);
+    expect(harmoniseRecordSchemaVersion).toBe(3);
   });
 });
 

@@ -15,6 +15,7 @@
 
 import { matchGlob } from "#core/glob.mjs";
 import { localizedImagePath } from "./patterns.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 /** A tree entry, as the forge hands it over. @typedef {{ path: string, type: string }} TreeEntry */
 
@@ -75,7 +76,7 @@ export function buildInventory({ entries, config, documents }) {
     const contenders = matches.filter((match) => match[2] === best);
     if (contenders.length > 1) {
       const named = contenders.map(([lang]) => `'${lang}'`).join(", ");
-      throw new Error(
+      throw new DeterministicRefusalError(
         `'${entry.path}' matches several language patterns equally well (${named}) — ` +
           `make one pattern more specific than the other; classification would otherwise ` +
           `be arbitrary`,

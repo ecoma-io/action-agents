@@ -22,10 +22,15 @@ import { oneLine } from "#core/one-line.mjs";
 import { warning } from "#core/runtime.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
-/** The harmonise run record's schema version. Any shape change bumps it. */
-export const harmoniseRecordSchemaVersion = 2;
+/**
+ * The harmonise run record's schema version. Any shape change bumps it.
+ * Version 3 made `pairs` and `headSha` nullable (#344): a red run may die
+ * before it finalises its accounting or pins a base commit, and its record
+ * carries the honest null rather than a shape v2 could not express.
+ */
+export const harmoniseRecordSchemaVersion = 3;
 
-/** The terminal reason's cap, in characters — the same width as the triage record's reason keeps. */
+/** The terminal reason's cap — measured as UTF-16 length, the metric the validator's bound and the core sanitiser's cap share (#347); the same width as the triage record's reason keeps. */
 export const REASON_CHARS = 300;
 
 /**
@@ -91,9 +96,9 @@ export const HARMONISE_OUTCOMES = /** @type {readonly HarmoniseOutcome[]} */ ([
  * @param {boolean} input.dryRun
  * @param {HarmoniseOutcome} input.outcome the terminal state, in the run contract's vocabulary
  * @param {string} input.reason the terminal path's own sentence — sanitised and capped at this build site
- * @param {RecordPairs} input.pairs the run's pair accounting
+ * @param {RecordPairs | null} input.pairs the run's pair accounting, or null when the run died before it was finalised
  * @param {RecordPullRequest | null} input.pullRequest the pull request the run wrote, or null
- * @param {string} input.headSha the base sha every read pinned to, 40 hex chars
+ * @param {string | null} input.headSha the base sha every read pinned to (40 hex chars), or null before one was resolved
  * @returns {HarmoniseRecord}
  */
 export function buildHarmoniseRecord({
@@ -115,13 +120,16 @@ export function buildHarmoniseRecord({
     dryRun,
     outcome,
     reason: cappedLine(reason, REASON_CHARS),
-    pairs: {
-      selected: pairs.selected,
-      proposed: pairs.proposed,
-      unchanged: pairs.unchanged,
-      skipped: pairs.skipped,
-      failed: pairs.failed,
-    },
+    pairs:
+      pairs === null
+        ? null
+        : {
+            selected: pairs.selected,
+            proposed: pairs.proposed,
+            unchanged: pairs.unchanged,
+            skipped: pairs.skipped,
+            failed: pairs.failed,
+          },
     pullRequest: pullRequest === null ? null : { ...pullRequest },
     headSha,
   };
@@ -150,10 +158,11 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/;
 /**
  * Fail-closed validation of a harmonise record: exactly the keys this module
  * spells, the run contract's outcome vocabulary, the reason within its
- * declared cap, the pairs accounting that partitions the selected schedule,
- * and a well-formed head sha. A malformed record is a code bug — the
- * builder's output is what flows here — and refusing it beats inventing
- * evidence.
+ * declared cap, the pairs accounting that partitions the selected schedule
+ * (or the honest `null` of a run that died before finalising it), and a
+ * well-formed head sha (or the honest `null` of a run that died before
+ * pinning one). A malformed record is a code bug — the builder's output is
+ * what flows here — and refusing it beats inventing evidence.
  *
  * @param {unknown} value
  * @returns {HarmoniseRecord}
@@ -174,11 +183,12 @@ export function validateHarmoniseRecord(value) {
   }
   asOutcome(record["outcome"]);
   asBoundedString(record["reason"], "the harmonise record's 'reason'", REASON_CHARS);
-  asPairs(record["pairs"]);
+  if (record["pairs"] !== null) asPairs(record["pairs"]);
   asPullRequest(record["pullRequest"]);
   if (
-    typeof record["headSha"] !== "string" ||
-    !SHA_PATTERN.test(/** @type {string} */ (record["headSha"]))
+    record["headSha"] !== null &&
+    (typeof record["headSha"] !== "string" ||
+      !SHA_PATTERN.test(/** @type {string} */ (record["headSha"])))
   ) {
     throw new TypeError("the harmonise record's 'headSha' is not a 40-hex commit sha");
   }
@@ -270,14 +280,16 @@ function asOutcome(value) {
 /**
  * The name a run record is written under. One file per run, named after the
  * base commit the run pinned to — a record's identity is the instant it
- * judged, and the name carries that. The name sits inside the upload glob
- * `harmonise-record-*.json`.
+ * judged, and the name carries that. A red run that died before pinning a
+ * base writes `no-base` in its place: still one deterministic name, still
+ * inside the upload glob `harmonise-record-*.json`, and never a collision
+ * with a pinned run's 40-hex name.
  *
  * @param {HarmoniseRecord} record
  * @returns {string}
  */
 export function harmoniseRecordFilename(record) {
-  return `harmonise-record-${record.headSha}.json`;
+  return `harmonise-record-${record.headSha ?? "no-base"}.json`;
 }
 
 /**
@@ -416,7 +428,7 @@ function assertExactKeys(obj, label, allowed) {
  * @property {boolean} dryRun
  * @property {HarmoniseOutcome} outcome a terminal state, as the run contract spells it
  * @property {string} reason the terminal path's own sentence, one line, sanitised and capped
- * @property {RecordPairs} pairs the run's pair accounting
+ * @property {RecordPairs | null} pairs the run's pair accounting; null when the run died before it was finalised
  * @property {RecordPullRequest | null} pullRequest null when the run wrote none
- * @property {string} headSha the base sha every read pinned to
+ * @property {string | null} headSha the base sha every read pinned to; null before the run resolved one
  */
