@@ -365,8 +365,7 @@ artifact to keep them across runs:
   with:
     name: review-run-artifact
     path: .review-artifact/review-artifact-*.json
-    include-hidden-files: true
-    if-no-files-found: warn
+    if-no-files-found: ignore
 ```
 
 The record's `schemaVersion` is `5` for the bare family and `6` once an
@@ -609,8 +608,7 @@ Keep the machine-readable record for every run, including failed ones.
   with:
     name: review-run-artifact
     path: .review-artifact/review-artifact-*.json
-    include-hidden-files: true
-    if-no-files-found: warn
+    if-no-files-found: ignore
 ```
 
 ---

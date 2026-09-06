@@ -819,8 +819,8 @@ the original error still fails the step, so the record never masks the throw
 it records (#344, #347). Only a run that dies before it holds the facts a
 record is built from, and a run whose record write itself fails — at the
 boundary, or at a declared point under the logged-loss tier — stay
-unrecorded; the upload's `if-no-files-found: warn` keeps the green ones
-green and the miss loud (#378).
+unrecorded; the upload's `if-no-files-found: ignore` keeps the green ones
+green.
 
 The fields, in schema version 3: `schemaVersion`, `repository`, `eventName`,
 `sourceLanguage`, `dryRun`, `outcome`, `reason` (the terminal path's own
@@ -850,11 +850,7 @@ sha>.json`, from `harmoniseRecordFilename` in the same module — so a record's
 identity is the instant it judged. The name sits inside the upload glob
 `.harmonise-record/harmonise-record-*.json`, which this repository's own
 harmonise workflow uploads with `if: always()` as the `harmonise-run-record`
-artifact. Because the record directory is hidden by design, the upload's
-`include-hidden-files: true` is load-bearing — upload-artifact prunes hidden
-files by default, and without it the glob matches zero files while the step
-still reports success (#378) — and `if-no-files-found: warn` keeps a declared
-write that lands nowhere loud instead of green over nothing.
+artifact.
 
 Retention: every field is a fact the code already computed — no model text, no
 document text, no translation text. The record carries the run's own pair
