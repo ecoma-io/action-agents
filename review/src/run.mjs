@@ -695,13 +695,6 @@ export async function reviewPullRequest({
   );
   const reconciled =
     previous === undefined ? undefined : reconcile({ previous, current: canonical });
-  // canonical.findings is built from `published` in order but not to the
-  // same length: published findings sharing an identity collapse to one
-  // canonical finding. `reconciled.current` is aligned to
-  // canonical.findings, so the labels join by identity — the same
-  // `findingFingerprint` the canonical constructor collapses on — never
-  // by index: a collapsed duplicate carries its survivor's label, never a
-  // neighbour's. Reconcile stays the single source of the pairing.
   const labelOfFingerprint =
     reconciled === undefined
       ? undefined
@@ -711,6 +704,13 @@ export async function reviewPullRequest({
             reconciled.current[index]?.reconciliation,
           ]),
         );
+  // canonical.findings is built from `published` in order but not to the
+  // same length: published findings sharing an identity collapse to one
+  // canonical finding. `reconciled.current` is aligned to
+  // canonical.findings, so the labels join by identity — the same
+  // `findingFingerprint` the canonical constructor collapses on — never
+  // by index: a collapsed duplicate carries its survivor's label, never a
+  // neighbour's. Reconcile stays the single source of the pairing.
   const labelledFindings = published.map((finding, index) => {
     const input = canonicalFindings[index];
     const label =
