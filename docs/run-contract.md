@@ -122,6 +122,15 @@ account outlives the runner log. The contract's rules for every record:
   write their records' `outcome` from it, and review's artifact speaks the
   classification vocabulary its own shapes declare, which the mapping table
   above maps onto it.
+- **Contained before it mutates; observable when it lands.** A record write
+  validates its path inside the workspace's containment boundary before any
+  filesystem mutation — no symlinked segment is traversed, `.git` never, and
+  the write's namespace cleanup runs only on the validated path (review's
+  `writeRunArtifact` holds the law; every family's write ceiling is judged
+  by it). A declared write publishes the exact file it wrote as the
+  `artifact-file` action output — on green runs and on the red boundary's
+  record alike — so an observer reads where the record landed without
+  guessing (#378).
 
 Three families exist today:
 
@@ -184,6 +193,10 @@ stashed: a red exit re-attempts that record at the boundary writer, exactly
 as it was built, so the write's failure never relabels the terminal it was
 written for — and a failure's record never masks the original error it
 records.
+Delivery is part of the same posture: the written file is published as the
+`artifact-file` action output at every terminal that declares a record, and
+a terminal that declares none logs that it did, so a missing output reads as
+"declared nothing" next to the logged loss above — never as silence (#378).
 
 ## Concurrency: read-then-write, never compare-and-swap
 
