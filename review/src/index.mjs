@@ -13,7 +13,15 @@
  * the original error fails the step.
  */
 
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 
 import * as p from "node:path";
 
@@ -230,6 +238,10 @@ export async function run(inputs, context, io = {}) {
         directory: inputs.artifactPath,
         artifact,
       });
+      // The boundary's record is a declared write: it publishes the same
+      // fact a green run publishes — #378's failed-run reporter names its
+      // file, and a lost record's absence stays loud in the catch below.
+      setOutput("artifact-file", file);
       log(`review: ${classification} run artifact written to ${file}`);
     } catch (recordCause) {
       log(
@@ -282,6 +294,9 @@ export async function run(inputs, context, io = {}) {
         directory: inputs.artifactPath,
         artifact: result.artifact,
       });
+      // The publish posture's one machine-readable fact (#378): the exact
+      // file this run wrote, as the runner reads it.
+      setOutput("artifact-file", file);
       log(`review: run artifact written to ${file}`);
     } catch (cause) {
       // A skip's record is the skip's whole outcome — a failed write there
@@ -296,6 +311,11 @@ export async function run(inputs, context, io = {}) {
       }`;
       log(`review: ${result.reason}`);
     }
+  } else {
+    // The posture's no-false-alarm half (#378): a terminal that declares
+    // no record says so, so a missing `artifact-file` output reads as
+    // "declared nothing" and never as an unlogged loss.
+    log("review: artifact publish — this terminal declared no run artifact");
   }
 
   // ── Gate surfaces: the SARIF projection, the job outputs, the check run ──
@@ -507,7 +527,10 @@ function redReason(cause, log) {
  * same one every read honours, pointed the other way: the path resolves
  * inside `GITHUB_WORKSPACE` or the run fails loudly — a symlinked branch of
  * the tree cannot carry the write out, and `.git` is refused outright,
- * because that is where the checkout's credential lives.
+ * because that is where the checkout's credential lives. Containment comes
+ * before mutation: every existing segment is lstat'd and a symlinked
+ * segment refused before the write creates, clears, or serialises anything
+ * against the path.
  *
  * @param {object} input
  * @param {string} input.workspace the runner's workspace root
@@ -528,22 +551,35 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
       throw new Error(`artifact-path '${directory}' touches .git — refused`);
     }
   }
-  mkdirSync(target, { recursive: true });
-  // Clear any previously-written file matching the upload glob inside the
-  // target directory. A PR-author-writable checkout can plant a file under a
-  // matching name; the run clears its own namespace before writing, so a
-  // planted file cannot ride the `review-artifact-*.json` upload glob on a
-  // path the action itself wrote nothing to. The glob is deliberately narrow
-  // (`if-no-files-found: ignore`), but clearing at write time removes the
-  // planted file even when the run ends on a path that writes no artifact.
-  for (const old of readdirSync(target)) {
-    if (/^review-artifact-.*\.json$/u.test(old)) {
-      rmSync(p.join(target, old), { force: true });
+  // Containment before mutation: every segment that already exists is
+  // lstat'd, and a symlinked segment is refused before the write mutates
+  // anything — a planted link can neither carry the recursive mkdir outside
+  // the workspace nor turn the namespace cleanup into an outside deletion.
+  // A missing segment is fine: the mkdir below creates it, inside the root
+  // the checks above pinned.
+  let walked = root;
+  for (const segment of p.relative(root, target).split(p.sep)) {
+    walked = p.join(walked, segment);
+    let stats;
+    try {
+      stats = lstatSync(walked);
+    } catch {
+      break;
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`artifact-path '${directory}' traverses the symlink '${segment}' — refused`);
+    }
+    if (!stats.isDirectory()) {
+      throw new Error(
+        `artifact-path '${directory}' needs '${segment}' to be a directory — refused`,
+      );
     }
   }
-  // A directory on the way may be a symlink pointing outside the workspace
-  // or into the git metadata; resolve the real location and hold it to the
-  // same ceiling and the same .git rule before a single byte is written.
+  mkdirSync(target, { recursive: true });
+  // The walk above is static. A segment can be swapped for a symlink after
+  // it and before the mkdir — the race the lstat walk cannot see — so the
+  // real location is resolved and held to the same ceiling and the same
+  // .git rule before the namespace cleanup and a single byte are written.
   const real = realpathSync(target);
   if (real !== root && !real.startsWith(root + p.sep)) {
     throw new Error(`artifact-path '${directory}' resolves outside the workspace — refused`);
@@ -551,6 +587,20 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
   for (const segment of p.relative(root, real).split(p.sep)) {
     if (segment.toLowerCase() === ".git") {
       throw new Error(`artifact-path '${directory}' resolves inside .git — refused`);
+    }
+  }
+  // Clear any previously-written file matching the upload glob inside the
+  // validated target directory. A PR-author-writable checkout can plant a
+  // file under a matching name; the run clears its own namespace before
+  // writing, so a planted file cannot ride the `review-artifact-*.json`
+  // upload glob on a path the action itself wrote nothing to. The glob is
+  // deliberately narrow (`if-no-files-found: ignore`), but clearing at
+  // write time removes the planted file even when the run ends on a path
+  // that writes no artifact. The cleanup runs only here — after the path
+  // is validated — never through an unvalidated link.
+  for (const old of readdirSync(real)) {
+    if (/^review-artifact-.*\.json$/u.test(old)) {
+      rmSync(p.join(real, old), { force: true });
     }
   }
   // A skip record names its kind so a durable skip never reads as a reviewed
