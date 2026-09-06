@@ -116,7 +116,7 @@ describe("toSarif", () => {
                 ],
                 partialFingerprints: {
                   primaryLocationLineHash: aHash,
-                  "reviewFindingFingerprint/v1": aHash,
+                  "reviewFindingFingerprint/v2": aHash,
                 },
               },
               {
@@ -134,7 +134,7 @@ describe("toSarif", () => {
                 ],
                 partialFingerprints: {
                   primaryLocationLineHash: bHash,
-                  "reviewFindingFingerprint/v1": bHash,
+                  "reviewFindingFingerprint/v2": bHash,
                 },
               },
             ],
@@ -147,10 +147,10 @@ describe("toSarif", () => {
   it("passes the finding's own fingerprint through", () => {
     const result = build();
     const sarif = toSarif(result);
-    expect(sarif.runs[0]?.results[0]?.partialFingerprints["reviewFindingFingerprint/v1"]).toBe(
+    expect(sarif.runs[0]?.results[0]?.partialFingerprints["reviewFindingFingerprint/v2"]).toBe(
       findingFingerprint({ file: "src/a.mjs", kind: "correctness", subject: "if (!x) return;" }),
     );
-    expect(sarif.runs[0]?.results[0]?.partialFingerprints["reviewFindingFingerprint/v1"]).toBe(
+    expect(sarif.runs[0]?.results[0]?.partialFingerprints["reviewFindingFingerprint/v2"]).toBe(
       result.findings[0]?.fingerprint,
     );
   });
@@ -170,7 +170,7 @@ describe("toSarif", () => {
     // Both keys, fixed order: the projection stays byte-deterministic (I9).
     expect(Object.keys(fingerprints ?? {})).toEqual([
       "primaryLocationLineHash",
-      "reviewFindingFingerprint/v1",
+      "reviewFindingFingerprint/v2",
     ]);
     expect(JSON.stringify(toSarif(result))).toBe(JSON.stringify(toSarif(build())));
   });

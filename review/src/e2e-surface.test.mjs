@@ -146,7 +146,7 @@ describe("cross-surface consistency: one canonical record, three surfaces", () =
     expect(results[0]?.locations?.[0]?.physicalLocation?.region).toEqual({ startLine: 2 });
     // The fingerprint slot is the same identity the record carries — the
     // string a ruleset or a human uses to join comment and SARIF.
-    expect(results[0]?.partialFingerprints?.["reviewFindingFingerprint/v1"]).toBe(
+    expect(results[0]?.partialFingerprints?.["reviewFindingFingerprint/v2"]).toBe(
       canonical.findings[0]?.fingerprint,
     );
   });

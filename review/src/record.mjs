@@ -45,7 +45,7 @@
 
 import { parseMarker } from "#core/comment.mjs";
 
-import { CANONICAL_VERSION, createCanonicalResult } from "./canonical.mjs";
+import { createCanonicalResult } from "./canonical.mjs";
 
 /** The whole record block, as it sits in a comment. */
 const RECORD = /<!--\s*action-agents-record:review:([A-Za-z0-9+/=]+)\s*-->/;
@@ -87,7 +87,7 @@ export function embedRecordBlock(record) {
 /**
  * The canonical record a comment body carries, or `undefined` when it
  * carries none this machinery can trust. Every failure mode — no block,
- * broken base64, non-JSON bytes, a foreign or future version, a record
+ * broken base64, non-JSON bytes, a version the pipeline never spelled, a record
  * whose run never published, a mangled fingerprint — collapses to the same
  * `undefined` the honest absence of a block produces.
  *
@@ -100,14 +100,13 @@ export function parseRecordBlock(body) {
   try {
     const parsed = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
     if (parsed === null || typeof parsed !== "object") return undefined;
-    const { version, run } = /** @type {{ version?: unknown, run?: { state?: unknown } }} */ (
-      parsed
-    );
-    if (version !== CANONICAL_VERSION) return undefined;
+    const { run } = /** @type {{ run?: { state?: unknown } }} */ (parsed);
     if (run === null || typeof run !== "object" || run.state !== "published") return undefined;
-    // The canonical constructor is the guard: vocabulary, shape, and every
-    // stored fingerprint against the tuple it recomputes. Anything a
-    // truncated or hand-mangled block lost throws here and counts as absent.
+    // The canonical constructor is the guard: the record version (it spells
+    // the identity scheme — a stored v1 record verifies under the retired
+    // spelling), vocabulary, shape, and every stored fingerprint against the
+    // tuple it recomputes. Anything a truncated or hand-mangled block lost
+    // throws here and counts as absent.
     return createCanonicalResult(/** @type {any} */ (parsed));
   } catch {
     return undefined;

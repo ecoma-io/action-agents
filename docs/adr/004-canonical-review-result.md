@@ -46,6 +46,12 @@ reads as a different finding, a re-worded one can duplicate.
    label. Claims that share the full key inside one run collapse to the
    first in publication order, recorded on the result — no occurrence
    rank ever enters the identity.
+   The tuple's version is part of the identity scheme: the current scheme
+   hashes the span in full — truncation is a display choice, never an
+   identity input — and a stored record verifies its fingerprints under the
+   scheme the record's own version spells. Pre-hardening v1 records still
+   parse and reconcile, through one documented churn at the migration, never
+   a silent invalidation.
 3. **Reconciliation is code, not model.** `previous + current → new |
 persisting | moved | resolved | unresolved` is a pure deterministic
    function over artifacts. An incomplete or unknown current run never

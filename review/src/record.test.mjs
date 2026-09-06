@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
 import { CANONICAL_VERSION, createCanonicalResult } from "./canonical.mjs";
+import { contentDigest } from "./digest.mjs";
+import { reconcile } from "./reconcile.mjs";
 import { embedRecordBlock, parseRecordBlock, previousRecord } from "./record.mjs";
 
 /** A publication finding as the verification pass leaves it. */
@@ -304,5 +306,49 @@ describe("the publication fact in the embedded record", () => {
       `<!-- action-agents:review:0badcafe:head=9c9473e -->\n**Review** — Complete\n${legacy}\n`,
     );
     expect(parsed?.run).toEqual({ state: "published", verdict: "pass" });
+  });
+});
+
+describe("stored records across the full-span identity migration (#393)", () => {
+  /**
+   * The fingerprint a pre-hardening run stored — the v1 tuple over the
+   * truncated span. Spelled inline exactly as identity.mjs spelled it then:
+   * the stored bytes are what the next run verifies against, whatever the
+   * current scheme spells.
+   *
+   * @param {string} subject
+   */
+  const storedV1Fingerprint = (subject) =>
+    contentDigest(["v1", "src/a.mjs", "correctness", subject].join("\u0000"));
+
+  /** The block a pre-hardening published run embedded — schema version 1. */
+  const legacyBlock = () =>
+    encode({
+      version: 1,
+      head: "9c9473e",
+      run: { state: "published", verdict: "pass" },
+      findings: [{ ...finding(), fingerprint: storedV1Fingerprint("if (!x) return;") }],
+    });
+
+  it("still parses a stored v1 record — verify by record version, never silent invalidation", () => {
+    const parsed = parseRecordBlock(legacyBlock());
+    if (parsed === undefined) throw new Error("a stored v1 record must still parse");
+    expect(parsed.version).toBe(1);
+    expect(parsed.findings[0]?.fingerprint).toBe(storedV1Fingerprint("if (!x) return;"));
+  });
+
+  it("mints the full-span scheme for fresh records — the record schema moved to version 2", () => {
+    expect(CANONICAL_VERSION).toBe(2);
+    const parsed = parseRecordBlock(embedRecordBlock(run({ findings: [finding()] })));
+    if (parsed === undefined) throw new Error("the current record did not parse");
+    expect(parsed.version).toBe(2);
+  });
+
+  it("churns a stored v1 record against the current scheme exactly once — resolved beside new", () => {
+    const previous = parseRecordBlock(legacyBlock());
+    if (previous === undefined) throw new Error("the stored v1 record did not parse");
+    const out = reconcile({ previous, current: run({ findings: [finding()] }) });
+    expect(out.previous.map((f) => f.reconciliation)).toEqual(["resolved"]);
+    expect(out.current.map((f) => f.reconciliation)).toEqual(["new"]);
   });
 });
