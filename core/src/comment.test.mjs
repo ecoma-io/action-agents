@@ -336,6 +336,94 @@ describe("the newer-head rule", () => {
   });
 });
 
+describe("the publication outcome", () => {
+  // The upsert's outcome is the publication fact every caller judges: an
+  // abandoned write names the comment that stands as another run's — never
+  // an id of its own — and leaves the thread exactly as it found it.
+  it("abandons with no id, the standing comment named as foreign, and zero mutations", async () => {
+    const raced = comment({
+      id: 6,
+      body: `${markerLine("triage", "d0d00006", "aaaabbbbccccdddde")} raced`,
+      updated_at: "2026-07-01T12:00:00Z",
+    });
+    const duplicate = comment({
+      id: 5,
+      body: `${markerLine("triage", "d0d00005")} older duplicate`,
+    });
+    const api = store([duplicate, raced]);
+
+    const outcome = await upsertComment({
+      ...baseOptions(api, {
+        head: "ffff0000ffff0000f",
+        startedAt: Date.parse("2026-07-01T11:00:00Z"),
+      }),
+      log: (line) => api.log.push(line),
+    });
+
+    // No `id`: the standing comment belongs to the run that won the thread.
+    expect(outcome).toStrictEqual({
+      outcome: "abandoned",
+      foreignId: 6,
+      deletedDuplicates: 0,
+    });
+    expect("id" in outcome).toBe(false);
+    // Zero mutations — the duplicate the upsert would have deleted is still
+    // on the thread, and nothing was created or updated.
+    const listed = await api.listComments(7);
+    expect(listed.map((entry) => entry.id)).toEqual([5, 6]);
+  });
+
+  it("abandons on an undatable standing comment without mutating the thread", async () => {
+    const undated = comment({
+      id: 6,
+      body: `${markerLine("triage", "d0d00006", "aaaabbbbccccdddde")} undated`,
+      updated_at: "not-a-timestamp",
+    });
+    const api = store([undated]);
+
+    const outcome = await upsertComment({
+      ...baseOptions(api, {
+        head: "ffff0000ffff0000f",
+        startedAt: Date.parse("2026-07-01T11:00:00Z"),
+      }),
+    });
+
+    expect(outcome).toStrictEqual({
+      outcome: "abandoned",
+      foreignId: 6,
+      deletedDuplicates: 0,
+    });
+  });
+
+  it("counts the duplicates it deleted on an update", async () => {
+    const older = comment({ id: 5, body: `${markerLine("triage", "d0d00005")} older duplicate` });
+    const winner = comment({ id: 6, body: `${markerLine("triage", "d0d00006")} the one` });
+    const api = store([older, winner]);
+
+    const outcome = await upsertComment(baseOptions(api));
+
+    expect(outcome).toStrictEqual({
+      outcome: "updated",
+      id: 6,
+      deletedDuplicates: 1,
+    });
+    const listed = await api.listComments(7);
+    expect(listed.map((entry) => entry.id)).toEqual([6]);
+  });
+
+  it("counts zero duplicates on a create", async () => {
+    const api = store([]);
+
+    const outcome = await upsertComment(baseOptions(api));
+
+    expect(outcome).toStrictEqual({
+      outcome: "created",
+      id: 1,
+      deletedDuplicates: 0,
+    });
+  });
+});
+
 describe("resolveOwnLogins", () => {
   it("resolves the identity the token writes as", async () => {
     const ownLogins = await resolveOwnLogins({ whoami: async () => ({ login: "docs-bot[bot]" }) });

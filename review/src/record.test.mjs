@@ -208,3 +208,35 @@ describe("previousRecord", () => {
     expect(previousRecord([foreign, comment(10, "just words")], "review")).toBeUndefined();
   });
 });
+
+describe("the publication fact in the embedded record", () => {
+  it("round-trips the publication fact when the record holds one", () => {
+    const record = run({ run: { state: "published", verdict: "pass", publication: "updated" } });
+    const block = embedRecordBlock(record);
+    expect(decode(block).run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "updated",
+    });
+    const parsed = parseRecordBlock(markerBody(record));
+    expect(parsed?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "updated",
+    });
+  });
+
+  it("parses a v1 record without a publication fact — the absence is the default", () => {
+    // An old published comment: its embedded payload predates the fact.
+    const legacy = encode({
+      version: CANONICAL_VERSION,
+      head: "9c9473e",
+      run: { state: "published", verdict: "pass" },
+      findings: [],
+    });
+    const parsed = parseRecordBlock(
+      `<!-- action-agents:review:0badcafe:head=9c9473e -->\n**Review** — Complete\n${legacy}\n`,
+    );
+    expect(parsed?.run).toEqual({ state: "published", verdict: "pass" });
+  });
+});

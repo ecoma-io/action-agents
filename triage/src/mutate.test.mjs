@@ -749,3 +749,101 @@ describe("mutate — the re-run re-derives, it never replays a plan", () => {
     expect(fake.writes.slice(2)).toEqual([{ op: "addLabels", args: [7, ["size/s"]] }]);
   });
 });
+
+describe("mutate — an abandoned comment write is not an applied op", () => {
+  const RACED = {
+    id: 55,
+    body: `<!-- action-agents:triage:d0d00001:head=${"b".repeat(40)} -->older classification`,
+    user: { login: "github-actions[bot]" },
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T12:00:00Z",
+  };
+
+  it("the classification abandonment ends the run abandoned — nothing written, no owned id logged", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fake = createFakeForge({ prSnapshot: {} });
+    fake.forge.listComments = async () => [RACED];
+    const run = mutate({
+      decision: {
+        kind: "comment",
+        add: [],
+        remove: [],
+        refusals: [],
+        logs: [],
+        rationale: "Because.",
+        comment: { classification: "a bug", rationale: "Because." },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: [],
+      subject: { head: "a".repeat(40), state: "open", merged: false },
+    });
+    // The comment-op abandonment is the subject-moved race (F-12): the run
+    // record ends abandoned — never partial-mutation failed, never applied.
+    await expect(run).rejects.toThrow(ThreadMovedError);
+    await expect(run).rejects.toThrow(/owned by a concurrent run/);
+    // The standing comment belongs to the run that won the thread: no log
+    // line claims an id for a write this run did not make.
+    expect(
+      log.mock.calls.some((call) =>
+        /comment (created|updated|abandoned) \(\d+\)/.test(String(call[0])),
+      ),
+    ).toBe(false);
+    // Zero mutations: the raced write touched nothing on the thread.
+    expect(
+      fake.writes.some(
+        (write) =>
+          write.op === "createComment" ||
+          write.op === "updateComment" ||
+          write.op === "deleteComment",
+      ),
+    ).toBe(false);
+  });
+
+  it("the signal abandonment ends the run abandoned the same way", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fake = createFakeForge({ prSnapshot: {} });
+    fake.forge.listComments = async () => [RACED];
+    const run = mutate({
+      decision: {
+        kind: "labels",
+        add: [],
+        remove: [],
+        refusals: [],
+        logs: [],
+        rationale: "Because.",
+        comment: undefined,
+        signal: {
+          needsMoreInfo: ["Steps to reproduce"],
+          modelJudgedQuality: false,
+          related: null,
+        },
+      },
+      forge: fake.forge,
+      issueNumber: 7,
+      dryRun: false,
+      now: () => 1,
+      action: "triage",
+      threadLabels: [],
+      subject: { head: "a".repeat(40), state: "open", merged: false },
+    });
+    await expect(run).rejects.toThrow(ThreadMovedError);
+    await expect(run).rejects.toThrow(/owned by a concurrent run/);
+    expect(
+      log.mock.calls.some((call) =>
+        /comment (created|updated|abandoned) \(\d+\)/.test(String(call[0])),
+      ),
+    ).toBe(false);
+    expect(
+      fake.writes.some(
+        (write) =>
+          write.op === "createComment" ||
+          write.op === "updateComment" ||
+          write.op === "deleteComment",
+      ),
+    ).toBe(false);
+  });
+});
