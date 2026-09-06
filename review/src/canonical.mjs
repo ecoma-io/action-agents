@@ -28,7 +28,7 @@ export const RUN_STATES = /** @type {const} */ ([
   "failed",
 ]);
 
-/** The verdict a run carries. `unknown` never passes — a hollow verdict is a defect, not a degraded pass. */
+/** The verdict a run carries. `unknown` and `fail` never pass — a hollow or incomplete review is no pass, not a degraded pass. */
 export const RUN_VERDICTS = /** @type {const} */ (["pass", "fail", "unknown"]);
 
 /** The canonical result's schema version. */

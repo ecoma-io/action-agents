@@ -74,6 +74,15 @@ describe("decideReviewGate", () => {
     ]);
   });
 
+  it("blocks on a failing run verdict", () => {
+    const result = build({ run: { state: "published", verdict: "fail" } });
+    const decision = decideReviewGate(result);
+    expect(decision.verdict).toBe("BLOCK");
+    expect(decision.reasons).toEqual([
+      "run verdict 'fail' never passes — an incomplete review is no pass.",
+    ]);
+  });
+
   it("blocks when coverage is present and files remain unread", () => {
     const result = build({
       coverage: { covered: ["src/a.mjs"], uncovered: ["src/b.mjs", "src/c.mjs"], total: 3 },
@@ -190,6 +199,23 @@ describe("decideReviewGate", () => {
       reasons: [
         "run state 'failed' is not 'published' — the review never concluded.",
         "run verdict 'unknown' never passes — a hollow verdict is a defect.",
+        "1 of 1 changed file was never read: src/a.mjs.",
+        "confirmed correctness finding at src/a.mjs:12.",
+      ],
+    });
+  });
+
+  it("structures reasons in order: verdict, coverage, findings when the state is published", () => {
+    const result = build({
+      run: { state: "published", verdict: "fail" },
+      coverage: { covered: [], uncovered: ["src/a.mjs"], total: 1 },
+      findings: [finding()],
+    });
+    const decision = decideReviewGate(result);
+    expect(decision).toEqual({
+      verdict: "BLOCK",
+      reasons: [
+        "run verdict 'fail' never passes — an incomplete review is no pass.",
         "1 of 1 changed file was never read: src/a.mjs.",
         "confirmed correctness finding at src/a.mjs:12.",
       ],
