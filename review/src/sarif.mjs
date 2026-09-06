@@ -35,7 +35,7 @@
  * @property {"warning" | "note"} level the severity's SARIF grade
  * @property {{ text: string }} message the finding's claim as answered
  * @property {Array<{ physicalLocation: { artifactLocation: { uri: string, uriBaseId: string }, region: { startLine: number } } }>} locations the finding's anchor
- * @property {{ primaryLocationLineHash: string, "reviewFindingFingerprint/v1": string }} partialFingerprints the finding's Ecoma fingerprint under GitHub's dedup key, and the review's named slot beside it
+ * @property {{ primaryLocationLineHash: string, "reviewFindingFingerprint/v2": string }} partialFingerprints the finding's Ecoma fingerprint under GitHub's dedup key, and the review's named slot beside it
  */
 
 /**
@@ -72,7 +72,7 @@ const SRC_ROOT = "%SRCROOT%";
 const PRIMARY_LOCATION_LINE_HASH = "primaryLocationLineHash";
 
 /** The review's named slot the fingerprint rides beside GitHub's key — the string a ruleset or a human joins comment and SARIF on. */
-const FINGERPRINT_SLOT = "reviewFindingFingerprint/v1";
+const FINGERPRINT_SLOT = "reviewFindingFingerprint/v2";
 
 /**
  * The SARIF `level` each finding severity projects to. The severity set is

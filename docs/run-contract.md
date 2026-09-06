@@ -227,11 +227,15 @@ give the shape its authority:
 - **Finding identity is content, not position.** A finding's fingerprint is a
   versioned digest over its normalized path, its claim kind — a closed,
   code-validated vocabulary the verification pass binds from evidence, as
-  epistemic as the verdicts themselves — and the code span the reviewed bytes
+  epistemic as the verdicts themselves — and the full code span the reviewed bytes
   carry at its anchor, captured by the integration boundary that reads the
   snapshot (the canonical constructor verifies a stored fingerprint against
-  the recomputed tuple; it never reads files). Line moves, message rewrites
-  and severity re-grades
+  the recomputed tuple; it never reads files). The span is hashed in full —
+  truncation is a display choice, never an identity input. The tuple's
+  version moves with the identity scheme, and a stored record verifies under
+  the scheme its own version spells: pre-hardening v1 records still parse
+  and reconcile, through one documented churn at the migration — never a
+  silent invalidation. Line moves, message rewrites and severity re-grades
   keep the identity; a rewritten span, a new file or a reclassified claim is
   a new finding — churn reconciliation records, never enforcement drift,
   since the gate reads the current set. Claims sharing the full key in one
@@ -288,7 +292,7 @@ give the shape its authority:
   comment's record block anchors on it, and the projection emits it under
   `partialFingerprints["primaryLocationLineHash"]`, the one key GitHub Code
   Scanning consults when deduplicating alerts across uploads, beside the
-  review's own `reviewFindingFingerprint/v1` slot. Each surface is a
+  review's own `reviewFindingFingerprint/v2` slot. Each surface is a
   logged loss on its own failure (F-14's posture): a SARIF write or check-run
   call that does not land is reported, never a red run, and never a disguise.
   A gate policy that names a kind outside the closed vocabulary is a defect,

@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import { isDigest } from "./digest.mjs";
 import {
-  FINGERPRINT_SUBJECT_CHARS,
   findingFingerprint,
+  findingFingerprintV1,
   normalisePath,
   normaliseSubject,
 } from "./identity.mjs";
@@ -33,15 +33,31 @@ describe("normaliseSubject", () => {
     expect(normaliseSubject("  const x\t=\r\n1;  ")).toBe("const x = 1;");
   });
 
-  it("marks a cut at the cap instead of trimming silently", () => {
-    const cut = normaliseSubject("x".repeat(FINGERPRINT_SUBJECT_CHARS + 50));
-    expect(cut).toHaveLength(FINGERPRINT_SUBJECT_CHARS + "…[truncated]".length);
-    expect(cut.endsWith("…[truncated]")).toBe(true);
+  it("keeps a long span whole — truncation is display-only, never the identity's job", () => {
+    expect(normaliseSubject("x".repeat(250))).toBe("x".repeat(250));
   });
 
-  it("keeps a subject at the cap exactly", () => {
-    const exact = "y".repeat(FINGERPRINT_SUBJECT_CHARS);
-    expect(normaliseSubject(exact)).toBe(exact);
+  it("keeps a long folded span whole — the fold is normalisation, the cut is gone", () => {
+    expect(normaliseSubject(`${"line\n".repeat(60)}end`)).toBe("line ".repeat(60) + "end");
+  });
+});
+
+describe("findingFingerprintV1 — the retired spelling, kept to verify stored records", () => {
+  /** @type {{ file: string, kind: import("./vocabulary.mjs").FindingKind, subject: string }} */
+  const base = { file: "src/a.mjs", kind: "correctness", subject: "return x;" };
+
+  it("is a 64-hex content digest", () => {
+    expect(isDigest(findingFingerprintV1(base))).toBe(true);
+  });
+
+  it("collapses two spans that share their first 200 characters — the defect the v2 tuple retired", () => {
+    const prefix = "x".repeat(200);
+    const long = prefix + "a".repeat(50);
+    const twin = prefix + "b".repeat(50);
+    expect(long.length).toBeGreaterThan(200);
+    expect(findingFingerprintV1({ ...base, subject: long })).toBe(
+      findingFingerprintV1({ ...base, subject: twin }),
+    );
   });
 });
 
@@ -89,5 +105,14 @@ describe("findingFingerprint", () => {
 
   it("mints a new identity for a cross-file move", () => {
     expect(findingFingerprint({ ...base, file: "src/b.mjs" })).not.toBe(findingFingerprint(base));
+  });
+
+  it("distinguishes two spans that share their first 200 characters — the truncation collision v1 had", () => {
+    const prefix = "x".repeat(200);
+    const long = prefix + "a".repeat(50);
+    const twin = prefix + "b".repeat(50);
+    expect(findingFingerprint({ ...base, subject: long })).not.toBe(
+      findingFingerprint({ ...base, subject: twin }),
+    );
   });
 });

@@ -14,7 +14,7 @@ import {
   withRunPublication,
 } from "./canonical.mjs";
 import { isDigest } from "./digest.mjs";
-import { findingFingerprint } from "./identity.mjs";
+import { findingFingerprint, findingFingerprintV1 } from "./identity.mjs";
 import { FINDING_KINDS, RECONCILIATIONS } from "./vocabulary.mjs";
 
 /** A publication finding as the verification pass leaves it. */
@@ -84,6 +84,18 @@ describe("createCanonicalResult", () => {
     expect(result.collapsed).toEqual([]);
   });
 
+  it("keeps two long-span claims apart that share a 200-character prefix — truncation never merges", () => {
+    const prefix = "x".repeat(200);
+    const result = build({
+      findings: [
+        finding({ subject: prefix + "a".repeat(50), message: "first" }),
+        finding({ subject: prefix + "b".repeat(50), message: "second" }),
+      ],
+    });
+    expect(result.findings).toHaveLength(2);
+    expect(result.collapsed).toEqual([]);
+  });
+
   it("rejects a stored fingerprint that the reviewed bytes do not spell", () => {
     expect(() => build({ findings: [finding({ fingerprint: "0".repeat(64) })] })).toThrow(
       CanonicalResultError,
@@ -98,6 +110,25 @@ describe("createCanonicalResult", () => {
     });
     const result = build({ findings: [finding({ fingerprint })] });
     expect(result.findings[0]?.fingerprint).toBe(fingerprint);
+  });
+
+  it("pins the record schema at version 2 — the full-span identity migration", () => {
+    expect(CANONICAL_VERSION).toBe(2);
+  });
+
+  it("verifies a stored v1 fingerprint under the retired scheme the input's version spells", () => {
+    const stored = findingFingerprintV1({
+      file: "src/a.mjs",
+      kind: "correctness",
+      subject: "if (!x) return;",
+    });
+    const result = build({ version: 1, findings: [finding({ fingerprint: stored })] });
+    expect(result.version).toBe(1);
+    expect(result.findings[0]?.fingerprint).toBe(stored);
+  });
+
+  it("refuses a record version the pipeline never spelled", () => {
+    expect(() => build({ version: 3 })).toThrow(CanonicalResultError);
   });
 
   it("rejects findings outside the closed vocabularies", () => {
