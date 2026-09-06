@@ -131,8 +131,7 @@ describe("creating", () => {
       newId: () => "0badcafe",
     });
 
-    expect(outcome.outcome).toBe("created");
-    expect(outcome.id).toBe(1);
+    expect(outcome).toStrictEqual({ outcome: "created", id: 1, deletedDuplicates: 0 });
     expect(api.log).toHaveLength(0);
   });
 });
@@ -176,7 +175,7 @@ describe("updating", () => {
       },
     });
 
-    expect(outcome).toEqual({ outcome: "updated", id: 5 });
+    expect(outcome).toEqual({ outcome: "updated", id: 5, deletedDuplicates: 0 });
     expect(seenMarker).toContain("ee99a1b2");
   });
 
@@ -187,7 +186,7 @@ describe("updating", () => {
 
     const outcome = await upsertComment({ ...baseOptions(api), log: (line) => api.log.push(line) });
 
-    expect(outcome.id).toBe(9);
+    expect(outcome).toStrictEqual({ outcome: "updated", id: 9, deletedDuplicates: 1 });
     expect(api.log.some((line) => line.match(/duplicate/) && line.includes("3"))).toBe(true);
   });
 
@@ -203,7 +202,7 @@ describe("updating", () => {
 
     const outcome = await upsertComment({ ...baseOptions(api), log: (line) => api.log.push(line) });
 
-    expect(outcome.id).toBe(9);
+    expect(outcome).toStrictEqual({ outcome: "updated", id: 9, deletedDuplicates: 1 });
     expect(api.log.some((line) => line.includes("3") && line.match(/duplicate/))).toBe(true);
     expect(api.log.some((line) => line.includes("untouched"))).toBe(true);
   });
@@ -225,7 +224,7 @@ describe("the identity guard", () => {
       log: (line) => api.log.push(line),
     });
 
-    expect(outcome).toEqual({ outcome: "updated", id: 2 });
+    expect(outcome).toEqual({ outcome: "updated", id: 2, deletedDuplicates: 0 });
     expect(api.log.some((line) => line.includes("untouched"))).toBe(true);
   });
 
@@ -244,7 +243,8 @@ describe("the identity guard", () => {
     });
 
     expect(outcome.outcome).toBe("created");
-    expect(outcome.id).not.toBe(4);
+    const created = /** @type {import("./comment.mjs").UpsertCreated} */ (outcome);
+    expect(created.id).not.toBe(4);
     expect(api.log.some((line) => line.includes("untouched"))).toBe(true);
   });
 
@@ -255,7 +255,8 @@ describe("the identity guard", () => {
     const outcome = await upsertComment({ ...baseOptions(api), newId: () => "fresh002" });
 
     expect(outcome.outcome).toBe("created");
-    expect(outcome.id).not.toBe(5);
+    const created = /** @type {import("./comment.mjs").UpsertCreated} */ (outcome);
+    expect(created.id).not.toBe(5);
   });
 
   it("lets a caller claim a non-default bot identity explicitly", async () => {
@@ -271,7 +272,7 @@ describe("the identity guard", () => {
       ownLogins: ["ecoma-io-app[bot]"],
     });
 
-    expect(outcome).toEqual({ outcome: "updated", id: 6 });
+    expect(outcome).toEqual({ outcome: "updated", id: 6, deletedDuplicates: 0 });
   });
 });
 
@@ -468,6 +469,6 @@ describe("resolveOwnLogins", () => {
 
     const outcome = await upsertComment({ ...baseOptions(api), ownLogins });
 
-    expect(outcome).toEqual({ outcome: "updated", id: 9 });
+    expect(outcome).toEqual({ outcome: "updated", id: 9, deletedDuplicates: 0 });
   });
 });
