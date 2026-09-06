@@ -4,7 +4,11 @@
 // so the step matches zero files and still reports success, the exact
 // silent-delivery signature #378 was filed against — and must not answer a
 // missing record with `if-no-files-found: ignore`: a declared write that
-// lands nowhere has to be loud. Runs over every workflow under
+// lands nowhere has to be loud. And a step that consumes an action output
+// as its path must guard on that output being non-empty — a terminal that
+// declares no record leaves the output empty, and an empty path fails the
+// step, colouring runs red that the contract keeps silent. Runs over every
+// workflow under
 // `.github/workflows` so a new record upload cannot reintroduce the
 // silent delivery, and over synthetic steps so the guard is proven to
 // catch the rot it exists for.
@@ -33,12 +37,21 @@ const pathValue = (step) => step.match(/^ {10}path: (.+)$/m)?.[1] ?? null;
 /** The step's `name:`, for failure messages. */
 const stepName = (step) => step.match(/^- name: (.+)$/m)?.[1]?.trim() ?? "unnamed step";
 
+/** The step's `if:` value, or null when the step is unconditional. */
+const stepIf = (step) => step.match(/^ {8}if: (.+)$/m)?.[1] ?? null;
+
+/** The `steps.<id>.outputs.<name>` refs the step's path consumes. */
+const outputRefs = (step) =>
+  [...(pathValue(step)?.matchAll(/steps\.[\w-]+\.outputs\.[\w-]+/g) ?? [])].map((m) => m[0]);
+
 /**
  * The delivery violations one workflow text carries: every upload-artifact
  * step whose first path component is hidden — `${{ }}` expressions are not
  * paths, so they are stripped before the check — while missing
  * `include-hidden-files: true` or swallowing the miss with
- * `if-no-files-found: ignore`. One human-readable string per offending step.
+ * `if-no-files-found: ignore`, and a step consuming a `steps.*.outputs.*`
+ * path must guard on that output being non-empty. One human-readable string
+ * per offending step.
  *
  * @param {string} text the workflow file's text
  * @param {string} name the file's name, for messages
@@ -47,6 +60,13 @@ const stepName = (step) => step.match(/^- name: (.+)$/m)?.[1]?.trim() ?? "unname
 function deliveryViolations(text, name) {
   const found = [];
   for (const step of steps(text).filter(isUpload)) {
+    for (const ref of outputRefs(step)) {
+      if (!stepIf(step)?.includes(`${ref} != ''`)) {
+        found.push(
+          `${name}: "${stepName(step)}" uploads the action output ${ref} without a non-empty guard — add "${ref} != ''" to the step's if so a terminal that declares no record skips silently`,
+        );
+      }
+    }
     const value = pathValue(step)
       ?.replace(/\$\{\{[^}]*\}\}/g, "")
       .trim();
@@ -121,4 +141,34 @@ test("a visible path stays outside the guard — the sarif upload's runner.temp 
     "          if-no-files-found: ignore",
   ]);
   assert.deepEqual(deliveryViolations(visible, "analysis.yml"), []);
+});
+
+test("a step consuming an action output must skip the empty case — no-record terminals stay silent", () => {
+  const unguarded = workflow([
+    "      - name: Upload the run artifact",
+    "        if: always()",
+    "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+    "        with:",
+    "          name: review-run-artifact",
+    "          path: ${{ steps.review.outputs.artifact-file }}",
+    "          include-hidden-files: true",
+    "          if-no-files-found: warn",
+  ]);
+  assert.deepEqual(deliveryViolations(unguarded, "regression.yml"), [
+    'regression.yml: "Upload the run artifact" uploads the action output steps.review.outputs.artifact-file without a non-empty guard — add "steps.review.outputs.artifact-file != \'\'" to the step\'s if so a terminal that declares no record skips silently',
+  ]);
+});
+
+test("the guarded output upload — always() and a non-empty output — is clean", () => {
+  const guarded = workflow([
+    "      - name: Upload the run artifact",
+    "        if: always() && steps.review.outputs.artifact-file != ''",
+    "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+    "        with:",
+    "          name: review-run-artifact",
+    "          path: ${{ steps.review.outputs.artifact-file }}",
+    "          include-hidden-files: true",
+    "          if-no-files-found: warn",
+  ]);
+  assert.deepEqual(deliveryViolations(guarded, "regression.yml"), []);
 });

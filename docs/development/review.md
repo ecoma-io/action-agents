@@ -1206,8 +1206,11 @@ outcome before opening a file, and a red run that died before the snapshot
 read writes `no-head` in the sha's place. The shipped workflow uploads
 the exact file the run declared — the `artifact-file` output, set on every
 declared write, a red run's refused/failed record included — never a glob —
-with `actions/upload-artifact` after the review step, `if: always()` so a
-failed comment step still leaves its record, `include-hidden-files: true`
+with `actions/upload-artifact` after the review step,
+`if: always() && steps.review.outputs.artifact-file != ''` — `always()` so a
+failed comment step still leaves its record, the non-empty check so a
+terminal that declares no record skips the upload silently instead of
+failing on an empty path — `include-hidden-files: true`
 because the record directory is hidden by design and upload-artifact prunes
 hidden files by default (#378), and `if-no-files-found: warn` because the
 carve-outs — a death before the run holds the facts an artifact is built
