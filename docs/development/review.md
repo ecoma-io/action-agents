@@ -1203,14 +1203,17 @@ red terminals carry their own prefixes — `review-artifact-abandoned-`,
 `review-artifact-dry-run-`, `review-artifact-refused-`,
 `review-artifact-failed-` — so a consumer reading the directory knows the
 outcome before opening a file, and a red run that died before the snapshot
-read writes `no-head` in the sha's place. All sit inside the upload
-glob `.review-artifact/review-artifact-*.json`. The shipped
-workflow uploads it with `actions/upload-artifact` after the review step,
-`if: always()` so a failed comment step still leaves its record, and
-`if-no-files-found: ignore` because the carve-outs — a death before the run
-holds the facts an artifact is built from, and a failed artifact write
-itself — leave no file; every red exit that reached the boundary leaves one.
-The upload notifies nobody and grants nothing.
+read writes `no-head` in the sha's place. The shipped workflow uploads
+the exact file the run declared — the `artifact-file` output, set on every
+declared write, a red run's refused/failed record included — never a glob —
+with `actions/upload-artifact` after the review step, `if: always()` so a
+failed comment step still leaves its record, `include-hidden-files: true`
+because the record directory is hidden by design and upload-artifact prunes
+hidden files by default (#378), and `if-no-files-found: warn` because the
+carve-outs — a death before the run holds the facts an artifact is built
+from, and a failed artifact write itself — leave no file, and a declared
+write that lands nowhere must be loud, not green over nothing. The upload
+notifies nobody and grants nothing.
 
 ### The red boundary
 
