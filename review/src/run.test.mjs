@@ -4001,6 +4001,7 @@ describe("the cross-run reconciliation in the published comment", () => {
     listed(
       55,
       `<!-- action-agents:review:0badcafe:head=${record.head} -->\n**Review** — Complete\n${embedRecordBlock(record)}\n`,
+      "github-actions[bot]",
     );
 
   /**
@@ -4122,9 +4123,7 @@ describe("the cross-run reconciliation in the published comment", () => {
 
   it("the upsert updates the action's own comment in place, record block and all", async () => {
     const forge = forgeStub();
-    forge.listComments = async () => [
-      { ...previousComment(previousRecord([])), user: { login: "github-actions[bot]" } },
-    ];
+    forge.listComments = async () => [previousComment(previousRecord([]))];
     const result = await runReview(forge, [READ, { content: CONCERN }, VERDICT]);
     expect(result.outcome).toBe("published");
     expect(forge.calls.upserts).toEqual([{ id: 55, body: expect.any(String) }]);
@@ -4145,7 +4144,14 @@ describe("the cross-run reconciliation in the published comment", () => {
     if (bare.canonical === undefined || labelled.canonical === undefined) {
       throw new Error("a published run lost its record");
     }
-    expect(labelled.canonical).toEqual(bare.canonical);
+    // The labels are comment prose: findings, head, state and verdict are
+    // identical. The one legitimate divergence is the publication fact —
+    // the labelled run updates the action's own comment where the bare run
+    // creates one — so it is normalised before the comparison.
+    expect({
+      ...labelled.canonical,
+      run: { ...labelled.canonical.run, publication: bare.canonical.run.publication },
+    }).toEqual(bare.canonical);
     expect(labelled.gate).toEqual(bare.gate);
     expect(JSON.stringify(toSarif(labelled.canonical))).toBe(
       JSON.stringify(toSarif(bare.canonical)),
