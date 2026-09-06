@@ -30,6 +30,13 @@ name: Review
 # enforces nothing. Neither notifies anybody or grants anything — both are
 # visible only to whoever can already see the run.
 #
+# Code Scanning is the one surface that leaves this repository's own pages:
+# a published run's confirmed findings upload to code scanning — §8's SARIF
+# column, published runs only, confirmed findings only; every
+# non-published terminal uploads nothing. The upload is the workflow's
+# step, never the action's: the action only writes the projection and
+# surfaces `sarif-path` (the audit's §7.5 split).
+#
 # The action is referenced as `./review` from the checkout of the ref that
 # triggered the run, which under `pull_request` is the merge preview: a pull
 # request is reviewed by exactly the code it carries. The trade that shape
@@ -45,12 +52,13 @@ on:
   # There is no workflow_dispatch: without a pull request there is nothing
   # for this action to look at.
 
-# The comment and the gate's `review gate` check run are the whole write
-# surface, and only when dry-run is off.
-permissions:
-  contents: read
-  pull-requests: write
-  checks: write
+# The workflow-level floor grants nothing; the review job below restates its
+# reads and holds every write — a job-level `permissions` block REPLACES this
+# one rather than merging with it (analysis.yml's rule), so a job added later
+# inherits read-only instead of silently widening. The job's writes are the
+# marker comment, the gate's check run, and, only after a published review,
+# the code scanning upload.
+permissions: read-all
 
 # One review per pull request: a rapid push sequence replaces the queued run
 # rather than stacking reviews of stale heads.
@@ -65,6 +73,17 @@ jobs:
     # a run that cannot finish in fifteen minutes has hit a bound and will
     # say so rather than hang.
     timeout-minutes: 15
+    # Writes are the job's, stated here rather than inherited: the marker
+    # comment and the gate's `review gate` check run, and — only after a
+    # published review — the code scanning upload. `actions: read` is the
+    # audit §7.5 consumer grant (artifact verification); the action itself
+    # never needs either write.
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+      security-events: write
+      actions: read
     steps:
       # Unlike `triage`, whose reads all go through the API, `review`'s
       # subject IS the working tree — this checkout is the snapshot the tools
@@ -74,7 +93,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: ./review
+      - id: review
+        uses: ./review
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
@@ -88,6 +108,22 @@ jobs:
           # check required only starts enforcing after this flips to
           # `required`, whose BLOCK renders `failure`.
           gate-mode: "observe"
+
+      # Code Scanning sees the same confirmed findings the comment renders —
+      # §8's SARIF column: published runs only, confirmed findings only. A
+      # published review writes the projection under `runner.temp` and
+      # surfaces it as `sarif-path`, so the bare default `if:` (no
+      # `always()`) uploads nothing on every other terminal — refused,
+      # failed, abandoned, skipped, dry-run — and no false alarm rides on a
+      # green no-write run. The explicit category keeps these alerts a
+      # separate stream from `analysis.yml`'s uploads. Pinned `tag@digest`
+      # like every third-party action here; Renovate bumps both halves.
+      - name: Upload the review's SARIF
+        if: steps.review.outputs.sarif-path != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: ${{ steps.review.outputs.sarif-path }}
+          category: review
 
       # The run artifact — policy, risk table, findings with verification
       # states, gate outcomes, coverage, phase log — as a downloadable file.
