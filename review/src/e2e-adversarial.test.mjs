@@ -51,7 +51,14 @@ afterAll(() => {
  */
 function canonicalOf(result) {
   if (result.canonical === undefined) throw new Error("the replay published no canonical record");
-  return result.canonical;
+  // The publication fact belongs to the returned canonical alone: the
+  // embedded block is written by the very upsert whose outcome the fact
+  // names, so the record it carries cannot know it. Comparisons against
+  // the embedded record read the canonical minus that one run-level fact.
+  return {
+    ...result.canonical,
+    run: { state: result.canonical.run.state, verdict: result.canonical.run.verdict },
+  };
 }
 
 /**
@@ -158,7 +165,14 @@ describe("adversarial: corrupted answer shapes", () => {
     expect(result.outcome).toBe("published");
     const canonical = canonicalOf(result);
     expect(canonical.findings).toEqual([]);
-    expect(canonical.run).toEqual({ state: "published", verdict: "pass" });
+    // The publication fact rides beside the verdict on the returned
+    // canonical (PR2) — this first-run review created the comment, and the
+    // two facts stay independent: a published comment on a passing review.
+    expect(result.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "created",
+    });
     const body = bodyOf({ forge });
     expect(body).toContain("No findings.");
     // The injected kind and its demand exist nowhere in the published prose.
