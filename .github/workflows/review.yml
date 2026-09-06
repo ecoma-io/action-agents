@@ -14,7 +14,7 @@ name: Review
 # whole surface found no path from pull-request content to anything beyond
 # that one comment before this flip was made.
 #
-# The write surface when that flip happens is the marker comment and the
+# The write surface, now that the flip has landed, is the marker comment and the
 # gate's `review gate` check run on the pull request — no labels
 # (`triage`'s job), no verdicts, no mentions — and the block below is the
 # boundary that makes that true: `contents` stays
@@ -22,13 +22,13 @@ name: Review
 # input, and a fork's pull request carries neither secrets nor a write token,
 # which is the arrangement SECURITY.md documents for this trigger.
 #
-# The other outputs stay consequence-free here: the run's machine-readable
-# record is written inside the workspace (`.review-artifact`, the action
-# refuses to resolve outside it) and the upload step publishes it as a
-# workflow artifact, and the gate's check run runs in `observe` mode — a
-# `neutral` check run that records `OBSERVE-PASS` or `OBSERVE-BLOCK` and
-# enforces nothing. Neither notifies anybody or grants anything — both are
-# visible only to whoever can already see the run.
+# The run's machine-readable record stays consequence-free: it is written
+# inside the workspace (`.review-artifact`, the action refuses to resolve
+# outside it) and the upload step publishes it as a workflow artifact —
+# visible only to whoever can already see the run. The gate's check run no
+# longer merely observes: this workflow runs it in `required` mode, so a
+# BLOCK verdict renders a `failure` `review gate` check run and a ruleset
+# that requires the check blocks merges while findings are unresolved.
 #
 # Code Scanning is the one surface that leaves this repository's own pages:
 # a published run's confirmed findings upload to code scanning — §8's SARIF
@@ -103,10 +103,9 @@ jobs:
           # Live: publishes one upserted marker comment plus the gate's
           # check run.
           dry-run: "false"
-          # Observe: the verdict lands as a `neutral` `review gate` check
-          # run — recorded, enforcing nothing. A ruleset that makes the
-          # check required only starts enforcing after this flips to
-          # `required`, whose BLOCK renders `failure`.
+          # Required: the verdict lands as the `review gate` check run and
+          # BLOCK renders `failure`, so a ruleset that requires the check
+          # blocks merges while findings are unresolved.
           gate-mode: "required"
 
       # Code Scanning sees the same confirmed findings the comment renders —
