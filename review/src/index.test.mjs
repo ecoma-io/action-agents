@@ -726,26 +726,153 @@ describe("writeRunArtifact", () => {
       }),
     ).toThrow(/touches \.git/);
   });
+});
 
-  it("refuses a symlinked directory that resolves into .git", () => {
-    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
-    mkdirSync(p.join(root, ".git"));
-    // The lexical path carries no `.git` segment, so only the post-resolve
-    // check can see that the real location is the metadata directory.
-    symlinkSync(p.join(root, ".git"), p.join(root, "link"), "dir");
+describe("writeRunArtifact — containment before mutation (T15)", () => {
+  const SHA = "a".repeat(40);
+
+  /**
+   * The record content is irrelevant to the ceiling; the smallest valid
+   * shape keeps the adversarial cases readable.
+   *
+   * @returns {import("./artifact.mjs").AnyRunArtifact}
+   */
+  function fixture() {
+    return buildDryRunArtifact({
+      repository: "acme/widgets",
+      pullRequest: 7,
+      headRef: SHA,
+      reason: "dry run — the ceiling refuses before any write happens",
+    });
+  }
+
+  /**
+   * A path->kind map of every tree entry, symlinks recorded as links — the
+   * before/after picture the throw-only assertions never took (A2).
+   *
+   * @param {string} root
+   * @returns {Map<string, string>}
+   */
+  function snapshotTree(root) {
+    /** @type {Map<string, string>} */
+    const out = new Map();
+    const walk = /** @param {string} dir */ (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = p.join(dir, entry.name);
+        out.set(
+          p.relative(root, full),
+          entry.isSymbolicLink() ? "symlink" : entry.isDirectory() ? "dir" : "file",
+        );
+        if (entry.isDirectory() && !entry.isSymbolicLink()) walk(full);
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  /**
+   * The refusal mutated nothing anywhere: both trees hold their exact
+   * before shapes and every probed file its exact bytes.
+   *
+   * @param {string} root
+   * @param {string} outside
+   * @param {Map<string, string>} beforeInside
+   * @param {Map<string, string>} beforeOutside
+   * @param {Array<[string, string]>} probes path and expected content
+   */
+  function expectZeroMutation(root, outside, beforeInside, beforeOutside, probes) {
+    expect(snapshotTree(root)).toEqual(beforeInside);
+    expect(snapshotTree(outside)).toEqual(beforeOutside);
+    for (const [file, content] of probes) {
+      expect(readFileSync(file, "utf8")).toBe(content);
+    }
+  }
+
+  it("refuses a target symlink without deleting the planted files it points at", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "t15-target-"));
+    const outside = mkdtempSync(p.join(tmpdir(), "t15-outside-"));
+    const stale = p.join(outside, "review-artifact-stale.json");
+    writeFileSync(stale, "planted outside the workspace", "utf8");
+    symlinkSync(outside, p.join(root, ".review-artifact"), "dir");
+    const beforeInside = snapshotTree(root);
+    const beforeOutside = snapshotTree(outside);
     expect(() =>
-      writeRunArtifact({ workspace: root, directory: "link", artifact: artifactFixture() }),
-    ).toThrow(/resolves inside \.git/);
+      writeRunArtifact({ workspace: root, directory: ".review-artifact", artifact: fixture() }),
+    ).toThrow();
+    expectZeroMutation(root, outside, beforeInside, beforeOutside, [
+      [stale, "planted outside the workspace"],
+    ]);
   });
 
-  it("refuses a symlinked directory that leaves the workspace", () => {
-    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
-    const outside = mkdtempSync(p.join(tmpdir(), "artifact-outside-"));
-    mkdirSync(p.join(outside, "real"));
-    symlinkSync(p.join(outside, "real"), p.join(root, "link"), "dir");
+  it("refuses a symlinked parent without creating directories outside the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "t15-parent-"));
+    const outside = mkdtempSync(p.join(tmpdir(), "t15-outside-"));
+    symlinkSync(outside, p.join(root, "parent"), "dir");
+    const beforeInside = snapshotTree(root);
+    const beforeOutside = snapshotTree(outside);
     expect(() =>
-      writeRunArtifact({ workspace: root, directory: "link", artifact: artifactFixture() }),
+      writeRunArtifact({ workspace: root, directory: "parent/sub", artifact: fixture() }),
+    ).toThrow();
+    expectZeroMutation(root, outside, beforeInside, beforeOutside, []);
+  });
+
+  it("refuses a nested symlink mid-path without creating anything past it", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "t15-nested-"));
+    const outside = mkdtempSync(p.join(tmpdir(), "t15-outside-"));
+    mkdirSync(p.join(root, "a"));
+    symlinkSync(outside, p.join(root, "a", "b"), "dir");
+    const beforeInside = snapshotTree(root);
+    const beforeOutside = snapshotTree(outside);
+    expect(() =>
+      writeRunArtifact({ workspace: root, directory: "a/b/c", artifact: fixture() }),
+    ).toThrow();
+    expectZeroMutation(root, outside, beforeInside, beforeOutside, []);
+  });
+
+  it("refuses a symlinked target even when it resolves inside the workspace", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "t15-inside-"));
+    const ordinary = p.join(root, "ordinary");
+    mkdirSync(ordinary);
+    const planted = p.join(ordinary, "review-artifact-planted.json");
+    writeFileSync(planted, "{}", "utf8");
+    symlinkSync("ordinary", p.join(root, ".review-artifact"), "dir");
+    expect(() =>
+      writeRunArtifact({ workspace: root, directory: ".review-artifact", artifact: fixture() }),
+    ).toThrow(/traverses the symlink/);
+    // Nothing was written through the link and the planted namespace kept.
+    expect(readdirSync(ordinary).sort()).toEqual(["review-artifact-planted.json"]);
+    expect(readFileSync(planted, "utf8")).toBe("{}");
+  });
+
+  it("refuses a traversal path without touching the outside target it names", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "t15-traversal-"));
+    const outside = mkdtempSync(p.join(tmpdir(), "t15-escape-"));
+    const probe = p.join(outside, "review-artifact-stale.json");
+    writeFileSync(probe, "outside", "utf8");
+    const beforeInside = snapshotTree(root);
+    const beforeOutside = snapshotTree(outside);
+    expect(() =>
+      writeRunArtifact({
+        workspace: root,
+        directory: p.join("..", p.basename(outside)),
+        artifact: fixture(),
+      }),
     ).toThrow(/outside the workspace/);
+    expectZeroMutation(root, outside, beforeInside, beforeOutside, [[probe, "outside"]]);
+  });
+
+  it("refuses a symlink into .git without clearing the metadata directory", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "t15-dotgit-"));
+    mkdirSync(p.join(root, ".git"));
+    const stale = p.join(root, ".git", "review-artifact-stale.json");
+    writeFileSync(stale, "{}", "utf8");
+    symlinkSync(".git", p.join(root, "link"), "dir");
+    const before = snapshotTree(root);
+    expect(() =>
+      writeRunArtifact({ workspace: root, directory: "link", artifact: fixture() }),
+    ).toThrow();
+    expect(snapshotTree(root)).toEqual(before);
+    expect(readFileSync(stale, "utf8")).toBe("{}");
   });
 });
 
@@ -897,6 +1024,310 @@ describe("run writes the artifact only after publication", () => {
       // The failure is logged.
       expect(log.some((line) => line.includes("not written"))).toBe(true);
     } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+describe("run — the artifact publish posture (T16)", () => {
+  /**
+   * The published-run double: empty findings, the comment lands, the gate
+   * surfaces render, and the record write can be aimed at a directory of
+   * the case's choosing.
+   *
+   * @param {{ artifactPath?: string }} [options]
+   * @returns {{ env: ReturnType<typeof runnerEnv>, root: string, log: string[], forge: any, info: (message: string) => void }}
+   */
+  function publishedRun(options = {}) {
+    const root = mkdtempSync(p.join(tmpdir(), "t16-published-"));
+    mkdirSync(p.join(root, "src"));
+    writeFileSync(p.join(root, "src", "a.mjs"), "line1\nline2\nline3\n");
+    const env = runnerEnv({
+      extra: {
+        GITHUB_WORKSPACE: root,
+        ...(options.artifactPath !== undefined
+          ? { "INPUT_ARTIFACT-PATH": options.artifactPath }
+          : {}),
+      },
+    });
+    /** @type {string[]} */
+    const log = [];
+    return {
+      env,
+      root,
+      log,
+      info: (message) => log.push(message),
+      /** @type {any} */
+      forge: {
+        async getPullRequest() {
+          return {
+            number: 41,
+            state: "open",
+            draft: false,
+            merged: false,
+            mergeable: true,
+            mergeableState: "clean",
+            title: "Test PR",
+            body: "",
+            head: { ref: "x", sha: "a".repeat(40) },
+            labels: [],
+            base: { ref: "main", sha: "b".repeat(40) },
+          };
+        },
+        async getRepository() {
+          return { defaultBranch: "main", name: "widgets", description: "" };
+        },
+        async getRef() {
+          return { sha: "c".repeat(40) };
+        },
+        async listPullRequestFiles() {
+          return [
+            {
+              filename: "src/a.mjs",
+              status: "modified",
+              additions: 1,
+              deletions: 0,
+              patch: "@@ -1,3 +1,3 @@\n-line1\n+line1 changed",
+            },
+          ];
+        },
+        async listComments() {
+          return [];
+        },
+        async createComment() {
+          return { id: 101 };
+        },
+        async updateComment() {},
+        async deleteComment() {},
+        async getContents() {
+          return null;
+        },
+        async whoami() {
+          return { login: "github-actions[bot]" };
+        },
+        createCheckRun: noopCheckRun,
+      },
+    };
+  }
+
+  it("a declared write publishes the artifact-file output naming the exact file", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "t16-out-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const { env, root, forge, info } = publishedRun();
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge,
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info,
+      });
+      expect(result.outcome).toBe("published");
+      // The one fact #378 missed: what the run wrote, as the runner reads it.
+      const line = readFileSync(outFile, "utf8")
+        .split("\n")
+        .find((candidate) => candidate.startsWith("artifact-file="));
+      expect(line).toBe(
+        `artifact-file=${p.join(root, ".review-artifact", `review-artifact-${"a".repeat(40)}.json`)}`,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a red run's refused record publishes the artifact-file output too", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "t16-out-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const root = mkdtempSync(p.join(tmpdir(), "t16-red-"));
+    const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
+    try {
+      const cause = await run(readInputs(env), readContext(env), {
+        forge: {
+          async getPullRequest() {
+            return {
+              number: 41,
+              state: "open",
+              draft: false,
+              merged: false,
+              mergeable: true,
+              mergeableState: "clean",
+              title: "Test PR",
+              body: "",
+              head: { ref: "x", sha: "a".repeat(40) },
+              labels: [],
+              base: { ref: "main", sha: "b".repeat(40) },
+            };
+          },
+          async getRepository() {
+            return { defaultBranch: "main", name: "widgets", description: "" };
+          },
+          async getRef() {
+            return { sha: "c".repeat(40) };
+          },
+          async listPullRequestFiles() {
+            return [
+              /** @type {any} */ ({
+                filename: "src/a.mjs",
+                status: "modified",
+                additions: 1,
+                deletions: 0,
+                patch: "@@ -1 +1,2 @@\n+x",
+              }),
+            ];
+          },
+          async listComments() {
+            return [];
+          },
+          async createComment() {
+            return { id: 101 };
+          },
+          async updateComment() {},
+          async deleteComment() {},
+          async getContents() {
+            return null;
+          },
+          async whoami() {
+            return { login: "github-actions[bot]" };
+          },
+          async createCheckRun() {
+            return { id: 501 };
+          },
+        },
+        chat: {
+          complete: async () => ({
+            content: "this is not the JSON object the contract specifies",
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info: () => undefined,
+      }).then(
+        () => null,
+        (error) => error,
+      );
+      expect(cause).toBeInstanceOf(DeterministicRefusalError);
+      // The failed run is #378's reporter: its record is written and must be
+      // named to the runner exactly like a published run's is.
+      expect(readFileSync(outFile, "utf8")).toContain(
+        `artifact-file=${p.join(root, ".review-artifact", `review-artifact-refused-${"a".repeat(40)}.json`)}\n`,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a lost write never publishes the output — the absence is the truth", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "t16-out-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const { env, log, forge, info } = publishedRun({ artifactPath: "../outside" });
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge,
+        chat: {
+          complete: async () => ({
+            content: '{"findings":[],"summary":"no findings"}',
+            toolCalls: [],
+            finishReason: "stop",
+          }),
+        },
+        now: () => 0,
+        info,
+      });
+      expect(result.outcome).toBe("published-without-artifact");
+      const outputs = readFileSync(outFile, "utf8");
+      expect(outputs).toContain("gate-verdict=");
+      // No output line may stand in for a file that was never written.
+      expect(outputs).not.toContain("artifact-file=");
+      expect(log.some((line) => line.includes("not written"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("a terminal that declares no record publishes no output and says so", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const temp = mkdtempSync(p.join(tmpdir(), "t16-out-"));
+    const outFile = p.join(temp, "gh-output.txt");
+    writeFileSync(outFile, "");
+    vi.stubEnv("GITHUB_OUTPUT", outFile);
+    const root = mkdtempSync(p.join(tmpdir(), "t16-nodeclared-"));
+    const env = runnerEnv({
+      extra: { GITHUB_WORKSPACE: root, "INPUT_DRY-RUN": "true" },
+    });
+    /** @type {string[]} */
+    const log = [];
+    try {
+      const result = await run(readInputs(env), readContext(env), {
+        forge: {
+          getPullRequest: async () => ({
+            number: 41,
+            state: "open",
+            draft: true,
+            merged: false,
+            mergeable: null,
+            mergeableState: "unknown",
+            title: "",
+            body: "",
+            head: { ref: "x", sha: "a".repeat(40) },
+            labels: [],
+            base: { ref: "main", sha: "b".repeat(40) },
+          }),
+          async getRepository() {
+            return { defaultBranch: "main", name: "", description: "" };
+          },
+          async getRef() {
+            return { sha: "c".repeat(40) };
+          },
+          async listPullRequestFiles() {
+            return [];
+          },
+          async listComments() {
+            return [];
+          },
+          async createComment() {
+            return { id: 1 };
+          },
+          async updateComment() {},
+          async deleteComment() {},
+          async getContents() {
+            return null;
+          },
+          async whoami() {
+            throw new Error("the draft path never reads the token's identity");
+          },
+          createCheckRun: noopCheckRun,
+        },
+        chat: {
+          complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
+        },
+        now: () => 0,
+        info: (message) => log.push(message),
+      });
+      expect(result.artifact).toBeUndefined();
+      const outputs = readFileSync(outFile, "utf8");
+      // The no-false-alarm half of #378: nothing declared, nothing claimed.
+      expect(outputs).not.toContain("artifact-file=");
+      expect(log.some((line) => line.includes("declared no run artifact"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
       vi.restoreAllMocks();
     }
   });
