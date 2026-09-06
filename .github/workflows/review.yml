@@ -14,13 +14,13 @@ name: Review
 # whole surface found no path from pull-request content to anything beyond
 # that one comment before this flip was made.
 #
-# The write surface, now that the flip has landed, is the marker comment and the
+# The write surface now that the flip has landed is the marker comment and the
 # gate's `review gate` check run on the pull request — no labels
 # (`triage`'s job), no verdicts, no mentions — and the block below is the
 # boundary that makes that true: `contents` stays
 # read-only because the working tree under `pull_request` is untrusted
-# input, and a fork's pull request carries neither secrets nor a write token,
-# which is the arrangement SECURITY.md documents for this trigger.
+# input, and a fork's pull request carries neither secrets nor a write
+# token, which is the arrangement SECURITY.md documents for this trigger.
 #
 # The run's machine-readable record stays consequence-free: it is written
 # inside the workspace (`.review-artifact`, the action refuses to resolve
