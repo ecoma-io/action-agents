@@ -1335,7 +1335,11 @@ describe("adversarial verification pass", () => {
     expect(result.outcome).toBe("published");
     const row = result.canonical?.findings[0];
     expect(result.canonical?.head).toBe(HEAD);
-    expect(result.canonical?.run).toEqual({ state: "published", verdict: "pass" });
+    expect(result.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "created",
+    });
     expect(row).toMatchObject({
       kind: "correctness",
       file: "src/a.mjs",
@@ -2700,7 +2704,7 @@ describe("publication ownership", () => {
   const VERDICT = {
     content: '{"verdict":"confirmed","kind":"correctness","reason":"the read settles it"}',
   };
-  const RACED_COMMENT = (id, head) => ({
+  const RACED_COMMENT = (/** @type {number} */ id, /** @type {string} */ head) => ({
     id,
     body: `<!-- action-agents:review:0badcafe:head=${head} -->raced findings`,
     user: { login: "github-actions[bot]" },
@@ -2738,7 +2742,7 @@ describe("publication ownership", () => {
     const base = forge.getPullRequest.bind(forge);
     forge.getPullRequest = async () => {
       reads += 1;
-      return reads >= 4 ? snapshot({ head: { ref: "feature", sha: MOVED } }) : base();
+      return reads >= 4 ? snapshot({ head: { ref: "feature", sha: MOVED } }) : base(7);
     };
     const result = await reviewPullRequest({
       inputs: INPUTS,

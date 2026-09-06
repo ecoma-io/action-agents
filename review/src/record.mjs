@@ -60,7 +60,13 @@ export function embedRecordBlock(record) {
   const payload = {
     version: record.version,
     head: record.head,
-    run: { state: record.run.state, verdict: record.run.verdict },
+    run: {
+      state: record.run.state,
+      verdict: record.run.verdict,
+      // Additive since the fact's introduction: a record without one embeds
+      // byte-identically to the v1 payload.
+      ...(record.run.publication !== undefined ? { publication: record.run.publication } : {}),
+    },
     findings: record.findings.map((finding) => ({ ...finding })),
     ...(record.coverage !== undefined
       ? {
