@@ -339,7 +339,7 @@ imports, 170 files, boundary fingerprint `c45fe82a…`), I1–I17 per
    a write token. This is the trade the workflow states rather than hides; §10
    PR8 audits it and records an architectural decision (ADR) — fix now or an
    explicit accepted risk with a follow-up issue. It must not silently persist
-   as dogfood folklore.
+   as dogfood folklore (audited: ADR 005).
 4. **Model output never composes calls or enforcement** (I4/I5, C4) — holds by
    construction and corpus; the gate reads structured canonical state only.
 5. **SARIF delivery trust**: the upload consumer will need
