@@ -34,11 +34,13 @@
  * No consequence ever reads it — the gate, the SARIF projection and every
  * exit path read the current canonical record alone.
  *
- * The record is honored only from the comment whose own marker names this
- * action and whose marker head equals the record's `head` — a block posing
- * in a foreign or markerless comment, or claiming a head its comment's
- * marker does not carry, is refused, and the newest own-marker comment
- * whose record fails any of these still ends the search: first run.
+ * The record is honored only from a comment this run's own token authored,
+ * whose marker names this action and whose marker head equals the record's
+ * `head` — authorship is the one thing GitHub authenticates about a comment
+ * (`user.login` cannot be forged to a bot principal), content shape never
+ * is. A block posing in a foreign or markerless comment, or claiming a head
+ * its comment's marker does not carry, is refused, and the newest own
+ * comment whose record fails any of these still ends the search: first run.
  */
 
 import { parseMarker } from "#core/comment.mjs";
@@ -113,20 +115,26 @@ export function parseRecordBlock(body) {
 }
 
 /**
- * The previous canonical record for a thread: the newest comment carrying
- * this action's marker wins, the same newest-first order the clearing write
- * uses, and its embedded record is the previous state. A marker comment
- * without a readable record — an older action's comment, a cleared thread,
- * a mangled block — is a first run as far as reconciliation is concerned;
- * older comments are never fallen back to, because the newest marker is the
+ * The previous canonical record for a thread: the newest comment this run's
+ * own token authored carrying this action's marker wins, the same
+ * newest-first order and ownership test the upsert applies, and its
+ * embedded record is the previous state. A comment from any other author is
+ * not the run's history — a forged marker, however valid its record, is
+ * skipped without ending the search. An own marker comment without a
+ * readable record — an older action's comment, a cleared thread, a mangled
+ * block — is a first run as far as reconciliation is concerned; older
+ * comments are never fallen back to, because the newest own marker is the
  * thread's latest truth.
  *
  * @param {import("#core/forge.mjs").CommentEntry[]} comments the thread's comments, any order
  * @param {string} action the acting action's marker namespace
+ * @param {string[]} ownLogins the logins this run's token writes as, resolved before the search
  * @returns {import("./canonical.mjs").CanonicalResult | undefined}
  */
-export function previousRecord(comments, action) {
+export function previousRecord(comments, action, ownLogins) {
   for (const comment of [...comments].sort((a, b) => b.id - a.id)) {
+    const login = comment.user?.login;
+    if (login === undefined || !ownLogins.includes(login)) continue;
     const marker = parseMarker(comment.body);
     if (marker?.action !== action) continue;
     const record = parseRecordBlock(comment.body);

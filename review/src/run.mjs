@@ -677,11 +677,21 @@ export async function reviewPullRequest({
   // last published run left on the thread; record.mjs embeds it in the same
   // upsert that publishes, so this read is the whole persistence story (the
   // artifact file does not survive across runs). Guarded at every step: no
-  // marker comment or no readable block — a first run, and the comment
-  // renders unlabeled. The labels are comment prose and nothing else: the
-  // gate above, the SARIF projection and every exit read the current
-  // canonical record alone, never the reconciliation.
-  const previous = previousRecord(await io.forge.listComments(pullRequestNumber), ACTION);
+  // own-marker comment — a foreign author's marker is nobody's history —
+  // or no readable block: a first run, and the comment renders unlabeled.
+  // The labels are comment prose and nothing else: the gate above, the
+  // SARIF projection and every exit read the current canonical record
+  // alone, never the reconciliation.
+  // Which comments are this run's own is a fact about the token, and it is
+  // resolved before any thread read: recovery applies the same ownership
+  // test the write does, so a forged marker can adopt nothing (#380). A
+  // failed identity read is a typed red run — never a guessed ownership.
+  const ownLogins = await resolveOwnLogins(io.forge);
+  const previous = previousRecord(
+    await io.forge.listComments(pullRequestNumber),
+    ACTION,
+    ownLogins,
+  );
   const reconciled =
     previous === undefined ? undefined : reconcile({ previous, current: canonical });
   // canonical.findings is built from `published` in order, so the labels
@@ -745,9 +755,6 @@ export async function reviewPullRequest({
       }),
     };
   }
-  // The identity read sits behind every skip and dry-run gate: paid only by
-  // a run about to write.
-  const ownLogins = await resolveOwnLogins(io.forge);
 
   // The artifact is the run's machine-readable record, built from the same
   // final facts the comment renders — BEFORE the comment, so every refusal

@@ -243,8 +243,8 @@ give the shape its authority:
   next run reconciles against — the comment, not the artifact file, is what
   survives between runs.
   Recovery reads only a comment this action's own token authored — the same
-  ownership test the write applies — never the newest comment carrying the
-  marker syntax.
+  ownership test the write applies, with the token's logins resolved before
+  the thread is read — never the newest comment carrying the marker syntax.
 - **The gate is a pure function of the canonical result and the policy.**
   `unknown` and `fail` never pass — an unanswered or incomplete review is no
   pass; an abandoned or refused run does not pass; a confirmed finding the

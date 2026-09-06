@@ -189,6 +189,7 @@ describe("cross-surface consistency: one canonical record, three surfaces", () =
         },
       ],
       "review",
+      ["github-actions[bot]"],
     );
     expect(recovered).toEqual(canonicalOf(world.result));
   });
