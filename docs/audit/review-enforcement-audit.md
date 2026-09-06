@@ -450,8 +450,12 @@ Cross-surface consistency + replay (PR9):
 ## 10. Proposed PR sequence
 
 Merge order is mandatory; each PR lands through the queue with signed commits
-and full gates (`pnpm lint && pnpm typecheck && pnpm arch && pnpm test &&
-pnpm check-skills`).
+and CI's Verify battery: `pnpm lint && pnpm typecheck && pnpm arch` with the
+arch canaries and monopolies, `pnpm test`, `pnpm test:tools`, `pnpm security`,
+`pnpm check-skills`, and the remaining `check-*` gates — the full table is
+`CONTRIBUTING.md`. The vitest suite discovers only `*/src/**`: the security
+corpus and the tools guards are `node --test` trees it never sees, so a green
+`pnpm test` alone proves nothing about them (PR1's corpus pin paid that gap).
 
 1. **PR1 — contract lock** (this branch). Contract edits: the pass law names
    `fail` (K1); every terminal lands a gate surface (K2/C6); mapping-table
