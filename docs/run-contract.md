@@ -281,7 +281,14 @@ give the shape its authority:
   action's exit: the run stays green with
   its outputs standing. The SARIF projection is written under `runner.temp`
   — never the workspace — byte-identical for the same record, surfaced
-  through `sarif-path`; the upload is the consumer's step. Each surface is a
+  through `sarif-path`; the upload is the consumer's step, gated on
+  `sarif-path` — only a published run uploads, so every other terminal
+  leaves the Code Scanning column empty. A result's identity is the
+  finding's fingerprint (`identity.mjs`): one string, two consumers — the
+  comment's record block anchors on it, and the projection emits it under
+  `partialFingerprints["primaryLocationLineHash"]`, the one key GitHub Code
+  Scanning consults when deduplicating alerts across uploads, beside the
+  review's own `reviewFindingFingerprint/v1` slot. Each surface is a
   logged loss on its own failure (F-14's posture): a SARIF write or check-run
   call that does not land is reported, never a red run, and never a disguise.
   A gate policy that names a kind outside the closed vocabulary is a defect,
