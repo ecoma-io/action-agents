@@ -1965,8 +1965,7 @@ describe("run — the run record", () => {
     expect(workflow).toContain("name: triage-run-record");
     expect(workflow).toContain("triage-record-*.json");
     expect(workflow).toContain("if: always()");
-    expect(workflow).toContain("include-hidden-files: true");
-    expect(workflow).toContain("if-no-files-found: warn");
+    expect(workflow).toContain("if-no-files-found: ignore");
   });
 });
 
