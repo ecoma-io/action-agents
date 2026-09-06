@@ -817,6 +817,25 @@ export async function reviewPullRequest({
     head: headSha,
     startedAt,
   });
+  if (upsert.outcome === "abandoned") {
+    // The concurrent-run rule kept this run's hands off a comment another
+    // run already owns: nothing of this run's was written, so the run ends
+    // abandoned — never published — and its artifact names no comment id,
+    // because the one it saw belongs to the run that won the thread.
+    return {
+      outcome: "abandoned",
+      reason:
+        `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run ` +
+        `(comment ${String(upsert.id)}) — nothing written`,
+      artifact: buildAbandonedArtifact({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequest: pullRequestNumber,
+        headRef: headSha,
+        reason: `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run — nothing written`,
+        ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
+      }),
+    };
+  }
   // The red-run stash follows the comment: a run that dies past here — the
   // identity attach, the write-time freshness read — records the comment
   // that stands (#355). Every typed refusal fires before any write, so a
