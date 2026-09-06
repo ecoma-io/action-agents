@@ -166,9 +166,12 @@ describe("a verified kind that contradicts the claimed kind demotes the finding"
       logged.some((line) => line.includes("names kind 'style' where the answer claimed")),
       "the demotion is named on the log",
     );
-    // The gate reads the demoted record: BLOCK, unresolved style finding.
+    // The gate reads the demoted record: BLOCK — the pass law's verdict
+    // reason first (this run is a partial review: the demotion fails the
+    // verification gate), then the unresolved style finding.
     assert.equal(/** @type {any} */ (result).gate?.verdict, "BLOCK");
     assert.deepEqual(/** @type {any} */ (result).gate?.reasons, [
+      "run verdict 'fail' never passes — an incomplete review is no pass.",
       "unresolved style finding at src/a.mjs:2.",
     ]);
   });
