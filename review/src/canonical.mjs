@@ -31,6 +31,9 @@ export const RUN_STATES = /** @type {const} */ ([
 /** The verdict a run carries. `unknown` and `fail` never pass — a hollow or incomplete review is no pass, not a degraded pass. */
 export const RUN_VERDICTS = /** @type {const} */ (["pass", "fail", "unknown"]);
 
+/** The upsert outcomes a publication fact may carry — the real comment write's result. */
+export const PUBLICATION_OUTCOMES = /** @type {const} */ (["created", "updated", "abandoned"]);
+
 /** The canonical result's schema version. */
 export const CANONICAL_VERSION = 1;
 
@@ -66,7 +69,7 @@ export class CanonicalResultError extends Error {}
  * @typedef {object} CanonicalResult
  * @property {typeof CANONICAL_VERSION} version
  * @property {string} head the reviewed commit's sha — the subject pinned beside the record
- * @property {{ state: typeof RUN_STATES[number], verdict: typeof RUN_VERDICTS[number] }} run the run's terminal facts
+ * @property {{ state: typeof RUN_STATES[number], verdict: typeof RUN_VERDICTS[number], publication?: typeof PUBLICATION_OUTCOMES[number] }} run the run's terminal facts — `publication` carries the real comment write's outcome when the run knows it, and is absent on records that predate the fact (and on every canonical a run builds before its write lands)
  * @property {readonly CanonicalFinding[]} findings publication order preserved
  * @property {readonly CollapsedClaim[]} collapsed claims that shared a kept finding's identity key, in publication order
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the read-coverage report, when the run carried one
@@ -106,7 +109,7 @@ function requireString(value, label) {
  *
  * @param {{
  *   head: string,
- *   run: { state: string, verdict: string },
+ *   run: { state: string, verdict: string, publication?: string },
  *   findings: Array<{
  *     kind: string,
  *     file: string,
@@ -133,6 +136,14 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
   }
   const state = inVocabulary(run.state, RUN_STATES, "run.state");
   const verdict = inVocabulary(run.verdict, RUN_VERDICTS, "run.verdict");
+  // Additive since the fact's introduction (the version stays 1): a record
+  // without one is the v1 shape, and its absence is the default.
+  const publication =
+    run.publication === undefined
+      ? undefined
+      : /** @type {typeof PUBLICATION_OUTCOMES[number]} */ (
+          inVocabulary(run.publication, PUBLICATION_OUTCOMES, "run.publication")
+        );
 
   /** @type {Map<string, CanonicalFinding>} */
   const kept = new Map();
@@ -216,6 +227,7 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
     run: Object.freeze({
       state: /** @type {typeof RUN_STATES[number]} */ (state),
       verdict: /** @type {typeof RUN_VERDICTS[number]} */ (verdict),
+      ...(publication !== undefined ? { publication } : {}),
     }),
     findings: Object.freeze(canonicalFindings),
     collapsed: Object.freeze(collapsed),
@@ -230,5 +242,28 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
           ),
         }
       : {}),
+  });
+}
+
+/**
+ * Attaches the real publication outcome to a built canonical result — the
+ * one fact a run learns only after the record exists, when the comment
+ * write returns. Pure: the same record and outcome yield the same frozen
+ * result, reusing the findings, collapsed claims and coverage by reference;
+ * nothing is recomputed. The fact stays independent of the verdict by law —
+ * publication success is not the review's verdict — and the merge gate
+ * never reads it.
+ *
+ * @param {CanonicalResult} canonical
+ * @param {string} publication the upsert's outcome — "created", "updated" or "abandoned"
+ * @returns {CanonicalResult}
+ */
+export function withRunPublication(canonical, publication) {
+  const outcome = /** @type {typeof PUBLICATION_OUTCOMES[number]} */ (
+    inVocabulary(publication, PUBLICATION_OUTCOMES, "run.publication")
+  );
+  return Object.freeze({
+    ...canonical,
+    run: Object.freeze({ ...canonical.run, publication: outcome }),
   });
 }

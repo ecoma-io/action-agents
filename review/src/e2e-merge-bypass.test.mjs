@@ -263,7 +263,15 @@ describe("merge-bypass: the enforcing check run is a function of the embedded re
     const settled = await driveEntrypoint({ workspace, forge, chat, gateMode: "required" });
     const result = /** @type {import("./run.mjs").RunResult} */ (settled.result);
     const embedded = parseRecordBlock(forge.calls.upserts[0]?.body ?? "");
-    expect(embedded).toEqual(result.canonical);
+    // The embedded record is the returned canonical minus the publication
+    // fact — the block is written by the very upsert whose outcome that
+    // fact names, so it cannot carry it.
+    const returned = result.canonical;
+    if (returned === undefined) throw new Error("the replay published no canonical record");
+    expect(embedded).toEqual({
+      ...returned,
+      run: { state: returned.run.state, verdict: returned.run.verdict },
+    });
     const gate = decideReviewGate(/** @type {*} */ (embedded));
     expect(gate).toEqual(result.gate);
     const rendered = renderGateCheckRun({ gate, gateMode: "required" });

@@ -42,7 +42,7 @@ import {
   VERIFIER_MAX_TOOL_CALLS,
 } from "./verify.mjs";
 import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
-import { createCanonicalResult } from "./canonical.mjs";
+import { createCanonicalResult, withRunPublication } from "./canonical.mjs";
 import { decideReviewGate } from "./merge-gate.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { embedRecordBlock, previousRecord } from "./record.mjs";
@@ -826,7 +826,7 @@ export async function reviewPullRequest({
       outcome: "abandoned",
       reason:
         `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run ` +
-        `(comment ${String(upsert.id)}) — nothing written`,
+        `(comment ${String(upsert.foreignId)}) — nothing written`,
       artifact: buildAbandonedArtifact({
         repository: `${context.owner}/${context.repo}`,
         pullRequest: pullRequestNumber,
@@ -874,7 +874,10 @@ export async function reviewPullRequest({
     reason,
     commentId: upsert.id,
     artifact: record,
-    canonical,
+    // The publication fact is the one thing the record could not carry when
+    // it was built — the write had not happened yet. Attach the real
+    // outcome: what this run's upsert actually did to the thread.
+    canonical: withRunPublication(canonical, upsert.outcome),
     gate,
   };
 }
@@ -1202,7 +1205,7 @@ async function nothingToReview({
           }),
         };
       }
-      await upsertComment({
+      const clearing = await upsertComment({
         store: io.forge,
         action: ACTION,
         issueNumber: pullRequestNumber,
@@ -1211,6 +1214,30 @@ async function nothingToReview({
         head: headSha,
         startedAt,
       });
+      if (clearing.outcome === "abandoned") {
+        // The clearing update is a write, and the newer-head rule governs
+        // writes: a concurrent run owns the thread, and the marker stands.
+        // The run ends abandoned and writes no skip record — a cleared
+        // record would describe a thread this run did not clear, and the
+        // next run would trust it over the comment that is really there.
+        return /** @type {RunResult} */ ({
+          outcome: "abandoned",
+          reason:
+            `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run ` +
+            `(comment ${String(clearing.foreignId)}) stands — the marker was not cleared`,
+          artifact: buildAbandonedArtifact({
+            repository,
+            pullRequest: pullRequestNumber,
+            headRef: headSha,
+            reason:
+              `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run ` +
+              `— the marker was not cleared`,
+            ...(applicabilityFact !== undefined
+              ? { applicability: applicabilityFact.context }
+              : {}),
+          }),
+        });
+      }
       return /** @type {RunResult} */ ({
         outcome: "nothing-to-review",
         reason: "universe empty — marker cleared",

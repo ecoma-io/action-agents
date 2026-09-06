@@ -111,10 +111,42 @@ function defaultNewId() {
  */
 
 /**
+ * The upsert's structured outcome — the publication fact every caller
+ * judges. An applied outcome carries the id of the comment THIS upsert left
+ * standing; an abandoned outcome carries no `id` at all (the comment standing
+ * on the thread is another run's, and this upsert must never claim it) and
+ * names that foreign comment instead. `deletedDuplicates` is surfaced on
+ * every outcome: an abandonment mutates nothing, so it is always 0 there.
+ *
+ * @typedef {object} UpsertCreated
+ * @property {"created"} outcome
+ * @property {number} id the comment this upsert created
+ * @property {number} deletedDuplicates own duplicates removed — 0 on a fresh thread
+ */
+
+/**
+ * @typedef {object} UpsertUpdated
+ * @property {"updated"} outcome
+ * @property {number} id the comment this upsert updated
+ * @property {number} deletedDuplicates own duplicates removed to keep exactly one
+ */
+
+/**
+ * @typedef {object} UpsertAbandoned
+ * @property {"abandoned"} outcome
+ * @property {number} foreignId the standing comment's id — another run's, named only to explain the refusal
+ * @property {number} deletedDuplicates always 0: an abandonment leaves the thread exactly as it was found
+ */
+
+/**
+ * @typedef {UpsertCreated | UpsertUpdated | UpsertAbandoned} UpsertOutcome
+ */
+
+/**
  * Creates or updates the action's one comment on a thread.
  *
  * @param {UpsertOptions} options
- * @returns {Promise<{ outcome: "created" | "updated" | "abandoned", id: number }>}
+ * @returns {Promise<UpsertOutcome>}
  */
 export async function upsertComment(options) {
   const log = options.log ?? (() => undefined);
@@ -151,7 +183,7 @@ export async function upsertComment(options) {
       options.issueNumber,
       options.buildBody(marker),
     );
-    return { outcome: "created", id: created.id };
+    return { outcome: "created", id: created.id, deletedDuplicates: 0 };
   }
 
   // Newest wins: ids ascend with creation, and the upsert keeps exactly one
@@ -161,13 +193,6 @@ export async function upsertComment(options) {
   if (winner === null) {
     throw new Error("the marker upsert found no comment after finding some");
   }
-  for (const loser of marked.slice(0, -1)) {
-    log(
-      `deleting a duplicate ${options.action} comment (${String(loser.id)}) — the upsert keeps exactly one`,
-    );
-    await options.store.deleteComment(loser.id);
-  }
-
   const marker = parseMarker(winner.body);
   if (
     options.head !== undefined &&
@@ -186,15 +211,26 @@ export async function upsertComment(options) {
         `abandoning the ${options.action} comment on #${String(options.issueNumber)} — ` +
           `a concurrent run recorded head ${marker.head} after this one started`,
       );
-      return { outcome: "abandoned", id: winner.id };
+      // The guard fires before any mutation: the duplicate cleanup below has
+      // not run yet, so the thread stays exactly as it was found — the
+      // standing comment and every duplicate on it are the run that won the
+      // thread's to claim, never this one's.
+      return { outcome: "abandoned", foreignId: winner.id, deletedDuplicates: 0 };
     }
+  }
+
+  for (const loser of marked.slice(0, -1)) {
+    log(
+      `deleting a duplicate ${options.action} comment (${String(loser.id)}) — the upsert keeps exactly one`,
+    );
+    await options.store.deleteComment(loser.id);
   }
 
   await options.store.updateComment(
     winner.id,
     options.buildBody(markerLine(options.action, marker?.id ?? "", options.head)),
   );
-  return { outcome: "updated", id: winner.id };
+  return { outcome: "updated", id: winner.id, deletedDuplicates: marked.length - 1 };
 }
 
 /** The run could not learn which logins carry its own comments, so it refused. */

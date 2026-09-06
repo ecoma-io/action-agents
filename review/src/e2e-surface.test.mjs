@@ -47,7 +47,14 @@ afterAll(() => {
  */
 function canonicalOf(result) {
   if (result.canonical === undefined) throw new Error("the replay published no canonical record");
-  return result.canonical;
+  // The publication fact belongs to the returned canonical alone: the
+  // embedded block is written by the very upsert whose outcome the fact
+  // names, so the record it carries cannot know it. Every surface compared
+  // through this helper reads the canonical minus that one run-level fact.
+  return {
+    ...result.canonical,
+    run: { state: result.canonical.run.state, verdict: result.canonical.run.verdict },
+  };
 }
 
 /**
