@@ -4,7 +4,10 @@
 // under the run, a record forged into the thread — and pins the fail-closed
 // outcome: either the attack is quarantined by code (never published, never
 // obeyed) or the run goes red with nothing written beyond its one red
-// artifact. No check run, no gate output, no comment is ever bought.
+// artifact — plus the terminal review gate check that names the red
+// terminal (#377): the check reports the block, it never passes because of
+// it, and it is never absent. No gate output, no comment, no pass is ever
+// bought.
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -257,7 +260,7 @@ describe("adversarial: corrupted answer shapes", () => {
     // constructor refuses after the verdict, so no recovery re-ask fires.
   });
 
-  it("the entrypoint turns an empty-anchor refusal into a failed artifact and no surfaces", async () => {
+  it("the entrypoint turns an empty-anchor refusal into a failed artifact and one surface: the terminal check", async () => {
     const workspace = makeWorkspace({ "src/a.mjs": "line1\n\nline3\n" });
     const forge = forgeStub();
     const chat = scriptedChat(BLANK_ANCHOR_SCRIPT);
@@ -269,14 +272,27 @@ describe("adversarial: corrupted answer shapes", () => {
     const artifact = artifactOf(workspace, `review-artifact-failed-${HEAD}.json`);
     expect(artifact.outcome).toMatchObject({ classification: "failed" });
     expect(artifact.headRef).toBe(HEAD);
-    // No surface fired: no comment, no check run, no gate output, no SARIF.
+    // The comment never fires, but the terminal check does (#377): the old
+    // pin read a check-absence as the fail-closed posture, and #377 is
+    // exactly that absence — a required ruleset pends forever on a check
+    // that never reports. The red boundary lands the check naming the
+    // terminal; observe mode renders the BLOCK row neutral.
     expect(forge.calls.upserts).toEqual([]);
-    expect(forge.calls.checkRuns).toEqual([]);
+    expect(forge.calls.checkRuns).toHaveLength(1);
+    expect(forge.calls.checkRuns[0]).toMatchObject({
+      headSha: HEAD,
+      name: "review gate",
+      conclusion: "neutral",
+      output: {
+        title: "review gate: OBSERVE-BLOCK (failed)",
+        summary: "findings[0].subject must be a non-empty string",
+      },
+    });
     expect(readFileSync(settled.outFile, "utf8")).not.toContain("gate-verdict");
     expect(readdirSync(settled.temp)).toEqual(["github-output.txt"]);
   });
 
-  it("the entrypoint turns a mid-run capture refusal into a refused artifact and no surfaces", async () => {
+  it("the entrypoint turns a mid-run capture refusal into a refused artifact and one surface: the terminal check", async () => {
     const workspace = makeWorkspace({ "src/a.mjs": A_CONTENT });
     const forge = forgeStub();
     let cursor = 0;
@@ -322,7 +338,18 @@ describe("adversarial: corrupted answer shapes", () => {
     const artifact = artifactOf(workspace, `review-artifact-refused-${HEAD}.json`);
     expect(artifact.outcome).toMatchObject({ classification: "refused" });
     expect(forge.calls.upserts).toEqual([]);
-    expect(forge.calls.checkRuns).toEqual([]);
+    // The one surface a refusal keeps (#377 inversion): the terminal check
+    // naming the refusal — the check the old pin demanded be absent.
+    expect(forge.calls.checkRuns).toHaveLength(1);
+    expect(forge.calls.checkRuns[0]).toMatchObject({
+      headSha: HEAD,
+      name: "review gate",
+      conclusion: "neutral",
+      output: {
+        title: "review gate: OBSERVE-BLOCK (refused)",
+        summary: "capture refused for src/a.mjs:2 — the reviewed file carries 1 line(s)",
+      },
+    });
     expect(readFileSync(settled.outFile, "utf8")).not.toContain("gate-verdict");
     expect(readdirSync(settled.temp)).toEqual(["github-output.txt"]);
   });
@@ -583,11 +610,22 @@ describe("adversarial: the pull request moving under review", () => {
     expect(settled.ok).toBe(true);
     expect(settled.result?.outcome).toBe("abandoned");
     // The comment stands — honest about being published; the freshness
-    // check after the write abandons the run without a check run.
+    // check after the write abandons the run, and the run still lands the
+    // terminal check naming that ending (#377): BLOCK row, neutral under
+    // observe — the abandonment is reported, never left to check-absence.
     expect(forge.calls.upserts).toHaveLength(1);
     const artifact = artifactOf(workspace, `review-artifact-abandoned-${HEAD}.json`);
     expect(artifact.outcome).toMatchObject({ classification: "abandoned" });
-    expect(forge.calls.checkRuns).toEqual([]);
+    expect(forge.calls.checkRuns).toHaveLength(1);
+    expect(forge.calls.checkRuns[0]).toMatchObject({
+      headSha: HEAD,
+      name: "review gate",
+      conclusion: "neutral",
+      output: {
+        title: "review gate: OBSERVE-BLOCK (abandoned)",
+        summary: expect.stringContaining("moved while its review was being published"),
+      },
+    });
     expect(readFileSync(settled.outFile, "utf8")).not.toContain("gate-verdict");
     expect(readdirSync(settled.temp)).toEqual(["github-output.txt"]);
   });

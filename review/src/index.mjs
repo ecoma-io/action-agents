@@ -214,13 +214,14 @@ export async function run(inputs, context, io = {}) {
     // death before the run holds the facts an artifact is built from
     // stays unrecorded.
     const classification = cause instanceof DeterministicRefusalError ? "refused" : "failed";
+    const reason = redReason(cause, log);
     try {
       const artifact = buildRedArtifact({
         repository: `${context.owner}/${context.repo}`,
         pullRequest: event.pullRequestNumber,
         headRef: red.headRef,
         outcome: classification,
-        reason: redReason(cause, log),
+        reason,
         ...(red.commentId !== undefined ? { commentId: red.commentId } : {}),
         ...(red.applicability !== undefined ? { applicability: red.applicability } : {}),
       });
@@ -234,6 +235,40 @@ export async function run(inputs, context, io = {}) {
       log(
         `review: the ${classification} run's artifact was not written: ` +
           `${recordCause instanceof Error ? recordCause.message : String(recordCause)}`,
+      );
+    }
+    // ── The terminal check run (#377): a red run lands the review gate
+    // check its §8 row names — `refused` and `failed` are BLOCK rows
+    // (`failure` under `required`, `neutral` under `observe`) — because
+    // absence is never the enforcement state: #377 is a required ruleset
+    // pending forever on a check that never reported. The one carve-out is
+    // a run that died before the snapshot read gave it a head — the
+    // contract names that absence; it is not a posture. Like every write
+    // site here, a check that cannot land is a logged loss, and the
+    // original error still fails the step.
+    try {
+      if (red.headRef === null) {
+        log(
+          `review: the ${classification} run died before the snapshot read — ` +
+            `no head to land the review gate check on (the contract's named carve-out)`,
+        );
+      } else {
+        const check = renderTerminalCheckRun({
+          terminal: classification,
+          reason,
+          gateMode: inputs.gateMode,
+        });
+        await forge.createCheckRun({
+          headSha: red.headRef,
+          name: check.name,
+          conclusion: check.conclusion,
+          output: { title: check.title, summary: check.summary },
+        });
+      }
+    } catch (checkCause) {
+      log(
+        `review: the ${classification} run's gate check run was not created: ` +
+          `${checkCause instanceof Error ? checkCause.message : String(checkCause)}`,
       );
     }
     throw cause;
@@ -299,6 +334,42 @@ export async function run(inputs, context, io = {}) {
           `${cause instanceof Error ? cause.message : String(cause)}`,
       );
     }
+  } else {
+    // ── Terminal rows (#377): every non-published terminal lands the
+    // review gate check its §8 row names, from the head the snapshot read
+    // pinned — `skip`, `nothing-to-review` and `dry-run` are non-block
+    // (`neutral` in both modes, recorded and enforcing nothing);
+    // `abandoned` is a BLOCK row (`failure` under `required`, `neutral`
+    // under `observe`). `refused` and `failed` never reach this arm — they
+    // throw into the red boundary above. Absence is never the enforcement
+    // state; the one carve-out is a run that cannot name a head. The
+    // gate-verdict output and the SARIF stay published-run surfaces: only
+    // a canonical record renders those.
+    if (red.headRef === null) {
+      log(
+        `review: the ${result.outcome} run cannot name a head — ` +
+          `the review gate check stays absent (the contract's named carve-out)`,
+      );
+    } else {
+      try {
+        const check = renderTerminalCheckRun({
+          terminal: result.outcome,
+          reason: result.reason,
+          gateMode: inputs.gateMode,
+        });
+        await forge.createCheckRun({
+          headSha: red.headRef,
+          name: check.name,
+          conclusion: check.conclusion,
+          output: { title: check.title, summary: check.summary },
+        });
+      } catch (writeCause) {
+        log(
+          `review: the ${result.outcome} run's gate check run was not created: ` +
+            `${writeCause instanceof Error ? writeCause.message : String(writeCause)}`,
+        );
+      }
+    }
   }
   return result;
 }
@@ -358,6 +429,46 @@ export function renderGateCheckRun({ gate, gateMode }) {
     conclusion: observe ? "neutral" : gate.verdict === "PASS" ? "success" : "failure",
     title: title === "" ? "review gate" : title,
     summary,
+  };
+}
+
+/**
+ * Renders a non-published terminal's review gate check run — the §8
+ * matrix's rows for the endings that never reach the published surfaces.
+ * The blocking terminals — `refused`, `failed`, `abandoned` — render
+ * `failure` under `required` and `neutral`-with-the-block-named under
+ * `observe`; the recorded-not-enforcing terminals — `skip`,
+ * `nothing-to-review`, `dry-run` — render `neutral` in both modes. Any
+ * other terminal is fail-closed: it renders the BLOCK row, never an
+ * absence (#377). Every string goes through the comment sanitiser — the
+ * same discipline `renderGateCheckRun` keeps — because a terminal reason
+ * can interpolate a thrown message.
+ *
+ * @param {object} input
+ * @param {string} input.terminal the run's ending, in outcome vocabulary
+ * @param {string | undefined} input.reason the run's own reason sentence
+ * @param {"observe" | "required"} input.gateMode
+ * @returns {{ name: string, conclusion: "success" | "failure" | "neutral", title: string, summary: string }}
+ */
+export function renderTerminalCheckRun({ terminal, reason, gateMode }) {
+  const observe = gateMode === "observe";
+  const blocking = !(
+    terminal === "skip" ||
+    terminal === "nothing-to-review" ||
+    terminal === "dry-run"
+  );
+  const verdictName = blocking ? (observe ? "OBSERVE-BLOCK" : "BLOCK") : "NEUTRAL";
+  const title = sanitiseCommentText(oneLine(`review gate: ${verdictName} (${terminal})`), {
+    maxChars: RED_REASON_CHARS,
+  }).text;
+  const summary = sanitiseCommentText(oneLine(reason ?? "", { stripControlChars: true }), {
+    maxChars: VERDICT_REASON_CHARS,
+  }).text;
+  return {
+    name: "review gate",
+    conclusion: blocking && !observe ? "failure" : "neutral",
+    title: title === "" ? "review gate" : title,
+    summary: summary === "" ? `the run ended ${terminal} without a reason` : summary,
   };
 }
 

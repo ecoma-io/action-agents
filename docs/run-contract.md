@@ -270,8 +270,11 @@ give the shape its authority:
   `success` on PASS, `failure` on BLOCK — the check run a ruleset makes
   required. Every terminal a run can end in lands this surface — a `refused`,
   `failed` or `abandoned` run renders the check run too, `failure` under
-  `required` — except a run that dies before it holds the event facts needed
-  to name a head; that carve-out is the contract's, never an accident. And
+  `required`; a `skip`, `nothing-to-review` or `dry-run` terminal renders
+  `neutral` in both modes, recorded and enforcing nothing; and the check
+  output names the terminal state either way — except a run that dies before
+  it holds the event facts needed to name a head; that carve-out is the
+  contract's, never an accident. And
   because GitHub counts a `neutral` check as reported, a repository that
   makes the check required MUST pin `gate-mode: required` — `observe`
   satisfies the ruleset while enforcing nothing. A BLOCK never fails the

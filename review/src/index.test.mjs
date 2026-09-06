@@ -29,6 +29,7 @@ import {
   readEvent,
   readInputs,
   renderGateCheckRun,
+  renderTerminalCheckRun,
   run,
   writeRunArtifact,
   writeSarifFile,
@@ -1009,11 +1010,17 @@ describe("the red boundary (#355)", () => {
     const root = mkdtempSync(p.join(tmpdir(), "red-failed-"));
     const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
     const breakage = new TransportError("https://api.github.com/prs/41", "connection reset");
+    /** @type {number[]} */
+    const checks = [];
     try {
       const cause = await run(readInputs(env), readContext(env), {
         forge: openForge({
           getPullRequest: async () => {
             throw breakage;
+          },
+          createCheckRun: async () => {
+            checks.push(1);
+            return { id: 501 };
           },
         }),
         chat: junkChat,
@@ -1035,6 +1042,9 @@ describe("the red boundary (#355)", () => {
       // never a guessed sha.
       expect(record.headRef).toBeNull();
       expect(record.outcome.reason).toMatch(/connection reset/);
+      // The carve-out (#377): a run with no head lands no check — the one
+      // named absence, never an enforcement posture.
+      expect(checks).toEqual([]);
     } finally {
       vi.restoreAllMocks();
     }
@@ -1384,6 +1394,79 @@ describe("the gate surfaces", () => {
     expect(renderGateCheckRun({ gate: gatePass, gateMode: "observe" }).conclusion).toBe("neutral");
     const observe = renderGateCheckRun({ gate: gateBlock, gateMode: "observe" });
     expect(observe.title).toBe("review gate: BLOCK");
+  });
+
+  it("renderTerminalCheckRun: the blocking terminals render the BLOCK row under required", () => {
+    expect(
+      renderTerminalCheckRun({
+        terminal: "refused",
+        reason: "the output contract refused",
+        gateMode: "required",
+      }),
+    ).toMatchObject({
+      name: "review gate",
+      conclusion: "failure",
+      title: "review gate: BLOCK (refused)",
+    });
+    expect(
+      renderTerminalCheckRun({
+        terminal: "failed",
+        reason: "connection reset",
+        gateMode: "required",
+      }).conclusion,
+    ).toBe("failure");
+    expect(
+      renderTerminalCheckRun({
+        terminal: "abandoned",
+        reason: "the head moved",
+        gateMode: "required",
+      }).conclusion,
+    ).toBe("failure");
+  });
+
+  it("renderTerminalCheckRun: the non-block terminals render neutral in both modes", () => {
+    for (const terminal of ["skip", "nothing-to-review", "dry-run"]) {
+      expect(
+        renderTerminalCheckRun({ terminal, reason: "nothing enforcing", gateMode: "required" }),
+      ).toMatchObject({
+        name: "review gate",
+        conclusion: "neutral",
+        title: `review gate: NEUTRAL (${terminal})`,
+      });
+      expect(
+        renderTerminalCheckRun({ terminal, reason: "nothing enforcing", gateMode: "observe" })
+          .conclusion,
+      ).toBe("neutral");
+    }
+  });
+
+  it("renderTerminalCheckRun: observe renders neutral with the block named, whatever the terminal", () => {
+    const observe = renderTerminalCheckRun({
+      terminal: "refused",
+      reason: "refused",
+      gateMode: "observe",
+    });
+    expect(observe.conclusion).toBe("neutral");
+    expect(observe.title).toBe("review gate: OBSERVE-BLOCK (refused)");
+  });
+
+  it("renderTerminalCheckRun: an unknown terminal is fail-closed — the BLOCK row, never an absence", () => {
+    expect(
+      renderTerminalCheckRun({
+        terminal: "something-new",
+        reason: "mystery",
+        gateMode: "required",
+      }),
+    ).toMatchObject({
+      conclusion: "failure",
+      title: "review gate: BLOCK (something-new)",
+    });
+    expect(
+      renderTerminalCheckRun({ terminal: "something-new", reason: "", gateMode: "observe" }),
+    ).toMatchObject({
+      conclusion: "neutral",
+      summary: "the run ended something-new without a reason",
+    });
   });
 
   it("readInputs reads gate-mode against the closed pair", () => {
