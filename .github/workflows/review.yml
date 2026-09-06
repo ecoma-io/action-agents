@@ -107,7 +107,7 @@ jobs:
           # run — recorded, enforcing nothing. A ruleset that makes the
           # check required only starts enforcing after this flips to
           # `required`, whose BLOCK renders `failure`.
-          gate-mode: "observe"
+          gate-mode: "required"
 
       # Code Scanning sees the same confirmed findings the comment renders —
       # §8's SARIF column: published runs only, confirmed findings only. A
