@@ -468,7 +468,7 @@ export function renderGateCheckRun({ gate, gateMode }) {
  * @param {string} input.terminal the run's ending, in outcome vocabulary
  * @param {string | undefined} input.reason the run's own reason sentence
  * @param {"observe" | "required"} input.gateMode
- * @returns {{ name: string, conclusion: "success" | "failure" | "neutral", title: string, summary: string }}
+ * @returns {{ name: string, conclusion: "failure" | "neutral", title: string, summary: string }}
  */
 export function renderTerminalCheckRun({ terminal, reason, gateMode }) {
   const observe = gateMode === "observe";
