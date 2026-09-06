@@ -107,7 +107,8 @@ account outlives the runner log. The contract's rules for every record:
   is built from — the entrypoint's input and context reads — and a run whose
   record write itself fails — red at the boundary, or green at a declared
   point under the logged-loss tier below — stay unrecorded; the upload's
-  `if-no-files-found: ignore` keeps the green ones green. Review has no
+  `if-no-files-found: warn` keeps the green ones green and the miss loud —
+  a declared write that lands nowhere is never green over nothing (#378). Review has no
   declared failure record yet; its failure-record path is its own change.
 - **Byte-deterministic (I15).** No wall-clock fields; the same run facts
   build the same bytes. Keys sorted, compact JSON, no trailing newline.
