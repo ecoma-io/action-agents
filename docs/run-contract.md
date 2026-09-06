@@ -27,6 +27,10 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 - `unknown` never passes. A run that could not fully read the world it judged
   has no verdict, and a hollow verdict — a pass over facts nobody checked — is
   a defect, not a degraded pass.
+- `fail` never passes either. A review that could not complete within its
+  ceilings — a partial review — publishes what it concluded and stops there;
+  its verdict records the incompleteness, and the merge gate reads it as no
+  pass.
 - `refused` is not `failed`. A refusal is the ceilings working; `failed` is a
   defect or an environment break. Conflating them is how red herrings enter
   dashboards.
@@ -41,9 +45,9 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 | `triage`    | dry-run, event-gate exit                                                              | `skip`                                                                                                                                                                                             |
 | `triage`    | red run                                                                               | `failed` or `refused` per the class                                                                                                                                                                |
 | `triage`    | the write withheld — the thread changed while the run was in flight                   | `abandoned`                                                                                                                                                                                        |
-| `review`    | `nothing-to-review`                                                                   | `published` (the marker-clearing write still happens)                                                                                                                                              |
-| `review`    | `published`                                                                           | `published`                                                                                                                                                                                        |
-| `review`    | `published-without-artifact`                                                          | `published` with verdict `unknown` on the archive                                                                                                                                                  |
+| `review`    | `nothing-to-review`                                                                   | `published` (the marker-clearing write still happens; when that write loses the newer-head guard, the run ends `abandoned` and no skip record is written)                                          |
+| `review`    | `published`                                                                           | `published` — a Partial review publishes here too: its incompleteness rides the verdict (`fail`), never the state                                                                                  |
+| `review`    | `published-without-artifact`                                                          | `published` (the verdict stands; the archive's absence is a logged delivery loss, never a verdict)                                                                                                 |
 | `review`    | `dry-run`                                                                             | `skip`                                                                                                                                                                                             |
 | `review`    | an applicability rule matched with `run: false` (bot attestation, size guard)         | `skip`                                                                                                                                                                                             |
 | `review`    | `abandoned`                                                                           | `abandoned`                                                                                                                                                                                        |
@@ -238,9 +242,13 @@ give the shape its authority:
   previous finding `resolved`. The published comment embeds the record the
   next run reconciles against — the comment, not the artifact file, is what
   survives between runs.
+  Recovery reads only a comment this action's own token authored — the same
+  ownership test the write applies — never the newest comment carrying the
+  marker syntax.
 - **The gate is a pure function of the canonical result and the policy.**
-  `unknown` never passes; an incomplete, abandoned or refused run does not
-  pass; a confirmed finding the policy blocks on blocks the gate. The model
+  `unknown` and `fail` never pass — an unanswered or incomplete review is no
+  pass; an abandoned or refused run does not pass; a confirmed finding the
+  policy blocks on blocks the gate. The model
   names no consequence, and no projection — comment or SARIF — is ever read
   back as input. The one carve-out runs the other way: the published comment
   embeds the record it projected, the next run recovers it to render the
@@ -260,7 +268,14 @@ give the shape its authority:
   enforcing mode) records `OBSERVE-<verdict>` on the `gate-verdict` output and
   a `neutral` check run; `required` names the verdict bare and renders
   `success` on PASS, `failure` on BLOCK — the check run a ruleset makes
-  required. A BLOCK never fails the action's exit: the run stays green with
+  required. Every terminal a run can end in lands this surface — a `refused`,
+  `failed` or `abandoned` run renders the check run too, `failure` under
+  `required` — except a run that dies before it holds the event facts needed
+  to name a head; that carve-out is the contract's, never an accident. And
+  because GitHub counts a `neutral` check as reported, a repository that
+  makes the check required MUST pin `gate-mode: required` — `observe`
+  satisfies the ruleset while enforcing nothing. A BLOCK never fails the
+  action's exit: the run stays green with
   its outputs standing. The SARIF projection is written under `runner.temp`
   — never the workspace — byte-identical for the same record, surfaced
   through `sarif-path`; the upload is the consumer's step. Each surface is a
@@ -293,7 +308,7 @@ judges static facts only — it owns the A rows and none of the others.
   `src/index.mjs`.** D — the action-shape script plus the release-invariants
   gate, in CI.
 - **I9 — The run artifact is byte-deterministic and fail-closed.** R.
-- **I10 — Run verdicts use the frozen vocabulary; `unknown` never passes.** R.
+- **I10 — Run verdicts use the frozen vocabulary; `unknown` and `fail` never pass.** R.
 - **I11 — Review's declared gate table (conclusion, bound, coverage, provenance, verification) yields a recorded verdict for each, in declared order; a missing fact is a typed refusal, never a pass. Triage and harmonise satisfy the same law without a declared gate table — typed refusals enforced sequentially, a missing fact never passes.** R.
 - **I12 — The architecture is under architecture-intent: required projects
   exist and forbidden transitive dependencies stay absent.** A — `pnpm arch`.

@@ -39,9 +39,10 @@ export class GatePolicyError extends Error {}
  *
  * 1. the run did not publish;
  * 2. the run's verdict is `unknown` — an unanswered review is no pass;
- * 3. the run carried a coverage report and left changed files unread;
- * 4. a `confirmed` finding whose kind the policy blocks on;
- * 5. an `unresolved` finding, when the policy blocks them.
+ * 3. the run's verdict is `fail` — an incomplete review is no pass;
+ * 4. the run carried a coverage report and left changed files unread;
+ * 5. a `confirmed` finding whose kind the policy blocks on;
+ * 6. an `unresolved` finding, when the policy blocks them.
  *
  * A `refuted` finding never blocks. Finding reasons follow the findings'
  * publication order; structural reasons precede them.
@@ -68,6 +69,9 @@ export function decideReviewGate(result, policy = {}) {
   }
   if (result.run.verdict === "unknown") {
     reasons.push("run verdict 'unknown' never passes — a hollow verdict is a defect.");
+  }
+  if (result.run.verdict === "fail") {
+    reasons.push("run verdict 'fail' never passes — an incomplete review is no pass.");
   }
   if (result.coverage !== undefined && result.coverage.uncovered.length > 0) {
     const { uncovered, total } = result.coverage;

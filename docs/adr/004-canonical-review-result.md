@@ -52,8 +52,11 @@ persisting | moved | resolved | unresolved` is a pure deterministic
    declares a previous finding `resolved`.
 4. **The merge gate is a pure function.** `decideReviewGate(canonicalResult,
 policy)` reads nothing but the canonical result and the policy, and never
-   calls the model. Incomplete, unknown, abandoned and refused runs do not
-   pass. The gate's verdict lands as a check run a repository can make
+   calls the model. A verdict of `unknown` or `fail` never passes — an
+   unanswered or incomplete review is no pass — and neither do abandoned or
+   refused runs: a partial review publishes what it concluded and renders the
+   gate `BLOCK`, its incompleteness riding the verdict, never the state. The
+   gate's verdict lands as a check run a repository can make
    required.
 5. **The vocabulary already in code stays the vocabulary.** Verdicts remain
    `confirmed|refuted|uncertain`; published lifecycles remain
@@ -95,3 +98,7 @@ run's canonical record in an inert machine-readable block, and the next run
 recovers it to render the cross-run labels `reconcile.mjs` computes —
 comment prose only, never an input to the gate, the SARIF projection or an
 exit code.
+
+The hardening program's contract lock
+(`docs/audit/review-enforcement-audit.md`) closed the gate's missing `fail`
+arm: a partial review's verdict now blocks the merge gate.

@@ -199,9 +199,16 @@ describe("adversarial: corrupted answer shapes", () => {
     expect(canonical.findings[0]?.reason).toContain(
       "claimed kind 'correctness' but the verifier judged kind 'style'",
     );
+    // The pass law names the verdict reason too: this run is a partial
+    // review (the demotion fails the verification gate), and its `fail`
+    // verdict blocks before the finding's own reason — the reason order the
+    // gate contract pins.
     expect(gateOf(result)).toEqual({
       verdict: "BLOCK",
-      reasons: ["unresolved style finding at src/a.mjs:2."],
+      reasons: [
+        "run verdict 'fail' never passes — an incomplete review is no pass.",
+        "unresolved style finding at src/a.mjs:2.",
+      ],
     });
     expect(toSarif(canonical).runs[0]?.results ?? []).toEqual([]); // only confirmed publishes
     const body = bodyOf({ forge });
