@@ -71,6 +71,16 @@ describe("toSarif", () => {
           }),
         ],
       });
+    const aHash = findingFingerprint({
+      file: "src/a.mjs",
+      kind: "correctness",
+      subject: "if (!x) return;",
+    });
+    const bHash = findingFingerprint({
+      file: "src/b.mjs",
+      kind: "security",
+      subject: 'const token = "s3cret";',
+    });
     const first = JSON.stringify(toSarif(input()));
     const second = JSON.stringify(toSarif(input()));
     expect(first).toBe(second);
@@ -105,11 +115,8 @@ describe("toSarif", () => {
                   },
                 ],
                 partialFingerprints: {
-                  "reviewFindingFingerprint/v1": findingFingerprint({
-                    file: "src/a.mjs",
-                    kind: "correctness",
-                    subject: "if (!x) return;",
-                  }),
+                  primaryLocationLineHash: aHash,
+                  "reviewFindingFingerprint/v1": aHash,
                 },
               },
               {
@@ -126,11 +133,8 @@ describe("toSarif", () => {
                   },
                 ],
                 partialFingerprints: {
-                  "reviewFindingFingerprint/v1": findingFingerprint({
-                    file: "src/b.mjs",
-                    kind: "security",
-                    subject: 'const token = "s3cret";',
-                  }),
+                  primaryLocationLineHash: bHash,
+                  "reviewFindingFingerprint/v1": bHash,
                 },
               },
             ],
@@ -149,6 +153,26 @@ describe("toSarif", () => {
     expect(sarif.runs[0]?.results[0]?.partialFingerprints["reviewFindingFingerprint/v1"]).toBe(
       result.findings[0]?.fingerprint,
     );
+  });
+
+  it("carries the Ecoma fingerprint under primaryLocationLineHash — the key GitHub deduplicates on", () => {
+    const result = build();
+    const sarif = toSarif(result);
+    const fingerprints = sarif.runs[0]?.results[0]?.partialFingerprints;
+    // Dual identity (audit T13): GitHub's consulted dedup key IS the Ecoma
+    // canonical fingerprint — deterministic, byte-stable across replays.
+    expect(fingerprints?.["primaryLocationLineHash"]).toBe(
+      findingFingerprint({ file: "src/a.mjs", kind: "correctness", subject: "if (!x) return;" }),
+    );
+    // One identity, two consumers: the very string the canonical record
+    // carries — the comment's record block anchors on the same value.
+    expect(fingerprints?.["primaryLocationLineHash"]).toBe(result.findings[0]?.fingerprint);
+    // Both keys, fixed order: the projection stays byte-deterministic (I9).
+    expect(Object.keys(fingerprints ?? {})).toEqual([
+      "primaryLocationLineHash",
+      "reviewFindingFingerprint/v1",
+    ]);
+    expect(JSON.stringify(toSarif(result))).toBe(JSON.stringify(toSarif(build())));
   });
 
   it("dedupes rules per kind in first-appearance order of the sorted results", () => {

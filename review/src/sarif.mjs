@@ -6,6 +6,12 @@
  * invocation ids, no environment echoes — the projection is a pure function
  * of the canonical result and nothing else.
  *
+ * Each result carries the finding's Ecoma fingerprint (`identity.mjs`) as its
+ * `partialFingerprints` — under `primaryLocationLineHash`, the one key GitHub
+ * Code Scanning consults when deduplicating alerts across uploads, and under
+ * the review's own named slot beside it. One identity, two consumers: the
+ * comment's record block and the Code Scanning alert carry the same string.
+ *
  * Only `confirmed` findings publish. A `refuted` claim was answered wrong
  * and an `unresolved` one carries no verdict; neither may enter Code
  * Scanning. The model never decides what this projection contains — the
@@ -29,7 +35,7 @@
  * @property {"warning" | "note"} level the severity's SARIF grade
  * @property {{ text: string }} message the finding's claim as answered
  * @property {Array<{ physicalLocation: { artifactLocation: { uri: string, uriBaseId: string }, region: { startLine: number } } }>} locations the finding's anchor
- * @property {{ "reviewFindingFingerprint/v1": string }} partialFingerprints the cross-revision identity GitHub matches across uploads
+ * @property {{ primaryLocationLineHash: string, "reviewFindingFingerprint/v1": string }} partialFingerprints the finding's Ecoma fingerprint under GitHub's dedup key, and the review's named slot beside it
  */
 
 /**
@@ -62,7 +68,10 @@ const SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json";
 /** The URI base id GitHub Code Scanning resolves relative artifact locations against. */
 const SRC_ROOT = "%SRCROOT%";
 
-/** The partial fingerprint slot GitHub Code Scanning matches across uploads. */
+/** The partial fingerprint key GitHub Code Scanning consults when deduplicating alerts across uploads. */
+const PRIMARY_LOCATION_LINE_HASH = "primaryLocationLineHash";
+
+/** The review's named slot the fingerprint rides beside GitHub's key — the string a ruleset or a human joins comment and SARIF on. */
 const FINGERPRINT_SLOT = "reviewFindingFingerprint/v1";
 
 /**
@@ -137,7 +146,10 @@ export function toSarif(result) {
           },
         },
       ],
-      partialFingerprints: { [FINGERPRINT_SLOT]: finding.fingerprint },
+      partialFingerprints: {
+        [PRIMARY_LOCATION_LINE_HASH]: finding.fingerprint,
+        [FINGERPRINT_SLOT]: finding.fingerprint,
+      },
     };
   });
 
