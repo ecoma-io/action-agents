@@ -274,6 +274,16 @@ export async function mutate({
             startedAt: now(),
             log: info,
           });
+          if (outcome.outcome === "abandoned") {
+            // The comment standing on the thread is another run's: this
+            // op wrote nothing, so it is not applied work, and no id may
+            // be logged against it. F-12 carries the run out as abandoned.
+            const reason =
+              `the classification comment on #${String(issueNumber)} is owned by a ` +
+              `concurrent run (comment ${String(outcome.foreignId)}) stands — nothing written`;
+            warning(reason);
+            throw new ThreadMovedError(reason);
+          }
           info(`classification comment ${outcome.outcome} (${String(outcome.id)})`);
         },
       });
@@ -301,6 +311,13 @@ export async function mutate({
             startedAt: now(),
             log: info,
           });
+          if (outcome.outcome === "abandoned") {
+            const reason =
+              `the signal comment on #${String(issueNumber)} is owned by a ` +
+              `concurrent run (comment ${String(outcome.foreignId)}) stands — nothing written`;
+            warning(reason);
+            throw new ThreadMovedError(reason);
+          }
           info(`signal comment ${outcome.outcome} (${String(outcome.id)})`);
         },
       });
@@ -317,6 +334,11 @@ export async function mutate({
     try {
       await op.apply();
     } catch (cause) {
+      // F-12: a moved subject is not a partial mutation. The comment-op
+      // abandonment means another run owns the thread — the pipeline's
+      // catch writes the run record as abandoned with the carried reason,
+      // never failed-with-accounting.
+      if (cause instanceof ThreadMovedError) throw cause;
       throw new PartialMutationError(
         {
           applied: [...applied],
