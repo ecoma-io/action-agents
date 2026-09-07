@@ -98,11 +98,9 @@ export function reconcile({ previous, current }) {
       ? priorRun.findings.map((finding) => {
           const observed = matched.get(finding.fingerprint);
           if (observed === undefined) {
-            // An incomplete current run — unpublished, or published without
-            // a passing verdict — never retires a previous finding; the
-            // label is left unset. Post-#410 a coverage-incomplete review
-            // publishes as published + fail, so the verdict is what makes
-            // "published" mean "complete" here.
+            // The header's incomplete-run rule at its decision point: the
+            // verdict is what makes "published" mean "complete", so an
+            // unmatched previous finding is left without a label.
             return current.run.state === "published" && current.run.verdict === "pass"
               ? labelled(finding, "resolved")
               : unlabelled(finding);
