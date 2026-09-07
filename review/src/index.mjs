@@ -603,16 +603,18 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
       rmSync(p.join(real, old), { force: true });
     }
   }
-  // A skip record names its kind so a durable skip never reads as a reviewed
-  // run; abandonment, dry-run and the red terminals' refused/failed records
-  // are similarly distinguished so a consumer reading the file name knows
-  // the outcome before opening it. All names sit inside the upload glob
+  // A skip record names its outcome — the state skip through its `kind`, the
+  // applicability skip (kind-less, classification `skip`) through that
+  // classification — so a durable skip never reads as a reviewed run;
+  // abandonment, dry-run and the red terminals' refused/failed records are
+  // similarly distinguished so a consumer reading the file name knows the
+  // outcome before opening it. All names sit inside the upload glob
   // `review-artifact-*.json`; a red run that died before the snapshot read
   // has no head to name, and writes `no-head` in its place — one
   // deterministic name that never collides with a pinned run's 40 hex.
   const classification = /** @type {Record<string, unknown>} */ (artifact.outcome).classification;
   const prefix =
-    "kind" in artifact
+    "kind" in artifact || classification === "skip"
       ? "review-artifact-skip"
       : classification === "abandoned"
         ? "review-artifact-abandoned"
