@@ -27,10 +27,7 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 - `unknown` never passes. A run that could not fully read the world it judged
   has no verdict, and a hollow verdict — a pass over facts nobody checked — is
   a defect, not a degraded pass.
-- `fail` never passes either. A review that could not complete within its
-  ceilings — a partial review — publishes what it concluded and stops there;
-  its verdict records the incompleteness, and the merge gate reads it as no
-  pass.
+- `fail` is the ceilings' verdict: a review that could not complete within its ceilings — a partial review — publishes what it concluded and stops there, its verdict records the incompleteness, and the merge gate reads it as no pass.
 - `refused` is not `failed`. A refusal is the ceilings working; `failed` is a
   defect or an environment break. Conflating them is how red herrings enter
   dashboards.
