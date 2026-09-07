@@ -21,6 +21,7 @@ import {
   normaliseSubject,
 } from "./identity.mjs";
 import { FINDING_KINDS, PUBLISHED_LIFECYCLE_STATES, VERDICTS } from "./vocabulary.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { LIFECYCLE_OF_VERDICT } from "./verify.mjs";
 
 /** The terminal states a run record may end in — the run contract's vocabulary. */
@@ -293,4 +294,29 @@ export function withRunPublication(canonical, publication) {
     ...canonical,
     run: Object.freeze({ ...canonical.run, publication: outcome }),
   });
+}
+
+/**
+ * The birth seam's typed belt around {@link createCanonicalResult}: the run
+ * has already determined its terminal by the time the record binds, and an
+ * undeclared crash at the binding would destroy that terminal (#411). A
+ * record the shapes reject is therefore a typed refusal — the red boundary
+ * records `refused`, the failure taxonomy stays closed — and any other
+ * throw travels untouched: the belt retypes shape defects, it is not an
+ * exception sink.
+ *
+ * @param {Parameters<typeof createCanonicalResult>[0]} input
+ * @returns {CanonicalResult}
+ */
+export function buildCanonicalRecord(input) {
+  try {
+    return createCanonicalResult(input);
+  } catch (cause) {
+    if (cause instanceof CanonicalResultError) {
+      throw new DeterministicRefusalError(`the run's record did not validate: ${cause.message}`, {
+        cause,
+      });
+    }
+    throw cause;
+  }
 }

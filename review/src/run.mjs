@@ -42,7 +42,7 @@ import {
   VERIFIER_MAX_TOOL_CALLS,
 } from "./verify.mjs";
 import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
-import { createCanonicalResult, withRunPublication } from "./canonical.mjs";
+import { buildCanonicalRecord, withRunPublication } from "./canonical.mjs";
 import { findingFingerprint, normalisePath, normaliseSubject } from "./identity.mjs";
 import { decideReviewGate } from "./merge-gate.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
@@ -591,7 +591,7 @@ export async function reviewPullRequest({
     model: inputs.model,
     info: (line) => io.info(`review: ${line}`),
   });
-  const published = verified.findings;
+  let published = verified.findings;
 
   // The declared gates decide the concluding posture — the loop's bound
   // accounting, the coverage condition, the publication invariants. The
@@ -636,8 +636,18 @@ export async function reviewPullRequest({
   // the pure constructor, because the constructor does no I/O. A refused
   // capture refuses the run RED, never skip-and-continue: a finding whose
   // anchor cannot be captured has no digest, and a finding without a
-  // digest is not confirmed by anything.
-  const canonicalFindings = published.map((finding) => {
+  // digest is not confirmed by anything. A capture the tree honours but
+  // whose span certifies nothing — a blank or whitespace-only anchor line
+  // — withholds the finding instead (#411): through the quarantine
+  // channel, counted, logged, never published, never run-fatal. A claim
+  // anchored on no span would enter the record with an empty identity,
+  // and the terminal the gates already determined must not be destroyed
+  // by its own record.
+  /** @type {Array<{ finding: import("./verify.mjs").VerifiedFinding, captured: import("./capture.mjs").CapturedEvidence }>} */
+  const capturedFindings = [];
+  /** @type {Array<{ file: string, line: number }>} */
+  const withheldUnspanned = [];
+  for (const finding of published) {
     let captured;
     try {
       captured = captureFindingEvidence({ workspace, file: finding.file, line: finding.line });
@@ -647,19 +657,33 @@ export async function reviewPullRequest({
       }
       throw cause;
     }
-    return {
-      kind: finding.kind,
-      file: finding.file,
-      line: finding.line,
-      severity: finding.severity,
-      message: finding.message,
-      subject: captured.subject,
-      lifecycle: finding.lifecycle ?? "unresolved",
-      ...(finding.verdict !== undefined ? { verdict: finding.verdict } : {}),
-      reason: finding.reason ?? "the verification policy did not schedule this finding",
-      evidence: { digest: captured.digest, excerpt: captured.excerpt },
-    };
-  });
+    if (normaliseSubject(captured.subject) === "") {
+      withheldUnspanned.push({ file: finding.file, line: finding.line });
+      continue;
+    }
+    capturedFindings.push({ finding, captured });
+  }
+  for (const { file, line } of withheldUnspanned) {
+    io.info(
+      `review: finding withheld — its anchor line carries no span to certify: ${file}:${String(line)}`,
+    );
+  }
+  const canonicalFindings = capturedFindings.map(({ finding, captured }) => ({
+    kind: finding.kind,
+    file: finding.file,
+    line: finding.line,
+    severity: finding.severity,
+    message: finding.message,
+    subject: captured.subject,
+    lifecycle: finding.lifecycle ?? "unresolved",
+    ...(finding.verdict !== undefined ? { verdict: finding.verdict } : {}),
+    reason: finding.reason ?? "the verification policy did not schedule this finding",
+    evidence: { digest: captured.digest, excerpt: captured.excerpt },
+  }));
+  // The label join downstream walks the set the record was built from: the
+  // withheld findings left it here, so the published set is rebound to the
+  // survivors — alignment with `canonicalFindings` stays 1:1.
+  published = capturedFindings.map(({ finding }) => finding);
   // The canonical verdict answers "was the review COMPLETE", a different
   // question from "may the run publish" (the gates above). At low/medium
   // strictness a run may publish with unread files — the merge gate then
@@ -668,7 +692,7 @@ export async function reviewPullRequest({
   /** @type {boolean} every changed file read — undefined coverage counts as complete */
   const coverageComplete =
     outcome.coverage === undefined || outcome.coverage.uncovered.length === 0;
-  const canonical = createCanonicalResult({
+  const canonical = buildCanonicalRecord({
     head: headSha,
     run: { state: "published", verdict: report.mayPublish && coverageComplete ? "pass" : "fail" },
     findings: canonicalFindings,
@@ -743,6 +767,7 @@ export async function reviewPullRequest({
     policySource: source,
     strictness: runStrictness,
     quarantinedCount: anchored.quarantined.length,
+    withheldUnspannedCount: withheldUnspanned.length,
     ...(reconciled !== undefined ? { resolvedFindings: reconciled.previous } : {}),
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
