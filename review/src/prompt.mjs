@@ -23,7 +23,7 @@ import { PHASES, PHASE_PROCEDURES } from "./phases.mjs";
  */
 const STRICTNESS_MODES = /** @type {const} */ ({
   low:
-    'Review mode — strictness "low": prioritise concerns over completeness. ' +
+    'Review mode — strictness "low": prioritise a few confident concerns over a broad report. ' +
     "Report only findings you are confident matter, and anchor precisely what you do report. " +
     "Investigate lightly.",
   medium:
@@ -198,7 +198,7 @@ function renderLaneProcedure(laneBudgets) {
  */
 const SYSTEM_CONTRACT = `You are reviewing a pull request as a careful senior engineer.
 
-Read the diff first; use the provided tools to read files around it when claims need verification before you make them. Never claim what you have not checked.
+Start from the diff, then read every changed file with the provided tools before you answer — the diff is context, not a substitute for the files. A review that leaves changed files unread is incomplete, and an incomplete review is no pass. Never claim what you have not checked.
 
 Write your findings' prose in the language tagged "{language}".
 
