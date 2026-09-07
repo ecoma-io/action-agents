@@ -42,7 +42,8 @@ import {
   VERIFIER_MAX_TOOL_CALLS,
 } from "./verify.mjs";
 import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
-import { createCanonicalResult } from "./canonical.mjs";
+import { createCanonicalResult, withRunPublication } from "./canonical.mjs";
+import { findingFingerprint, normalisePath, normaliseSubject } from "./identity.mjs";
 import { decideReviewGate } from "./merge-gate.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { embedRecordBlock, previousRecord } from "./record.mjs";
@@ -684,23 +685,53 @@ export async function reviewPullRequest({
   // last published run left on the thread; record.mjs embeds it in the same
   // upsert that publishes, so this read is the whole persistence story (the
   // artifact file does not survive across runs). Guarded at every step: no
-  // marker comment or no readable block — a first run, and the comment
-  // renders unlabeled. The labels are comment prose and nothing else: the
-  // gate above, the SARIF projection and every exit read the current
-  // canonical record alone, never the reconciliation.
-  const previous = previousRecord(await io.forge.listComments(pullRequestNumber), ACTION);
+  // own-marker comment — a foreign author's marker is nobody's history —
+  // or no readable block: a first run, and the comment renders unlabeled.
+  // The labels are comment prose and nothing else: the gate above, the
+  // SARIF projection and every exit read the current canonical record
+  // alone, never the reconciliation.
+  // Which comments are this run's own is a fact about the token, and it is
+  // resolved before any thread read: recovery applies the same ownership
+  // test the write does, so a forged marker can adopt nothing (#380). A
+  // failed identity read is a typed red run — never a guessed ownership.
+  const ownLogins = await resolveOwnLogins(io.forge);
+  const previous = previousRecord(
+    await io.forge.listComments(pullRequestNumber),
+    ACTION,
+    ownLogins,
+  );
   const reconciled =
     previous === undefined ? undefined : reconcile({ previous, current: canonical });
-  // canonical.findings is built from `published` in order, so the labels
-  // join by index — no fingerprint matching duplicated here; reconcile is
-  // the single source of the pairing.
-  const labelledFindings =
+  // canonical.findings is built from `published` in order but not to the
+  // same length: published findings sharing an identity collapse to one
+  // canonical finding. `reconciled.current` is aligned to
+  // canonical.findings, so the labels join by identity — the same
+  // `findingFingerprint` the canonical constructor collapses on — never
+  // by index: a collapsed duplicate carries its survivor's label, never a
+  // neighbour's. Reconcile stays the single source of the pairing.
+  const labelOfFingerprint =
     reconciled === undefined
-      ? published
-      : published.map((finding, index) => {
-          const label = reconciled.current[index]?.reconciliation;
-          return label === undefined ? finding : { ...finding, reconciliation: label };
-        });
+      ? undefined
+      : new Map(
+          canonical.findings.map((finding, index) => [
+            finding.fingerprint,
+            reconciled.current[index]?.reconciliation,
+          ]),
+        );
+  const labelledFindings = published.map((finding, index) => {
+    const input = canonicalFindings[index];
+    const label =
+      input === undefined
+        ? undefined
+        : labelOfFingerprint?.get(
+            findingFingerprint({
+              file: normalisePath(input.file),
+              kind: input.kind,
+              subject: normaliseSubject(input.subject),
+            }),
+          );
+    return label === undefined ? finding : { ...finding, reconciliation: label };
+  });
 
   const body = renderComment({
     status: status.label,
@@ -752,9 +783,6 @@ export async function reviewPullRequest({
       }),
     };
   }
-  // The identity read sits behind every skip and dry-run gate: paid only by
-  // a run about to write.
-  const ownLogins = await resolveOwnLogins(io.forge);
 
   // The artifact is the run's machine-readable record, built from the same
   // final facts the comment renders — BEFORE the comment, so every refusal
@@ -833,7 +861,7 @@ export async function reviewPullRequest({
       outcome: "abandoned",
       reason:
         `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run ` +
-        `(comment ${String(upsert.id)}) — nothing written`,
+        `(comment ${String(upsert.foreignId)}) — nothing written`,
       artifact: buildAbandonedArtifact({
         repository: `${context.owner}/${context.repo}`,
         pullRequest: pullRequestNumber,
@@ -881,7 +909,10 @@ export async function reviewPullRequest({
     reason,
     commentId: upsert.id,
     artifact: record,
-    canonical,
+    // The publication fact is the one thing the record could not carry when
+    // it was built — the write had not happened yet. Attach the real
+    // outcome: what this run's upsert actually did to the thread.
+    canonical: withRunPublication(canonical, upsert.outcome),
     gate,
   };
 }
@@ -1209,7 +1240,7 @@ async function nothingToReview({
           }),
         };
       }
-      await upsertComment({
+      const clearing = await upsertComment({
         store: io.forge,
         action: ACTION,
         issueNumber: pullRequestNumber,
@@ -1218,6 +1249,30 @@ async function nothingToReview({
         head: headSha,
         startedAt,
       });
+      if (clearing.outcome === "abandoned") {
+        // The clearing update is a write, and the newer-head rule governs
+        // writes: a concurrent run owns the thread, and the marker stands.
+        // The run ends abandoned and writes no skip record — a cleared
+        // record would describe a thread this run did not clear, and the
+        // next run would trust it over the comment that is really there.
+        return /** @type {RunResult} */ ({
+          outcome: "abandoned",
+          reason:
+            `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run ` +
+            `(comment ${String(clearing.foreignId)}) stands — the marker was not cleared`,
+          artifact: buildAbandonedArtifact({
+            repository,
+            pullRequest: pullRequestNumber,
+            headRef: headSha,
+            reason:
+              `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run ` +
+              `— the marker was not cleared`,
+            ...(applicabilityFact !== undefined
+              ? { applicability: applicabilityFact.context }
+              : {}),
+          }),
+        });
+      }
       return /** @type {RunResult} */ ({
         outcome: "nothing-to-review",
         reason: "universe empty — marker cleared",

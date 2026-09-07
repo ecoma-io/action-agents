@@ -13,7 +13,15 @@
  * the original error fails the step.
  */
 
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 
 import * as p from "node:path";
 
@@ -214,13 +222,14 @@ export async function run(inputs, context, io = {}) {
     // death before the run holds the facts an artifact is built from
     // stays unrecorded.
     const classification = cause instanceof DeterministicRefusalError ? "refused" : "failed";
+    const reason = redReason(cause, log);
     try {
       const artifact = buildRedArtifact({
         repository: `${context.owner}/${context.repo}`,
         pullRequest: event.pullRequestNumber,
         headRef: red.headRef,
         outcome: classification,
-        reason: redReason(cause, log),
+        reason,
         ...(red.commentId !== undefined ? { commentId: red.commentId } : {}),
         ...(red.applicability !== undefined ? { applicability: red.applicability } : {}),
       });
@@ -229,11 +238,49 @@ export async function run(inputs, context, io = {}) {
         directory: inputs.artifactPath,
         artifact,
       });
+      // The boundary's record is a declared write: it publishes the same
+      // fact a green run publishes — #378's failed-run reporter names its
+      // file, and a lost record's absence stays loud in the catch below.
+      setOutput("artifact-file", file);
       log(`review: ${classification} run artifact written to ${file}`);
     } catch (recordCause) {
       log(
         `review: the ${classification} run's artifact was not written: ` +
           `${recordCause instanceof Error ? recordCause.message : String(recordCause)}`,
+      );
+    }
+    // ── The terminal check run (#377): a red run lands the review gate
+    // check its §8 row names — `refused` and `failed` are BLOCK rows
+    // (`failure` under `required`, `neutral` under `observe`) — because
+    // absence is never the enforcement state: #377 is a required ruleset
+    // pending forever on a check that never reported. The one carve-out is
+    // a run that died before the snapshot read gave it a head — the
+    // contract names that absence; it is not a posture. Like every write
+    // site here, a check that cannot land is a logged loss, and the
+    // original error still fails the step.
+    try {
+      if (red.headRef === null) {
+        log(
+          `review: the ${classification} run died before the snapshot read — ` +
+            `no head to land the review gate check on (the contract's named carve-out)`,
+        );
+      } else {
+        const check = renderTerminalCheckRun({
+          terminal: classification,
+          reason,
+          gateMode: inputs.gateMode,
+        });
+        await forge.createCheckRun({
+          headSha: red.headRef,
+          name: check.name,
+          conclusion: check.conclusion,
+          output: { title: check.title, summary: check.summary },
+        });
+      }
+    } catch (checkCause) {
+      log(
+        `review: the ${classification} run's gate check run was not created: ` +
+          `${checkCause instanceof Error ? checkCause.message : String(checkCause)}`,
       );
     }
     throw cause;
@@ -247,6 +294,9 @@ export async function run(inputs, context, io = {}) {
         directory: inputs.artifactPath,
         artifact: result.artifact,
       });
+      // The publish posture's one machine-readable fact (#378): the exact
+      // file this run wrote, as the runner reads it.
+      setOutput("artifact-file", file);
       log(`review: run artifact written to ${file}`);
     } catch (cause) {
       // A skip's record is the skip's whole outcome — a failed write there
@@ -261,6 +311,11 @@ export async function run(inputs, context, io = {}) {
       }`;
       log(`review: ${result.reason}`);
     }
+  } else {
+    // The posture's no-false-alarm half (#378): a terminal that declares
+    // no record says so, so a missing `artifact-file` output reads as
+    // "declared nothing" and never as an unlogged loss.
+    log("review: artifact publish — this terminal declared no run artifact");
   }
 
   // ── Gate surfaces: the SARIF projection, the job outputs, the check run ──
@@ -298,6 +353,42 @@ export async function run(inputs, context, io = {}) {
         `review: the gate check run was not created: ` +
           `${cause instanceof Error ? cause.message : String(cause)}`,
       );
+    }
+  } else {
+    // ── Terminal rows (#377): every non-published terminal lands the
+    // review gate check its §8 row names, from the head the snapshot read
+    // pinned — `skip`, `nothing-to-review` and `dry-run` are non-block
+    // (`neutral` in both modes, recorded and enforcing nothing);
+    // `abandoned` is a BLOCK row (`failure` under `required`, `neutral`
+    // under `observe`). `refused` and `failed` never reach this arm — they
+    // throw into the red boundary above. Absence is never the enforcement
+    // state; the one carve-out is a run that cannot name a head. The
+    // gate-verdict output and the SARIF stay published-run surfaces: only
+    // a canonical record renders those.
+    if (red.headRef === null) {
+      log(
+        `review: the ${result.outcome} run cannot name a head — ` +
+          `the review gate check stays absent (the contract's named carve-out)`,
+      );
+    } else {
+      try {
+        const check = renderTerminalCheckRun({
+          terminal: result.outcome,
+          reason: result.reason,
+          gateMode: inputs.gateMode,
+        });
+        await forge.createCheckRun({
+          headSha: red.headRef,
+          name: check.name,
+          conclusion: check.conclusion,
+          output: { title: check.title, summary: check.summary },
+        });
+      } catch (writeCause) {
+        log(
+          `review: the ${result.outcome} run's gate check run was not created: ` +
+            `${writeCause instanceof Error ? writeCause.message : String(writeCause)}`,
+        );
+      }
     }
   }
   return result;
@@ -362,6 +453,46 @@ export function renderGateCheckRun({ gate, gateMode }) {
 }
 
 /**
+ * Renders a non-published terminal's review gate check run — the §8
+ * matrix's rows for the endings that never reach the published surfaces.
+ * The blocking terminals — `refused`, `failed`, `abandoned` — render
+ * `failure` under `required` and `neutral`-with-the-block-named under
+ * `observe`; the recorded-not-enforcing terminals — `skip`,
+ * `nothing-to-review`, `dry-run` — render `neutral` in both modes. Any
+ * other terminal is fail-closed: it renders the BLOCK row, never an
+ * absence (#377). Every string goes through the comment sanitiser — the
+ * same discipline `renderGateCheckRun` keeps — because a terminal reason
+ * can interpolate a thrown message.
+ *
+ * @param {object} input
+ * @param {string} input.terminal the run's ending, in outcome vocabulary
+ * @param {string | undefined} input.reason the run's own reason sentence
+ * @param {"observe" | "required"} input.gateMode
+ * @returns {{ name: string, conclusion: "success" | "failure" | "neutral", title: string, summary: string }}
+ */
+export function renderTerminalCheckRun({ terminal, reason, gateMode }) {
+  const observe = gateMode === "observe";
+  const blocking = !(
+    terminal === "skip" ||
+    terminal === "nothing-to-review" ||
+    terminal === "dry-run"
+  );
+  const verdictName = blocking ? (observe ? "OBSERVE-BLOCK" : "BLOCK") : "NEUTRAL";
+  const title = sanitiseCommentText(oneLine(`review gate: ${verdictName} (${terminal})`), {
+    maxChars: RED_REASON_CHARS,
+  }).text;
+  const summary = sanitiseCommentText(oneLine(reason ?? "", { stripControlChars: true }), {
+    maxChars: VERDICT_REASON_CHARS,
+  }).text;
+  return {
+    name: "review gate",
+    conclusion: blocking && !observe ? "failure" : "neutral",
+    title: title === "" ? "review gate" : title,
+    summary: summary === "" ? `the run ended ${terminal} without a reason` : summary,
+  };
+}
+
+/**
  * The red artifact's reason: the thrown error's own sentence, flattened to
  * one line with control characters mapped to spaces — a thrown message can
  * interpolate a pull-request author's file name, and escaped terminal
@@ -396,7 +527,10 @@ function redReason(cause, log) {
  * same one every read honours, pointed the other way: the path resolves
  * inside `GITHUB_WORKSPACE` or the run fails loudly — a symlinked branch of
  * the tree cannot carry the write out, and `.git` is refused outright,
- * because that is where the checkout's credential lives.
+ * because that is where the checkout's credential lives. Containment comes
+ * before mutation: every existing segment is lstat'd and a symlinked
+ * segment refused before the write creates, clears, or serialises anything
+ * against the path.
  *
  * @param {object} input
  * @param {string} input.workspace the runner's workspace root
@@ -417,22 +551,35 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
       throw new Error(`artifact-path '${directory}' touches .git — refused`);
     }
   }
-  mkdirSync(target, { recursive: true });
-  // Clear any previously-written file matching the upload glob inside the
-  // target directory. A PR-author-writable checkout can plant a file under a
-  // matching name; the run clears its own namespace before writing, so a
-  // planted file cannot ride the `review-artifact-*.json` upload glob on a
-  // path the action itself wrote nothing to. The glob is deliberately narrow
-  // (`if-no-files-found: ignore`), but clearing at write time removes the
-  // planted file even when the run ends on a path that writes no artifact.
-  for (const old of readdirSync(target)) {
-    if (/^review-artifact-.*\.json$/u.test(old)) {
-      rmSync(p.join(target, old), { force: true });
+  // Containment before mutation: every segment that already exists is
+  // lstat'd, and a symlinked segment is refused before the write mutates
+  // anything — a planted link can neither carry the recursive mkdir outside
+  // the workspace nor turn the namespace cleanup into an outside deletion.
+  // A missing segment is fine: the mkdir below creates it, inside the root
+  // the checks above pinned.
+  let walked = root;
+  for (const segment of p.relative(root, target).split(p.sep)) {
+    walked = p.join(walked, segment);
+    let stats;
+    try {
+      stats = lstatSync(walked);
+    } catch {
+      break;
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`artifact-path '${directory}' traverses the symlink '${segment}' — refused`);
+    }
+    if (!stats.isDirectory()) {
+      throw new Error(
+        `artifact-path '${directory}' needs '${segment}' to be a directory — refused`,
+      );
     }
   }
-  // A directory on the way may be a symlink pointing outside the workspace
-  // or into the git metadata; resolve the real location and hold it to the
-  // same ceiling and the same .git rule before a single byte is written.
+  mkdirSync(target, { recursive: true });
+  // The walk above is static. A segment can be swapped for a symlink after
+  // it and before the mkdir — the race the lstat walk cannot see — so the
+  // real location is resolved and held to the same ceiling and the same
+  // .git rule before the namespace cleanup and a single byte are written.
   const real = realpathSync(target);
   if (real !== root && !real.startsWith(root + p.sep)) {
     throw new Error(`artifact-path '${directory}' resolves outside the workspace — refused`);
@@ -440,6 +587,20 @@ export function writeRunArtifact({ workspace, directory, artifact }) {
   for (const segment of p.relative(root, real).split(p.sep)) {
     if (segment.toLowerCase() === ".git") {
       throw new Error(`artifact-path '${directory}' resolves inside .git — refused`);
+    }
+  }
+  // Clear any previously-written file matching the upload glob inside the
+  // validated target directory. A PR-author-writable checkout can plant a
+  // file under a matching name; the run clears its own namespace before
+  // writing, so a planted file cannot ride the `review-artifact-*.json`
+  // upload glob on a path the action itself wrote nothing to. The glob is
+  // deliberately narrow (`if-no-files-found: ignore`), but clearing at
+  // write time removes the planted file even when the run ends on a path
+  // that writes no artifact. The cleanup runs only here — after the path
+  // is validated — never through an unvalidated link.
+  for (const old of readdirSync(real)) {
+    if (/^review-artifact-.*\.json$/u.test(old)) {
+      rmSync(p.join(real, old), { force: true });
     }
   }
   // A skip record names its kind so a durable skip never reads as a reviewed

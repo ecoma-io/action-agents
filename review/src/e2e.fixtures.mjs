@@ -365,7 +365,7 @@ export function drainEntryTemps() {
  * endings the same way, plus where the runner's surfaces landed: the gate
  * output file and a runner temp that only a SARIF write could fill.
  *
- * @param {{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: import("#core/chat.mjs").Chat, gateMode?: "observe" | "required" }} setup
+ * @param {{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: import("#core/chat.mjs").Chat, gateMode?: "observe" | "required", extra?: Record<string, string> }} setup
  * @returns {Promise<{ ok: boolean, result: import("./run.mjs").RunResult | undefined, cause: unknown, outFile: string, temp: string }>}
  */
 export async function driveEntrypoint(setup) {
@@ -382,6 +382,9 @@ export async function driveEntrypoint(setup) {
       extra: {
         RUNNER_TEMP: temp,
         ...(setup.gateMode === undefined ? {} : { "INPUT_GATE-MODE": setup.gateMode }),
+        // Scenario inputs beyond the harness's own — the dry-run row of
+        // the terminal matrix (T9) drives `INPUT_DRY-RUN` through here.
+        ...(setup.extra ?? {}),
       },
     });
     const settled = await run(readInputs(env), readContext(env), {

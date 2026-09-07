@@ -11,9 +11,10 @@ import {
   RUN_STATES,
   RUN_VERDICTS,
   createCanonicalResult,
+  withRunPublication,
 } from "./canonical.mjs";
 import { isDigest } from "./digest.mjs";
-import { findingFingerprint } from "./identity.mjs";
+import { findingFingerprint, findingFingerprintV1 } from "./identity.mjs";
 import { FINDING_KINDS, RECONCILIATIONS } from "./vocabulary.mjs";
 
 /** A publication finding as the verification pass leaves it. */
@@ -83,6 +84,18 @@ describe("createCanonicalResult", () => {
     expect(result.collapsed).toEqual([]);
   });
 
+  it("keeps two long-span claims apart that share a 200-character prefix — truncation never merges", () => {
+    const prefix = "x".repeat(200);
+    const result = build({
+      findings: [
+        finding({ subject: prefix + "a".repeat(50), message: "first" }),
+        finding({ subject: prefix + "b".repeat(50), message: "second" }),
+      ],
+    });
+    expect(result.findings).toHaveLength(2);
+    expect(result.collapsed).toEqual([]);
+  });
+
   it("rejects a stored fingerprint that the reviewed bytes do not spell", () => {
     expect(() => build({ findings: [finding({ fingerprint: "0".repeat(64) })] })).toThrow(
       CanonicalResultError,
@@ -97,6 +110,25 @@ describe("createCanonicalResult", () => {
     });
     const result = build({ findings: [finding({ fingerprint })] });
     expect(result.findings[0]?.fingerprint).toBe(fingerprint);
+  });
+
+  it("pins the record schema at version 2 — the full-span identity migration", () => {
+    expect(CANONICAL_VERSION).toBe(2);
+  });
+
+  it("verifies a stored v1 fingerprint under the retired scheme the input's version spells", () => {
+    const stored = findingFingerprintV1({
+      file: "src/a.mjs",
+      kind: "correctness",
+      subject: "if (!x) return;",
+    });
+    const result = build({ version: 1, findings: [finding({ fingerprint: stored })] });
+    expect(result.version).toBe(1);
+    expect(result.findings[0]?.fingerprint).toBe(stored);
+  });
+
+  it("refuses a record version the pipeline never spelled", () => {
+    expect(() => build({ version: 3 })).toThrow(CanonicalResultError);
   });
 
   it("rejects findings outside the closed vocabularies", () => {
@@ -206,5 +238,61 @@ describe("the closed vocabularies", () => {
       "test-gap",
       "documentation",
     ]);
+  });
+});
+
+describe("the publication fact", () => {
+  it("carries the publication fact beside the verdict when the run provides it", () => {
+    const result = build({ run: { state: "published", verdict: "fail", publication: "created" } });
+    expect(result.run).toEqual({
+      state: "published",
+      verdict: "fail",
+      publication: "created",
+    });
+  });
+
+  it("builds a record without a publication fact when none is given — v1 stays parseable", () => {
+    expect("publication" in build().run).toBe(false);
+  });
+
+  it("validates the publication fact against the upsert's vocabulary", () => {
+    expect(() =>
+      build({ run: { state: "published", verdict: "pass", publication: "published" } }),
+    ).toThrow(/run\.publication/);
+  });
+
+  it("keeps publication independent of the verdict — the two facts never weld", () => {
+    // A partial review's write lands: a failing verdict, a created comment.
+    const landedOnFail = build({
+      run: { state: "published", verdict: "fail", publication: "created" },
+    });
+    expect(landedOnFail.run.verdict).toBe("fail");
+    expect(landedOnFail.run.publication).toBe("created");
+    // The constructor keeps the facts orthogonal: publication success is not
+    // the review verdict. (A run itself never constructs a canonical for a
+    // lost write — an abandoned upsert returns before the canonical exists —
+    // but the fact, once attached, stays independent of the verdict.)
+    const lostOnPass = build({
+      run: { state: "published", verdict: "pass", publication: "abandoned" },
+    });
+    expect(lostOnPass.run.verdict).toBe("pass");
+    expect(lostOnPass.run.publication).toBe("abandoned");
+  });
+
+  it("withRunPublication attaches the real outcome without recomputing the record", () => {
+    const result = build();
+    const withPublication = withRunPublication(result, "updated");
+    expect(withPublication.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "updated",
+    });
+    // Everything else is the same frozen record, by reference.
+    expect(withPublication.findings).toBe(result.findings);
+    expect(withPublication.collapsed).toBe(result.collapsed);
+    expect(withPublication.head).toBe(result.head);
+    expect(Object.isFrozen(withPublication)).toBe(true);
+    expect(Object.isFrozen(withPublication.run)).toBe(true);
+    expect(() => withRunPublication(result, "published")).toThrow(/run\.publication/);
   });
 });

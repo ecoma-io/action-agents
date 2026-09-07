@@ -391,6 +391,43 @@ describe("the universe and the budget", () => {
     expect(forge.calls.upserts).toHaveLength(0);
   });
 
+  it("abandons when the clearing write loses the newer-head race — no marker-cleared record", async () => {
+    const withMarker = forgeStub({ files: [] });
+    withMarker.listComments = async () => [
+      {
+        id: 55,
+        body: `<!-- action-agents:review:0badcafe:head=${"c".repeat(40)} -->raced findings`,
+        user: { login: "github-actions[bot]" },
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T12:00:00Z",
+      },
+    ];
+    const raced = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(withMarker),
+    });
+    // A concurrent run recorded a newer head after this run started: the
+    // clearing write is refused, and the run ends abandoned — never a
+    // "marker cleared" skip, because the marker stands, owned by the run
+    // that won the thread.
+    expect(raced.outcome).toBe("abandoned");
+    expect(raced.reason).toContain("concurrent");
+    expect(raced.reason).not.toContain("marker cleared");
+    expect(withMarker.calls.upserts).toHaveLength(0);
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (raced.artifact)));
+    expect(record.outcome.classification).toBe("abandoned");
+    // No skip record: the clearing never landed, so the record is the
+    // abandoned shape and carries no skip kind.
+    expect(record.kind).toBeUndefined();
+    // Pre-write abandonment: a foreign comment stands on the thread, and
+    // the provenance still names none of them.
+    expect(record.provenance).toBeUndefined();
+  });
+
   it("refuses diffs past the budget, red, naming both numbers — before any model call", async () => {
     const forge = forgeStub({
       files: [
@@ -1298,7 +1335,11 @@ describe("adversarial verification pass", () => {
     expect(result.outcome).toBe("published");
     const row = result.canonical?.findings[0];
     expect(result.canonical?.head).toBe(HEAD);
-    expect(result.canonical?.run).toEqual({ state: "published", verdict: "pass" });
+    expect(result.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "created",
+    });
     expect(row).toMatchObject({
       kind: "correctness",
       file: "src/a.mjs",
@@ -2647,6 +2688,116 @@ describe("artifact freshness around publication", () => {
   });
 });
 
+describe("publication ownership", () => {
+  // The ownership distinction the publication contract rests on: an
+  // abandonment before this run wrote anything names no comment id anywhere
+  // — the comment standing on the thread belongs to whichever run won it —
+  // while an abandonment after the write keeps the id of the comment this
+  // run itself left standing. The returned canonical carries the real
+  // publication outcome beside the verdict: the two facts are independent.
+  const CONCERN =
+    '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}';
+  const READ = {
+    content: "",
+    toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+  };
+  const VERDICT = {
+    content: '{"verdict":"confirmed","kind":"correctness","reason":"the read settles it"}',
+  };
+  const RACED_COMMENT = (/** @type {number} */ id, /** @type {string} */ head) => ({
+    id,
+    body: `<!-- action-agents:review:0badcafe:head=${head} -->raced findings`,
+    user: { login: "github-actions[bot]" },
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T12:00:00Z",
+  });
+
+  it("an upsert-guard abandonment on the main path names no comment id anywhere", async () => {
+    const forge = forgeStub();
+    forge.listComments = async () => [RACED_COMMENT(55, "c".repeat(40))];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
+    });
+    expect(result.outcome).toBe("abandoned");
+    expect(result.reason).toContain("concurrent");
+    expect(result.commentId).toBeUndefined();
+    expect(forge.calls.upserts).toHaveLength(0);
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.outcome.classification).toBe("abandoned");
+    // A foreign comment stands on the thread; this run wrote none, so the
+    // provenance names none.
+    expect(record.provenance).toBeUndefined();
+  });
+
+  it("a post-write abandonment keeps the run's own commentId when the write was an update", async () => {
+    const MOVED = "d".repeat(40);
+    const forge = forgeStub();
+    forge.listComments = async () => [RACED_COMMENT(55, HEAD)]; // same head: the upsert updates it
+    let reads = 0;
+    const base = forge.getPullRequest.bind(forge);
+    forge.getPullRequest = async () => {
+      reads += 1;
+      return reads >= 4 ? snapshot({ head: { ref: "feature", sha: MOVED } }) : base(7);
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge, readingChat([READ, { content: CONCERN }, VERDICT])),
+    });
+    // The write landed — this run's update of its own comment stands — so
+    // the abandonment keeps that comment's id under provenance.
+    expect(result.outcome).toBe("abandoned");
+    expect(forge.calls.upserts).toEqual([{ id: 55, body: expect.any(String) }]);
+    const record = JSON.parse(serialiseArtifact(/** @type {any} */ (result.artifact)));
+    expect(record.outcome.classification).toBe("abandoned");
+    expect(record.provenance).toEqual({ commentId: 55 });
+  });
+
+  it("the published canonical carries the real publication outcome beside the verdict", async () => {
+    // A fresh thread: this run's write created its comment.
+    const fresh = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forgeStub(), readingChat([READ, { content: CONCERN }, VERDICT])),
+    });
+    expect(fresh.outcome).toBe("published");
+    expect(fresh.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "created",
+    });
+
+    // An own comment already at this head: this run's write updated it.
+    const updating = forgeStub();
+    updating.listComments = async () => [RACED_COMMENT(55, HEAD)];
+    const updated = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(updating, readingChat([READ, { content: CONCERN }, VERDICT])),
+    });
+    expect(updated.outcome).toBe("published");
+    expect(updated.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "updated",
+    });
+  });
+});
+
 describe("the untrusted-data ceiling (no steering)", () => {
   // P1-5 (#138): a pull-request body and diff are untrusted data, never
   // instruction. One hostile change carries the whole injected menu — raise
@@ -3850,6 +4001,7 @@ describe("the cross-run reconciliation in the published comment", () => {
     listed(
       55,
       `<!-- action-agents:review:0badcafe:head=${record.head} -->\n**Review** — Complete\n${embedRecordBlock(record)}\n`,
+      "github-actions[bot]",
     );
 
   /**
@@ -3971,9 +4123,7 @@ describe("the cross-run reconciliation in the published comment", () => {
 
   it("the upsert updates the action's own comment in place, record block and all", async () => {
     const forge = forgeStub();
-    forge.listComments = async () => [
-      { ...previousComment(previousRecord([])), user: { login: "github-actions[bot]" } },
-    ];
+    forge.listComments = async () => [previousComment(previousRecord([]))];
     const result = await runReview(forge, [READ, { content: CONCERN }, VERDICT]);
     expect(result.outcome).toBe("published");
     expect(forge.calls.upserts).toEqual([{ id: 55, body: expect.any(String) }]);
@@ -3994,7 +4144,14 @@ describe("the cross-run reconciliation in the published comment", () => {
     if (bare.canonical === undefined || labelled.canonical === undefined) {
       throw new Error("a published run lost its record");
     }
-    expect(labelled.canonical).toEqual(bare.canonical);
+    // The labels are comment prose: findings, head, state and verdict are
+    // identical. The one legitimate divergence is the publication fact —
+    // the labelled run updates the action's own comment where the bare run
+    // creates one — so it is normalised before the comparison.
+    expect({
+      ...labelled.canonical,
+      run: { ...labelled.canonical.run, publication: bare.canonical.run.publication },
+    }).toEqual(bare.canonical);
     expect(labelled.gate).toEqual(bare.gate);
     expect(JSON.stringify(toSarif(labelled.canonical))).toBe(
       JSON.stringify(toSarif(bare.canonical)),
@@ -4004,5 +4161,57 @@ describe("the cross-run reconciliation in the published comment", () => {
     expect(labelledBody).toContain("[new]");
     expect(bareBody).not.toContain("[new]");
     expect(labelledBody).not.toBe(bareBody);
+  });
+
+  it("a collapsed duplicate wears the survivor's label, never its neighbour's", async () => {
+    // Two findings share the canonical identity — same file, kind and
+    // anchor-line content; only the message differs — and a distinct
+    // finding follows them. The record collapses the pair to one finding,
+    // so a join by position shifts every later label onto the wrong row:
+    // the duplicate must carry the survivor's own label and the third
+    // finding its own, exactly as the embedded record spells them.
+    const THREE =
+      '{"findings":[' +
+      '{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+      '{"severity":"nit","kind":"correctness","file":"src/a.mjs","line":2,"message":"the arithmetic is off"},' +
+      '{"severity":"nit","kind":"style","file":"src/b.mjs","line":2,"message":"naming"}' +
+      '],"summary":"three"}';
+    // The previous run published only the third finding: the collapsed
+    // pair labels new, the third persisting — three distinct facts the
+    // comment must not shuffle.
+    const forge = forgeStub({ files: TWO_FILES });
+    forge.listComments = async () => [
+      previousComment(
+        previousRecord([
+          {
+            kind: "style",
+            file: "src/b.mjs",
+            line: 2,
+            severity: "nit",
+            message: "naming",
+            subject: "b2",
+            lifecycle: "unresolved",
+          },
+        ]),
+      ),
+    ];
+    const result = await runReview(forge, [READS, { content: THREE }, VERDICT, VERDICT]);
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    // The collapse itself happened: three published findings, two survive.
+    // (The embedded block carries the record minus `collapsed` — the audit
+    // trail is the run's own fact, never the thread's — so the pin reads
+    // the canonical result, and the block is checked against it.)
+    if (result.canonical === undefined) throw new Error("a published run lost its record");
+    expect(result.canonical.findings).toHaveLength(2);
+    expect(result.canonical.collapsed).toHaveLength(1);
+    const carried = parseRecordBlock(body);
+    if (carried === undefined) throw new Error("the upsert carried no readable record");
+    expect(carried.findings).toEqual(result.canonical.findings);
+    expect(body).toContain("- `src/a.mjs:2` — off-by-one [new]");
+    expect(body).toContain("- `src/a.mjs:2` — the arithmetic is off [new]");
+    expect(body).toContain("- `src/b.mjs:2` — naming [persisting]");
+    expect(body).toContain("Compared with the previous review: 1 persisting, 2 new.");
+    expect(body).not.toContain("Resolved since the last review");
   });
 });

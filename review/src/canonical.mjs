@@ -14,7 +14,12 @@
 
 import { SEVERITIES } from "./answer.mjs";
 import { isDigest } from "./digest.mjs";
-import { findingFingerprint, normalisePath, normaliseSubject } from "./identity.mjs";
+import {
+  findingFingerprint,
+  findingFingerprintV1,
+  normalisePath,
+  normaliseSubject,
+} from "./identity.mjs";
 import { FINDING_KINDS, PUBLISHED_LIFECYCLE_STATES, VERDICTS } from "./vocabulary.mjs";
 import { LIFECYCLE_OF_VERDICT } from "./verify.mjs";
 
@@ -31,8 +36,14 @@ export const RUN_STATES = /** @type {const} */ ([
 /** The verdict a run carries. `unknown` and `fail` never pass — a hollow or incomplete review is no pass, not a degraded pass. */
 export const RUN_VERDICTS = /** @type {const} */ (["pass", "fail", "unknown"]);
 
-/** The canonical result's schema version. */
-export const CANONICAL_VERSION = 1;
+/** The upsert outcomes a publication fact may carry — the real comment write's result. */
+export const PUBLICATION_OUTCOMES = /** @type {const} */ (["created", "updated", "abandoned"]);
+
+/** The canonical result's schema version — 2 since the full-span identity migration (#393). */
+export const CANONICAL_VERSION = 2;
+
+/** The record versions this pipeline spells — the current, and the stored v1 it still verifies. */
+const RECORD_VERSIONS = [1, CANONICAL_VERSION];
 
 /** A canonical result that does not check out — vocabulary, shape or fingerprint. */
 export class CanonicalResultError extends Error {}
@@ -64,9 +75,9 @@ export class CanonicalResultError extends Error {}
 
 /**
  * @typedef {object} CanonicalResult
- * @property {typeof CANONICAL_VERSION} version
+ * @property {typeof CANONICAL_VERSION | 1} version the record schema version — 2 fresh, or 1 for a stored record verified under the retired scheme
  * @property {string} head the reviewed commit's sha — the subject pinned beside the record
- * @property {{ state: typeof RUN_STATES[number], verdict: typeof RUN_VERDICTS[number] }} run the run's terminal facts
+ * @property {{ state: typeof RUN_STATES[number], verdict: typeof RUN_VERDICTS[number], publication?: typeof PUBLICATION_OUTCOMES[number] }} run the run's terminal facts — `publication` carries the real comment write's outcome when the run knows it, and is absent on records that predate the fact (and on every canonical a run builds before its write lands)
  * @property {readonly CanonicalFinding[]} findings publication order preserved
  * @property {readonly CollapsedClaim[]} collapsed claims that shared a kept finding's identity key, in publication order
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the read-coverage report, when the run carried one
@@ -102,11 +113,15 @@ function requireString(value, label) {
 /**
  * Builds the one canonical result from a run's verified publication set.
  * Pure aside from nothing: the same input always yields the same frozen
- * result, so replaying an artifact's facts rebuilds it byte for byte.
+ * result, so replaying an artifact's facts rebuilds it byte for byte. The
+ * input's optional version spells the identity scheme: fresh records (the
+ * default) mint the full-span tuple; a stored v1 record verifies its
+ * fingerprints under the retired truncated-span spelling.
  *
  * @param {{
+ *   version?: typeof CANONICAL_VERSION | 1,
  *   head: string,
- *   run: { state: string, verdict: string },
+ *   run: { state: string, verdict: string, publication?: string },
  *   findings: Array<{
  *     kind: string,
  *     file: string,
@@ -124,15 +139,38 @@ function requireString(value, label) {
  * }} input
  * @returns {CanonicalResult}
  */
-export function createCanonicalResult({ head, run, findings, coverage }) {
+export function createCanonicalResult({
+  version = CANONICAL_VERSION,
+  head,
+  run,
+  findings,
+  coverage,
+}) {
   if (typeof head !== "string" || !/^[0-9a-f]{7,40}$/.test(head)) {
     throw new CanonicalResultError(`head must be a git sha — got ${JSON.stringify(head)}`);
   }
+  if (typeof version !== "number" || !RECORD_VERSIONS.includes(version)) {
+    throw new CanonicalResultError(
+      `version must be a record schema this pipeline spells (1 or ${CANONICAL_VERSION}) — got ${JSON.stringify(version)}`,
+    );
+  }
+  // The record's version spells its identity scheme: a stored v1 record
+  // verifies its fingerprints under the retired truncated-span spelling;
+  // fresh records mint the full-span tuple. One constructor, one guard.
+  const spellFingerprint = version === 1 ? findingFingerprintV1 : findingFingerprint;
   if (run === null || typeof run !== "object") {
     throw new CanonicalResultError("run must carry the run's terminal facts");
   }
   const state = inVocabulary(run.state, RUN_STATES, "run.state");
   const verdict = inVocabulary(run.verdict, RUN_VERDICTS, "run.verdict");
+  // Additive since the fact's introduction (the version stays 1): a record
+  // without one is the v1 shape, and its absence is the default.
+  const publication =
+    run.publication === undefined
+      ? undefined
+      : /** @type {typeof PUBLICATION_OUTCOMES[number]} */ (
+          inVocabulary(run.publication, PUBLICATION_OUTCOMES, "run.publication")
+        );
 
   /** @type {Map<string, CanonicalFinding>} */
   const kept = new Map();
@@ -172,7 +210,7 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
     if (finding.evidence !== undefined && !isDigest(finding.evidence.digest)) {
       throw new CanonicalResultError(`${label}.evidence.digest must be a content digest`);
     }
-    const fingerprint = findingFingerprint({ file, kind, subject });
+    const fingerprint = spellFingerprint({ file, kind, subject });
     if (finding.fingerprint !== undefined && finding.fingerprint !== fingerprint) {
       throw new CanonicalResultError(
         `${label}: stored fingerprint does not match the tuple this result recomputes`,
@@ -211,11 +249,12 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
   });
 
   return Object.freeze({
-    version: CANONICAL_VERSION,
+    version,
     head,
     run: Object.freeze({
       state: /** @type {typeof RUN_STATES[number]} */ (state),
       verdict: /** @type {typeof RUN_VERDICTS[number]} */ (verdict),
+      ...(publication !== undefined ? { publication } : {}),
     }),
     findings: Object.freeze(canonicalFindings),
     collapsed: Object.freeze(collapsed),
@@ -230,5 +269,28 @@ export function createCanonicalResult({ head, run, findings, coverage }) {
           ),
         }
       : {}),
+  });
+}
+
+/**
+ * Attaches the real publication outcome to a built canonical result — the
+ * one fact a run learns only after the record exists, when the comment
+ * write returns. Pure: the same record and outcome yield the same frozen
+ * result, reusing the findings, collapsed claims and coverage by reference;
+ * nothing is recomputed. The fact stays independent of the verdict by law —
+ * publication success is not the review's verdict — and the merge gate
+ * never reads it.
+ *
+ * @param {CanonicalResult} canonical
+ * @param {string} publication the upsert's outcome — "created", "updated" or "abandoned"
+ * @returns {CanonicalResult}
+ */
+export function withRunPublication(canonical, publication) {
+  const outcome = /** @type {typeof PUBLICATION_OUTCOMES[number]} */ (
+    inVocabulary(publication, PUBLICATION_OUTCOMES, "run.publication")
+  );
+  return Object.freeze({
+    ...canonical,
+    run: Object.freeze({ ...canonical.run, publication: outcome }),
   });
 }

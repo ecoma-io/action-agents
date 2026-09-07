@@ -34,16 +34,18 @@
  * No consequence ever reads it — the gate, the SARIF projection and every
  * exit path read the current canonical record alone.
  *
- * The record is honored only from the comment whose own marker names this
- * action and whose marker head equals the record's `head` — a block posing
- * in a foreign or markerless comment, or claiming a head its comment's
- * marker does not carry, is refused, and the newest own-marker comment
- * whose record fails any of these still ends the search: first run.
+ * The record is honored only from a comment this run's own token authored,
+ * whose marker names this action and whose marker head equals the record's
+ * `head` — authorship is the one thing GitHub authenticates about a comment
+ * (`user.login` cannot be forged to a bot principal), content shape never
+ * is. A block posing in a foreign or markerless comment, or claiming a head
+ * its comment's marker does not carry, is refused, and the newest own
+ * comment whose record fails any of these still ends the search: first run.
  */
 
 import { parseMarker } from "#core/comment.mjs";
 
-import { CANONICAL_VERSION, createCanonicalResult } from "./canonical.mjs";
+import { createCanonicalResult } from "./canonical.mjs";
 
 /** The whole record block, as it sits in a comment. */
 const RECORD = /<!--\s*action-agents-record:review:([A-Za-z0-9+/=]+)\s*-->/;
@@ -60,7 +62,13 @@ export function embedRecordBlock(record) {
   const payload = {
     version: record.version,
     head: record.head,
-    run: { state: record.run.state, verdict: record.run.verdict },
+    run: {
+      state: record.run.state,
+      verdict: record.run.verdict,
+      // Additive since the fact's introduction: a record without one embeds
+      // byte-identically to the v1 payload.
+      ...(record.run.publication !== undefined ? { publication: record.run.publication } : {}),
+    },
     findings: record.findings.map((finding) => ({ ...finding })),
     ...(record.coverage !== undefined
       ? {
@@ -79,7 +87,7 @@ export function embedRecordBlock(record) {
 /**
  * The canonical record a comment body carries, or `undefined` when it
  * carries none this machinery can trust. Every failure mode — no block,
- * broken base64, non-JSON bytes, a foreign or future version, a record
+ * broken base64, non-JSON bytes, a version the pipeline never spelled, a record
  * whose run never published, a mangled fingerprint — collapses to the same
  * `undefined` the honest absence of a block produces.
  *
@@ -92,14 +100,13 @@ export function parseRecordBlock(body) {
   try {
     const parsed = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
     if (parsed === null || typeof parsed !== "object") return undefined;
-    const { version, run } = /** @type {{ version?: unknown, run?: { state?: unknown } }} */ (
-      parsed
-    );
-    if (version !== CANONICAL_VERSION) return undefined;
+    const { run } = /** @type {{ run?: { state?: unknown } }} */ (parsed);
     if (run === null || typeof run !== "object" || run.state !== "published") return undefined;
-    // The canonical constructor is the guard: vocabulary, shape, and every
-    // stored fingerprint against the tuple it recomputes. Anything a
-    // truncated or hand-mangled block lost throws here and counts as absent.
+    // The canonical constructor is the guard: the record version (it spells
+    // the identity scheme — a stored v1 record verifies under the retired
+    // spelling), vocabulary, shape, and every stored fingerprint against the
+    // tuple it recomputes. Anything a truncated or hand-mangled block lost
+    // throws here and counts as absent.
     return createCanonicalResult(/** @type {any} */ (parsed));
   } catch {
     return undefined;
@@ -107,20 +114,26 @@ export function parseRecordBlock(body) {
 }
 
 /**
- * The previous canonical record for a thread: the newest comment carrying
- * this action's marker wins, the same newest-first order the clearing write
- * uses, and its embedded record is the previous state. A marker comment
- * without a readable record — an older action's comment, a cleared thread,
- * a mangled block — is a first run as far as reconciliation is concerned;
- * older comments are never fallen back to, because the newest marker is the
+ * The previous canonical record for a thread: the newest comment this run's
+ * own token authored carrying this action's marker wins, the same
+ * newest-first order and ownership test the upsert applies, and its
+ * embedded record is the previous state. A comment from any other author is
+ * not the run's history — a forged marker, however valid its record, is
+ * skipped without ending the search. An own marker comment without a
+ * readable record — an older action's comment, a cleared thread, a mangled
+ * block — is a first run as far as reconciliation is concerned; older
+ * comments are never fallen back to, because the newest own marker is the
  * thread's latest truth.
  *
  * @param {import("#core/forge.mjs").CommentEntry[]} comments the thread's comments, any order
  * @param {string} action the acting action's marker namespace
+ * @param {string[]} ownLogins the logins this run's token writes as, resolved before the search
  * @returns {import("./canonical.mjs").CanonicalResult | undefined}
  */
-export function previousRecord(comments, action) {
+export function previousRecord(comments, action, ownLogins) {
   for (const comment of [...comments].sort((a, b) => b.id - a.id)) {
+    const login = comment.user?.login;
+    if (login === undefined || !ownLogins.includes(login)) continue;
     const marker = parseMarker(comment.body);
     if (marker?.action !== action) continue;
     const record = parseRecordBlock(comment.body);

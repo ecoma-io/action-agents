@@ -416,11 +416,19 @@ fail-closed. The SARIF upload is the consumer's step:
     api-key: ${{ secrets.LLM_API_KEY }}
     model: ${{ vars.LLM_MODEL }}
 - name: Upload the SARIF projection
-  if: always()
+  if: steps.review.outputs.sarif-path != ''
   uses: github/codeql-action/upload-sarif@v3
   with:
     sarif_file: ${{ steps.review.outputs.sarif-path }}
+    category: review
 ```
+
+`sarif-path` exists only after a published review, so the upload runs on
+exactly the terminals whose confirmed findings are in the projection — a
+refused, failed or dry-run run uploads nothing. The consuming job needs
+`security-events: write` (and `actions: read`); the action itself needs
+neither. Pin `upload-sarif` by full SHA in a real workflow; the tag here is
+only for reading.
 
 ## Cost and budget controls
 

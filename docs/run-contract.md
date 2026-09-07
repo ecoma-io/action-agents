@@ -122,6 +122,15 @@ account outlives the runner log. The contract's rules for every record:
   write their records' `outcome` from it, and review's artifact speaks the
   classification vocabulary its own shapes declare, which the mapping table
   above maps onto it.
+- **Contained before it mutates; observable when it lands.** A record write
+  validates its path inside the workspace's containment boundary before any
+  filesystem mutation — no symlinked segment is traversed, `.git` never, and
+  the write's namespace cleanup runs only on the validated path (review's
+  `writeRunArtifact` holds the law; every family's write ceiling is judged
+  by it). A declared write publishes the exact file it wrote as the
+  `artifact-file` action output — on green runs and on the red boundary's
+  record alike — so an observer reads where the record landed without
+  guessing (#378).
 
 Three families exist today:
 
@@ -184,6 +193,10 @@ stashed: a red exit re-attempts that record at the boundary writer, exactly
 as it was built, so the write's failure never relabels the terminal it was
 written for — and a failure's record never masks the original error it
 records.
+Delivery is part of the same posture: the written file is published as the
+`artifact-file` action output at every terminal that declares a record, and
+a terminal that declares none logs that it did, so a missing output reads as
+"declared nothing" next to the logged loss above — never as silence (#378).
 
 ## Concurrency: read-then-write, never compare-and-swap
 
@@ -227,11 +240,15 @@ give the shape its authority:
 - **Finding identity is content, not position.** A finding's fingerprint is a
   versioned digest over its normalized path, its claim kind — a closed,
   code-validated vocabulary the verification pass binds from evidence, as
-  epistemic as the verdicts themselves — and the code span the reviewed bytes
+  epistemic as the verdicts themselves — and the full code span the reviewed bytes
   carry at its anchor, captured by the integration boundary that reads the
   snapshot (the canonical constructor verifies a stored fingerprint against
-  the recomputed tuple; it never reads files). Line moves, message rewrites
-  and severity re-grades
+  the recomputed tuple; it never reads files). The span is hashed in full —
+  truncation is a display choice, never an identity input. The tuple's
+  version moves with the identity scheme, and a stored record verifies under
+  the scheme its own version spells: pre-hardening v1 records still parse
+  and reconcile, through one documented churn at the migration — never a
+  silent invalidation. Line moves, message rewrites and severity re-grades
   keep the identity; a rewritten span, a new file or a reclassified claim is
   a new finding — churn reconciliation records, never enforcement drift,
   since the gate reads the current set. Claims sharing the full key in one
@@ -243,8 +260,8 @@ give the shape its authority:
   next run reconciles against — the comment, not the artifact file, is what
   survives between runs.
   Recovery reads only a comment this action's own token authored — the same
-  ownership test the write applies — never the newest comment carrying the
-  marker syntax.
+  ownership test the write applies, with the token's logins resolved before
+  the thread is read — never the newest comment carrying the marker syntax.
 - **The gate is a pure function of the canonical result and the policy.**
   `unknown` and `fail` never pass — an unanswered or incomplete review is no
   pass; an abandoned or refused run does not pass; a confirmed finding the
@@ -270,15 +287,25 @@ give the shape its authority:
   `success` on PASS, `failure` on BLOCK — the check run a ruleset makes
   required. Every terminal a run can end in lands this surface — a `refused`,
   `failed` or `abandoned` run renders the check run too, `failure` under
-  `required` — except a run that dies before it holds the event facts needed
-  to name a head; that carve-out is the contract's, never an accident. And
+  `required`; a `skip`, `nothing-to-review` or `dry-run` terminal renders
+  `neutral` in both modes, recorded and enforcing nothing; and the check
+  output names the terminal state either way — except a run that dies before
+  it holds the event facts needed to name a head; that carve-out is the
+  contract's, never an accident. And
   because GitHub counts a `neutral` check as reported, a repository that
   makes the check required MUST pin `gate-mode: required` — `observe`
   satisfies the ruleset while enforcing nothing. A BLOCK never fails the
   action's exit: the run stays green with
   its outputs standing. The SARIF projection is written under `runner.temp`
   — never the workspace — byte-identical for the same record, surfaced
-  through `sarif-path`; the upload is the consumer's step. Each surface is a
+  through `sarif-path`; the upload is the consumer's step, gated on
+  `sarif-path` — only a published run uploads, so every other terminal
+  leaves the Code Scanning column empty. A result's identity is the
+  finding's fingerprint (`identity.mjs`): one string, two consumers — the
+  comment's record block anchors on it, and the projection emits it under
+  `partialFingerprints["primaryLocationLineHash"]`, the one key GitHub Code
+  Scanning consults when deduplicating alerts across uploads, beside the
+  review's own `reviewFindingFingerprint/v2` slot. Each surface is a
   logged loss on its own failure (F-14's posture): a SARIF write or check-run
   call that does not land is reported, never a red run, and never a disguise.
   A gate policy that names a kind outside the closed vocabulary is a defect,
