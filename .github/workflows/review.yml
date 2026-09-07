@@ -8,34 +8,35 @@ name: Review
 # ignored embedded instructions as data, cleared stale state honestly, and
 # wrote nothing while doing it. This run publishes for real: exactly one
 # marker comment per pull request, updated in place, guarded by the
-# pre-publication re-read of state and head — plus the merge gate's
-# `review gate` check run (#362), a code-pinned projection of the same
-# canonical record (SECURITY.md's fifth ceiling). A hostile review of the
-# whole surface found no path from pull-request content to anything beyond
-# that one comment before this flip was made.
+# pre-publication re-read of state and head. A hostile review of the whole
+# surface found no path from pull-request content to anything beyond that
+# one comment before this flip was made; the Code Scanning upload below is
+# the one surface that has joined it since, and it is equally a projection
+# of the same canonical record.
 #
-# The write surface now that the flip has landed is the marker comment and the
-# gate's `review gate` check run on the pull request — no labels
-# (`triage`'s job), no verdicts, no mentions — and the block below is the
-# boundary that makes that true: `contents` stays
-# read-only because the working tree under `pull_request` is untrusted
-# input, and a fork's pull request carries neither secrets nor a write
-# token, which is the arrangement SECURITY.md documents for this trigger.
+# The write surface is the marker comment and — only after a published
+# review — the Code Scanning upload: no labels (`triage`'s job), no
+# verdicts, no mentions — and the block below is the boundary that makes
+# that true: `contents` stays read-only because the working tree under
+# `pull_request` is untrusted input, and a fork's pull request carries
+# neither secrets nor a write token, which is the arrangement SECURITY.md
+# documents for this trigger.
 #
 # The run's machine-readable record stays consequence-free: it is written
 # inside the workspace (`.review-artifact`, the action refuses to resolve
 # outside it) and the upload step publishes it as a workflow artifact —
-# visible only to whoever can already see the run. The gate's check run no
-# longer merely observes: this workflow runs it in `required` mode, so a
-# BLOCK verdict renders a `failure` `review gate` check run and a ruleset
-# that requires the check blocks merges while findings are unresolved.
+# visible only to whoever can already see the run. Review records and never
+# enforces (ADR 006): what a verdict may block, this repository decides in
+# its own merge-protection surfaces, never in this workflow.
 #
-# Code Scanning is the one surface that leaves this repository's own pages:
-# a published run's confirmed findings upload to code scanning — §8's SARIF
-# column, published runs only, confirmed findings only; every
-# non-published terminal uploads nothing. The upload is the workflow's
-# step, never the action's: the action only writes the projection and
-# surfaces `sarif-path` (the audit's §7.5 split).
+# Code Scanning is the one surface that leaves this repository's own pages,
+# and the one merge enforcement rides (ADR 006): a published run's
+# confirmed findings upload as SARIF — published runs only, confirmed
+# findings only; every non-published terminal uploads nothing. The upload
+# is the workflow's step, never the action's: the action only writes the
+# projection and surfaces `sarif-path` (the audit's §7.5 split). What the
+# resulting alerts do at a merge is this ruleset's decision, made here or
+# not at all.
 #
 # The action is referenced as `./review` from the checkout of the ref that
 # triggered the run, which under `pull_request` is the merge preview: a pull
@@ -47,31 +48,27 @@ name: Review
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  # The merge queue's head reports here too (#412): the queue waits for every
-  # required check to report against the queued ref, and `review gate` is one
-  # of them. A merge_group run is a declared skip — the action answers it
-  # with a neutral `review gate` check run on the group head and writes
-  # nothing else. Each member pull request was already reviewed on its own
-  # head, which stays the enforcement surface; under ALLGREEN a pull request
-  # only enters a group when its own required checks were green.
-  merge_group:
   # `edited` is deliberately absent — a re-worded description does not change
   # the code under review, and re-reviewing it would only churn the comment.
   # There is no workflow_dispatch: without a pull request there is nothing
-  # for this action to look at.
+  # for this action to look at. There is no `merge_group` either (ADR 006):
+  # the queue's required checks are `ci-gate` and `analysis-gate`, and both
+  # run on group heads — review needs nothing from the queue, and a
+  # merge_group event that reached this workflow anyway is not for this
+  # action: the action answers it with a typed refusal and writes nothing.
 
 # The workflow-level floor grants nothing; the review job below restates its
 # reads and holds every write — a job-level `permissions` block REPLACES this
 # one rather than merging with it (analysis.yml's rule), so a job added later
 # inherits read-only instead of silently widening. The job's writes are the
-# marker comment and, only after a published review, the code scanning upload.
+# marker comment and, only after a published review, the code scanning
+# upload.
 permissions: read-all
 
 # One review per pull request: a rapid push sequence replaces the queued run
-# rather than stacking reviews of stale heads. A merge_group run carries no
-# pull request to number, so it groups by its own head sha instead (#412).
+# rather than stacking reviews of stale heads.
 concurrency:
-  group: review-${{ github.event.pull_request.number || github.sha }}
+  group: review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -82,8 +79,8 @@ jobs:
     # say so rather than hang.
     timeout-minutes: 15
     # Writes are the job's, stated here rather than inherited: the marker
-    # comment and — only after a published review — the code scanning upload.
-    # `actions: read` is the audit §7.5 consumer grant (artifact
+    # comment and — only after a published review — the code scanning
+    # upload. `actions: read` is the audit §7.5 consumer grant (artifact
     # verification); the action itself never needs either write.
     permissions:
       contents: read
@@ -106,8 +103,7 @@ jobs:
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
           model: review
-          # Live: publishes one upserted marker comment plus the gate's
-          # check run.
+          # Live: publishes one upserted marker comment.
           dry-run: "false"
 
       # Code Scanning sees the same confirmed findings the comment renders —
@@ -117,8 +113,11 @@ jobs:
       # `always()`) uploads nothing on every other terminal — refused,
       # failed, abandoned, skipped, dry-run — and no false alarm rides on a
       # green no-write run. The explicit category keeps these alerts a
-      # separate stream from `analysis.yml`'s uploads. Pinned `tag@digest`
-      # like every third-party action here; Renovate bumps both halves.
+      # separate stream from `analysis.yml`'s uploads. This upload is also
+      # the surface merge enforcement rides (ADR 006): turning these alerts
+      # into a merge requirement is this ruleset's decision, made here or
+      # not at all. Pinned `tag@digest` like every third-party action here;
+      # Renovate bumps both halves.
       - name: Upload the review's SARIF
         if: steps.review.outputs.sarif-path != ''
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
@@ -127,16 +126,16 @@ jobs:
           category: review
 
       # The run artifact — policy, risk table, findings with verification
-      # states, gate outcomes, coverage, phase log — as a downloadable file.
-      # The `if` guards both ways: `always()` keeps the record for runs whose
-      # comment step failed — a red exit leaves its refused/failed record
-      # behind — while the non-empty check makes terminals that declare no
-      # record (the two carve-outs: a death before the run holds the facts an
-      # artifact is built from, and a failed artifact write itself; plus the
-      # green dry-run skips, which suppress the record along with everything
-      # else) skip the upload silently — a lost write emits nothing, per the
-      # run contract. The path is the exact file the action declared via
-      # its `artifact-file` output — set on every declared write, a red run's
+      # states, coverage, phase log — as a downloadable file. The `if` guards
+      # both ways: `always()` keeps the record for runs whose comment step
+      # failed — a red exit leaves its refused/failed record behind — while
+      # the non-empty check makes terminals that declare no record (the two
+      # carve-outs: a death before the run holds the facts an artifact is
+      # built from, and a failed artifact write itself; plus the green
+      # dry-run skips, which suppress the record along with everything else)
+      # skip the upload silently — a lost write emits nothing, per the run
+      # contract. The path is the exact file the action declared via its
+      # `artifact-file` output — set on every declared write, a red run's
       # refused record included — never a glob. Two knobs are load-bearing
       # (#378): `include-hidden-files: true`, because the record directory is
       # hidden by design and upload-artifact prunes hidden files by default —
