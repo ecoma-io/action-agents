@@ -89,11 +89,17 @@ jobs:
       # The run record — outcome, pair accounting, pull request identity — as
       # a downloadable file. `always()` keeps the record for runs whose action
       # step failed; a run that died before any record could be written
-      # produced no file, and `if-no-files-found: ignore` keeps those green.
+      # produced no file. The record directory is hidden by design, so
+      # `include-hidden-files: true` is load-bearing: upload-artifact prunes
+      # hidden files by default and the glob then matches zero files while
+      # the step still reports success (#378). `if-no-files-found: warn`
+      # keeps a declared write that lands nowhere loud instead of green over
+      # nothing.
       - name: Upload the run record
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: harmonise-run-record
           path: .harmonise-record/harmonise-record-*.json
-          if-no-files-found: ignore
+          include-hidden-files: true
+          if-no-files-found: warn
