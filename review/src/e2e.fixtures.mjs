@@ -250,7 +250,7 @@ export function context(workspace) {
  * payload file, the workspace a replay's bytes live in, and no gate-mode
  * unless the test demands one.
  *
- * @param {{ workspace: string, event?: unknown, extra?: Record<string, string> }} options
+ * @param {{ workspace: string, event?: unknown, eventName?: string, extra?: Record<string, string> }} options
  * @returns {Record<string, string>}
  */
 export function runnerEnv(options) {
@@ -268,7 +268,7 @@ export function runnerEnv(options) {
     INPUT_MODEL: "review",
     GITHUB_REPOSITORY: "acme/widgets",
     GITHUB_WORKSPACE: options.workspace,
-    GITHUB_EVENT_NAME: "pull_request",
+    GITHUB_EVENT_NAME: options.eventName ?? "pull_request",
     GITHUB_EVENT_PATH: eventPath,
     GITHUB_API_URL: "https://api.github.com",
     ...options.extra,
@@ -365,7 +365,7 @@ export function drainEntryTemps() {
  * endings the same way, plus where the runner's surfaces landed: the gate
  * output file and a runner temp that only a SARIF write could fill.
  *
- * @param {{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: import("#core/chat.mjs").Chat, gateMode?: "observe" | "required", extra?: Record<string, string> }} setup
+ * @param {{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: import("#core/chat.mjs").Chat, gateMode?: "observe" | "required", event?: unknown, eventName?: string, extra?: Record<string, string> }} setup
  * @returns {Promise<{ ok: boolean, result: import("./run.mjs").RunResult | undefined, cause: unknown, outFile: string, temp: string }>}
  */
 export async function driveEntrypoint(setup) {
@@ -379,6 +379,10 @@ export async function driveEntrypoint(setup) {
   try {
     const env = runnerEnv({
       workspace: setup.workspace,
+      // A scenario that is not a pull_request run names its own event: the
+      // payload file and GITHUB_EVENT_NAME move together.
+      ...(setup.event === undefined ? {} : { event: setup.event }),
+      ...(setup.eventName === undefined ? {} : { eventName: setup.eventName }),
       extra: {
         RUNNER_TEMP: temp,
         ...(setup.gateMode === undefined ? {} : { "INPUT_GATE-MODE": setup.gateMode }),

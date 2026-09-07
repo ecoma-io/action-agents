@@ -152,6 +152,16 @@ const SKIP_RECORD_KEYS = new Set([
   "outcome",
   "policy",
 ]);
+/** The merge-group skip record's kind — the one kind buildMergeGroupSkipRecord writes (#412). */
+const MERGE_GROUP_SKIP_KIND = "merge-group";
+/** The exact key set the merge-group skip record serialises with — a queued group head is not a pull request, so the record names no pull request and carries no policy section: nothing was read beyond the event gate (#412). */
+const MERGE_GROUP_SKIP_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "repository",
+  "headRef",
+  "outcome",
+]);
 /** The exact key set an abandonment artifact without provenance or applicability — the record for a subject that moved before any write — serialises with. */
 const ABANDONED_CORE_KEYS = new Set([
   "schemaVersion",
@@ -509,6 +519,24 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {RunPolicy} policy
  */
 
+/**
+ * The durable record a merge-group head writes (#412) — the merge queue's
+ * re-verification surface, skipped because each member pull request was
+ * already reviewed on its own head. The skip-record family's shape minus the
+ * two facts a group head does not have: a merge_group payload carries no
+ * pull request to number, and the run reads no policy before it declines, so
+ * neither is invented. It rides the applicability family's version constant
+ * like every skip record, names its kind, and carries the group head and the
+ * outcome sentence. No findings or coverage: nothing was read at all.
+ *
+ * @typedef {object} MergeGroupSkipRecord
+ * @property {typeof applicabilityArtifactSchemaVersion} schemaVersion
+ * @property {"merge-group"} kind which skip path wrote the record
+ * @property {string} repository
+ * @property {string} headRef the queued group head the check run lands on
+ * @property {{ classification: "skip", reason: string }} outcome
+ */
+
 /** The schema-version-agnostic body the full shapes share. */
 /** @typedef {Omit<RunArtifact, "schemaVersion">} PublishedArtifactBody */
 
@@ -569,7 +597,7 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  */
 
 /** Every serialisable shape this module emits. */
-/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord | AbandonedRunArtifact | DryRunRunArtifact | RedRunArtifact} AnyRunArtifact */
+/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord | MergeGroupSkipRecord | AbandonedRunArtifact | DryRunRunArtifact | RedRunArtifact} AnyRunArtifact */
 
 /**
  * The typed refusal. Every refusal this module raises is one of these, so a
@@ -1308,6 +1336,42 @@ export function buildSkipRecord({ repository, pullRequest, headRef, reason, kind
 }
 
 /**
+ * Builds the durable record a merge-group head writes (#412): the run was
+ * triggered by a `merge_group` event — the merge queue's re-verification
+ * surface — and skips because each member pull request was already reviewed
+ * on its own head. The skip-record family's posture — exact keys, the run
+ * identity fail-closed, the code-composed reason uncapped, byte-deterministic
+ * — minus the two facts a group head does not have: a merge_group payload
+ * carries no pull request to number, and the run reads no policy before it
+ * declines, so neither is invented. Carries the group head so a stale record
+ * is detectable instead of authoritative.
+ *
+ * @param {object} skip
+ * @param {string} skip.repository "owner/repo", as the forge names it
+ * @param {string} skip.headRef the queued group head, full 40 hex chars
+ * @param {string} skip.reason the code-composed sentence, uncapped
+ * @throws {ArtifactError} on any malformed field
+ * @returns {MergeGroupSkipRecord}
+ */
+export function buildMergeGroupSkipRecord({ repository, headRef, reason }) {
+  const repo = asNonEmptyString(repository, "merge-group skip record.repository");
+  const ref = asNonEmptyString(headRef, "merge-group skip record.headRef");
+  if (!HEAD_REF.test(ref)) {
+    throw new ArtifactError(
+      "merge-group skip record.headRef must be a 40-char hex commit sha — refused",
+    );
+  }
+  asNonEmptyString(reason, "merge-group skip record.reason");
+  return deepFreeze({
+    schemaVersion: applicabilityArtifactSchemaVersion,
+    kind: MERGE_GROUP_SKIP_KIND,
+    repository: repo,
+    headRef: ref,
+    outcome: { classification: "skip", reason },
+  });
+}
+
+/**
  * Builds the reduced artifact an abandoned run writes — the subject moved
  * mid-run, so the record names only the identity and the outcome. No policy,
  * risk, findings or coverage: nothing was read beyond the classification.
@@ -1660,11 +1724,13 @@ export function serialiseArtifact(artifact) {
   } else if (record.schemaVersion === applicabilityArtifactSchemaVersion) {
     // The applicability family's shapes: the full shape carrying an
     // applicability fact, the reduced shape a skipped run writes, and the
-    // skip record a path with no applicability fact writes.
+    // skip records — a path with no applicability fact, and a merge-group
+    // head the queue re-verifies (#412).
     if (
       !hasExactKeys(record, SKIPPED_ARTIFACT_KEYS) &&
       !hasExactKeys(record, APPLICABILITY_ARTIFACT_KEYS) &&
-      !hasExactKeys(record, SKIP_RECORD_KEYS)
+      !hasExactKeys(record, SKIP_RECORD_KEYS) &&
+      !hasExactKeys(record, MERGE_GROUP_SKIP_KEYS)
     ) {
       throw new ArtifactError("artifact keys fit no schema of this version — refused");
     }
