@@ -51,29 +51,23 @@ document is the program's last deliverable.
 
 ## 2. DoD verdict
 
-- **DoD 1 — protected-branch enforcement demonstrated: UNMET — pending
-  capture.** What exists today is required-mode _renderer_ evidence
-  (§4.1: #398 BLOCK, #399 BLOCK, #400 PASS — three rounds whose check-run
-  verdicts tracked the diff) and the documented gap (§4.2: the `main` ruleset
-  required only `ci-gate` + `analysis-gate` with `always` bypass for
-  OrganizationAdmin and RepositoryRole, so every one of those PRs queue-merged
-  despite a live BLOCK). The remediation — adding `review gate` to the
-  ruleset's required status checks and moving both bypass actors to `never` —
-  is approved and application is in flight (§4.4). The missing half is the
-  post-change capture: a red `review gate` producing
-  `mergeStateStatus: BLOCKED` and no merge-queue enrollment (procedure in
-  §10). **Nothing in this document is enforcement evidence until that capture
-  lands.**
+- **DoD 1 — protected-branch enforcement demonstrated: PARTIAL — the BLOCK
+  path is demonstrated; the bypass and PASS paths are not.** What exists
+  today: required-mode _renderer_ evidence (§4.1: #398 BLOCK, #399 BLOCK,
+  #400 PASS — three rounds whose check-run verdicts tracked the diff) plus
+  the enforcement half for one path — the `main` ruleset now requires
+  `review gate` (§10, applied 2026-09-07) and a live red `review gate` on an
+  up-to-date PR head produced `mergeStateStatus: BLOCKED` with
+  `mergeQueueEntry: null` (§4.3, captured verbatim in §10). What remains
+  undemonstrated: the bypass actors stay `always` (owner decision, §4.4), so
+  a maintainer's merge-through-red is unmeasured, and no PASS-path
+  enrollment capture (a green `review gate` entering the merge queue) was
+  taken on this branch. The program records both as open gaps, not as
+  evidence.
 - **DoD 2 — line-by-line reconciliation of every invariant against code,
   tests and E2E, plus the enforcement-evidence pack: MET by this document**
   (§3 and §4). Every row was verified by reading the test, not by trusting
   the program record.
-- **Remediation status — approved, application in flight.** The ruleset edit
-  (`review gate` added to `required_status_checks` with the GitHub Actions
-  integration; OrganizationAdmin and RepositoryRole bypass → `never`) is
-  being applied out-of-band on the repo owner's session; the before/after
-  JSON and the live blocked-merge capture are appended in §10 before this PR
-  enqueues.
 
 ## 3. Invariant reconciliation
 
@@ -174,25 +168,46 @@ The renderer proof of §4.1 demonstrates everything up to the branch boundary;
 the ruleset is the half that was not yet listening. This is a gap in the
 program's outcome, stated as such — it is not enforcement evidence.
 
-### 4.3 A natural blocked case, pending
+### 4.3 The negative proof, observed
 
-PR #403 (the #378 delivery fix) carries a red `review gate` right now (check
-run 101491779947, conclusion `failure`) and is not enqueued; its
-`mergeStateStatus` reads `UNSTABLE` at recording time — unstable, not BLOCKED,
-because the ruleset does not yet require the check. Once §10's edit lands, the
-expectation is exact and testable: `mergeStateStatus` must read `BLOCKED`, and
-the pull request must not enroll in the merge queue
-(`mergeQueueEntry` null via GraphQL). The capture procedure is written down in
-§10; no result is claimed here before it exists.
+After the ruleset edit (§10, applied 2026-09-07), PR #403's branch was
+updated onto `main` and re-reviewed. Observed facts, each from the API:
+
+- `review` (the action) run 34110709937 on head `7b4f2e8…` → `success`;
+  the run published its review comment, whose embedded record carries
+  `coverage.uncovered: ["tools/workflow-record-delivery.test.mjs"]` —
+  4/5 changed files examined — and `"run": {"state": "published",
+"verdict": "pass"}` (the #405 defect, live; §6a).
+- `review gate` (the check) run **101706331100** on the same head →
+  **`failure`**, output title `review gate: BLOCK`, completed
+  2026-09-07T10:18:57Z. The gate check failing while the run's recorded
+  verdict reads `pass` is consistent with the gate law (canonical coverage
+  read independently of the verdict — the separation #405's fix makes
+  explicit); this capture does not independently establish that
+  separation, it observes it.
+- `mergeStateStatus` → **`BLOCKED`**, `mergeQueueEntry` → `null`
+  (GraphQL, queried 2026-09-07T10:19Z, verbatim in §10).
+
+Inference, labelled as such: the BLOCK's proximate cause is the coverage
+reason (the check-run summary names the unread file; the same run's record
+carries it), not a verified finding — no confirmed finding exists in the
+record. The causal chain from that coverage to the ruleset's BLOCKED state
+is the documented gate law (`decideReviewGate` fails on uncovered files)
+plus the ruleset's required check; neither link was independently re-tested
+under a bypass actor, so the capture demonstrates the observed path only.
 
 ### 4.4 Remediation status
 
-The ruleset edit — add `review gate` to `required_status_checks` (GitHub
-Actions integration) and move both bypass actors (OrganizationAdmin,
-RepositoryRole) to `never` — is user-approved; application is in flight via a
-browser relay on the repo owner's session. Before/after JSON and a live
-blocked-merge capture are to be appended in §10 (marked TODO-before-merge)
-before this PR enqueues.
+Applied 2026-09-07: `review gate` (GitHub Actions integration 15368) joins
+`ci-gate` and `analysis-gate` in the `main` ruleset's
+`required_status_checks`. The bypass actors — OrganizationAdmin and
+RepositoryRole (role 5) — remain `bypass_mode: "always"` by owner decision:
+the owner chose not to narrow them in the same pass. Consequence, stated
+plainly: a maintainer bypassing the ruleset can still merge through a red
+`review gate`, exactly as Phase 13's PRs did under the old ruleset, and no
+capture was taken of a bypass actor's merge-through-red under the new
+ruleset. The §4.3 evidence is the observed path; bypass applicability is
+untested and recorded as an open gap (§9), not as a pass.
 
 ## 5. Defect findings handled in scope
 
@@ -273,49 +288,55 @@ by this PR, one needs no action:
 
 ## 8. Issue and PR state
 
-States fetched live from the GitHub API on 2026-09-06.
+States fetched live from the GitHub API on 2026-09-07 (refreshed with the
+§10 capture).
 
-| #         | Kind  | State               | Closing reason / remaining work                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------- | ----- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| #377      | issue | closed              | red terminals land the `review gate` check — #390                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| #378      | issue | **open** (reopened) | action-side fixed by #392; delivery half broken on `main` (§5) — fix in #403, open                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| #380      | issue | closed              | provenance-bound recovery — #391                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| #381      | issue | **open**            | main path fixed by #382 + #389; the clearing path remains the open remainder, kept open by decision                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| #383      | issue | closed              | gate law — #384                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| #385      | issue | closed              | SARIF identity + upload — #388                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| #386      | issue | **open**            | ADR 005's re-open conditions + migration sketch — stays open by decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| #393      | issue | **open**            | implemented by #394 (full-span v2 identity, v1 verify-by-version); no close recorded — live state reported as-is                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| #395      | issue | closed              | cross-surface cases + replay — #396                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| #397      | issue | **open**            | the hardening tracker; stays open until the post-change enforcement capture (§10) lands                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| #401      | issue | closed              | label misassign across collapse — #402, auto-closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| #405      | issue | **open**            | zero-read model response publishes a passing record (§6a). Duplicate check: not a duplicate of #381 — #381 is an abandoned marker-comment write that still reports `published` and attributes a foreign/`commentId` (publication-ownership seam); #405 is a zero-read model response that publishes a passing record over an unreviewed diff (record-truthfulness seam). Different seams, no duplicate among open issues.                                                                                                                                |
-| #407      | issue | **open**            | failed-terminal step crash on an empty finding subject — the failed-terminal sibling of #405; with it, the live form of §6's taxonomy follow-up (a)                                                                                                                                                                                                                                                                                                                                                                                                      |
-| #384–#396 | PRs   | closed (merged)     | the nine hardening PRs, §1's table                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| #398–#400 | PRs   | closed (merged)     | Phase 13 required-mode flip; renderer evidence §4.1, gap §4.2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| #402      | PR    | closed (merged)     | #401 fix; `75d6630` is this branch's base                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| #403      | PR    | **open**            | the #378 delivery fix; red `review gate` (101491779947), `mergeStateStatus: UNSTABLE`, not enqueued — the natural blocked case for §10                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| #404      | PR    | **open** (draft)    | the run-record delivery posture docs sweep, paired with #403. Its one review run (34036826590, 13:40–13:45Z) ended FAILED — the failed artifact was written and the run's decisions were sound (quarantine of the unanchored finding, refutation of the review.md:1138 finding) — and the terminal step then crashed on `findings[0].subject must be a non-empty string` (gate check `review gate: BLOCK (failed)`, summary = the validation error; → #407). Open by design: its hunks only become true once #403 merges — the base mismatch is expected |
+| #         | Kind  | State               | Closing reason / remaining work                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------- | ----- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #377      | issue | closed              | red terminals land the `review gate` check — #390                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| #378      | issue | **open** (reopened) | action-side fixed by #392; delivery half broken on `main` (§5) — fix in #403, open                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| #380      | issue | closed              | provenance-bound recovery — #391                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| #381      | issue | **open**            | main path fixed by #382 + #389; the clearing path remains the open remainder, kept open by decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| #383      | issue | closed              | gate law — #384                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| #385      | issue | closed              | SARIF identity + upload — #388                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| #386      | issue | **open**            | ADR 005's re-open conditions + migration sketch — stays open by decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| #393      | issue | **open**            | implemented by #394 (full-span v2 identity, v1 verify-by-version); no close recorded — live state reported as-is                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| #395      | issue | closed              | cross-surface cases + replay — #396                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| #397      | issue | **open**            | the hardening tracker; stays open until the post-change enforcement capture (§10) lands                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| #401      | issue | closed              | label misassign across collapse — #402, auto-closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| #405      | issue | **open**            | zero-read model response publishes a passing record (§6a). Duplicate check: not a duplicate of #381 — #381 is an abandoned marker-comment write that still reports `published` and attributes a foreign/`commentId` (publication-ownership seam); #405 is a zero-read model response that publishes a passing record over an unreviewed diff (record-truthfulness seam). Different seams, no duplicate among open issues.                                                                                                                                                        |
+| #407      | issue | **open**            | failed-terminal step crash on an empty finding subject — the failed-terminal sibling of #405; with it, the live form of §6's taxonomy follow-up (a)                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| #384–#396 | PRs   | closed (merged)     | the nine hardening PRs, §1's table                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| #398–#400 | PRs   | closed (merged)     | Phase 13 required-mode flip; renderer evidence §4.1, gap §4.2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| #402      | PR    | closed (merged)     | #401 fix; `75d6630` is this branch's base                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| #403      | PR    | **open**            | the #378 delivery fix; red `review gate` (101706331100), `mergeStateStatus: BLOCKED`, not enqueued — the live blocked case, §10. Same head also carries the §4.3 record whose `"verdict":"pass"` over an uncovered file is #405 live                                                                                                                                                                                                                                                                                                                                             |
+| #404      | PR    | **open**            | the run-record delivery posture docs sweep, paired with #403; head stale against `main` (`BEHIND`). Its one review run (34036826590) ended FAILED — the failed artifact was written and the run's decisions were sound (quarantine of the unanchored finding, refutation of the review.md:1138 finding) — and the terminal step then crashed on `findings[0].subject must be a non-empty string` (gate check `review gate: BLOCK (failed)`, summary = the validation error; → #407). Open by design: its hunks only become true once #403 merges — the base mismatch is expected |
 
 ## 9. Open items
 
-1. **Ruleset application in flight** — `review gate` into
-   `required_status_checks`, both bypass actors → `never` (§4.4, §10).
+1. **Ruleset: required check applied; bypass untouched.** `review gate`
+   joined `required_status_checks` on 2026-09-07 (§4.4, §10). Both bypass
+   actors remain `always` by owner decision — an open gap, not in flight.
 2. **#403 blocked, not enqueued** — its `review gate` is red from the flaky
    partial-coverage reviewer runs #405 records (§6a); it becomes §10's natural
    blocked-merge capture once the ruleset requires the check.
-3. **#404** — the docs-sweep PR, draft, open by design: its delivery-posture
-   hunks only become true once #403 merges. Queue order constraint:
-   #403 → #404.
-4. **#397 stays open** until the post-change capture lands and DoD 1 flips.
-5. **#386 stays open** by decision — ADR 005's re-open conditions live there.
+3. **#404** — the docs-sweep PR, open, its head stale against `main`
+   (`BEHIND`): its delivery-posture hunks only become true once #403
+   merges. Queue order constraint: #403 → #404.
+4. **#397 stays open** until the PASS-path and bypass-path captures land
+   and DoD 1's PARTIAL flips (§2).
+5. **#386 stays open** by decision — ADR 005's re-open conditions live
+   there.
 6. **#405 + the `commentsQueue` seam stay open** by scope decision (§6).
-7. **#407 stays open** by scope decision — with #405, the live form of the
-   taxonomy follow-up (§6a).
+   The fix in #410 (draft, unmerged at recording) is the program's
+   response; it closes the issue only when merged and dogfooded.
+7. **#407 stays open** by scope decision — with #405, the live form of
+   the taxonomy follow-up (§6a).
+8. **Bypass actors `always`** — a maintainer can merge through a red
+   `review gate`. No capture of that path exists; recorded as an open gap
+   (§4.4), not as evidence or as a pass.
 
 ## 10. Appendix: post-change enforcement capture
-
-**TODO before this PR enqueues** — the coordinator appends the after-state and
-the live capture here; §2's DoD 1 line flips only when this section is filled.
 
 Before-state, verified via the rulesets API on 2026-09-06 (ruleset `main`,
 id 21322094):
@@ -333,31 +354,32 @@ id 21322094):
 }
 ```
 
-Planned after-state: `required_status_checks` gains `review gate` (GitHub
-Actions integration); both bypass actors move to `never`.
+After-state, verified via the same API on 2026-09-07:
 
-Capture procedure:
+```json
+{
+  "id": 21322094,
+  "name": "main",
+  "enforcement": "active",
+  "required_status_checks": ["ci-gate", "analysis-gate", "review gate"],
+  "bypass_actors": [
+    { "actor_type": "OrganizationAdmin", "bypass_mode": "always" },
+    { "actor_type": "RepositoryRole", "bypass_mode": "always" }
+  ]
+}
+```
 
-1. Paste the after-state JSON from
-   `gh api repos/ecoma-io/action-agents/rulesets/21322094` beside the
-   before-state above.
-2. On PR #403 (red `review gate`, check run 101491779947), capture:
-   - `gh pr view 403 --json mergeStateStatus` → expect `BLOCKED`
-     (was `UNSTABLE` before the change — §4.3);
-   - GraphQL enrollment:
-     ```graphql
-     query {
-       repository(owner: "ecoma-io", name: "action-agents") {
-         pullRequest(number: 403) {
-           mergeStateStatus
-           mergeQueueEntry {
-             position
-             state
-           }
-         }
-       }
-     }
-     ```
-     → expect `mergeQueueEntry` null (no queue enrollment) while the gate
-     stays red.
-3. Paste both outputs verbatim with a timestamp, and update §2.
+Diff: `review gate` (GitHub Actions integration 15368) added to the
+required set; bypass actors unchanged — `always`, by owner decision (§4.4).
+
+Live capture, PR #403 on head `7b4f2e8cda42e62be74ee8f129108c6926972e26`,
+2026-09-07 ~10:19Z:
+
+```
+$ gh pr view 403 --json mergeStateStatus,mergeQueueEntry
+{"mergeStateStatus":"BLOCKED","mergeQueueEntry":null}
+```
+
+The gate check run (101706331100) and its output title are recorded in
+§4.3. No PASS-path enrollment capture and no bypass-actor merge capture
+were taken; both are open gaps (§9).
