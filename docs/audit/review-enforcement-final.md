@@ -399,3 +399,111 @@ $ gh pr view 403 --json mergeStateStatus,mergeQueueEntry
 The gate check run (101706331100) and its output title are recorded in
 §4.3. No PASS-path enrollment capture and no bypass-actor merge capture
 were taken; both are open gaps (§9).
+
+## 11. Refresh — 2026-09-07 (recorded on `main` @ `713f70d`)
+
+This section re-reads §2 and §9 against the day's reality and separates what
+is historical evidence, what the implementation now is, what live evidence
+exists, what risk stays accepted, and what still blocks. Method unchanged:
+every citation below was re-queried from the API or re-run locally on the day
+of recording.
+
+### 11.1 What landed since §8's table
+
+| PR             | What it landed                                                                                           | Merge commit                      | Closed             |
+| -------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------- | ------------------ |
+| #403/#404      | the #378 delivery fix + its docs sweep (both merged the morning of 2026-09-07)                           | —                                 | #378               |
+| #410           | the verdict law: canonical verdict is `pass` only on a complete-coverage publication                     | `49e6955`                         | #405               |
+| #422           | the prompt states the coverage mandate the verdict enforces (#421)                                       | `7132d8b`                         | #421               |
+| #419           | the merge-group skip: `merge_group` trigger + declared neutral `review gate` on the group head (#412)    | `bb2f1e5`                         | #412               |
+| #417/#418/#416 | skip-record naming, `artifact-file` manifest truth, reconcile-predicate verdict gating                   | `4263002` / `1f8f09a` / `d6e0192` | #414 / #415 / #413 |
+| #420           | the withheld-span law + the birth-seam belt (#411); two stale run-contract rows corrected in the same PR | `713f70d`                         | #411               |
+
+#381 and #393 were closed by reconciliation with evidence comments (neither
+carried remaining code work: #381's main path was #382 + #389; #393 was
+implemented by #394). #407 closed by reconciliation — its crash family is
+what #420's belt finishes on the published-terminal side.
+
+### 11.2 The merge-queue deadlock — found live, fixed, and captured
+
+Between the ruleset edit (§4.4, applied 2026-09-07 10:05Z) and `bb2f1e5`
+(14:47:13Z) **nothing could merge through the queue**: the queue branch's
+check runs carried `ci-gate` and `analysis-gate` and no `review gate` at all
+(verified directly on `gh-readonly-queue/main/pr-417-*` head
+`7fa86d75…`), because `review.yml` had no `merge_group` trigger. Four entries
+sat `AWAITING_CHECKS`. §10's "after-state" was therefore a ruleset requiring a
+check the queue structurally could not receive — the gap §4.2 described at
+PR scale, repeated at queue scale. #409/#410 had already bypassed it that
+morning without queue events.
+
+`bb2f1e5` fixed the mechanism, and the recovery was captured end to end:
+at 14:47:25–28Z the queue re-formed four group entries and the **[Review]
+workflow ran on `merge_group` for the first time — success on every group
+branch** (runs 34134873647, 34134874397, 34134875793, 34134877269). On group
+head `42630021c6…` the gate landed as check run **101783375250**:
+`review gate: neutral`, title `review gate: NEUTRAL (skip)`. PRs #417,
+#418 and #416 then merged through the queue in sequence — the per-PR heads
+having each passed a real review — which is the **ALLGREEN/enrollment capture
+§9.4 named as an open gap**.
+
+### 11.3 DoD 1 re-verdict: the three paths, each with a live capture
+
+- **BLOCK — demonstrated (repeatedly).** The coverage law holds the merge
+  fail-closed: on PR #419's head `0347c04` the reviewer read 4/9 files twice
+  (runs 14:22Z, 14:29Z) and the gate BLOCKed both; on PR #420's three heads
+  the reviewer read 0/12 each time and BLOCKed three times (runs 34126422289,
+  34126757785, 34135325834). §4.3's captures stand.
+- **PASS — demonstrated.** PR #422's head: coverage 2/2 on the first run with
+  the mandate in place, `review gate` **success** (check run 101768327678),
+  all checks green, PR enqueued. #400's earlier success (§4.1) plus this
+  enrollment-grade capture close the gap §2 recorded.
+- **BYPASS — demonstrated, owner-sanctioned, and that is the finding.** Three
+  admin merges through a red gate were executed in-session with the owner's
+  explicit approval: #419 (its own head gate red — the fix could not pass the
+  gate it unblocks), #422 (dequeued from the deadlocked queue), and #420
+  (0/12 reviewer — a 12-file diff is beyond the dogfood model's coverage
+  capacity, see §11.4). §9.8's "no capture exists" is closed; the capture
+  says the bypass actors are not a theoretical residue but the working
+  recovery path whenever the reviewer cannot complete a review.
+
+DoD 1's PARTIAL verdict flips to **MET, with the bypass caveat restated**:
+enforcement is demonstrated on every path, and one of those paths is the
+maintainer override working exactly as the owner chose to keep it (§4.4).
+
+### 11.4 Accepted risk — the reviewer's coverage capacity (new, stated)
+
+The dogfood model's full-coverage capacity degrades with diff size:
+2 files → 2/2, 9 files → 4/9 (twice, deterministic), 12 files → 0/12
+(three times). The bias is systematic — it reads load-bearing source and
+config, and defers `*.test.mjs` and fixtures. The enforcement side behaved
+correctly in every observed run (BLOCK, never a false PASS); #421's fix
+(#422) raised 0→4 on the 9-file diff but does not close the gap. Two
+structural facts keep this honest rather than worked around: the run gives
+the model no mid-run coverage pressure (the natural-stop re-ask withholds
+tools), and the verdict law makes every shortfall a red gate, never a
+degraded pass. Consequence, recorded plainly: multi-file pull requests in
+this repository land by owner-sanctioned bypass until either the reviewer
+model or the loop's coverage feedback changes. That is an owner decision
+(model choice at the gateway, or a coverage-nudge loop change), not a
+defect in the enforcement program.
+
+### 11.5 Accepted risk — unchanged
+
+- **#386 stays open.** ADR 005's addendum (landed in #420) records that the
+  third re-open condition fired (#398) and the owner reviewed and retained
+  acceptance. No migration was made.
+- **Bypass actors `always`.** Now with three live demonstrations (§11.3).
+
+### 11.6 Remaining blockers — none in the program's scope
+
+Every §9 item is resolved or re-stated above: §9.1's ruleset gap closed
+mechanically by #419; §9.2/#9.3's PRs merged; §9.4's captures taken
+(§11.2/§11.3); §9.5's #386 stays open by decision; §9.6's #405 closed by
+#410 with the verdict law; §9.7's #407 closed; §9.8's bypass captured
+(§11.3). The program's own tracker #397 had already closed at 10:54Z that
+morning — on §2's PARTIAL verdict, with both capture gaps named open — and
+this refresh supersedes that closing state rather than replacing it: DoD
+item 1 is §11.3's re-verdict (MET, with the bypass caveat restated), DoD
+item 2 is §3 plus this refresh. What remains open belongs to the
+reviewer-capacity decision (§11.4) and to #386's standing acceptance —
+both outside this program's scope by design.
