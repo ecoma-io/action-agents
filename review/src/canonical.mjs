@@ -2,10 +2,14 @@
  * The canonical review result — the one source of truth a review projects
  * from (ADR 004). The comment, the SARIF upload and the merge gate are
  * projections; none of them records state this shape does not carry, and
- * none of them is authoritative. The constructor is the only way in: it
- * validates the closed vocabularies, recomputes every fingerprint from the
- * tuple it is given, collapses claims that share the full identity key, and
- * deep-freezes what it returns. The tuple's provenance — the subject
+ * none of them is authoritative. Two entries exist, both constructors at
+ * heart: `createCanonicalResult` is the only way in — it validates the
+ * closed vocabularies, recomputes every fingerprint from the tuple it is
+ * given, collapses claims that share the full identity key, and
+ * deep-freezes what it returns — and `buildCanonicalRecord` is the birth
+ * seam's typed belt around it, retyping a shape rejection as the
+ * deterministic refusal the red boundary records. The tuple's provenance —
+ * the subject
  * captured from the reviewed snapshot, never written by the model — is
  * enforced by the integration boundary that reads the snapshot; this
  * constructor never touches the filesystem. A stored fingerprint is
