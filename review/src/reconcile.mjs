@@ -19,12 +19,15 @@
  * - fingerprint only in the previous run — `resolved` on the previous finding.
  *
  * Two run-state rules bound the labels:
- * - an incomplete current run (`current.run.state` not `published`) may
- *   still be writing, so it never retires a previous finding: `resolved` is
- *   suppressed and those previous findings are left without a label. The
- *   current findings keep theirs — `new`, `persisting` or `moved` — they
- *   were observed. A fingerprint match still labels both sides, since the
- *   match rules carry no run-state qualifier.
+ * - an incomplete current run never retires a previous finding: `resolved`
+ *   is suppressed and those previous findings are left without a label. A
+ *   run is incomplete when it never published, or when it published without
+ *   a passing verdict — `current.run.state` is not `published`, or
+ *   `current.run.verdict` is not `pass` (`fail` or `unknown`; a
+ *   coverage-incomplete review publishes as published + fail). The current
+ *   findings keep theirs — `new`, `persisting` or `moved` — they were
+ *   observed. A fingerprint match still labels both sides, since the match
+ *   rules carry no run-state qualifier.
  * - a previous run that never published cleanly (`abandoned`, `refused`,
  *   `skip`, `failed`) counts as empty: no identity map, every current
  *   finding is `new`, and the previous side of the result is empty.
@@ -95,9 +98,10 @@ export function reconcile({ previous, current }) {
       ? priorRun.findings.map((finding) => {
           const observed = matched.get(finding.fingerprint);
           if (observed === undefined) {
-            // An incomplete current run may still be writing — it never
-            // retires a previous finding; the label is left unset.
-            return current.run.state === "published"
+            // The header's incomplete-run rule at its decision point: the
+            // verdict is what makes "published" mean "complete", so an
+            // unmatched previous finding is left without a label.
+            return current.run.state === "published" && current.run.verdict === "pass"
               ? labelled(finding, "resolved")
               : unlabelled(finding);
           }

@@ -121,6 +121,31 @@ describe("reconcile", () => {
     expect(out.previous[2] ?? {}).not.toHaveProperty("reconciliation");
   });
 
+  it("never retires a previous finding when a published run's verdict is not pass", () => {
+    const previous = run({
+      findings: [
+        finding(),
+        finding({ file: "src/b.mjs", line: 3, message: "leak", subject: "let y = 2;" }),
+      ],
+    });
+    for (const verdict of /** @type {const} */ (["fail", "unknown"])) {
+      // A run that published without a passing verdict — post-#410 a
+      // coverage-incomplete review publishes as published + fail — did not
+      // see everything, so it may not declare a previous finding resolved.
+      const current = run({
+        run: { state: "published", verdict },
+        findings: [finding({ line: 30 })],
+      });
+      const out = reconcile({ previous, current });
+      // The one matching fingerprint still labels both sides — the match
+      // rules carry no run-state qualifier — but nothing is retired.
+      expect(out.current.map((f) => f.reconciliation)).toEqual(["moved"]);
+      expect(out.previous.map((f) => f.reconciliation)).toEqual(["moved", undefined]);
+      expect(out.previous.some((f) => f.reconciliation === "resolved")).toBe(false);
+      expect(out.previous[1] ?? {}).not.toHaveProperty("reconciliation");
+    }
+  });
+
   it("treats a previous run that never published cleanly as empty", () => {
     const unpublished = RUN_STATES.filter((state) => state !== "published" && state !== "partial");
     expect(unpublished).toEqual(["refused", "abandoned", "skip", "failed"]);
