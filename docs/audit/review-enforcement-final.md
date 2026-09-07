@@ -196,18 +196,21 @@ is the documented gate law (`decideReviewGate` fails on uncovered files)
 plus the ruleset's required check; neither link was independently re-tested
 under a bypass actor, so the capture demonstrates the observed path only.
 
-The fix's live counterpart, on PR #410's own head the same day: three
-review attempts (10:28Z head `eea3513…`, 10:35Z head `b2daaa1…`) read 1/4,
-1/4 and 2/4 changed files, and each record — under the fixed verdict law —
-published `"verdict": "fail"` with the unread files named in
-`coverage.uncovered`, where the pre-fix law published `pass` (as §4.3's
-#403 capture shows on the same defect shape). Each gate check
-(101708864033, 101710503910) rendered `review gate: BLOCK` and the PR
-stayed `BLOCKED`. Read together, the two captures are the before/after of
-#405 on the same defect class, plus the enforcement cost made visible: a
+The fix's live counterpart, on PR #410's own head the same day: four
+review attempts read 1/4, 1/4, 2/4 and 2/4 changed files, and each
+post-ready record — under the fixed verdict law — published
+`"verdict": "fail"` with the unread files named in `coverage.uncovered`,
+where the pre-fix law published `pass` (§4.3's #403 capture shows the same
+defect shape pre-fix). The draft-era run (10:03Z) predates
+`ready_for_review`, so its gate was `skipping`; the three post-ready
+attempts each produced a red gate check — 101708864033, 101710503910,
+101711582482 (`review gate: BLOCK`) — and the PR stayed `BLOCKED` across
+all four. Read together, the two captures are the before/after of #405 on
+the same defect class, plus the enforcement cost made visible: a
 stochastic reviewer's partial reads hold merges, fail-closed, until a
 full-coverage read lands. The review's own nit on the fix's
-`coverageComplete` annotation was addressed by commit `8cadacb`.
+`coverageComplete` annotation was addressed by commit `8cadacb` and
+verified: the follow-up record carries no findings.
 
 ### 4.4 Remediation status
 
