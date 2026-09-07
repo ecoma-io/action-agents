@@ -19,15 +19,15 @@
  * - fingerprint only in the previous run — `resolved` on the previous finding.
  *
  * Two run-state rules bound the labels:
- * - an incomplete current run — one that never published, or that published
- *   without a passing verdict (`current.run.state` is not `published`, or
- *   `current.run.verdict` is not `pass` — `fail` or `unknown`; a
- *   coverage-incomplete review publishes as published + fail) — never
- *   retires a previous finding: `resolved` is suppressed and those previous
- *   findings are left without a label. The current findings keep theirs —
- *   `new`, `persisting` or `moved` — they were observed. A fingerprint match
- *   still labels both sides, since the match rules carry no run-state
- *   qualifier.
+ * - an incomplete current run never retires a previous finding: `resolved`
+ *   is suppressed and those previous findings are left without a label. A
+ *   run is incomplete when it never published, or when it published without
+ *   a passing verdict — `current.run.state` is not `published`, or
+ *   `current.run.verdict` is not `pass` (`fail` or `unknown`; a
+ *   coverage-incomplete review publishes as published + fail). The current
+ *   findings keep theirs — `new`, `persisting` or `moved` — they were
+ *   observed. A fingerprint match still labels both sides, since the match
+ *   rules carry no run-state qualifier.
  * - a previous run that never published cleanly (`abandoned`, `refused`,
  *   `skip`, `failed`) counts as empty: no identity map, every current
  *   finding is `new`, and the previous side of the result is empty.
