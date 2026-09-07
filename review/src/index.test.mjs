@@ -38,10 +38,12 @@ import { createCanonicalResult } from "./canonical.mjs";
 import { toSarif } from "./sarif.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
 import {
+  applicabilitySection,
   buildAbandonedArtifact,
   buildArtifact,
   buildDryRunArtifact,
   buildSkipRecord,
+  buildSkippedArtifact,
   serialiseArtifact,
 } from "./artifact.mjs";
 
@@ -662,6 +664,47 @@ describe("writeRunArtifact", () => {
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseArtifact(record));
     expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 6, kind: "state", headRef: SHA });
+  });
+
+  it("names an applicability skip record inside the upload glob — a record with no kind", () => {
+    const root = mkdtempSync(p.join(tmpdir(), "artifact-write-"));
+    // buildSkippedArtifact's record carries classification "skip" and no
+    // `kind` key — the naming chain must read the classification, not the
+    // kind alone, or the skip lands under the published run's prefix.
+    const record = buildSkippedArtifact({
+      repository: "acme/widgets",
+      pullRequest: 7,
+      headRef: SHA,
+      reason: "#7 matched applicability rule 'release-prs' — review intentionally not run",
+      policy: {
+        strictness: "medium",
+        strategy: "standard",
+        basis: "base",
+        branch: "main",
+        sha: SHA,
+      },
+      applicability: applicabilitySection({
+        context: "automation",
+        applicable: false,
+        posture: "standard",
+        matchedRule: "release-prs",
+        basis: "rule",
+        inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+      }),
+    });
+    const file = writeRunArtifact({
+      workspace: root,
+      directory: ".review-artifact",
+      artifact: record,
+    });
+    expect(file).toBe(p.join(root, ".review-artifact", `review-artifact-skip-${SHA}.json`));
+    expect(p.basename(file)).toMatch(/^review-artifact-.*\.json$/);
+    const bytes = readFileSync(file, "utf8");
+    expect(bytes).toBe(serialiseArtifact(record));
+    expect(JSON.parse(bytes)).toMatchObject({
+      outcome: { classification: "skip" },
+      headRef: SHA,
+    });
   });
 
   it("names an abandoned run's reduced artifact inside the upload glob, comment id included", () => {
