@@ -145,6 +145,37 @@ describe("renderComment", () => {
     expect(body).toContain("1 finding withheld: no recorded read reaches its anchor line.");
   });
 
+  it("a span-withheld-only complete names the span law instead of a clean bill", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "high",
+      withheldUnspannedCount: 1,
+    });
+    expect(body).toContain(
+      "No published findings — 1 finding withheld: its anchor line carries no span to certify.",
+    );
+    expect(body).not.toContain("No findings.");
+  });
+
+  it("both withheld kinds render one combined sentence, unanchored first", () => {
+    const two = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "high",
+      quarantinedCount: 2,
+      withheldUnspannedCount: 1,
+    });
+    expect(two).toContain(
+      "No published findings — 2 findings withheld: no recorded read reaches their anchor lines; " +
+        "1 more withheld: its anchor line carries no span to certify.",
+    );
+  });
+
   it("defangs inventory-derived paths before they enter backticks", () => {
     const body = renderComment({
       status: "Complete",

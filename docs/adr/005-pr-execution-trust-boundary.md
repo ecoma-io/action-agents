@@ -190,3 +190,15 @@ Landed as PR8 of the review-enforcement hardening program: this record, the
 `docs/audit/review-enforcement-audit.md` §7.3, and follow-up issue #386
 carrying the re-open conditions and the migration sketch. Merges after
 PR1–PR7 in the program's order.
+
+## Addendum — the third re-open condition has fired (2026-09-07)
+
+Condition 3 above is now true: the dogfood moved the `review gate` to
+`gate-mode: required` on a ruleset-protected branch (the workflow change
+landed in #398; the branch ruleset makes the check required). Per this
+record's own terms the sketched migration — not a fresh acceptance — is
+the fix, and #386 owns it. The owner has reviewed the fired condition and
+retains the acceptance for now: `./review` keeps running as the dogfood,
+the migration stays sketched and unapplied, and #386 stays open to carry
+the migration when the owner schedules it. This addendum records the
+state; it does not reopen the decision or edit it.

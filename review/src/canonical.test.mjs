@@ -10,11 +10,13 @@ import {
   CanonicalResultError,
   RUN_STATES,
   RUN_VERDICTS,
+  buildCanonicalRecord,
   createCanonicalResult,
   withRunPublication,
 } from "./canonical.mjs";
 import { isDigest } from "./digest.mjs";
 import { findingFingerprint, findingFingerprintV1 } from "./identity.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { FINDING_KINDS, RECONCILIATIONS } from "./vocabulary.mjs";
 
 /** A publication finding as the verification pass leaves it. */
@@ -294,5 +296,39 @@ describe("the publication fact", () => {
     expect(Object.isFrozen(withPublication)).toBe(true);
     expect(Object.isFrozen(withPublication.run)).toBe(true);
     expect(() => withRunPublication(result, "published")).toThrow(/run\.publication/);
+  });
+});
+
+describe("buildCanonicalRecord", () => {
+  it("delegates a valid record to the constructor unchanged", () => {
+    const result = buildCanonicalRecord({
+      head: "9c9473e",
+      run: { state: "published", verdict: "pass" },
+      findings: [finding()],
+    });
+    expect(result).toEqual(build());
+  });
+
+  it("retypes a shape rejection as the typed refusal the birth seam records", () => {
+    const attempt = () =>
+      buildCanonicalRecord({
+        head: "9c9473e",
+        run: { state: "published", verdict: "pass" },
+        findings: [finding({ subject: "" })],
+      });
+    expect(attempt).toThrow(DeterministicRefusalError);
+    expect(attempt).toThrow(/the run's record did not validate/);
+    expect(attempt).toThrow(/subject must be a non-empty string/);
+    // The cause chain stays intact: the belt retypes, it never erases.
+    try {
+      attempt();
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(DeterministicRefusalError);
+      expect(/** @type {Error} */ (cause).cause).toBeInstanceOf(CanonicalResultError);
+    }
+  });
+
+  it("lets a non-shape error travel untouched — the belt is not an exception sink", () => {
+    expect(() => buildCanonicalRecord(/** @type {*} */ (null))).toThrow(TypeError);
   });
 });

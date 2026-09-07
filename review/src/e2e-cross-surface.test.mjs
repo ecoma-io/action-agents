@@ -1,6 +1,6 @@
 // E2E, cross-surface cases + replay (PR9, T17–T18): one harness, three laws.
 //
-// T17 — the ten cases A–J of the task brief, each replayed through the real
+// T17 — the eleven cases A–K of the task brief, each replayed through the real
 // entrypoint in both gate modes: the SAME run outcome must produce the SAME
 // view on every surface — the comment's embedded record, the gate verdict,
 // the check run, the SARIF projection, the workspace artifact and the
@@ -129,7 +129,26 @@ const refusedScenario = () =>
   });
 
 /** F: the failed run — an undeclared defect the red boundary records. */
-const failedScenario = () =>
+const failedScenario = () => {
+  const world = scenario({
+    script: [readTurn("src/a.mjs"), { content: CONFIRMED_ANSWER }],
+  });
+  // An undeclared transport break after the run's facts are in — the
+  // failed terminal the red boundary records. The blank-anchor producer
+  // moved to the withheld row below (#411): a span that certifies nothing
+  // is withheld, never run-fatal.
+  let reads = 0;
+  const inner = world.forge.getPullRequest.bind(world.forge);
+  world.forge.getPullRequest = async (/** @type {number} */ number) => {
+    reads += 1;
+    if (reads > 1) throw new Error("the forge transport broke mid-run");
+    return inner(number);
+  };
+  return world;
+};
+
+/** The withheld run: one claim, but its anchor line certifies no span (#411). */
+const withheldScenario = () =>
   scenario({
     files: { "src/a.mjs": "line1\n\nline3\n" },
     script: [readTurn("src/a.mjs"), { content: BLANK_ANCHOR_ANSWER }],
@@ -414,9 +433,9 @@ function expectNoPublishedSurfaces(p) {
   expect(p.outputs).not.toContain("gate-verdict=");
 }
 
-// ── T17: the ten cases A–J on one harness ──
+// ── T17: the eleven cases A–K on one harness ──
 
-describe("cross-surface cases A–J: one run outcome, one view on every surface (T17)", () => {
+describe("cross-surface cases A–K: one run outcome, one view on every surface (T17)", () => {
   it("A: the clean pass projects pass everywhere", async () => {
     for (const gateMode of /** @type {const} */ (["observe", "required"])) {
       const { p, canonical } = await projectPublished(cleanScenario, gateMode);
@@ -519,7 +538,7 @@ describe("cross-surface cases A–J: one run outcome, one view on every surface 
         conclusion: gateMode === "required" ? "failure" : "neutral",
         output: {
           title: `review gate: ${gateMode === "required" ? "BLOCK" : "OBSERVE-BLOCK"} (failed)`,
-          summary: expect.stringMatching(/subject must be a non-empty string/),
+          summary: expect.stringMatching(/forge transport broke/),
         },
       });
       expect(p.artifacts).toHaveLength(1);
@@ -610,6 +629,35 @@ describe("cross-surface cases A–J: one run outcome, one view on every surface 
       expect(p.sarif?.runs[0]?.results).toHaveLength(1);
     }
   });
+
+  it("K: the withheld span publishes a reduced view that names its withholding on every surface", async () => {
+    for (const gateMode of /** @type {const} */ (["observe", "required"])) {
+      const p = await driveCase(withheldScenario(), gateMode);
+      expect(p.settled.ok).toBe(true);
+      expect(p.outcome).toBe("published");
+      // A span that certifies nothing anchors no identity: the claim never
+      // enters the record, so every surface reads a clean zero — and the
+      // comment names the withholding instead of a clean bill.
+      expect(p.canonical?.findings).toHaveLength(0);
+      expect(p.upserts).toHaveLength(1);
+      expect(p.upserts[0]?.body).toContain(
+        "1 finding withheld: its anchor line carries no span to certify.",
+      );
+      expect(gateOf(p)).toEqual({ verdict: "PASS", reasons: [] });
+      // The PASS row renders the same title in both modes; the conclusion
+      // follows the mode — success enforcing, neutral recording.
+      expect(p.checkRuns[0]).toMatchObject({
+        conclusion: gateMode === "required" ? "success" : "neutral",
+        output: { title: "review gate: PASS" },
+      });
+      expect(p.sarif?.runs[0]?.results).toHaveLength(0);
+      expect(p.artifacts[0]?.name).toBe(`review-artifact-${HEAD}.json`);
+      expect(p.artifacts[0]?.json.outcome).toMatchObject({ classification: "published" });
+      expect(p.outputs).toContain(
+        gateMode === "required" ? "gate-verdict=PASS" : "gate-verdict=OBSERVE-PASS",
+      );
+    }
+  });
 });
 
 // ── §8: the terminal × projection matrix as one executable table ──
@@ -650,6 +698,14 @@ const MATRIX = [
     artifact: "published",
   },
   {
+    row: "published (all findings withheld)",
+    make: withheldScenario,
+    published: true,
+    blocking: false,
+    comments: 1,
+    artifact: "published",
+  },
+  {
     row: "refused",
     make: refusedScenario,
     terminal: "refused",
@@ -665,7 +721,7 @@ const MATRIX = [
     blocking: true,
     comments: 0,
     artifact: "failed",
-    redSummary: /subject must be a non-empty string/,
+    redSummary: /forge transport broke/,
   },
   {
     row: "abandoned (pre-write)",
@@ -912,7 +968,7 @@ describe("the deterministic race replay harness (T18)", () => {
           conclusion: gateMode === "required" ? "failure" : "neutral",
           output: {
             title: `review gate: ${gateMode === "required" ? "BLOCK" : "OBSERVE-BLOCK"} (failed)`,
-            summary: expect.stringContaining("subject must be a non-empty string"),
+            summary: expect.stringContaining("forge transport broke"),
           },
         });
         expect(p.artifacts[0]?.json.outcome).toMatchObject({ classification: "failed" });

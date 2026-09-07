@@ -27,6 +27,8 @@ beforeAll(() => {
   writeFileSync(p.join(root, "src", "crlf.mjs"), "one\r\ntwo\r\n");
   writeFileSync(p.join(root, "src", "empty.mjs"), "");
   writeFileSync(p.join(root, "src", "bin.mjs"), "a\x00b\n");
+  writeFileSync(p.join(root, "src", "blank.mjs"), "line1\n\nline3\n");
+  writeFileSync(p.join(root, "src", "ws.mjs"), "line1\n   \nline3\n");
   writeFileSync(p.join(root, "src", "hostile.mjs"), "@maintainer <script>alert(1)</script> ok\n");
   workspace = createWorkspace({ root });
 });
@@ -87,6 +89,27 @@ describe("captureFindingEvidence", () => {
 
   it("refuses an anchor on a directory", () => {
     expect(refusalOf("src", 1)).toMatch(/^capture refused for src:1 — /);
+  });
+
+  it("binds a blank anchor line as the empty span — withholding is downstream law, not the capture's", () => {
+    // The raw-span law: the capture reports the bytes, however empty. A
+    // span that certifies nothing is withheld by the run (#411) — refusing
+    // here would fold the withheld law into the refusal law and destroy
+    // the distinction the run boundary records through.
+    const evidence = captureFindingEvidence({ workspace, file: "src/blank.mjs", line: 2 });
+    expect(evidence.subject).toBe("");
+    expect(evidence.digest).toBe(contentDigest(""));
+    expect(evidence.excerpt).toBe("");
+  });
+
+  it("binds a whitespace-only span raw — normalisation is the identity's job, never the capture's", () => {
+    const evidence = captureFindingEvidence({
+      workspace,
+      file: "src/ws.mjs",
+      line: 2,
+    });
+    expect(evidence.subject).toBe("   ");
+    expect(evidence.digest).toBe(contentDigest("   "));
   });
 
   it("refuses an empty file — there is no line to anchor", () => {
