@@ -28,8 +28,6 @@ import {
   main,
   readEvent,
   readInputs,
-  renderGateCheckRun,
-  renderTerminalCheckRun,
   run,
   writeRunArtifact,
   writeSarifFile,
@@ -51,9 +49,6 @@ import {
 
 /** @type {string} */
 let eventDir;
-
-/** A no-op check-run double for stubs whose runs never reach the gate surfaces. */
-const noopCheckRun = async () => ({ id: 501 });
 
 /**
  * A runner-shaped env for a same-repo pull_request run whose event payload
@@ -151,9 +146,7 @@ describe("readEvent", () => {
   });
 
   it("refuses any other event name before touching the payload", () => {
-    expect(() => readEvent("issues", "/dev/null")).toThrow(
-      /runs on 'pull_request' and 'merge_group' events only/,
-    );
+    expect(() => readEvent("issues", "/dev/null")).toThrow(/runs on 'pull_request' events only/);
     expect(() => readEvent("workflow_dispatch", "/dev/null")).toThrow(/pull_request/);
   });
 
@@ -180,7 +173,7 @@ describe("readEvent", () => {
     );
   });
 
-  it("accepts a merge_group event and reports the queued head — the queue's re-verification surface (#412)", () => {
+  it("refuses a merge_group event — an unsupported event, never a review subject (F-01)", () => {
     const head = "e".repeat(40);
     const env = runnerEnv({
       eventName: "merge_group",
@@ -194,41 +187,11 @@ describe("readEvent", () => {
         },
       },
     });
-    const read = readEvent("merge_group", /** @type {string} */ (env.GITHUB_EVENT_PATH));
-    // A merge_group payload carries no pull request, so the fact a skip needs
-    // is the group head the check run must land on — and nothing else.
-    expect(read).toMatchObject({ eventName: "merge_group", mergeGroupHeadSha: head });
-  });
-
-  it("refuses a merge_group event that names no head sha", () => {
-    const env = runnerEnv({
-      eventName: "merge_group",
-      event: {
-        action: "checks_requested",
-        merge_group: { head_ref: "gh-readonly-queue/main/pr-7" },
-      },
-    });
+    // The refusal happens on the event name alone, before the payload is
+    // even read: review does not run for merge groups (ADR 006), so a
+    // payload's shape cannot matter and no fact is invented from it.
     expect(() => readEvent("merge_group", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toThrow(
-      /no merge_group\.head_sha/,
-    );
-  });
-
-  it("refuses a merge_group head that is not a 40-hex commit sha", () => {
-    const env = runnerEnv({
-      eventName: "merge_group",
-      event: { action: "checks_requested", merge_group: { head_sha: "not-a-sha" } },
-    });
-    expect(() => readEvent("merge_group", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toThrow(
-      /40-hex/,
-    );
-  });
-
-  it("still refuses a genuinely unknown event name — the widening stops at merge_group (F-01)", () => {
-    expect(() => readEvent("push", "/dev/null")).toThrow(
-      /runs on 'pull_request' and 'merge_group' events only/,
-    );
-    expect(() => readEvent("repository", "/dev/null")).toThrow(
-      /runs on 'pull_request' and 'merge_group' events only/,
+      /runs on 'pull_request' events only/,
     );
   });
 });
@@ -255,7 +218,7 @@ describe("main", () => {
     try {
       const outcome = await main(runnerEnv({ eventName: "push" }));
       expect(outcome.ok).toBe(false);
-      expect(outcome.message).toMatch(/merge_group' events only/);
+      expect(outcome.message).toMatch(/pull_request' events only/);
       expect(process.exitCode).toBe(1);
     } finally {
       process.exitCode = before;
@@ -325,7 +288,6 @@ describe("run over injected io", () => {
           async whoami() {
             throw new Error("the draft path never reads the token's identity");
           },
-          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
@@ -349,7 +311,35 @@ describe("run over injected io", () => {
         now: () => 0,
         info: () => undefined,
       }),
-    ).rejects.toThrow(/merge_group' events only/);
+    ).rejects.toThrow(/pull_request' events only/);
+  });
+
+  it("a stray merge_group event is the same refusal — no io touch, no write, no skip record (F-01)", async () => {
+    const head = "e".repeat(40);
+    const env = runnerEnv({
+      eventName: "merge_group",
+      event: {
+        action: "checks_requested",
+        merge_group: {
+          head_ref: "gh-readonly-queue/main/pr-7-abcdef",
+          head_sha: head,
+          base_ref: "refs/heads/main",
+          base_sha: "f".repeat(40),
+        },
+      },
+    });
+    // Empty objects as the io doubles: ANY contact with them is a failure —
+    // an unsupported event must not create, write, or read anything. Before
+    // the gate's retirement this event answered a declared skip; since
+    // ADR 006 it is simply unsupported, exactly like `issues` above.
+    await expect(
+      run(readInputs(env), readContext(env), {
+        forge: /** @type {any} */ ({}),
+        chat: /** @type {any} */ ({}),
+        now: () => 0,
+        info: () => undefined,
+      }),
+    ).rejects.toThrow(/pull_request' events only/);
   });
 });
 
@@ -1020,7 +1010,6 @@ describe("run writes the artifact only after publication", () => {
           async whoami() {
             throw new Error("the draft path never reads the token's identity");
           },
-          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
@@ -1103,7 +1092,6 @@ describe("run writes the artifact only after publication", () => {
           async whoami() {
             return { login: "github-actions[bot]" };
           },
-          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({
@@ -1205,7 +1193,6 @@ describe("run — the artifact publish posture (T16)", () => {
         async whoami() {
           return { login: "github-actions[bot]" };
         },
-        createCheckRun: noopCheckRun,
       },
     };
   }
@@ -1301,9 +1288,6 @@ describe("run — the artifact publish posture (T16)", () => {
           async whoami() {
             return { login: "github-actions[bot]" };
           },
-          async createCheckRun() {
-            return { id: 501 };
-          },
         },
         chat: {
           complete: async () => ({
@@ -1352,9 +1336,10 @@ describe("run — the artifact publish posture (T16)", () => {
       });
       expect(result.outcome).toBe("published-without-artifact");
       const outputs = readFileSync(outFile, "utf8");
-      expect(outputs).toContain("gate-verdict=");
-      // No output line may stand in for a file that was never written.
+      // No output line may stand in for a file that was never written —
+      // and no gate-verdict line exists any more to mistake for one.
       expect(outputs).not.toContain("artifact-file=");
+      expect(outputs).not.toContain("gate-verdict=");
       expect(log.some((line) => line.includes("not written"))).toBe(true);
     } finally {
       vi.unstubAllEnvs();
@@ -1413,7 +1398,6 @@ describe("run — the artifact publish posture (T16)", () => {
           async whoami() {
             throw new Error("the draft path never reads the token's identity");
           },
-          createCheckRun: noopCheckRun,
         },
         chat: {
           complete: async () => ({ content: "{}", toolCalls: [], finishReason: undefined }),
@@ -1482,9 +1466,6 @@ describe("the red boundary (#355)", () => {
     async whoami() {
       return { login: "github-actions[bot]" };
     },
-    async createCheckRun() {
-      return { id: 501 };
-    },
     ...over,
   });
   /** A chat that never satisfies the output contract — the refusal fixture. */
@@ -1541,17 +1522,11 @@ describe("the red boundary (#355)", () => {
     const root = mkdtempSync(p.join(tmpdir(), "red-failed-"));
     const env = runnerEnv({ extra: { GITHUB_WORKSPACE: root } });
     const breakage = new TransportError("https://api.github.com/prs/41", "connection reset");
-    /** @type {number[]} */
-    const checks = [];
     try {
       const cause = await run(readInputs(env), readContext(env), {
         forge: openForge({
           getPullRequest: async () => {
             throw breakage;
-          },
-          createCheckRun: async () => {
-            checks.push(1);
-            return { id: 501 };
           },
         }),
         chat: junkChat,
@@ -1573,9 +1548,6 @@ describe("the red boundary (#355)", () => {
       // never a guessed sha.
       expect(record.headRef).toBeNull();
       expect(record.outcome.reason).toMatch(/connection reset/);
-      // The carve-out (#377): a run with no head lands no check — the one
-      // named absence, never an enforcement posture.
-      expect(checks).toEqual([]);
     } finally {
       vi.restoreAllMocks();
     }
@@ -1881,18 +1853,13 @@ describe("the action constant", () => {
   });
 });
 
-describe("the gate surfaces", () => {
+describe("the SARIF projection — the run's one post-run surface", () => {
   /** A minimal canonical record: published, passing, nothing standing. */
   const canonical = createCanonicalResult({
     head: "a".repeat(40),
     run: { state: "published", verdict: "pass" },
     findings: [],
   });
-  const gatePass = { verdict: /** @type {const} */ ("PASS"), reasons: [] };
-  const gateBlock = {
-    verdict: /** @type {const} */ ("BLOCK"),
-    reasons: ["1 of 1 changed file was never read: src/a.mjs."],
-  };
 
   it("writeSarifFile lands byte-identical JSON under the runner temp, never the workspace", () => {
     const temp = mkdtempSync(p.join(tmpdir(), "gate-sarif-"));
@@ -1913,128 +1880,29 @@ describe("the gate surfaces", () => {
     expect(() => writeSarifFile({ tempDir: "", canonical })).toThrow(/RUNNER_TEMP is not set/);
   });
 
-  it("renderGateCheckRun: required turns a BLOCK into failure and a PASS into success", () => {
-    const blocked = renderGateCheckRun({ gate: gateBlock, gateMode: "required" });
-    expect(blocked).toMatchObject({ name: "review gate", conclusion: "failure" });
-    expect(blocked.summary).toContain("1 of 1 changed file was never read: src/a.mjs.");
-    expect(renderGateCheckRun({ gate: gatePass, gateMode: "required" }).conclusion).toBe("success");
-  });
-
-  it("renderGateCheckRun: observe renders neutral whatever the verdict — recorded, enforcing nothing", () => {
-    expect(renderGateCheckRun({ gate: gateBlock, gateMode: "observe" }).conclusion).toBe("neutral");
-    expect(renderGateCheckRun({ gate: gatePass, gateMode: "observe" }).conclusion).toBe("neutral");
-    const observe = renderGateCheckRun({ gate: gateBlock, gateMode: "observe" });
-    expect(observe.title).toBe("review gate: BLOCK");
-  });
-
-  it("renderTerminalCheckRun: the blocking terminals render the BLOCK row under required", () => {
-    expect(
-      renderTerminalCheckRun({
-        terminal: "refused",
-        reason: "the output contract refused",
-        gateMode: "required",
-      }),
-    ).toMatchObject({
-      name: "review gate",
-      conclusion: "failure",
-      title: "review gate: BLOCK (refused)",
-    });
-    expect(
-      renderTerminalCheckRun({
-        terminal: "failed",
-        reason: "connection reset",
-        gateMode: "required",
-      }).conclusion,
-    ).toBe("failure");
-    expect(
-      renderTerminalCheckRun({
-        terminal: "abandoned",
-        reason: "the head moved",
-        gateMode: "required",
-      }).conclusion,
-    ).toBe("failure");
-  });
-
-  it("renderTerminalCheckRun: the non-block terminals render neutral in both modes", () => {
-    for (const terminal of ["skip", "nothing-to-review", "dry-run"]) {
-      expect(
-        renderTerminalCheckRun({ terminal, reason: "nothing enforcing", gateMode: "required" }),
-      ).toMatchObject({
-        name: "review gate",
-        conclusion: "neutral",
-        title: `review gate: NEUTRAL (${terminal})`,
-      });
-      expect(
-        renderTerminalCheckRun({ terminal, reason: "nothing enforcing", gateMode: "observe" })
-          .conclusion,
-      ).toBe("neutral");
-    }
-  });
-
-  it("renderTerminalCheckRun: observe renders neutral with the block named, whatever the terminal", () => {
-    const observe = renderTerminalCheckRun({
-      terminal: "refused",
-      reason: "refused",
-      gateMode: "observe",
-    });
-    expect(observe.conclusion).toBe("neutral");
-    expect(observe.title).toBe("review gate: OBSERVE-BLOCK (refused)");
-  });
-
-  it("renderTerminalCheckRun: an unknown terminal is fail-closed — the BLOCK row, never an absence", () => {
-    expect(
-      renderTerminalCheckRun({
-        terminal: "something-new",
-        reason: "mystery",
-        gateMode: "required",
-      }),
-    ).toMatchObject({
-      conclusion: "failure",
-      title: "review gate: BLOCK (something-new)",
-    });
-    expect(
-      renderTerminalCheckRun({ terminal: "something-new", reason: "", gateMode: "observe" }),
-    ).toMatchObject({
-      conclusion: "neutral",
-      summary: "the run ended something-new without a reason",
-    });
-  });
-
-  it("readInputs reads gate-mode against the closed pair", () => {
-    expect(readInputs(runnerEnv()).gateMode).toBe("observe");
-    expect(readInputs(runnerEnv({ extra: { "INPUT_GATE-MODE": "required" } })).gateMode).toBe(
-      "required",
-    );
-    expect(() => readInputs(runnerEnv({ extra: { "INPUT_GATE-MODE": "wat" } }))).toThrow(
-      /gate-mode/,
-    );
-  });
-
   /**
-   * A forge stub over the published-run path, recording check runs.
+   * A forge stub over the published-run path. No check-run double exists:
+   * the action must never attempt the write, and a stray attempt would
+   * surface as a TypeError against this stub.
    *
-   * @param {{ gateMode?: string, runnerTemp?: string, checkBoom?: boolean }} [options]
-   * @returns {{ env: ReturnType<typeof runnerEnv>, root: string, checkCalls: Array<Record<string, unknown>>, upserts: Array<{ id?: number, body?: string }>, forge: any }}
+   * @param {{ runnerTemp?: string }} [options]
+   * @returns {{ env: ReturnType<typeof runnerEnv>, root: string, upserts: Array<{ id?: number, body?: string }>, forge: any }}
    */
   function publishedForge(options = {}) {
     const root = mkdtempSync(p.join(tmpdir(), "gate-run-"));
     mkdirSync(p.join(root, "src"));
     writeFileSync(p.join(root, "src", "a.mjs"), "line1\nline2\nline3\n");
-    /** @type {Array<Record<string, unknown>>} */
-    const checkCalls = [];
     /** @type {Array<{ id?: number, body?: string }>} */
     const upserts = [];
     const env = runnerEnv({
       extra: {
         GITHUB_WORKSPACE: root,
-        ...(options.gateMode !== undefined ? { "INPUT_GATE-MODE": options.gateMode } : {}),
         ...(options.runnerTemp !== undefined ? { RUNNER_TEMP: options.runnerTemp } : {}),
       },
     });
     return {
       env,
       root,
-      checkCalls,
       upserts,
       /** @type {any} */
       forge: {
@@ -2086,23 +1954,17 @@ describe("the gate surfaces", () => {
         async whoami() {
           return { login: "github-actions[bot]" };
         },
-        /** @param {{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }} input */
-        async createCheckRun(input) {
-          checkCalls.push(input);
-          if (options.checkBoom === true) throw new Error("checks are down");
-          return { id: 501 };
-        },
       },
     };
   }
 
-  it("a published run writes the gate outputs, the SARIF file, and the check run — BLOCK exits green in observe", async () => {
+  it("a published run writes the SARIF file and no gate output — no check run is attempted", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
     const outFile = p.join(temp, "gh-output.txt");
     writeFileSync(outFile, "");
     vi.stubEnv("GITHUB_OUTPUT", outFile);
-    const { env, root, checkCalls, forge } = publishedForge({ runnerTemp: temp });
+    const { env, root, forge } = publishedForge({ runnerTemp: temp });
     /** @type {string[]} */
     const log = [];
     try {
@@ -2119,9 +1981,10 @@ describe("the gate surfaces", () => {
         info: (message) => log.push(message),
       });
       expect(result.outcome).toBe("published");
-      // BLOCK never fails the job — enforcement is the check run's job.
       const outputs = readFileSync(outFile, "utf8");
-      expect(outputs).toContain("gate-verdict=OBSERVE-BLOCK\n");
+      // The gate output is gone with the gate: the run names no verdict on
+      // the job, and merge enforcement is the consumer's ruleset (ADR 006).
+      expect(outputs).not.toContain("gate-verdict=");
       const sarifLine = outputs
         .split("\n")
         .find((line) => line.startsWith("sarif-path="))
@@ -2131,61 +1994,21 @@ describe("the gate surfaces", () => {
         JSON.stringify(toSarif(/** @type {any} */ (result).canonical)),
       );
       expect(p.dirname(/** @type {string} */ (sarifLine))).not.toContain(p.basename(root));
-      // The check run records the verdict, neutral because the mode observes.
-      expect(checkCalls).toEqual([
-        {
-          headSha: "a".repeat(40),
-          name: "review gate",
-          conclusion: "neutral",
-          output: {
-            title: "review gate: BLOCK",
-            summary:
-              "run verdict 'fail' never passes — an incomplete review is no pass.\n1 of 1 changed file was never read: src/a.mjs.",
-          },
-        },
-      ]);
+      // The verdict still rides the canonical record the run returned.
+      expect(/** @type {any} */ (result).canonical?.run.verdict).toBe("fail");
     } finally {
       vi.unstubAllEnvs();
       vi.restoreAllMocks();
     }
   });
 
-  it("gate-mode required names the verdict bare and turns the BLOCK into a failing check run", async () => {
+  it("a fully covered clean run records verdict pass — and no gate output", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
     const outFile = p.join(temp, "gh-output.txt");
     writeFileSync(outFile, "");
     vi.stubEnv("GITHUB_OUTPUT", outFile);
-    const { env, checkCalls, forge } = publishedForge({ gateMode: "required", runnerTemp: temp });
-    try {
-      const result = await run(readInputs(env), readContext(env), {
-        forge,
-        chat: {
-          complete: async () => ({
-            content: '{"findings":[],"summary":"no findings"}',
-            toolCalls: [],
-            finishReason: "stop",
-          }),
-        },
-        now: () => 0,
-        info: () => undefined,
-      });
-      expect(result.outcome).toBe("published");
-      expect(readFileSync(outFile, "utf8")).toContain("gate-verdict=BLOCK\n");
-      expect(checkCalls[0]?.conclusion).toBe("failure");
-    } finally {
-      vi.unstubAllEnvs();
-      vi.restoreAllMocks();
-    }
-  });
-
-  it("a fully covered clean run passes the gate — OBSERVE-PASS and a neutral check run", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
-    const outFile = p.join(temp, "gh-output.txt");
-    writeFileSync(outFile, "");
-    vi.stubEnv("GITHUB_OUTPUT", outFile);
-    const { env, checkCalls, forge } = publishedForge({ runnerTemp: temp });
+    const { env, forge } = publishedForge({ runnerTemp: temp });
     let turn = 0;
     try {
       const result = await run(readInputs(env), readContext(env), {
@@ -2211,19 +2034,11 @@ describe("the gate surfaces", () => {
         info: () => undefined,
       });
       expect(result.outcome).toBe("published");
-      expect(readFileSync(outFile, "utf8")).toContain("gate-verdict=OBSERVE-PASS\n");
-      expect(checkCalls).toEqual([
-        {
-          headSha: "a".repeat(40),
-          name: "review gate",
-          conclusion: "neutral",
-          output: {
-            title: "review gate: PASS",
-            summary:
-              "Every finding in the closed vocabulary is either absent or below the gate's bar.",
-          },
-        },
-      ]);
+      const outputs = readFileSync(outFile, "utf8");
+      expect(outputs).not.toContain("gate-verdict=");
+      expect(outputs).toContain("sarif-path=");
+      // Coverage complete and nothing standing: the code law's pass.
+      expect(/** @type {any} */ (result).canonical?.run.verdict).toBe("pass");
     } finally {
       vi.unstubAllEnvs();
       vi.restoreAllMocks();
@@ -2256,40 +2071,8 @@ describe("the gate surfaces", () => {
       expect(result.outcome).toBe("published");
       expect(log.some((line) => line.includes("the SARIF projection was not written"))).toBe(true);
       const outputs = readFileSync(outFile, "utf8");
-      expect(outputs).toContain("gate-verdict=OBSERVE-BLOCK\n");
       expect(outputs).not.toContain("sarif-path=");
-    } finally {
-      vi.unstubAllEnvs();
-      vi.restoreAllMocks();
-    }
-  });
-
-  it("a check-run failure is a logged loss — the run stays green and the outputs stand", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const temp = mkdtempSync(p.join(tmpdir(), "gate-temp-"));
-    const outFile = p.join(temp, "gh-output.txt");
-    writeFileSync(outFile, "");
-    vi.stubEnv("GITHUB_OUTPUT", outFile);
-    const { env, checkCalls, forge } = publishedForge({ runnerTemp: temp, checkBoom: true });
-    /** @type {string[]} */
-    const log = [];
-    try {
-      const result = await run(readInputs(env), readContext(env), {
-        forge,
-        chat: {
-          complete: async () => ({
-            content: '{"findings":[],"summary":"no findings"}',
-            toolCalls: [],
-            finishReason: "stop",
-          }),
-        },
-        now: () => 0,
-        info: (message) => log.push(message),
-      });
-      expect(result.outcome).toBe("published");
-      expect(log.some((line) => line.includes("the gate check run was not created"))).toBe(true);
-      expect(checkCalls).toHaveLength(1);
-      expect(readFileSync(outFile, "utf8")).toContain("gate-verdict=OBSERVE-BLOCK\n");
+      expect(outputs).not.toContain("gate-verdict=");
     } finally {
       vi.unstubAllEnvs();
       vi.restoreAllMocks();

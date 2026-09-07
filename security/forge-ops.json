@@ -26,7 +26,6 @@
     "createTree",
     "createCommit",
     "upsertBranch",
-    "upsertPullRequest",
-    "createCheckRun"
+    "upsertPullRequest"
   ]
 }

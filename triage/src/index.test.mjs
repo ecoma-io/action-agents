@@ -297,10 +297,6 @@ function fakeForge(options = {}) {
       const at = comments.findIndex((entry) => entry.id === id);
       if (at !== -1) comments.splice(at, 1);
     },
-    /** The identity comments are written under; the comment-half upsert claims by it. */
-    async createCheckRun() {
-      return { id: 1 };
-    },
     async whoami() {
       if (options.whoamiError) throw options.whoamiError;
       return { login: options.whoamiLogin ?? "action-agents[bot]" };

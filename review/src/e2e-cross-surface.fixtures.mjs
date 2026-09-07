@@ -1,13 +1,13 @@
 /**
- * The one harness the PR9 cross-surface suites replay over. A case names a
- * scenario and a gate mode; the harness drives the action's real entrypoint
- * through it once and collects every surface the run touched — the run
- * result, the comment writes and deletions, the check run, the SARIF file,
- * the workspace artifact and the runner's outputs — so a test can assert
- * that no surface contradicts another. It also mints the deterministic
- * replay fingerprint the race suites (T18) compare: a schedule's whole
- * terminal effect, normalised only where a run legitimately varies (the
- * run-scoped marker id the upsert mints, the runner's temp paths).
+ * The one harness the cross-surface suites replay over. A case names a
+ * scenario; the harness drives the action's real entrypoint through it once
+ * and collects every surface the run touched — the run result, the comment
+ * writes and deletions, the SARIF file, the workspace artifact and the
+ * runner's outputs — so a test can assert that no surface contradicts
+ * another. It also mints the deterministic replay fingerprint the race
+ * suites (T18) compare: a schedule's whole terminal effect, normalised only
+ * where a run legitimately varies (the run-scoped marker id the upsert
+ * mints, the runner's temp paths).
  */
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -83,34 +83,29 @@ export function sarifOf(temp) {
 }
 
 /**
- * Drives one scenario through the entrypoint in the named gate mode and
- * returns the run's whole projection. Every case, matrix row and replay
- * schedule in the PR9 suites observes the surfaces through this one
- * function — a surface can only contradict another if it first passes
- * through the same collection here.
+ * Drives one scenario through the entrypoint and returns the run's whole
+ * projection. Every case, matrix row and replay schedule observes the
+ * surfaces through this one function — a surface can only contradict
+ * another if it first passes through the same collection here.
  *
  * @param {Scenario} scenario
- * @param {"observe" | "required"} gateMode
  * @returns {Promise<{
  *   settled: { ok: boolean, result: import("./run.mjs").RunResult | undefined, cause: unknown, outFile: string, temp: string },
  *   outcome: import("./run.mjs").RunResult["outcome"] | undefined,
  *   reason: string | undefined,
  *   canonical: import("./canonical.mjs").CanonicalResult | undefined,
- *   gate: import("./merge-gate.mjs").ReviewGateDecision | undefined,
  *   upserts: import("./e2e.fixtures.mjs").RecordingForge["calls"]["upserts"],
  *   deletes: number[],
- *   checkRuns: import("./e2e.fixtures.mjs").RecordingForge["calls"]["checkRuns"],
  *   outputs: string,
  *   sarif: any | undefined,
  *   artifacts: Array<{ name: string, json: any }>,
  * }>}
  */
-export async function driveCase(scenario, gateMode) {
+export async function driveCase(scenario) {
   const settled = await driveEntrypoint({
     workspace: scenario.workspace,
     forge: scenario.forge,
     chat: scenario.chat,
-    gateMode,
     ...(scenario.extra === undefined ? {} : { extra: scenario.extra }),
   });
   return {
@@ -118,10 +113,8 @@ export async function driveCase(scenario, gateMode) {
     outcome: settled.result?.outcome,
     reason: settled.result?.reason,
     canonical: settled.result?.canonical,
-    gate: settled.result?.gate,
     upserts: scenario.forge.calls.upserts,
     deletes: scenario.forge.deletes ?? [],
-    checkRuns: scenario.forge.calls.checkRuns,
     outputs: readFileSync(settled.outFile, "utf8"),
     sarif: sarifOf(settled.temp),
     artifacts: artifactsOf(scenario.workspace),
@@ -187,7 +180,6 @@ export function replayFingerprint(scenario, projection) {
       body: upsert.body === undefined ? undefined : normaliseRunScopedIds(upsert.body),
     })),
     deletes: projection.deletes,
-    checkRuns: projection.checkRuns,
     artifacts: projection.artifacts.map((artifact) => [
       artifact.name,
       normaliseRunScopedIds(JSON.stringify(artifact.json)),

@@ -1,10 +1,9 @@
-// E2E, cross-surface consistency: the three published surfaces of one
-// review — the marker comment, the SARIF projection and the gate's check
-// run — are three renderings of one canonical record. The replays here pin
-// that identity end to end: the embedded record parses back to what SARIF
-// and the gate consumed, fingerprints agree across surfaces, gate reasons
-// cite only findings the record carries, and two identical replays are
-// byte-stable everywhere but the run-scoped marker id.
+// E2E, cross-surface consistency: the published surfaces of one review —
+// the marker comment and the SARIF projection — are renderings of one
+// canonical record. The replays here pin that identity end to end: the
+// embedded record parses back to what SARIF consumed, fingerprints agree
+// across surfaces, and two identical replays are byte-stable everywhere
+// but the run-scoped marker id.
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,8 +26,7 @@ import {
   replayIo,
   scriptedChat,
 } from "./e2e.fixtures.mjs";
-import { renderGateCheckRun, writeSarifFile } from "./index.mjs";
-import { decideReviewGate } from "./merge-gate.mjs";
+import { writeSarifFile } from "./index.mjs";
 import { parseRecordBlock, previousRecord } from "./record.mjs";
 import { reviewPullRequest } from "./run.mjs";
 import { toSarif } from "./sarif.mjs";
@@ -60,17 +58,6 @@ function canonicalOf(result) {
 }
 
 /**
- * The gate verdict of a replay — same posture.
- *
- * @param {import("./run.mjs").RunResult} result
- * @returns {import("./merge-gate.mjs").ReviewGateDecision}
- */
-function gateOf(result) {
-  if (result.gate === undefined) throw new Error("the replay returned no gate verdict");
-  return result.gate;
-}
-
-/**
  * The one comment body the replay's forge recorded.
  *
  * @param {{ forge: ReturnType<typeof forgeStub> }} world
@@ -79,9 +66,6 @@ function gateOf(result) {
 function bodyOf(world) {
   return world.forge.calls.upserts[0]?.body ?? "";
 }
-
-/** The finding-shaped gate reason grammar, parsed back to its tuple. */
-const FINDING_REASON = /^(confirmed|unresolved) ([a-z-]+) finding at (.+):(\d+)\.$/;
 
 /**
  * The mixed-verdicts scenario: under the adversarial strategy both findings
@@ -143,15 +127,14 @@ async function partiallyCoveredRun() {
   return { workspace, forge, chat, log, result };
 }
 
-describe("cross-surface consistency: one canonical record, three surfaces", () => {
-  it("the comment, SARIF and the gate read one canonical record", async () => {
+describe("cross-surface consistency: one canonical record, every surface", () => {
+  it("the comment and SARIF read one canonical record", async () => {
     const world = await confirmedConcern();
     const canonical = canonicalOf(world.result);
     expect(world.result.outcome).toBe("published");
     // The block the comment carries parses back to the very record the run
-    // returned — the same object SARIF and the gate consume.
+    // returned — the same object the SARIF projection consumes.
     expect(parseRecordBlock(bodyOf(world))).toEqual(canonical);
-    expect(gateOf(world.result)).toEqual(decideReviewGate(canonical));
   });
 
   it("the confirmed finding is rendered once and fingerprinted identically in SARIF", async () => {
@@ -190,19 +173,16 @@ describe("cross-surface consistency: one canonical record, three surfaces", () =
     expect(readFileSync(file, "utf8")).toBe(JSON.stringify(toSarif(canonical)));
   });
 
-  it("gate reasons cite only findings the canonical record carries", async () => {
+  it("SARIF results cite only findings the canonical record carries", async () => {
     const world = await confirmedConcern();
     const canonical = canonicalOf(world.result);
-    const gate = gateOf(world.result);
-    expect(gate.verdict).toBe("BLOCK");
-    expect(gate.reasons).toHaveLength(1);
-    for (const reason of gate.reasons) {
-      const match = FINDING_REASON.exec(reason);
-      expect(match).not.toBeNull();
-      const [, lifecycle, kind, file, line] = /** @type {RegExpExecArray} */ (match);
-      expect(canonical.findings).toContainEqual(
-        expect.objectContaining({ lifecycle, kind, file, line: Number(line) }),
-      );
+    const results = toSarif(canonical).runs[0]?.results ?? [];
+    expect(results).toHaveLength(1);
+    for (const result of results) {
+      const kind = result.ruleId;
+      const uri = result.locations?.[0]?.physicalLocation?.artifactLocation?.uri;
+      const line = result.locations?.[0]?.physicalLocation?.region?.startLine;
+      expect(canonical.findings).toContainEqual(expect.objectContaining({ kind, file: uri, line }));
     }
   });
 
@@ -241,16 +221,11 @@ describe("cross-surface consistency: one canonical record, three surfaces", () =
     expect(restOne).toBe(restTwo);
   });
 
-  it("the SARIF bytes and the check-run rendering are byte-stable across replays", async () => {
+  it("the SARIF bytes are byte-stable across replays", async () => {
     const [one, two] = await Promise.all([confirmedConcern(), confirmedConcern()]);
     expect(JSON.stringify(toSarif(canonicalOf(one.result)))).toBe(
       JSON.stringify(toSarif(canonicalOf(two.result))),
     );
-    for (const gateMode of /** @type {const} */ (["required", "observe"])) {
-      expect(renderGateCheckRun({ gate: gateOf(one.result), gateMode })).toEqual(
-        renderGateCheckRun({ gate: gateOf(two.result), gateMode }),
-      );
-    }
   });
 
   it("the record block rides the comment inert", async () => {
@@ -276,7 +251,7 @@ describe("cross-surface consistency: one canonical record, three surfaces", () =
     const canonical = canonicalOf(world.result);
     expect(canonical.coverage).toEqual({ covered: ["src/a.mjs"], uncovered: [], total: 1 });
     expect(bodyOf(world)).toContain("Changed files examined: 1/1.");
-    expect(gateOf(world.result).reasons).toEqual(["confirmed correctness finding at src/a.mjs:2."]);
+    expect(canonical.run.verdict).toBe("pass");
   });
 });
 
@@ -308,17 +283,12 @@ describe("cross-surface consistency: mixed verdicts under the adversarial strate
     expect(parseRecordBlock(body)).toEqual(canonical);
   });
 
-  it("the gate blocks on the confirmed finding alone and the check run says so", async () => {
+  it("the confirmed finding alone reaches SARIF — the enforcement input (ADR 006)", async () => {
     const world = await mixedVerdicts();
-    const gate = gateOf(world.result);
-    expect(gate.verdict).toBe("BLOCK");
-    expect(gate.reasons).toEqual(["confirmed correctness finding at src/a.mjs:2."]);
-    const required = renderGateCheckRun({ gate, gateMode: "required" });
-    expect(required.conclusion).toBe("failure");
-    expect(required.summary).toBe("confirmed correctness finding at src/a.mjs:2.");
-    const observe = renderGateCheckRun({ gate, gateMode: "observe" });
-    expect(observe.conclusion).toBe("neutral");
-    expect(observe.title).toBe("review gate: BLOCK");
+    const canonical = canonicalOf(world.result);
+    const results = toSarif(canonical).runs[0]?.results ?? [];
+    expect(results).toHaveLength(1);
+    expect(results[0]?.ruleId).toBe("correctness");
   });
 });
 
@@ -329,9 +299,9 @@ describe("cross-surface consistency: incomplete coverage rides the verdict, neve
     expect(world.result.outcome).toBe("published");
     // The default (medium) strictness lets the run conclude — the state
     // stays published, the run published what it concluded — but the
-    // review was not COMPLETE: the merge gate will block on the unread
-    // file regardless of strictness, so the record's verdict must be the
-    // fail that agrees with it, never a pass the gate contradicts.
+    // review was not COMPLETE: the verdict alone must carry the
+    // incompleteness (it rides the verdict, never the state), and the
+    // verdict is the code law's fail, never a pass.
     expect(canonical.run).toEqual({ state: "published", verdict: "fail" });
     expect(canonical.coverage).toEqual({
       covered: ["src/a.mjs"],
@@ -340,13 +310,6 @@ describe("cross-surface consistency: incomplete coverage rides the verdict, neve
     });
     // The comment embeds exactly this record — the fail rides the thread.
     expect(parseRecordBlock(bodyOf(world))).toEqual(canonical);
-    // The gate re-derives from the one record: same BLOCK the coverage
-    // forces, no contradiction with the verdict it now carries.
-    expect(gateOf(world.result)).toEqual(decideReviewGate(canonical));
-    expect(gateOf(world.result).verdict).toBe("BLOCK");
-    expect(gateOf(world.result).reasons).toContain(
-      "1 of 2 changed files were never read: src/b.mjs.",
-    );
     // The SARIF projection of the same record: nothing confirmed, nothing reported.
     expect(toSarif(canonical).runs[0]?.results ?? []).toEqual([]);
     // The artifact — the run's machine-readable record — carries the same

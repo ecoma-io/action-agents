@@ -64,8 +64,7 @@ on:
 # reads and holds every write — a job-level `permissions` block REPLACES this
 # one rather than merging with it (analysis.yml's rule), so a job added later
 # inherits read-only instead of silently widening. The job's writes are the
-# marker comment, the gate's check run, and, only after a published review,
-# the code scanning upload.
+# marker comment and, only after a published review, the code scanning upload.
 permissions: read-all
 
 # One review per pull request: a rapid push sequence replaces the queued run
@@ -83,14 +82,12 @@ jobs:
     # say so rather than hang.
     timeout-minutes: 15
     # Writes are the job's, stated here rather than inherited: the marker
-    # comment and the gate's `review gate` check run, and — only after a
-    # published review — the code scanning upload. `actions: read` is the
-    # audit §7.5 consumer grant (artifact verification); the action itself
-    # never needs either write.
+    # comment and — only after a published review — the code scanning upload.
+    # `actions: read` is the audit §7.5 consumer grant (artifact
+    # verification); the action itself never needs either write.
     permissions:
       contents: read
       pull-requests: write
-      checks: write
       security-events: write
       actions: read
     steps:
@@ -112,10 +109,6 @@ jobs:
           # Live: publishes one upserted marker comment plus the gate's
           # check run.
           dry-run: "false"
-          # Required: the verdict lands as the `review gate` check run and
-          # BLOCK renders `failure`, so a ruleset that requires the check
-          # blocks merges while findings are unresolved.
-          gate-mode: "required"
 
       # Code Scanning sees the same confirmed findings the comment renders —
       # §8's SARIF column: published runs only, confirmed findings only. A

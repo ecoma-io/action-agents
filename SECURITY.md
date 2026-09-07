@@ -128,27 +128,27 @@ answer it, and each is enforced in code rather than asked for in a prompt:
    than as a robustness bug.
 
 5. **The model never decides a consequence; code does, deterministically, from
-   the canonical record.** This is the merge gate's ceiling (#362), and it
-   bounds what a talked-into model can do to a merge decision. A review's
-   published findings are bound at a capture boundary: code reads the reviewed
-   bytes at each finding's anchor and stores the digest and excerpt its
-   fingerprint is recomputable from, and a capture the tree cannot honour — a
-   file that is gone, a line past its end, a path outside the workspace —
-   refuses the run rather than publishing a finding whose evidence confirms
-   nothing. The finding kinds ride the same discipline: the answer must name
-   a kind from the closed vocabulary, the verification pass binds the kind
-   from its own evidence, and a verdict naming a kind the answer did not
-   claim demotes the finding instead of confirming it. What follows — the
-   merge gate's verdict, the `review gate` check run, the SARIF projection —
-   is a pure function of the canonical record and a policy no model writes:
-   `decideReviewGate` reads nothing else and throws on a `blockKinds` entry
-   outside the vocabulary instead of silently narrowing, and `gate-mode`
-   chooses only whether the recorded verdict enforces (a check run a ruleset
-   can make required) or merely observes (a `neutral` check run, the job exit
-   staying green — enforcement is the check run's job, never the action's
-   exit code). The check run's name, conclusion and rendered text are
-   code-pinned, and the SARIF bytes are byte-identical for the same record.
-   Fixtures: `security/fixtures/canonical-gate/`.
+   the canonical record.** This bounds what a talked-into model can do to a
+   merge decision (ADR 006, decision 5): the consequences are code-owned from
+   the canonical record — the recorded verdict and the SARIF projection — and
+   the model names no consequence of its own. A review's published findings
+   are bound at a capture boundary: code reads the reviewed bytes at each
+   finding's anchor and stores the digest and excerpt its fingerprint is
+   recomputable from, and a capture the tree cannot honour — a file that is
+   gone, a line past its end, a path outside the workspace — refuses the run
+   rather than publishing a finding whose evidence confirms nothing. The
+   finding kinds ride the same discipline: the answer must name a kind from
+   the closed vocabulary, the verification pass binds the kind from its own
+   evidence, and a verdict naming a kind the answer did not claim demotes the
+   finding instead of confirming it. The recorded verdict is the code law
+   `mayPublish && coverageComplete ? "pass" : "fail"` over facts the model
+   does not choose — nothing a model answer says can make an incomplete
+   review pass, and the SARIF projection publishes confirmed findings only,
+   never a verdict, a state or an enforcement fact, with bytes that are
+   byte-identical for the same record. There is no check run and no
+   `gate-verdict` to move: a consequence the model could create it could
+   forge, so review declares none — merge enforcement is the consumer's
+   ruleset over Code Scanning. Fixtures: `security/fixtures/canonical-gate/`.
 
 ## Scope
 

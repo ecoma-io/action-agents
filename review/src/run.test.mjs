@@ -73,7 +73,7 @@ function snapshot(over = {}) {
  * A forge stub covering the reads a full happy-path run makes.
  *
  * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot, whoamiLogin?: string, whoamiError?: Error, documents?: Record<string, string> }} [options]
- * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }>, checkRuns: Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }> } }}
+ * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }> } }}
  */
 function forgeStub(options = {}) {
   const calls = {
@@ -81,8 +81,6 @@ function forgeStub(options = {}) {
     getPullRequests: [],
     /** @type {Array<{ id?: number, body?: string }> } */
     upserts: [],
-    /** @type {Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }> } */
-    checkRuns: [],
   };
   return {
     calls,
@@ -146,11 +144,6 @@ function forgeStub(options = {}) {
       calls.upserts.push({ id, body });
     },
     async deleteComment() {},
-    /** @param {{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }} input */
-    async createCheckRun(input) {
-      calls.checkRuns.push(input);
-      return { id: 501 };
-    },
   };
 }
 
@@ -1404,13 +1397,12 @@ describe("adversarial verification pass", () => {
       subject: "line2",
     });
     expect(row?.evidence?.digest).toBe(contentDigest("line2"));
-    // Refuted findings never block: the gate passes, with no reasons.
-    expect(result.gate).toEqual({ verdict: "PASS", reasons: [] });
-    // The check run is the entrypoint's surface, not the run's.
-    expect(forge.calls.checkRuns).toEqual([]);
+    // Refuted findings stand in the record but never lower the verdict:
+    // the code law reads coverage and publication, not refutations.
+    expect(result.canonical?.run.verdict).toBe("pass");
   });
 
-  it("a confirmed finding BLOCKS the gate under the all-kinds default policy", async () => {
+  it("a confirmed finding is the SARIF projection's input under the all-kinds default policy", async () => {
     const forge = forgeStub();
     const chat = scriptedChat([
       READ,
@@ -1427,11 +1419,14 @@ describe("adversarial verification pass", () => {
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "confirmed" });
-    expect(result.gate?.verdict).toBe("BLOCK");
-    expect(result.gate?.reasons).toEqual(["confirmed correctness finding at src/a.mjs:2."]);
+    // A confirmed finding never moves the verdict — coverage and publication
+    // own it — but it is exactly what the SARIF projection reports, and the
+    // SARIF alert is the merge consequence's input now (ADR 006).
+    expect(result.canonical?.run.verdict).toBe("pass");
+    expect(toSarif(/** @type {any} */ (result).canonical).runs[0]?.results).toHaveLength(1);
   });
 
-  it("an unresolved finding BLOCKS — a hollow pass is a defect", async () => {
+  it("an unresolved finding stays unresolved without moving the verdict — enforcement is not the run's", async () => {
     const forge = forgeStub();
     const chat = scriptedChat([
       READ,
@@ -1451,8 +1446,11 @@ describe("adversarial verification pass", () => {
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "unresolved" });
-    expect(result.gate?.verdict).toBe("BLOCK");
-    expect(result.gate?.reasons).toEqual(["unresolved correctness finding at src/a.mjs:2."]);
+    // An unresolved finding stands in the record and the comment, never in
+    // the SARIF projection (results carry confirmed findings only) — and
+    // the verdict stays coverage-owned, never finding-owned.
+    expect(result.canonical?.run.verdict).toBe("pass");
+    expect(toSarif(/** @type {any} */ (result).canonical).runs[0]?.results ?? []).toEqual([]);
   });
 
   it("a capture that cannot be honoured refuses the run RED — never skip-and-continue", async () => {
@@ -4204,7 +4202,7 @@ describe("the cross-run reconciliation in the published comment", () => {
     );
   });
 
-  it("labels change only the prose: record, gate verdict and SARIF bytes are identical", async () => {
+  it("labels change only the prose: record, verdict and SARIF bytes are identical", async () => {
     const script = [READ, { content: CONCERN }, VERDICT];
     const without = forgeStub();
     const bare = await runReview(without, script);
@@ -4223,7 +4221,7 @@ describe("the cross-run reconciliation in the published comment", () => {
       ...labelled.canonical,
       run: { ...labelled.canonical.run, publication: bare.canonical.run.publication },
     }).toEqual(bare.canonical);
-    expect(labelled.gate).toEqual(bare.gate);
+    expect(labelled.canonical.run.verdict).toBe(bare.canonical.run.verdict);
     expect(JSON.stringify(toSarif(labelled.canonical))).toBe(
       JSON.stringify(toSarif(bare.canonical)),
     );

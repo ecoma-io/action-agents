@@ -120,11 +120,11 @@
     {
       "key": "consequences-are-code-owned",
       "name": "The model never decides a consequence; code does, deterministically, from the canonical record",
-      "source": "SECURITY.md \u2014 ceiling 5, \u201cThe ceilings everything else rests on\u201d: the capture boundary refuses an anchor the tree does not spell, a kind the verification does not confirm demotes, the gate and the check run are pure functions of the canonical record and a policy no model writes, and enforcement never rides on the action's exit code.",
+      "source": "SECURITY.md \u2014 ceiling 5, \u201cThe ceilings everything else rests on\u201d: the capture boundary refuses an anchor the tree does not spell, a kind the verification does not confirm demotes, and the consequences are code-owned from the canonical record \u2014 the recorded verdict and the SARIF projection \u2014 so no model answer can create a consequence or alter one (ADR 006, decision 5).",
       "fixtures": [
         "canonical-gate/capture-refusal-red.test.mjs",
         "canonical-gate/kind-mismatch-demotes.test.mjs",
-        "canonical-gate/gate-policy-error.test.mjs"
+        "canonical-gate/model-cannot-move-a-consequence.test.mjs"
       ]
     }
   ]

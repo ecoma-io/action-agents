@@ -8,9 +8,10 @@
 // kind than the answer claimed is refused as a mapping — the run never
 // confirms a claim the evidence does not spell. The bounded outcome, pinned
 // end to end through a real run: the finding publishes `unresolved` under
-// the kind the verification bound (`style`), the gate BLOCKS on it under
-// the all-kinds default policy, and the reason names the demoted state —
-// the model's severity theatre decides nothing.
+// the kind the verification bound (`style`), and the code-owned verdict
+// fails on it — the pass law's answer to a partial review — never the
+// BLOCK the claim hoped to rent: the model's severity theatre decides
+// nothing.
 //
 // Deterministic and offline: a temp workspace, a scripted model, a
 // recording forge.
@@ -103,14 +104,11 @@ function forgeStub() {
     },
     async updateComment() {},
     async deleteComment() {},
-    async createCheckRun() {
-      return { id: 501 };
-    },
   };
 }
 
 describe("a verified kind that contradicts the claimed kind demotes the finding", () => {
-  it("publishes unresolved under the verified kind, and the gate blocks on it", async () => {
+  it("publishes unresolved under the verified kind, and the verdict fails on it", async () => {
     const root = mkdtempSync(join(tmpdir(), "kind-mismatch-"));
     roots.push(root);
     mkdirSync(join(root, "src"));
@@ -166,13 +164,10 @@ describe("a verified kind that contradicts the claimed kind demotes the finding"
       logged.some((line) => line.includes("names kind 'style' where the answer claimed")),
       "the demotion is named on the log",
     );
-    // The gate reads the demoted record: BLOCK — the pass law's verdict
-    // reason first (this run is a partial review: the demotion fails the
-    // verification gate), then the unresolved style finding.
-    assert.equal(/** @type {any} */ (result).gate?.verdict, "BLOCK");
-    assert.deepEqual(/** @type {any} */ (result).gate?.reasons, [
-      "run verdict 'fail' never passes — an incomplete review is no pass.",
-      "unresolved style finding at src/a.mjs:2.",
-    ]);
+    // The verdict is code law over the demoted record: the demotion fails
+    // the verification gate, so the run is partial and the verdict is the
+    // fail that refuses to call it complete — the claim's scariest kind
+    // had no hand in computing it (ADR 006, decision 5).
+    assert.equal(/** @type {any} */ (result).canonical?.run.verdict, "fail");
   });
 });

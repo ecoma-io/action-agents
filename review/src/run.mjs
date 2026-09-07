@@ -44,7 +44,6 @@ import {
 import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
 import { buildCanonicalRecord, withRunPublication } from "./canonical.mjs";
 import { findingFingerprint, normalisePath, normaliseSubject } from "./identity.mjs";
-import { decideReviewGate } from "./merge-gate.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { embedRecordBlock, previousRecord } from "./record.mjs";
 import { reconcile } from "./reconcile.mjs";
@@ -76,7 +75,6 @@ import {
  * @property {(id: number, body: string) => Promise<void>} updateComment
  * @property {(id: number) => Promise<void>} deleteComment
  * @property {() => Promise<{ login: string }>} whoami the token's writing identity
- * @property {(input: { headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }) => Promise<{ id: number }>} createCheckRun created by the entrypoint after a published run — the merge gate's surface
  */
 
 /** The chat seam is the whole client; its shape is the protocol's. */
@@ -120,10 +118,9 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {"skip" | "abandoned" | "nothing-to-review" | "published" | "published-without-artifact" | "dry-run"} outcome
  * @property {string} reason human-readable, logged by the caller
  * @property {number} [commentId]
- * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact | import("./artifact.mjs").SkipRecord | import("./artifact.mjs").MergeGroupSkipRecord | import("./artifact.mjs").AbandonedRunArtifact | import("./artifact.mjs").DryRunRunArtifact} [artifact] the machine-readable run record — present when the run published, when a policy recorded a skipped run (the record is the skip's whole outcome), when a skip path with no applicability fact left its durable record, when a merge-group head left its record (#412), or when an abandonment or dry-run wrote its reduced artifact; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
+ * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact | import("./artifact.mjs").SkipRecord | import("./artifact.mjs").AbandonedRunArtifact | import("./artifact.mjs").DryRunRunArtifact} [artifact] the machine-readable run record — present when the run published, when a policy recorded a skipped run (the record is the skip's whole outcome), when a skip path with no applicability fact left its durable record, or when an abandonment or dry-run wrote its reduced artifact; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
  * @property {import("./artifact.mjs").ApplicabilitySection} [applicability] the applicability fact, present when the review policy is active
  * @property {import("./canonical.mjs").CanonicalResult} [canonical] the canonical record the projections project from — present when the run published
- * @property {import("./merge-gate.mjs").ReviewGateDecision} [gate] the merge gate's deterministic verdict over the canonical record — present when the run published
  */
 /**
  * @param {object} input
@@ -686,8 +683,8 @@ export async function reviewPullRequest({
   published = capturedFindings.map(({ finding }) => finding);
   // The canonical verdict answers "was the review COMPLETE", a different
   // question from "may the run publish" (the gates above). At low/medium
-  // strictness a run may publish with unread files — the merge gate then
-  // still blocks on them — so the verdict alone must carry the
+  // strictness a run may publish with unread files — enforcement is not
+  // this action's job — so the verdict alone must carry the
   // incompleteness (run-contract: it rides the verdict, never the state).
   /** @type {boolean} every changed file read — undefined coverage counts as complete */
   const coverageComplete =
@@ -698,12 +695,6 @@ export async function reviewPullRequest({
     findings: canonicalFindings,
     coverage: outcome.coverage,
   });
-  // The merge gate: a deterministic verdict over the canonical record.
-  // Empty policy — every kind in the closed vocabulary blocks, the ADR 004
-  // default; `gate-mode` decides whether the verdict enforces (surfaces)
-  // or only records. `required` never blocks here: enforcement is the
-  // check run's and the ruleset's job, not the action's exit code.
-  const gate = decideReviewGate(canonical);
 
   // ── The cross-run reconciliation (ADR 004 decision 3) ──
   // The previous canonical record is recovered from the marker comment the
@@ -935,11 +926,10 @@ export async function reviewPullRequest({
     reason,
     commentId: upsert.id,
     artifact: record,
-    // The publication fact is the one thing the record could not carry when
+    // The publication fact is the one thing the record could not produce when
     // it was built — the write had not happened yet. Attach the real
     // outcome: what this run's upsert actually did to the thread.
     canonical: withRunPublication(canonical, upsert.outcome),
-    gate,
   };
 }
 

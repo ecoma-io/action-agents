@@ -121,9 +121,6 @@ function forgeStub() {
     },
     async updateComment() {},
     async deleteComment() {},
-    async createCheckRun() {
-      return { id: 501 };
-    },
   };
 }
 
