@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.11.0](https://github.com/ecoma-io/action-agents/compare/v0.10.0...v0.11.0) (2026-09-07)
+
+
+### Features
+
+* **review:** canonical pipeline wired into the review run ([#362](https://github.com/ecoma-io/action-agents/issues/362)) ([#372](https://github.com/ecoma-io/action-agents/issues/372)) ([099018c](https://github.com/ecoma-io/action-agents/commit/099018ca617553fa8a149808e12e11e305f8a7de))
+* **review:** canonical review result contract + stable finding identity ([#363](https://github.com/ecoma-io/action-agents/issues/363)) ([7b49830](https://github.com/ecoma-io/action-agents/commit/7b49830ce908b3a8c90a67213051aed0d91b52ce))
+* **review:** cross-run reconciliation labels ([#362](https://github.com/ecoma-io/action-agents/issues/362)) ([#368](https://github.com/ecoma-io/action-agents/issues/368)) ([334cd70](https://github.com/ecoma-io/action-agents/commit/334cd7084e2f890e4647b84b443b360d1b727b4e))
+* **review:** deterministic SARIF 2.1.0 projection ([#362](https://github.com/ecoma-io/action-agents/issues/362)) ([#370](https://github.com/ecoma-io/action-agents/issues/370)) ([ac068de](https://github.com/ecoma-io/action-agents/commit/ac068de7b243c25a1337a21d5e6c8630f1b3a304))
+* **review:** finding identity — full-span hashing with v1 compat (PR6) ([#394](https://github.com/ecoma-io/action-agents/issues/394)) ([59b88aa](https://github.com/ecoma-io/action-agents/commit/59b88aa6e0e7d2b737a6d87b77a6b8ac0093cbd7))
+* **review:** reconciliation labels in the review comment ([#362](https://github.com/ecoma-io/action-agents/issues/362)) ([#379](https://github.com/ecoma-io/action-agents/issues/379)) ([ed73b87](https://github.com/ecoma-io/action-agents/commit/ed73b87469f75323e018448b665135c0407d92c4))
+* **review:** the pure merge gate decision ([#362](https://github.com/ecoma-io/action-agents/issues/362)) ([#369](https://github.com/ecoma-io/action-agents/issues/369)) ([a2f7505](https://github.com/ecoma-io/action-agents/commit/a2f7505b84ffc502cb481054e719c7540e5cd5ad))
+* **review:** the SARIF projection gains its GitHub identity and upload consumer (PR5) ([#388](https://github.com/ecoma-io/action-agents/issues/388)) ([0d4044c](https://github.com/ecoma-io/action-agents/commit/0d4044c896653984f20d92aaefacc1c440f3c0fd))
+
+
+### Bug Fixes
+
+* **core:** publication ownership — structured upsert outcome, abandoned never claims a comment (PR2) ([#389](https://github.com/ecoma-io/action-agents/issues/389)) ([88c246b](https://github.com/ecoma-io/action-agents/commit/88c246bee5715bc035da473e7df6ee1ef7f85c74))
+* **docs:** refresh stale v0.5 example pins and check declared action pins ([#364](https://github.com/ecoma-io/action-agents/issues/364)) ([5f5dd34](https://github.com/ecoma-io/action-agents/commit/5f5dd3492847f7b9b9331a11db52be4cd464c49e))
+* **harmonise:** strip control characters from the record reason ([#361](https://github.com/ecoma-io/action-agents/issues/361)) ([#365](https://github.com/ecoma-io/action-agents/issues/365)) ([b3d1ace](https://github.com/ecoma-io/action-agents/commit/b3d1ace1384ba0e07ae7759af3a78fc40bcb8b05))
+* **review:** artifact containment ordered before mutation, publish made observable (PR7) ([#392](https://github.com/ecoma-io/action-agents/issues/392)) ([2dd777e](https://github.com/ecoma-io/action-agents/commit/2dd777e27f3c855de94eddd5f5b66c0f978a7d08))
+* **review:** canonical verdict reflects coverage completeness ([#405](https://github.com/ecoma-io/action-agents/issues/405)) ([#410](https://github.com/ecoma-io/action-agents/issues/410)) ([49e6955](https://github.com/ecoma-io/action-agents/commit/49e695518ea2496f21d3d5d3f486c65efae067c8))
+* **review:** declare the artifact-file output and tell the delivery truth ([#418](https://github.com/ecoma-io/action-agents/issues/418)) ([1f8f09a](https://github.com/ecoma-io/action-agents/commit/1f8f09ae9f9ae51381f38d48f0aa2b1ab0278fc3))
+* **review:** declare the merge-group skip so the merge queue can go green ([#419](https://github.com/ecoma-io/action-agents/issues/419)) ([bb2f1e5](https://github.com/ecoma-io/action-agents/commit/bb2f1e5b865506d9955e087f529ab6801f38c641))
+* **review:** every red terminal lands a terminal review-gate check (PR3) ([#390](https://github.com/ecoma-io/action-agents/issues/390)) ([2f62345](https://github.com/ecoma-io/action-agents/commit/2f623452954071e469021065c7f279fc3eed0fc6))
+* **review:** name the applicability skip record by its outcome ([#417](https://github.com/ecoma-io/action-agents/issues/417)) ([4263002](https://github.com/ecoma-io/action-agents/commit/42630021c6c58464d56f675dded374df36873294))
+* **review:** provenance — ownLogins resolve before recovery, previousRecord ownership-tested (PR4) ([#391](https://github.com/ecoma-io/action-agents/issues/391)) ([c959290](https://github.com/ecoma-io/action-agents/commit/c959290b6e53c424412b426e94c13fcc44ccf876))
+* **review:** reconciliation labels align by canonical identity (fix2) ([#402](https://github.com/ecoma-io/action-agents/issues/402)) ([75d6630](https://github.com/ecoma-io/action-agents/commit/75d6630ba6d8588edff5144de611b0bab70460d0))
+* **review:** retire a previous finding only on a published passing run ([#416](https://github.com/ecoma-io/action-agents/issues/416)) ([d6e0192](https://github.com/ecoma-io/action-agents/commit/d6e01923ca93d982a9dc24419f5c3724197c718c))
+* **review:** the merge gate never passes a failing review (PR1 contract lock) ([#384](https://github.com/ecoma-io/action-agents/issues/384)) ([ee16f7b](https://github.com/ecoma-io/action-agents/commit/ee16f7bfb7dadc3785d6513ab8f67178d42d1ade))
+* **review:** the prompt states the coverage mandate the verdict enforces ([#422](https://github.com/ecoma-io/action-agents/issues/422)) ([7132d8b](https://github.com/ecoma-io/action-agents/commit/7132d8b852c252fc9a833fe99f09859e7a1a53e3))
+* **review:** the run artifact upload delivers the record file (fix1) ([#403](https://github.com/ecoma-io/action-agents/issues/403)) ([426e970](https://github.com/ecoma-io/action-agents/commit/426e970e4963cb3f92a6d8325b17d49f5fd9bead))
+* **review:** withhold findings whose anchor span certifies nothing ([#411](https://github.com/ecoma-io/action-agents/issues/411)) ([#420](https://github.com/ecoma-io/action-agents/issues/420)) ([713f70d](https://github.com/ecoma-io/action-agents/commit/713f70d2d47bb2e2f0faf57d8fb75c32f0d693fe))
+* **triage:** strip control characters from the record line ([#366](https://github.com/ecoma-io/action-agents/issues/366)) ([#371](https://github.com/ecoma-io/action-agents/issues/371)) ([161cd2f](https://github.com/ecoma-io/action-agents/commit/161cd2f7610efcf7820e49a98d7c1511b831b233))
+
 ## [0.10.0](https://github.com/ecoma-io/action-agents/compare/v0.9.0...v0.10.0) (2026-09-05)
 
 
