@@ -4,27 +4,32 @@ The pages here are written as they are earned. This index is the map; a row
 without a link is a page that does not exist yet, and saying so is better than
 a link that goes nowhere.
 
-| Page                                                                     | What it covers                                                                                                  |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| [Doctrine](doctrine.md)                                                  | Where a new piece of code goes, and what an action may become                                                   |
-| [Run contract](run-contract.md)                                          | The frozen vocabulary every run is judged on — terminal states, verdicts, failure classes, invariants           |
-| [Archkeep integration](archkeep-integration.md)                          | The boundary of the boundary — what the pinned gate proves, what stays runtime, and the measured contract       |
-| [Evaluation](evaluation.md)                                              | The offline corpus, the metric table, the certification bar, and the U-8 decision                               |
-| [ADR 001 — core boundary](adr/001-core-boundary.md)                      | The decision the boundary rows cite: core is protocol and ceiling, and archkeep judges the tree against the law |
-| [ADR 002 — no intelligence layer](adr/002-no-intelligence-layer.md)      | The dissolved shared-intelligence workstream, as permanent non-goals                                            |
-| [ADR 003 — evidence retention](adr/003-evidence-retention.md)            | What a record may keep, per record kind — persist, fingerprint, never                                           |
-| [Development: configuration](development/configuration.md)               | The shared config-file mechanism — discovery, format, the default branch, precedence                            |
-| [Development: `triage`](development/triage.md)                           | `triage`'s full design — schema, prompt, pipeline                                                               |
-| [Development: `harmonise`](development/harmonise.md)                     | `harmonise`'s full design — document model, prompt, pull request                                                |
-| [Development: `review`](development/review.md)                           | `review`'s full design — config, tool surface, agent loop                                                       |
-| [Development: review applicability](development/applicability-policy.md) | Design record (issue #179) — all three axes are shipped in [`review`](development/review.md)                    |
-| [Development: the core ceilings](development/ceilings.md)                | The ceiling modules' contracts — evidence, sanitiser, marker comment, workspace, seam                           |
-| [Guide: getting started](guides/getting-started.md)                      | Adding one action to a workflow, and the permissions it needs                                                   |
-| [Guide: `triage`](guides/triage.md)                                      | The label sheet, size from the diff, the marker comment, failure modes and recipes                              |
-| [Guide: `review`](guides/review.md)                                      | The agent loop, the tool surface, the applicability policy, the run artifact, failure modes                     |
-| [Guide: `harmonise`](guides/harmonise.md)                                | The language map, the glossary, skip directives, the pull request, failure modes                                |
-| Configuration                                                            | `.github/action-agents/<action>.json5`, and the inputs each action takes                                        |
-| Providers                                                                | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless                                         |
+| Page                                                                                  | What it covers                                                                                                  |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [Doctrine](doctrine.md)                                                               | Where a new piece of code goes, and what an action may become                                                   |
+| [Run contract](run-contract.md)                                                       | The frozen vocabulary every run is judged on — terminal states, verdicts, failure classes, invariants           |
+| [Archkeep integration](archkeep-integration.md)                                       | The boundary of the boundary — what the pinned gate proves, what stays runtime, and the measured contract       |
+| [Evaluation](evaluation.md)                                                           | The offline corpus, the metric table, the certification bar, and the U-8 decision                               |
+| [ADR 001 — core boundary](adr/001-core-boundary.md)                                   | The decision the boundary rows cite: core is protocol and ceiling, and archkeep judges the tree against the law |
+| [ADR 002 — no intelligence layer](adr/002-no-intelligence-layer.md)                   | The dissolved shared-intelligence workstream, as permanent non-goals                                            |
+| [ADR 003 — evidence retention](adr/003-evidence-retention.md)                         | What a record may keep, per record kind — persist, fingerprint, never                                           |
+| [ADR 004 — canonical review result](adr/004-canonical-review-result.md)               | The one source of truth a review projects from — identity, reconciliation; decision 4's gate is superseded      |
+| [ADR 005 — PR execution trust boundary](adr/005-pr-execution-trust-boundary.md)       | The accepted dogfood risk, its re-open conditions, and the fired-then-resolved condition 3                      |
+| [ADR 006 — merge enforcement is GitHub's](adr/006-code-scanning-merge-enforcement.md) | Review produces, GitHub disposes: no gate, no check run; enforcement rides Code Scanning rulesets               |
+| [Audit: review-enforcement audit](audit/review-enforcement-audit.md)                  | Historical record of the review-enforcement program's audit phase                                               |
+| [Audit: review-enforcement final](audit/review-enforcement-final.md)                  | Historical record of the program's closure — the verdict law, the enforcement captures, the §11 risks           |
+| [Development: configuration](development/configuration.md)                            | The shared config-file mechanism — discovery, format, the default branch, precedence                            |
+| [Development: `triage`](development/triage.md)                                        | `triage`'s full design — schema, prompt, pipeline                                                               |
+| [Development: `harmonise`](development/harmonise.md)                                  | `harmonise`'s full design — document model, prompt, pull request                                                |
+| [Development: `review`](development/review.md)                                        | `review`'s full design — config, tool surface, agent loop                                                       |
+| [Development: review applicability](development/applicability-policy.md)              | Design record (issue #179) — all three axes are shipped in [`review`](development/review.md)                    |
+| [Development: the core ceilings](development/ceilings.md)                             | The ceiling modules' contracts — evidence, sanitiser, marker comment, workspace, seam                           |
+| [Guide: getting started](guides/getting-started.md)                                   | Adding one action to a workflow, and the permissions it needs                                                   |
+| [Guide: `triage`](guides/triage.md)                                                   | The label sheet, size from the diff, the marker comment, failure modes and recipes                              |
+| [Guide: `review`](guides/review.md)                                                   | The agent loop, the tool surface, the applicability policy, the run artifact, failure modes                     |
+| [Guide: `harmonise`](guides/harmonise.md)                                             | The language map, the glossary, skip directives, the pull request, failure modes                                |
+| Configuration                                                                         | `.github/action-agents/<action>.json5`, and the inputs each action takes                                        |
+| Providers                                                                             | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless                                         |
 
 Doctrine comes first deliberately. The rows below it describe behaviour that
 exists — all three actions do their work, released and pinnable —

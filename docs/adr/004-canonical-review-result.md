@@ -6,6 +6,15 @@ created: 2026-09-06
 
 # 004 — The canonical review result is the one source of truth a review projects from
 
+> **Superseded in part (2026-09-07) by [ADR 006](006-code-scanning-merge-enforcement.md).**
+> Decision 4's merge gate and its check-run landing are retired: merge
+> enforcement moved to Code Scanning and rulesets, and review declares no
+> merge consequence of its own — the verdict's "incomplete never passes"
+> law survives in ADR 006's decision 3, and the projections are now the
+> comment, the run artifact and the SARIF/Code Scanning projection.
+> Decisions 1–3 and 5–6 stand unchanged. The text below is kept as
+> written; nothing in it has been rewritten.
+
 ## Context
 
 A review run already verifies before it claims: the verification pass binds

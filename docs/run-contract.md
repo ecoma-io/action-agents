@@ -27,7 +27,7 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 - `unknown` never passes. A run that could not fully read the world it judged
   has no verdict, and a hollow verdict — a pass over facts nobody checked — is
   a defect, not a degraded pass.
-- `fail` is the ceilings' verdict: a review that could not complete within its ceilings — a partial review — publishes what it concluded and stops there, its verdict records the incompleteness, and the merge gate reads it as no pass.
+- `fail` is the ceilings' verdict: a review that could not complete within its ceilings — a partial review — publishes what it concluded and stops there, its verdict records the incompleteness, and no surface of review mistakes it for a clean review. The verdict is a recording, never an enforcement; what a verdict may block, a repository decides in its own merge-protection surfaces ([ADR 006](adr/006-code-scanning-merge-enforcement.md)), not in this action.
 - `refused` is not `failed`. A refusal is the ceilings working; `failed` is a
   defect or an environment break. Conflating them is how red herrings enter
   dashboards.
@@ -36,28 +36,27 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 
 ## What today's outcomes map to
 
-| Action      | Today's outcome                                                                                          | Contract state                                                                                                                                                                                     |
-| ----------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `triage`    | green run with writes                                                                                    | `published`                                                                                                                                                                                        |
-| `triage`    | dry-run, event-gate exit                                                                                 | `skip`                                                                                                                                                                                             |
-| `triage`    | red run                                                                                                  | `failed` or `refused` per the class                                                                                                                                                                |
-| `triage`    | the write withheld — the thread changed while the run was in flight                                      | `abandoned`                                                                                                                                                                                        |
-| `review`    | `nothing-to-review`                                                                                      | `published` (the marker-clearing write still happens; when that write loses the newer-head guard, the run ends `abandoned` and no skip record is written)                                          |
-| `review`    | `published`                                                                                              | `published` — a Partial review publishes here too: its incompleteness rides the verdict (`fail`), never the state                                                                                  |
-| `review`    | `published-without-artifact`                                                                             | `published` (the verdict stands; the archive's absence is a logged delivery loss, never a verdict)                                                                                                 |
-| `review`    | `dry-run`                                                                                                | `skip`                                                                                                                                                                                             |
-| `review`    | an applicability rule matched with `run: false` (bot attestation, size guard)                            | `skip`                                                                                                                                                                                             |
-| `review`    | a merge-group head — the merge queue's re-verification surface; each member was reviewed on its own head | `skip`                                                                                                                                                                                             |
-| `review`    | `abandoned`                                                                                              | `abandoned`                                                                                                                                                                                        |
-| `review`    | a typed deterministic refusal — its own ceilings declining to act (#355)                                 | a `refused` record, then the red error — the boundary writer reads the class                                                                                                                       |
-| `review`    | any other throw the run did not declare                                                                  | a `failed` record for the throws the boundary sees, then the red error — the boundary writer pins F-15; the entrypoint's input and context reads stay unrecorded                                   |
-| `harmonise` | commit + pull request                                                                                    | `published`                                                                                                                                                                                        |
-| `harmonise` | some pairs applied, run stopped                                                                          | `partial`                                                                                                                                                                                          |
-| `harmonise` | dry run, or every pair already in step                                                                   | `skip`                                                                                                                                                                                             |
-| `harmonise` | a pair the run refuses — preparation or protection (#356, #358)                                          | `partial` when other pairs published; otherwise a `refused` record when every skipped line is a refusal, a `failed` record when a defect line joins the skipped lines — the red error follows each |
-| `harmonise` | every pair refused by the script gate — arriving candidates in the wrong script (I17)                    | `partial` when other pairs published; otherwise a `refused` record when every line is the typed refusal, a `failed` record when a defect line joins — the red error follows each                   |
-| `harmonise` | a typed deterministic refusal — its own ceilings declining to act (#347)                                 | a `refused` record, then the red error — the boundary writer reads the class                                                                                                                       |
-| `harmonise` | any other throw the run did not declare                                                                  | a `failed` record, then the red error — the boundary writer pins F-15                                                                                                                              |
+| Action      | Today's outcome                                                                       | Contract state                                                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `triage`    | green run with writes                                                                 | `published`                                                                                                                                                                                        |
+| `triage`    | dry-run, event-gate exit                                                              | `skip`                                                                                                                                                                                             |
+| `triage`    | red run                                                                               | `failed` or `refused` per the class                                                                                                                                                                |
+| `triage`    | the write withheld — the thread changed while the run was in flight                   | `abandoned`                                                                                                                                                                                        |
+| `review`    | `nothing-to-review`                                                                   | `published` (the marker-clearing write still happens; when that write loses the newer-head guard, the run ends `abandoned` and no skip record is written)                                          |
+| `review`    | `published`                                                                           | `published` — a Partial review publishes here too: its incompleteness rides the verdict (`fail`), never the state                                                                                  |
+| `review`    | `published-without-artifact`                                                          | `published` (the verdict stands; the archive's absence is a logged delivery loss, never a verdict)                                                                                                 |
+| `review`    | `dry-run`                                                                             | `skip`                                                                                                                                                                                             |
+| `review`    | an applicability rule matched with `run: false` (bot attestation, size guard)         | `skip`                                                                                                                                                                                             |
+| `review`    | `abandoned`                                                                           | `abandoned`                                                                                                                                                                                        |
+| `review`    | a typed deterministic refusal — its own ceilings declining to act (#355)              | a `refused` record, then the red error — the boundary writer reads the class                                                                                                                       |
+| `review`    | any other throw the run did not declare                                               | a `failed` record for the throws the boundary sees, then the red error — the boundary writer pins F-15; the entrypoint's input and context reads stay unrecorded                                   |
+| `harmonise` | commit + pull request                                                                 | `published`                                                                                                                                                                                        |
+| `harmonise` | some pairs applied, run stopped                                                       | `partial`                                                                                                                                                                                          |
+| `harmonise` | dry run, or every pair already in step                                                | `skip`                                                                                                                                                                                             |
+| `harmonise` | a pair the run refuses — preparation or protection (#356, #358)                       | `partial` when other pairs published; otherwise a `refused` record when every skipped line is a refusal, a `failed` record when a defect line joins the skipped lines — the red error follows each |
+| `harmonise` | every pair refused by the script gate — arriving candidates in the wrong script (I17) | `partial` when other pairs published; otherwise a `refused` record when every line is the typed refusal, a `failed` record when a defect line joins — the red error follows each                   |
+| `harmonise` | a typed deterministic refusal — its own ceilings declining to act (#347)              | a `refused` record, then the red error — the boundary writer reads the class                                                                                                                       |
+| `harmonise` | any other throw the run did not declare                                               | a `failed` record, then the red error — the boundary writer pins F-15                                                                                                                              |
 
 ## Failure taxonomy
 
@@ -234,8 +233,10 @@ run judged), **policy** (what the configuration allows), **human-workflow**
 ## The canonical review result
 
 A review's verified publication set is canonical: one shape, built once by
-`createCanonicalResult`, that the comment, the SARIF upload and the merge gate
-all project from ([ADR 004](adr/004-canonical-review-result.md)). Five rules
+`createCanonicalResult`, that the comment, the run artifact and the
+SARIF/Code Scanning projection all project from
+([ADR 004](adr/004-canonical-review-result.md),
+[ADR 006](adr/006-code-scanning-merge-enforcement.md)). Five rules
 give the shape its authority:
 
 - **Finding identity is content, not position.** A finding's fingerprint is a
@@ -251,8 +252,8 @@ give the shape its authority:
   and reconcile, through one documented churn at the migration — never a
   silent invalidation. Line moves, message rewrites and severity re-grades
   keep the identity; a rewritten span, a new file or a reclassified claim is
-  a new finding — churn reconciliation records, never enforcement drift,
-  since the gate reads the current set. Claims sharing the full key in one
+  a new finding — churn reconciliation records, never enforcement drift:
+  every consumer reads the current set. Claims sharing the full key in one
   run collapse to the first, recorded on the result.
 - **Reconciliation is code, and incomplete runs resolve nothing.** The
   `new | persisting | moved | resolved | unresolved` vocabulary is computed
@@ -263,10 +264,13 @@ give the shape its authority:
   Recovery reads only a comment this action's own token authored — the same
   ownership test the write applies, with the token's logins resolved before
   the thread is read — never the newest comment carrying the marker syntax.
-- **The gate is a pure function of the canonical result and the policy.**
+- **Consequences are code, and no projection is read back as input.**
   `unknown` and `fail` never pass — an unanswered or incomplete review is no
-  pass; an abandoned or refused run does not pass; a confirmed finding the
-  policy blocks on blocks the gate. The model
+  pass; an abandoned or refused run does not pass. What a repository does
+  with a confirmed finding — enforce it at merge through Code Scanning
+  protection rules, or let it stand as commentary — is the repository's
+  decision, made in its own rulesets and never in this action
+  ([ADR 006](adr/006-code-scanning-merge-enforcement.md)). The model
   names no consequence, and no projection — comment or SARIF — is ever read
   back as input. The one carve-out runs the other way: the published comment
   embeds the record it projected, the next run recovers it to render the
@@ -290,29 +294,14 @@ give the shape its authority:
   binds the record retypes a record its own shapes reject as a typed
   refusal (`refused`, the red error), never an undeclared crash: a terminal
   the run has already determined is not destroyed by its record.
-- **The gate's verdict lands as surfaces, and none of them is the job's
-  exit.** The verdict is `PASS` or `BLOCK`. `gate-mode` chooses only whether
-  it enforces: `observe` (the default — a rollout must never start on the
-  enforcing mode) records `OBSERVE-<verdict>` on the `gate-verdict` output and
-  a `neutral` check run; `required` names the verdict bare and renders
-  `success` on PASS, `failure` on BLOCK — the check run a ruleset makes
-  required. Every terminal a run can end in lands this surface — a `refused`,
-  `failed` or `abandoned` run renders the check run too, `failure` under
-  `required`; a `skip`, `nothing-to-review` or `dry-run` terminal renders
-  `neutral` in both modes, recorded and enforcing nothing; and the check
-  output names the terminal state either way — except a run that dies before
-  it holds the event facts needed to name a head; that carve-out is the
-  contract's, never an accident. And
-  because GitHub counts a `neutral` check as reported, a repository that
-  makes the check required MUST pin `gate-mode: required` — `observe`
-  satisfies the ruleset while enforcing nothing. A merge-group head is one of
-  those skips — a `merge_group` event, the merge queue's re-verification
-  surface — and lands the check `neutral` on the group head, which is what a
-  required ruleset needs to report so the queue can reach ALLGREEN, while the
-  per-PR head each member was reviewed on stays the enforcement surface. A
-  BLOCK never fails the
-  action's exit: the run stays green with
-  its outputs standing. The SARIF projection is written under `runner.temp`
+- **The canonical verdict lands as recorded surfaces, and none of them is
+  the job's exit.** The verdict is `pass`, `fail` or `unknown`, and it is
+  recorded — in the run artifact, in the comment's record block, in the
+  reduced shapes the red boundary writes — never rendered as a merge
+  consequence: an incomplete review publishes its `fail` and stays green,
+  because review's surfaces record and never enforce
+  ([ADR 006](adr/006-code-scanning-merge-enforcement.md)). The SARIF
+  projection is written under `runner.temp`
   — never the workspace — byte-identical for the same record, surfaced
   through `sarif-path`; the upload is the consumer's step, gated on
   `sarif-path` — only a published run uploads, so every other terminal
@@ -322,11 +311,8 @@ give the shape its authority:
   `partialFingerprints["primaryLocationLineHash"]`, the one key GitHub Code
   Scanning consults when deduplicating alerts across uploads, beside the
   review's own `reviewFindingFingerprint/v2` slot. Each surface is a
-  logged loss on its own failure (F-14's posture): a SARIF write or check-run
-  call that does not land is reported, never a red run, and never a disguise.
-  A gate policy that names a kind outside the closed vocabulary is a defect,
-  not a preference: it throws, and the run ends `failed` — fail closed, fail
-  loud, never a silent narrowing.
+  logged loss on its own failure (F-14's posture): a SARIF write
+  that does not land is reported, never a red run, and never a disguise.
 
 ## The seventeen invariants
 
