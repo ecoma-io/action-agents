@@ -77,6 +77,22 @@ const BASE_MESSAGES = [
   { role: "user", content: "task + evidence" },
 ];
 
+/**
+ * How many code-authored uncovered-files notices the transcript carries —
+ * the once-guard's observable.
+ *
+ * @param {ChatMessage[]} messages
+ * @returns {number}
+ */
+function noticeCount(messages) {
+  return messages.filter(
+    (message) =>
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.includes("[coverage check]"),
+  ).length;
+}
+
 function toolsForRoot() {
   return createTools({ workspace, evidence, ignore: [] });
 }
@@ -213,6 +229,130 @@ describe("reading bounds and finalisation", () => {
     expect(finalRequest?.tools).toBeUndefined();
     expect(finalRequest?.messages.at(-1)?.content).toMatch(/budget is exhausted/);
     expect(outcome.log.some((line) => line.includes("max-turns"))).toBe(true);
+  });
+});
+
+describe("the uncovered-files notice before a natural stop (#424)", () => {
+  it("one natural stop with unread files sends one notice, offers the tools again, and the loop continues", async () => {
+    // One read covers src/a.mjs; the stop leaves src/b.mjs unread; the
+    // notice goes out; the model goes and reads it before answering.
+    writeFileSync(p.join(root, "src", "b.mjs"), "beta\n");
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: '{"findings":[],"summary":"stopped after one read"}' },
+      { content: "", toolCalls: [readCall({ id: "c2", argumentsJson: '{"path":"src/b.mjs"}' })] },
+      { content: '{"findings":[],"summary":"complete now"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "src/b.mjs"],
+    });
+    expect(outcome.naturalStopped).toBe(true);
+    expect(outcome.bound).toBeUndefined();
+    // The loop continued past the notice and covered the remaining file.
+    expect(outcome.coverage).toEqual({
+      covered: ["src/a.mjs", "src/b.mjs"],
+      uncovered: [],
+      total: 2,
+    });
+    expect(outcome.candidate).toContain("complete now");
+    // Exactly one notice, persisted in the transcript that followed it.
+    expect(noticeCount(outcome.transcript)).toBe(1);
+    // The request sent right after the notice carried it and the tools.
+    const afterNotice = chat.requests[2];
+    const notice = (afterNotice?.messages ?? []).find(
+      (message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes("[coverage check]"),
+    );
+    expect(notice?.content).toContain("1 of 2");
+    expect(notice?.content).toContain("src/b.mjs");
+    // The notice lists files; it quotes none of the tree's bytes (the
+    // captured content of src/a.mjs is "alpha\n").
+    expect(notice?.content).not.toContain("alpha");
+    // The tools were offered again — the notice never withholds them.
+    const offered = /** @type {{ name: string }[] | undefined} */ (afterNotice?.tools);
+    expect((offered ?? []).map((tool) => tool.name)).toContain("read_file");
+    // The loop's own account of the nudge is in the run log.
+    expect(outcome.log.some((line) => line.includes("notice went out once"))).toBe(true);
+  });
+
+  it("a second natural stop with coverage still incomplete ends the run — the notice never re-asks", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: '{"findings":[],"summary":"first stop"}' },
+      { content: '{"findings":[],"summary":"second stop"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "src/b.mjs"],
+    });
+    expect(outcome.naturalStopped).toBe(true);
+    expect(outcome.coverage.uncovered).toEqual(["src/b.mjs"]);
+    expect(outcome.candidate).toContain("second stop");
+    // One notice, then the stop was accepted: no nudge loop.
+    expect(noticeCount(outcome.transcript)).toBe(1);
+    expect(chat.requests).toHaveLength(3);
+  });
+
+  it("a bound exit never sends the notice — the bound wins", async () => {
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: "", toolCalls: [readCall({ id: "c2" })] },
+      { content: '{"findings":[],"summary":"budget spent"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 2,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "src/b.mjs"],
+    });
+    expect(outcome.bound).toBe("max-turns");
+    expect(outcome.naturalStopped).toBe(false);
+    // Finalisation with the tools withheld, exactly as before the notice
+    // existed — and not one coverage message anywhere on the wire.
+    expect(chat.requests.at(-1)?.tools).toBeUndefined();
+    for (const request of chat.requests) {
+      expect(noticeCount(request.messages)).toBe(0);
+    }
+  });
+
+  it("complete coverage never sends the notice — the natural stop is accepted as before", async () => {
+    writeFileSync(p.join(root, "src", "b.mjs"), "beta\n");
+    const chat = scriptedChat([
+      { content: "", toolCalls: [readCall()] },
+      { content: "", toolCalls: [readCall({ id: "c2", argumentsJson: '{"path":"src/b.mjs"}' })] },
+      { content: '{"findings":[],"summary":"complete without help"}' },
+    ]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+      expectedPaths: ["src/a.mjs", "src/b.mjs"],
+    });
+    expect(outcome.naturalStopped).toBe(true);
+    expect(outcome.coverage.uncovered).toEqual([]);
+    expect(chat.requests).toHaveLength(3);
+    for (const request of chat.requests) {
+      expect(noticeCount(request.messages)).toBe(0);
+    }
   });
 });
 
@@ -367,8 +507,11 @@ describe("coverage accounting", () => {
     expect(outcome.coverage).toEqual({ covered: [], uncovered: [], total: 0 });
   });
 
-  it("reports every expected file uncovered when the natural stop read none", async () => {
-    const chat = scriptedChat([{ content: '{"findings":[],"summary":"done"}' }]);
+  it("reports every expected file uncovered when the natural stop read none — and hears the notice once", async () => {
+    const chat = scriptedChat([
+      { content: '{"findings":[],"summary":"done"}' },
+      { content: '{"findings":[],"summary":"still unread"}' },
+    ]);
     const outcome = await runLoop({
       chat: /** @type {any} */ (chat),
       model: "m",
@@ -383,6 +526,10 @@ describe("coverage accounting", () => {
       uncovered: ["src/a.mjs", "src/b.mjs"],
       total: 2,
     });
+    // The stop was heard once and then accepted: the second stop ends the
+    // run exactly as the first would have before the notice existed.
+    expect(noticeCount(outcome.transcript)).toBe(1);
+    expect(outcome.naturalStopped).toBe(true);
   });
 
   it("counts a ./spelled read_file argument as covering its diff-spelled path", async () => {
@@ -425,6 +572,7 @@ describe("coverage accounting", () => {
     const chat = scriptedChat([
       { content: "", toolCalls: [readCall({ argumentsJson: '{"path":"src/missing.mjs"}' })] },
       { content: '{"findings":[],"summary":"s"}' },
+      { content: '{"findings":[],"summary":"s again"}' },
     ]);
     const outcome = await runLoop({
       chat: /** @type {any} */ (chat),
@@ -437,6 +585,9 @@ describe("coverage accounting", () => {
     });
     expect(outcome.coverage.covered).toEqual([]);
     expect(outcome.coverage.uncovered).toEqual(["src/missing.mjs"]);
+    // The refused attempt bought the run one notice, not two: the second
+    // stop was accepted with the file still unread.
+    expect(noticeCount(outcome.transcript)).toBe(1);
   });
 
   it("a read of a path past the display cap still covers at its full spelling", async () => {
@@ -489,6 +640,7 @@ describe("coverage accounting", () => {
     const chat = scriptedChat([
       { content: "", toolCalls: [readCall({ argumentsJson: '{"path":"src/missing.mjs"}' })] },
       { content: '{"findings":[],"summary":"s"}' },
+      { content: '{"findings":[],"summary":"s once more"}' },
     ]);
     const outcome = await runLoop({
       chat: /** @type {any} */ (chat),
@@ -709,7 +861,10 @@ describe("loop accounting facts", () => {
 
 describe("deletion coverage", () => {
   it("records a deletion's inspection in code — covered with no read on record at all", async () => {
-    const chat = scriptedChat([{ content: '{"findings":[],"summary":"done"}' }]);
+    const chat = scriptedChat([
+      { content: '{"findings":[],"summary":"done"}' },
+      { content: '{"findings":[],"summary":"still not read"}' },
+    ]);
     const outcome = await runLoop({
       chat: /** @type {any} */ (chat),
       model: "m",

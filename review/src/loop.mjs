@@ -20,6 +20,10 @@
  *   - a response without tool calls while reading turns remain is a natural
  *     stop, and its content is the candidate — the only path a corrective
  *     re-ask may ever follow;
+ *   - before such a stop is accepted with changed files still unread, ONE
+ *     ledger-derived notice names the files and the phase's tools come
+ *     back for another round — once per run, never past a bound, and a
+ *     second stop is accepted wherever coverage then stands;
  *   - before every request, the token estimate is checked: past 80% of the
  *     window the transcript is compacted deterministically — system and task
  *     messages kept, everything later replaced by one state message built
@@ -147,6 +151,8 @@ export async function runLoop({
   const phaseLog = [];
   /** @type {string[]} */
   const log = [];
+  /** The uncovered-files notice's once-guard: it fires at most one time per run. */
+  let nudgedUncovered = false;
 
   /**
    * The machine's input, rebuilt from the ledger at every update — the
@@ -209,12 +215,34 @@ export async function runLoop({
     transcript = currentTranscript;
 
     if (response.toolCalls.length === 0) {
+      const coverage = readCoverage(expected, ledger);
+      // A natural stop with changed files still unread is heard once: the
+      // ledger's own uncovered list goes back as ONE user message and the
+      // phase's tools come with it — this is not a bound, reading turns
+      // remain, and a model told what it has not read can go read it. The
+      // guard makes it fire once; a second stop is accepted wherever
+      // coverage then stands, and a bound exit never reaches this arm.
+      if (!nudgedUncovered && coverage.uncovered.length > 0) {
+        nudgedUncovered = true;
+        if (response.content !== "") {
+          transcript.push({ role: "assistant", content: response.content });
+        }
+        transcript.push({
+          role: "user",
+          content: uncoveredFilesNotice(coverage.uncovered, coverage.total),
+        });
+        log.push(
+          `natural stop with ${String(coverage.uncovered.length)} changed file(s) unread — ` +
+            "the uncovered-files notice went out once; the tools are offered again",
+        );
+        continue;
+      }
       // Natural stop while reading turns remain: the candidate speaks now.
       return {
         candidate: response.content,
         naturalStopped: true,
         bound: undefined,
-        coverage: readCoverage(expected, ledger),
+        coverage,
         phase,
         readingTurns: ledger.readingTurns,
         toolCalls: ledger.toolCalls,
@@ -418,6 +446,30 @@ export async function reaskFinalAnswer({ chat, model, transcript }) {
     ],
   });
   return response.content;
+}
+
+/**
+ * The one corrective message a natural stop with unread changed files
+ * receives. It is code-authored from the ledger — the same record the
+ * verdict will later judge on, so the model cannot talk its way to
+ * complete — and it carries files, never conclusions: paths only, nothing
+ * quoted from them, nothing about what to find or conclude. What the model
+ * does with the list is effort; the verdict stays code's.
+ *
+ * @param {string[]} uncovered expected paths with no read on record, byte-wise sorted
+ * @param {number} total the expected set's size
+ * @returns {string}
+ */
+function uncoveredFilesNotice(uncovered, total) {
+  return (
+    `[coverage check] The read ledger shows ${String(uncovered.length)} of ${String(total)} ` +
+    `changed file(s) with no read on record:\n` +
+    uncovered.map((path) => `- ${JSON.stringify(path).slice(0, 300)}`).join("\n") +
+    "\n\n" +
+    "Changed files left unread make the review incomplete, and an incomplete review is " +
+    "no pass. The reading tools are offered again: read the files listed above, then " +
+    "answer under the output contract."
+  );
 }
 
 /**

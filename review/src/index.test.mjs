@@ -551,9 +551,12 @@ describe("run — request-timeout-ms wiring", () => {
       }),
     ).rejects.toThrow(/the final answer failed the output contract twice/);
 
-    expect(signals).toHaveLength(2);
+    // Three model calls: the loop's ask, the uncovered-files notice's ask,
+    // and the one re-ask — every one of them carries the abort signal.
+    expect(signals).toHaveLength(3);
     expect(signals[0]).toBeInstanceOf(AbortSignal);
     expect(signals[1]).toBeInstanceOf(AbortSignal);
+    expect(signals[2]).toBeInstanceOf(AbortSignal);
   });
 
   it("aborts a hanging provider on every attempt and fails with the transport error", async () => {

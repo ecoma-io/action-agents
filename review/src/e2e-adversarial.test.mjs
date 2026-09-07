@@ -377,6 +377,13 @@ describe("adversarial: coverage and provenance attacks", () => {
           '{"findings":[{"severity":"concern","kind":"correctness","file":"src/b.mjs","line":1,' +
           '"message":"confirm me without reading"}],"summary":"a claim about b"}',
       },
+      // The notice's second stop repeats the claim; the file is still unread
+      // and the claim is still withheld.
+      {
+        content:
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/b.mjs","line":1,' +
+          '"message":"confirm me without reading"}],"summary":"a claim about b"}',
+      },
     ]);
     const { io } = replayIo(forge, chat);
     const result = await reviewPullRequest({

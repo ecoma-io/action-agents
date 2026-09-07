@@ -126,6 +126,9 @@ async function partiallyCoveredRun() {
   const forge = forgeStub({ files: [changedFile("src/a.mjs"), changedFile("src/b.mjs")] });
   const chat = scriptedChat([
     readTurn("src/a.mjs"),
+    // The stop is heard once — the notice names src/b.mjs — and the second
+    // stop ends the run with the same coverage the first would have ended it.
+    { content: '{"findings":[],"summary":"nothing to report"}' },
     { content: '{"findings":[],"summary":"nothing to report"}' },
   ]);
   const { io, log } = replayIo(forge, chat);

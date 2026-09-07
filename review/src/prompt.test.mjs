@@ -94,6 +94,21 @@ describe("strictness mode paragraphs", () => {
       expect(system).not.toMatch(/will be enforced|guaranteed|automatically checks/);
     }
   });
+
+  it("the coverage mandate outranks the mode paragraphs at every strictness (#424)", () => {
+    for (const strictness of /** @type {const} */ (["low", "medium", "high"])) {
+      const system = systemOf(parts({ strictness }));
+      // A weak model reading "Investigate lightly" must not read it as an
+      // exemption: the mandate names its own priority over every mode below.
+      expect(system).toContain("This holds at every strictness");
+      expect(system).toContain("no mode paragraph below exempts a changed file from being read");
+      expect(system.indexOf("an incomplete review is no pass")).toBeLessThan(
+        system.indexOf("Review mode — strictness"),
+      );
+      // The priority sentence is no enforcement promise either.
+      expect(system).not.toMatch(/will be enforced|guaranteed|automatically checks/);
+    }
+  });
 });
 
 describe("adversarial strategy paragraph", () => {
