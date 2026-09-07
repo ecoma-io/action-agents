@@ -196,6 +196,19 @@ is the documented gate law (`decideReviewGate` fails on uncovered files)
 plus the ruleset's required check; neither link was independently re-tested
 under a bypass actor, so the capture demonstrates the observed path only.
 
+The fix's live counterpart, on PR #410's own head the same day: three
+review attempts (10:28Z head `eea3513…`, 10:35Z head `b2daaa1…`) read 1/4,
+1/4 and 2/4 changed files, and each record — under the fixed verdict law —
+published `"verdict": "fail"` with the unread files named in
+`coverage.uncovered`, where the pre-fix law published `pass` (as §4.3's
+#403 capture shows on the same defect shape). Each gate check
+(101708864033, 101710503910) rendered `review gate: BLOCK` and the PR
+stayed `BLOCKED`. Read together, the two captures are the before/after of
+#405 on the same defect class, plus the enforcement cost made visible: a
+stochastic reviewer's partial reads hold merges, fail-closed, until a
+full-coverage read lands. The review's own nit on the fix's
+`coverageComplete` annotation was addressed by commit `8cadacb`.
+
 ### 4.4 Remediation status
 
 Applied 2026-09-07: `review gate` (GitHub Actions integration 15368) joins
