@@ -19,8 +19,10 @@
  * - fingerprint only in the previous run — `resolved` on the previous finding.
  *
  * Two run-state rules bound the labels:
- * - an incomplete current run (`current.run.state` not `published`) may
- *   still be writing, so it never retires a previous finding: `resolved` is
+ * - an incomplete current run — one that never published, or that published
+ *   without a passing verdict (`current.run.state` not `published`, or
+ *   `current.run.verdict` not `pass`; a coverage-incomplete review publishes
+ *   as published + fail) — never retires a previous finding: `resolved` is
  *   suppressed and those previous findings are left without a label. The
  *   current findings keep theirs — `new`, `persisting` or `moved` — they
  *   were observed. A fingerprint match still labels both sides, since the
@@ -95,9 +97,12 @@ export function reconcile({ previous, current }) {
       ? priorRun.findings.map((finding) => {
           const observed = matched.get(finding.fingerprint);
           if (observed === undefined) {
-            // An incomplete current run may still be writing — it never
-            // retires a previous finding; the label is left unset.
-            return current.run.state === "published"
+            // An incomplete current run — unpublished, or published without
+            // a passing verdict — never retires a previous finding; the
+            // label is left unset. Post-#410 a coverage-incomplete review
+            // publishes as published + fail, so the verdict is what makes
+            // "published" mean "complete" here.
+            return current.run.state === "published" && current.run.verdict === "pass"
               ? labelled(finding, "resolved")
               : unlabelled(finding);
           }
