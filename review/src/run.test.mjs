@@ -4215,3 +4215,65 @@ describe("the cross-run reconciliation in the published comment", () => {
     expect(body).not.toContain("Resolved since the last review");
   });
 });
+
+describe("the #411 withheld-span law", () => {
+  it("withholds a finding whose anchor line certifies no span — published, named, never fatal", async () => {
+    writeFileSync(p.join(wsRoot, "src", "blank.mjs"), "line1\n\nline3\n");
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "src/blank.mjs",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: "@@ -1 +1,3 @@\n+x",
+        },
+      ],
+    });
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: {
+        forge,
+        chat: readingChat([
+          {
+            content: "",
+            toolCalls: [
+              { id: "r1", name: "read_file", arguments: JSON.stringify({ path: "src/blank.mjs" }) },
+            ],
+          },
+          {
+            content:
+              '{"findings":[{"severity":"concern","kind":"correctness","file":"src/blank.mjs","line":2,"message":"off-by-one"}],"summary":"blank anchor"}',
+          },
+        ]),
+        now: () => 0,
+        info: (m) => logged.push(m),
+      },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings).toEqual([]);
+    expect(result.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "created",
+    });
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain(
+      "No published findings — 1 finding withheld: its anchor line carries no span to certify.",
+    );
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("finding withheld") &&
+          line.includes("no span to certify") &&
+          line.includes("src/blank.mjs:2"),
+      ),
+    ).toBe(true);
+  });
+});

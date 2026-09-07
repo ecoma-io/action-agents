@@ -13,7 +13,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { CanonicalResultError, createCanonicalResult } from "./canonical.mjs";
+import { createCanonicalResult } from "./canonical.mjs";
 import {
   A_CONTENT,
   artifactOf,
@@ -233,63 +233,74 @@ describe("adversarial: corrupted answer shapes", () => {
     expect(body).toContain("  unverified: ");
   });
 
-  it("an anchor on an empty line refuses before anything is written", async () => {
+  it("an anchor on an empty line withholds the finding — the span certifies nothing (#411)", async () => {
     const workspace = makeWorkspace({ "src/a.mjs": "line1\n\nline3\n" });
     const forge = forgeStub();
     const chat = scriptedChat(BLANK_ANCHOR_SCRIPT);
-    const { io } = replayIo(forge, chat);
-    const cause = await reviewPullRequest({
+    const { io, log } = replayIo(forge, chat);
+    const result = await reviewPullRequest({
       inputs: INPUTS,
       context: context(workspace),
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
       io,
-    }).then(
-      (result) => {
-        throw new Error(`the replay published: ${String(result.outcome)}`);
-      },
-      (error) => error,
-    );
-    expect(cause).toBeInstanceOf(CanonicalResultError);
-    expect(cause).toMatchObject({
-      message: expect.stringContaining("findings[0].subject must be a non-empty string"),
     });
-    expect(forge.calls.upserts).toEqual([]);
-    expect(chat.calls()).toBe(3); // read, answer, verdict — the canonical
-    // constructor refuses after the verdict, so no recovery re-ask fires.
+    // A claim anchored on a line that certifies no span would enter the
+    // record with an empty identity — it is withheld instead (#411),
+    // counted in the body, and never run-fatal: the run publishes what
+    // survives it, and the log names what was withheld and where.
+    expect(result.outcome).toBe("published");
+    expect(
+      log.some(
+        (line) =>
+          line.includes("finding withheld") &&
+          line.includes("no span to certify") &&
+          line.includes("src/a.mjs:2"),
+      ),
+    ).toBe(true);
+    expect(forge.calls.upserts).toHaveLength(1);
+    expect(bodyOf({ forge })).toContain(
+      "1 finding withheld: its anchor line carries no span to certify.",
+    );
+    expect(chat.calls()).toBe(3); // read, answer, the verification call the
+    // exhausted script makes uncertain — withholding added no model call.
+    expect(canonicalOf(result).findings).toEqual([]);
+    expect(result.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "created",
+    });
   });
 
-  it("the entrypoint turns an empty-anchor refusal into a failed artifact and one surface: the terminal check", async () => {
+  it("the entrypoint renders a withheld-only run as published: comment, PASS gate, published artifact", async () => {
     const workspace = makeWorkspace({ "src/a.mjs": "line1\n\nline3\n" });
     const forge = forgeStub();
     const chat = scriptedChat(BLANK_ANCHOR_SCRIPT);
-    const settled = await driveEntrypoint({ workspace, forge, chat });
-    expect(settled.ok).toBe(false);
-    expect(settled.cause).toBeInstanceOf(CanonicalResultError);
-    // The red boundary wrote exactly one artifact — failed, not refused:
-    // the canonical constructor's defect is not a typed refusal.
-    const artifact = artifactOf(workspace, `review-artifact-failed-${HEAD}.json`);
-    expect(artifact.outcome).toMatchObject({ classification: "failed" });
+    const settled = await driveEntrypoint({ workspace, forge, chat, gateMode: "required" });
+    expect(settled.ok).toBe(true);
+    // The withheld-only run is a published run now (#411): the comment
+    // stands, the artifact records what was withheld, and the required
+    // gate renders the PASS the empty record earns.
+    const artifact = artifactOf(workspace, `review-artifact-${HEAD}.json`);
+    expect(artifact.outcome).toMatchObject({ classification: "published" });
+    expect(artifact.findings).toEqual([]);
     expect(artifact.headRef).toBe(HEAD);
-    // The comment never fires, but the terminal check does (#377): the old
-    // pin read a check-absence as the fail-closed posture, and #377 is
-    // exactly that absence — a required ruleset pends forever on a check
-    // that never reports. The red boundary lands the check naming the
-    // terminal; observe mode renders the BLOCK row neutral.
-    expect(forge.calls.upserts).toEqual([]);
+    expect(forge.calls.upserts).toHaveLength(1);
+    expect(forge.calls.upserts[0]?.body).toContain(
+      "1 finding withheld: its anchor line carries no span to certify.",
+    );
     expect(forge.calls.checkRuns).toHaveLength(1);
     expect(forge.calls.checkRuns[0]).toMatchObject({
       headSha: HEAD,
       name: "review gate",
-      conclusion: "neutral",
-      output: {
-        title: "review gate: OBSERVE-BLOCK (failed)",
-        summary: "findings[0].subject must be a non-empty string",
-      },
+      conclusion: "success",
+      output: { title: "review gate: PASS" },
     });
-    expect(readFileSync(settled.outFile, "utf8")).not.toContain("gate-verdict");
-    expect(readdirSync(settled.temp)).toEqual(["github-output.txt"]);
+    expect(readFileSync(settled.outFile, "utf8")).toContain("gate-verdict=PASS\n");
+    // A published run writes its SARIF projection beside the output file —
+    // the runner temp is no longer the red run's one-file floor.
+    expect(readdirSync(settled.temp)).toEqual(["github-output.txt", `review-sarif-${HEAD}.json`]);
   });
 
   it("the entrypoint turns a mid-run capture refusal into a refused artifact and one surface: the terminal check", async () => {

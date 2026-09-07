@@ -2,10 +2,14 @@
  * The canonical review result — the one source of truth a review projects
  * from (ADR 004). The comment, the SARIF upload and the merge gate are
  * projections; none of them records state this shape does not carry, and
- * none of them is authoritative. The constructor is the only way in: it
- * validates the closed vocabularies, recomputes every fingerprint from the
- * tuple it is given, collapses claims that share the full identity key, and
- * deep-freezes what it returns. The tuple's provenance — the subject
+ * none of them is authoritative. Two entries exist, both constructors at
+ * heart: `createCanonicalResult` is the only way in — it validates the
+ * closed vocabularies, recomputes every fingerprint from the tuple it is
+ * given, collapses claims that share the full identity key, and
+ * deep-freezes what it returns — and `buildCanonicalRecord` is the birth
+ * seam's typed belt around it, retyping a shape rejection as the
+ * deterministic refusal the red boundary records. The tuple's provenance —
+ * the subject
  * captured from the reviewed snapshot, never written by the model — is
  * enforced by the integration boundary that reads the snapshot; this
  * constructor never touches the filesystem. A stored fingerprint is
@@ -21,6 +25,7 @@ import {
   normaliseSubject,
 } from "./identity.mjs";
 import { FINDING_KINDS, PUBLISHED_LIFECYCLE_STATES, VERDICTS } from "./vocabulary.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { LIFECYCLE_OF_VERDICT } from "./verify.mjs";
 
 /** The terminal states a run record may end in — the run contract's vocabulary. */
@@ -293,4 +298,29 @@ export function withRunPublication(canonical, publication) {
     ...canonical,
     run: Object.freeze({ ...canonical.run, publication: outcome }),
   });
+}
+
+/**
+ * The birth seam's typed belt around {@link createCanonicalResult}: the run
+ * has already determined its terminal by the time the record binds, and an
+ * undeclared crash at the binding would destroy that terminal (#411). A
+ * record the shapes reject is therefore a typed refusal — the red boundary
+ * records `refused`, the failure taxonomy stays closed — and any other
+ * throw travels untouched: the belt retypes shape defects, it is not an
+ * exception sink.
+ *
+ * @param {Parameters<typeof createCanonicalResult>[0]} input
+ * @returns {CanonicalResult}
+ */
+export function buildCanonicalRecord(input) {
+  try {
+    return createCanonicalResult(input);
+  } catch (cause) {
+    if (cause instanceof CanonicalResultError) {
+      throw new DeterministicRefusalError(`the run's record did not validate: ${cause.message}`, {
+        cause,
+      });
+    }
+    throw cause;
+  }
 }

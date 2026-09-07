@@ -228,20 +228,27 @@ describe("merge-bypass: terminal rows — the red terminals land the check (T8, 
   });
 
   it("a failed run renders the terminal check naming the failure — absence was the defect", async () => {
-    const workspace = makeWorkspace({ "src/a.mjs": "line1\n\nline3\n" });
+    const workspace = makeWorkspace({ "src/a.mjs": A_CONTENT });
     const forge = forgeStub();
-    const chat = scriptedChat([
-      readTurn("src/a.mjs"),
-      {
-        content:
-          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,' +
-          '"message":"off-by-one"}],"summary":"blank anchor"}',
-      },
-    ]);
+    // An undeclared transport break after the run's facts are in: the run's
+    // own snapshot read succeeds, and the pre-publication guard's re-read
+    // throws — the failed terminal the red boundary records. The
+    // blank-anchor producer moved to the withheld law (#411): a span that
+    // certifies nothing is withheld, never run-fatal.
+    let reads = 0;
+    const inner = forge.getPullRequest.bind(forge);
+    forge.getPullRequest = async (/** @type {number} */ number) => {
+      reads += 1;
+      if (reads > 1) throw new Error("the forge transport broke mid-run");
+      return inner(number);
+    };
+    const chat = scriptedChat(CONFIRMED_SCRIPT);
     const settled = await driveEntrypoint({ workspace, forge, chat });
     expect(settled.ok).toBe(false);
     // Inverted with #377: the check exists and names the terminal — it
-    // never reports absence, and it never reports pass over a red run.
+    // never reports absence, and it never reports pass over a red run. The
+    // summary is the thrown message, verbatim: the red boundary records
+    // what broke, never an interpretation of it.
     expect(forge.calls.checkRuns).toHaveLength(1);
     expect(forge.calls.checkRuns[0]).toMatchObject({
       headSha: HEAD,
@@ -249,7 +256,7 @@ describe("merge-bypass: terminal rows — the red terminals land the check (T8, 
       conclusion: "neutral",
       output: {
         title: "review gate: OBSERVE-BLOCK (failed)",
-        summary: "findings[0].subject must be a non-empty string",
+        summary: "the forge transport broke mid-run",
       },
     });
     expect(readFileSync(settled.outFile, "utf8")).not.toContain("gate-verdict");
@@ -353,19 +360,26 @@ const TERMINAL_SCENARIOS = [
     terminal: "failed",
     blocking: true,
     ok: false,
-    summary: /subject must be a non-empty string/,
-    setup: () => ({
-      workspace: makeWorkspace({ "src/a.mjs": "line1\n\nline3\n" }),
-      forge: forgeStub(),
-      chat: scriptedChat([
-        readTurn("src/a.mjs"),
-        {
-          content:
-            '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,' +
-            '"message":"off-by-one"}],"summary":"blank anchor"}',
-        },
-      ]),
-    }),
+    summary: /forge transport broke/,
+    setup: () => {
+      const forge = forgeStub();
+      // An undeclared transport break after the run's facts are in — the
+      // failed terminal the red boundary records. The blank-anchor
+      // producer moved to the withheld law (#411): a span that certifies
+      // nothing is withheld, never run-fatal.
+      let reads = 0;
+      const inner = forge.getPullRequest.bind(forge);
+      forge.getPullRequest = async (/** @type {number} */ number) => {
+        reads += 1;
+        if (reads > 1) throw new Error("the forge transport broke mid-run");
+        return inner(number);
+      };
+      return {
+        workspace: makeWorkspace({ "src/a.mjs": A_CONTENT }),
+        forge,
+        chat: scriptedChat(CONFIRMED_SCRIPT),
+      };
+    },
   },
   {
     name: "abandoned run (lost before publication)",

@@ -106,8 +106,10 @@ account outlives the runner log. The contract's rules for every record:
   record write itself fails — red at the boundary, or green at a declared
   point under the logged-loss tier below — stay unrecorded; the upload's
   `if-no-files-found: warn` keeps the green ones green and the miss loud —
-  a declared write that lands nowhere is never green over nothing (#378). Review has no
-  declared failure record yet; its failure-record path is its own change.
+  a declared write that lands nowhere is never green over nothing (#378).
+  Review's failure-record path is closed: every red terminal — `refused`,
+  `failed`, `abandoned` — writes its reduced record, and the skip/dry-run
+  families are its recorded-not-enforcing twins.
 - **Byte-deterministic (I15).** No wall-clock fields; the same run facts
   build the same bytes. Keys sorted, compact JSON, no trailing newline.
 - **Fail-closed.** The module that owns a record family validates it before
@@ -159,8 +161,8 @@ finalised), `pullRequest` (`number`, `created`, or `null` when the run wrote
 none), `headSha` (the base commit every read pinned to; `null` before the
 run resolved one).
 
-Review's artifact shapes, version 4 (the applicability family's shapes are
-version 5): the full published shape carries the twelve-fact body the
+Review's artifact shapes, version 5 (the applicability family's shapes are
+version 6): the full published shape carries the twelve-fact body the
 builder validates; the reduced abandonment shape carries the run identity,
 the outcome sentence, and — when a comment was published before the subject
 moved — the comment id under `provenance`; the reduced dry-run shape carries
@@ -278,6 +280,16 @@ give the shape its authority:
   range, an empty file — refuses the finding's evidence and with it the run:
   a `refused` record and the red error, naming file and line, never a
   skip-and-continue that publishes a finding whose digest confirms nothing.
+  A capture the tree honours but whose span certifies nothing — the anchor
+  line is blank or whitespace-only — withholds the finding instead, through
+  the quarantine channel: counted and named in the log, rendered in the
+  comment's withheld sentence when nothing else publishes, never part of
+  the canonical result, never run-fatal — the run proceeds to the terminal
+  its gates already determined, carrying only the surviving findings. And
+  the birth site that
+  binds the record retypes a record its own shapes reject as a typed
+  refusal (`refused`, the red error), never an undeclared crash: a terminal
+  the run has already determined is not destroyed by its record.
 - **The gate's verdict lands as surfaces, and none of them is the job's
   exit.** The verdict is `PASS` or `BLOCK`. `gate-mode` chooses only whether
   it enforces: `observe` (the default — a rollout must never start on the
