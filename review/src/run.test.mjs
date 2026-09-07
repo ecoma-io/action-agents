@@ -4162,4 +4162,56 @@ describe("the cross-run reconciliation in the published comment", () => {
     expect(bareBody).not.toContain("[new]");
     expect(labelledBody).not.toBe(bareBody);
   });
+
+  it("a collapsed duplicate wears the survivor's label, never its neighbour's", async () => {
+    // Two findings share the canonical identity — same file, kind and
+    // anchor-line content; only the message differs — and a distinct
+    // finding follows them. The record collapses the pair to one finding,
+    // so a join by position shifts every later label onto the wrong row:
+    // the duplicate must carry the survivor's own label and the third
+    // finding its own, exactly as the embedded record spells them.
+    const THREE =
+      '{"findings":[' +
+      '{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+      '{"severity":"nit","kind":"correctness","file":"src/a.mjs","line":2,"message":"the arithmetic is off"},' +
+      '{"severity":"nit","kind":"style","file":"src/b.mjs","line":2,"message":"naming"}' +
+      '],"summary":"three"}';
+    // The previous run published only the third finding: the collapsed
+    // pair labels new, the third persisting — three distinct facts the
+    // comment must not shuffle.
+    const forge = forgeStub({ files: TWO_FILES });
+    forge.listComments = async () => [
+      previousComment(
+        previousRecord([
+          {
+            kind: "style",
+            file: "src/b.mjs",
+            line: 2,
+            severity: "nit",
+            message: "naming",
+            subject: "b2",
+            lifecycle: "unresolved",
+          },
+        ]),
+      ),
+    ];
+    const result = await runReview(forge, [READS, { content: THREE }, VERDICT, VERDICT]);
+    expect(result.outcome).toBe("published");
+    const body = forge.calls.upserts[0]?.body ?? "";
+    // The collapse itself happened: three published findings, two survive.
+    // (The embedded block carries the record minus `collapsed` — the audit
+    // trail is the run's own fact, never the thread's — so the pin reads
+    // the canonical result, and the block is checked against it.)
+    if (result.canonical === undefined) throw new Error("a published run lost its record");
+    expect(result.canonical.findings).toHaveLength(2);
+    expect(result.canonical.collapsed).toHaveLength(1);
+    const carried = parseRecordBlock(body);
+    if (carried === undefined) throw new Error("the upsert carried no readable record");
+    expect(carried.findings).toEqual(result.canonical.findings);
+    expect(body).toContain("- `src/a.mjs:2` — off-by-one [new]");
+    expect(body).toContain("- `src/a.mjs:2` — the arithmetic is off [new]");
+    expect(body).toContain("- `src/b.mjs:2` — naming [persisting]");
+    expect(body).toContain("Compared with the previous review: 1 persisting, 2 new.");
+    expect(body).not.toContain("Resolved since the last review");
+  });
 });

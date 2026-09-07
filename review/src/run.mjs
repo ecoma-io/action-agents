@@ -43,6 +43,7 @@ import {
 } from "./verify.mjs";
 import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
 import { createCanonicalResult, withRunPublication } from "./canonical.mjs";
+import { findingFingerprint, normalisePath, normaliseSubject } from "./identity.mjs";
 import { decideReviewGate } from "./merge-gate.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { embedRecordBlock, previousRecord } from "./record.mjs";
@@ -694,16 +695,36 @@ export async function reviewPullRequest({
   );
   const reconciled =
     previous === undefined ? undefined : reconcile({ previous, current: canonical });
-  // canonical.findings is built from `published` in order, so the labels
-  // join by index — no fingerprint matching duplicated here; reconcile is
-  // the single source of the pairing.
-  const labelledFindings =
+  // canonical.findings is built from `published` in order but not to the
+  // same length: published findings sharing an identity collapse to one
+  // canonical finding. `reconciled.current` is aligned to
+  // canonical.findings, so the labels join by identity — the same
+  // `findingFingerprint` the canonical constructor collapses on — never
+  // by index: a collapsed duplicate carries its survivor's label, never a
+  // neighbour's. Reconcile stays the single source of the pairing.
+  const labelOfFingerprint =
     reconciled === undefined
-      ? published
-      : published.map((finding, index) => {
-          const label = reconciled.current[index]?.reconciliation;
-          return label === undefined ? finding : { ...finding, reconciliation: label };
-        });
+      ? undefined
+      : new Map(
+          canonical.findings.map((finding, index) => [
+            finding.fingerprint,
+            reconciled.current[index]?.reconciliation,
+          ]),
+        );
+  const labelledFindings = published.map((finding, index) => {
+    const input = canonicalFindings[index];
+    const label =
+      input === undefined
+        ? undefined
+        : labelOfFingerprint?.get(
+            findingFingerprint({
+              file: normalisePath(input.file),
+              kind: input.kind,
+              subject: normaliseSubject(input.subject),
+            }),
+          );
+    return label === undefined ? finding : { ...finding, reconciliation: label };
+  });
 
   const body = renderComment({
     status: status.label,
