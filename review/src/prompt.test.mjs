@@ -57,7 +57,7 @@ describe("strictness mode paragraphs", () => {
   it("low: prioritises concerns, light investigation, precise anchors", () => {
     const system = systemOf(parts({ strictness: "low" }));
     expect(system).toContain('strictness "low"');
-    expect(system).toContain("prioritise concerns over completeness");
+    expect(system).toContain("prioritise a few confident concerns over a broad report");
     expect(system).toContain("Report only findings you are confident matter");
     expect(system).toContain("Investigate lightly");
   });
@@ -82,6 +82,17 @@ describe("strictness mode paragraphs", () => {
   it("exactly one strictness paragraph is present", () => {
     const system = systemOf(parts({ strictness: "high" }));
     expect(system.match(/Review mode — strictness/g) ?? []).toHaveLength(1);
+  });
+
+  it("every strictness carries the coverage mandate the verdict enforces (#421)", () => {
+    for (const strictness of /** @type {const} */ (["low", "medium", "high"])) {
+      const system = systemOf(parts({ strictness }));
+      expect(system).toContain("read every changed file with the provided tools");
+      expect(system).toContain("an incomplete review is no pass");
+      // The mandate states the code's law in the gate's own words; it never
+      // promises an enforcement mechanism prose cannot run.
+      expect(system).not.toMatch(/will be enforced|guaranteed|automatically checks/);
+    }
   });
 });
 
