@@ -116,6 +116,10 @@ statement); ADR 004's superseded-in-part banner; ADR 005's second addendum.
 Live record at landing, read from the GitHub API on 2026-09-07: the `main`
 ruleset requires `ci-gate` and `analysis-gate` and carries a code-scanning
 requirement over CodeQL and Semgrep OSS at the `errors` threshold;
-review's `category: review` analyses have never carried an alert — the
-upload path is exercised by tests, not yet by history, and verifying its
-lifecycle is part of the migration rather than an assumption.
+review's `category: review` upload path is in history — three live analyses
+under tool `ecoma-io/action-agents/review`, all from 2026-09-07, each an
+empty analysis (`result_count: 0`, `rules_count: 0`), the no-findings shape
+decision 3 predicts — but no review analysis has yet carried a finding, so
+the finding→alert lifecycle a confirmed finding would ride is exercised by
+tests, not yet by history, and verifying it stays part of the migration
+rather than an assumption.

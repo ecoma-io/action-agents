@@ -37,7 +37,7 @@ Bảo trì kho lưu trữ là công việc mà không ai lên lịch: gán nhãn
 - **Agentic khi nó xứng đáng** — `review` quyết định đọc gì, xác minh trước khi yêu cầu, và gói gọn bản ghi của mình thay vì cắt ngắn diff của bạn.
 - **Giới hạn bởi workflow của bạn, không phải bởi prompt của chúng tôi** — cấu hình mô tả hành vi; khối `permissions:` là ranh giới bảo mật.
 
-> **Trạng thái: đã phát hành.** v0.5.0 đã ra mắt — cả `v0.5` (thẻ nổi) lẫn `v0.5.0` (thẻ chính xác) đều có thể ghim, và ví dụ dưới đây phân giải được.
+> **Trạng thái: đã phát hành.** Mọi thẻ đều có thể ghim — các thẻ nổi (`v0.10`) theo dõi bản vá mới nhất của nhánh minor, thẻ chính xác (`v0.10.0`) không bao giờ di chuyển — và ví dụ dưới đây phân giải được. Xem chiến lược ghim trong tài liệu tiếng Anh (mục Pinning strategy của README.md); [CHANGELOG.md](CHANGELOG.md) ghi lại những gì đã phát hành, vào lúc nào.
 
 ## Get started
 

@@ -1,5 +1,12 @@
 # Review-enforcement pipeline audit (PHASE 0)
 
+> **Frozen historical record.** This is the Phase-0 audit of the
+> review-enforcement program, kept as written; the merge gate it audited and
+> the program built — the `review gate` check run, `gate-mode` and the
+> merge-group skip — is retired by
+> [ADR 006](../adr/006-code-scanning-merge-enforcement.md) (#436), and
+> review declares no merge consequence of its own.
+
 Recorded 2026-09-06 on `hardening/pr1-contract-lock` (base `main` @ `ad76345`).
 Scope: the `review` action's canonical-result pipeline — comment publication,
 record recovery, merge gate, check run, SARIF projection, run artifact — and

@@ -43,23 +43,32 @@ re-worded description does not change the code under review. There is no
 All inputs listed below. Shared inputs are documented in the
 [development configuration page](../development/configuration.md).
 
-| Input                | Required | Default            | What it does                                                                                                                                           |
-| -------------------- | -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `github-token`       | yes      | —                  | Token for GitHub API calls.                                                                                                                            |
-| `api-url`            | yes      | —                  | Base URL of an OpenAI-compatible endpoint.                                                                                                             |
-| `api-key`            | no       | —                  | Key for that endpoint. Leave unset for keyless endpoints.                                                                                              |
-| `model`              | yes      | —                  | Model id to ask.                                                                                                                                       |
-| `request-timeout-ms` | no       | `120000`           | Per-attempt timeout in milliseconds.                                                                                                                   |
-| `config-path`        | no       | `""`               | Override the config file location.                                                                                                                     |
-| `max-turns`          | no       | `30`               | Ceiling on agent turns.                                                                                                                                |
-| `context-window`     | no       | `128000`           | Token budget of the configured model.                                                                                                                  |
-| `dry-run`            | no       | `false`            | Review and log, comment nothing.                                                                                                                       |
-| `artifact-path`      | no       | `.review-artifact` | Directory for the machine-readable run record.                                                                                                         |
-| `gate-mode`          | no       | `observe`          | What the merge gate does with its verdict: `observe` records it and blocks nothing; `required` renders a check run a branch ruleset can make required. |
+| Input                | Required | Default            | What it does                                              |
+| -------------------- | -------- | ------------------ | --------------------------------------------------------- |
+| `github-token`       | yes      | —                  | Token for GitHub API calls.                               |
+| `api-url`            | yes      | —                  | Base URL of an OpenAI-compatible endpoint.                |
+| `api-key`            | no       | —                  | Key for that endpoint. Leave unset for keyless endpoints. |
+| `model`              | yes      | —                  | Model id to ask.                                          |
+| `request-timeout-ms` | no       | `120000`           | Per-attempt timeout in milliseconds.                      |
+| `config-path`        | no       | `""`               | Override the config file location.                        |
+| `max-turns`          | no       | `30`               | Ceiling on agent turns.                                   |
+| `context-window`     | no       | `128000`           | Token budget of the configured model.                     |
+| `dry-run`            | no       | `false`            | Review and log, comment nothing.                          |
+| `artifact-path`      | no       | `.review-artifact` | Directory for the machine-readable run record.            |
 
 **`max-turns`**: the agent loop reads files (tools), reflects, and decides what
 to read next. Reaching the ceiling ends the review and says so in the comment;
 it never posts a partial review as if it were complete.
+
+**Unread changed files**: before the reviewer's natural stop is accepted while
+changed files remain unread, the loop sends one corrective message listing
+them and offers the reading tools again for another round. The list is the
+coverage ledger's own — paths only, computed in code, never the reviewer's
+self-report — and the notice fires once per run: a second stop is accepted
+wherever coverage then stands, and a run a bound ended (`max-turns`, the tool
+ceilings) never reaches it. The notice is effort, not enforcement: a review
+that still ends with files unread records the `fail` verdict wherever it
+publishes.
 
 **`context-window`**: the token budget of the configured model. The agent
 compacts its transcript before reaching it. Set this to match your model's
@@ -334,29 +343,32 @@ workflow choice.
 
 **Marker comment**: one comment per pull request, created or updated in place by
 its marker. The comment carries the review's findings with their verification
-states — confirmed, refuted, unresolved — policy and risk table, gate outcomes,
-and the phase log. It also embeds the published run's canonical record as a
-machine-readable block, so the next run can reconcile against it.
+states — confirmed, refuted, unresolved — under the run's status banner
+(Complete or Partial, with the reason when partial), the examined-files count,
+and a provenance line naming the policy source the run read. It also embeds the
+published run's canonical record as a machine-readable block, so the next run
+can reconcile against it.
 
 **Cross-run labels**: when the previous marker comment carried a readable
 record, code compares the two published records and tags every finding
 `[new]`, `[persisting]`, `[moved]` or `[resolved]`, adds a one-line comparison
 count under the summary, and lists the findings that resolved where they
 retired. The labels are informational prose over the same facts the artifact
-already carries: they never change the gate verdict, the SARIF projection or
-any exit code, and a missing or unreadable previous record simply renders the
-comment as a first run.
+already carries: they never change the recorded verdict, the SARIF projection
+or any exit code, and a missing or unreadable previous record simply renders
+the comment as a first run.
 
 **Run artifact** (when `dry-run` is `false`): a machine-readable JSON file
 written inside the workspace at `artifact-path`, named after the reviewed commit.
-The file carries the same facts the comment renders; every bound verdict also
-records the sha256 of the exact evidence window it judged plus a bounded
-retention excerpt of it, so a consumer can re-check the content behind the
-verdict. Skipped runs leave a record too — a skip record naming which skip
-path wrote it, under the same upload glob — and so does a red exit: a
-`refused` record when one of the run's own ceilings declined to act, a
-`failed` record for anything else. Upload the records as a workflow
-artifact to keep them across runs:
+The file carries what the comment renders plus what it does not: the policy the
+run ran under, the per-file risk table, the declared run gates' outcomes and
+the phase log. Every bound verdict also records the sha256 of the exact
+evidence window it judged plus a bounded retention excerpt of it, so a
+consumer can re-check the content behind the verdict. Skipped runs leave a
+record too — a skip record naming which skip path wrote it, under the same
+upload glob — and so does a red exit: a `refused` record when one of the run's
+own ceilings declined to act, a `failed` record for anything else. Upload the
+records as a workflow artifact to keep them across runs:
 
 ```yaml
 - name: Upload the run artifact
@@ -382,31 +394,38 @@ uploads as `review-artifact-refused-<head sha>.json` or
 resolved a head writes `no-head` in the sha's place — retention tooling that
 parses shas out of these names must tolerate `no-head`.
 
-**Job outputs** (after a published review): `gate-verdict` — the merge gate's
-verdict as surfaced, `PASS` or `BLOCK` in `required` mode and `OBSERVE-PASS`
-or `OBSERVE-BLOCK` in `observe` mode — and `sarif-path`, the SARIF projection
-of the same record, written under the runner's temp directory (never inside
-the workspace, which the checkout owns). `sarif-path` is present when the
-write succeeded; a failed write is a logged loss that never disguises itself
-as success.
+**Job outputs**: `sarif-path` — present after a published review whose SARIF
+write succeeded, the path of the projection written under the runner's temp
+directory (never inside the workspace, which the checkout owns) — and
+`artifact-file`, the exact record file the run wrote, set at every terminal
+that declares a record, a red run's refused or failed record included. A
+failed SARIF write is a logged loss that never disguises itself as success;
+a terminal that declares no record leaves `artifact-file` empty and logs
+that it did.
 
-**Merge gate**: the gate is code's deterministic decision over the published
-record — a finding the verification confirmed or could not resolve blocks,
-under every kind in the vocabulary, and a refuted finding never blocks.
-`gate-mode` chooses whether the verdict enforces:
+**Merge enforcement**: review declares none
+([ADR 006](../adr/006-code-scanning-merge-enforcement.md)) — there is no
+`gate-mode` input, no `gate-verdict` output, and no check run. What the
+action produces is a record and its projections, and what any of them does
+at a merge is the consumer's decision, made in GitHub's own protection
+surfaces:
 
-- `observe` (the default) — the verdict lands on the outputs and a `neutral`
-  `review gate` check run, and blocks nothing. Roll out with this first.
-- `required` — the check run's conclusion is `success` on a PASS and
-  `failure` on a BLOCK: the run a branch ruleset can make required.
+- The recorded verdict — `pass`, `fail`, `unknown`, and `unknown` and `fail`
+  never pass — is a recording, not an enforcement: an incomplete review
+  publishes its `fail` through every surface review owns and stays a green
+  run. Nothing review writes blocks a merge.
+- The SARIF projection publishes confirmed findings only — a refuted claim
+  was answered wrong and an unresolved one carries no verdict, and neither
+  enters Code Scanning. An `unresolved` finding is recorded in the comment
+  and the artifact and is no longer merge-blocking.
+- A repository that wants confirmed findings to block merges points its Code
+  Scanning protection rules — or its branch ruleset's code-scanning
+  requirement — at the upload below. Thresholds, per-tool scoping and alert
+  dismissal are that ruleset's vocabulary, never an input of this action. A
+  repository that opts out still gets the visibility: the alerts exist in
+  the Security tab either way.
 
-The action's own exit never fails on a BLOCK — enforcement is the check
-run's and the ruleset's job, so a BLOCK is still a published, green run with
-its outputs standing. A branch ruleset requiring the `review gate` check is
-satisfied by the neutral `observe`-mode check — a ruleset only starts
-enforcing after the workflow sets `gate-mode: required`. A refused or failed
-run renders no gate check run at all, which a ruleset treats as pending:
-fail-closed. The SARIF upload is the consumer's step:
+The upload is the consumer's step:
 
 ```yaml
 - id: review
@@ -416,20 +435,32 @@ fail-closed. The SARIF upload is the consumer's step:
     api-url: ${{ vars.LLM_API_URL }}
     api-key: ${{ secrets.LLM_API_KEY }}
     model: ${{ vars.LLM_MODEL }}
-- name: Upload the SARIF projection
+- name: Upload the review's SARIF
   if: steps.review.outputs.sarif-path != ''
-  uses: github/codeql-action/upload-sarif@v3
+  uses: github/codeql-action/upload-sarif@v4
   with:
     sarif_file: ${{ steps.review.outputs.sarif-path }}
     category: review
 ```
 
-`sarif-path` exists only after a published review, so the upload runs on
-exactly the terminals whose confirmed findings are in the projection — a
-refused, failed or dry-run run uploads nothing. The consuming job needs
-`security-events: write` (and `actions: read`); the action itself needs
-neither. Pin `upload-sarif` by full SHA in a real workflow; the tag here is
-only for reading.
+`sarif-path` exists only after a published review, and the bare `if:` — no
+`always()` — skips the upload on every other terminal, so a refused, failed,
+abandoned, skipped or dry-run run uploads nothing; the failed review step
+has already made the job red. If the upload step itself fails, the job is
+red with it — the enforcement input never silently disappears. A published
+run with no confirmed findings uploads an empty analysis, which Code
+Scanning records as no alerts: a no-findings or incomplete review is
+indistinguishable from clean to Code Scanning, which is the point —
+enforcement attaches to findings, and completeness is spoken about only by
+review's own surfaces (the `fail` verdict, the partial posture, the run
+artifact), never merge-enforced. To turn the alerts into a merge
+requirement, add a code scanning protection rule for the tool
+`ecoma-io/action-agents/review` (Settings → Code security → Code scanning →
+Protection rules), or a `Require code scanning results` requirement naming
+that tool in the branch ruleset, at the threshold the repository wants.
+The consuming job needs `security-events: write` (and `actions: read`); the
+action itself needs neither. Pin `upload-sarif` by full SHA in a real
+workflow; the tag here is only for reading.
 
 ## Cost and budget controls
 

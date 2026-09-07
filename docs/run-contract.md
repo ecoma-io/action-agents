@@ -88,7 +88,7 @@ runner's workspace, delivered by the workflow's upload step — so a run's
 account outlives the runner log. The contract's rules for every record:
 
 - **One record per run, at every terminal point the action declares.** A
-  landed mutation, a dry run, a gate skip: each ends in a record. A
+  landed mutation, a dry run, a terminal with nothing to write: each ends in a record. A
   failure's posture is per action — triage records at its own terminal
   points, failures included; harmonise's red terminals are declared too:
   any throw its run did not declare — a config refusal, a transport break,
@@ -120,8 +120,8 @@ account outlives the runner log. The contract's rules for every record:
 - **The `outcome` speaks the terminal-state vocabulary above, whole.** A word
   outside it is a word the contract has not defined — triage and harmonise
   write their records' `outcome` from it, and review's artifact speaks the
-  classification vocabulary its own shapes declare, which the mapping table
-  above maps onto it.
+  classification vocabulary its own shapes declare, mapped onto it by the
+  outcome column of the table above.
 - **Contained before it mutates; observable when it lands.** A record write
   validates its path inside the workspace's containment boundary before any
   filesystem mutation — no symlinked segment is traversed, `.git` never, and
