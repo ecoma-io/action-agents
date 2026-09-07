@@ -47,6 +47,14 @@ name: Review
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # The merge queue's head reports here too (#412): the queue waits for every
+  # required check to report against the queued ref, and `review gate` is one
+  # of them. A merge_group run is a declared skip — the action answers it
+  # with a neutral `review gate` check run on the group head and writes
+  # nothing else. Each member pull request was already reviewed on its own
+  # head, which stays the enforcement surface; under ALLGREEN a pull request
+  # only enters a group when its own required checks were green.
+  merge_group:
   # `edited` is deliberately absent — a re-worded description does not change
   # the code under review, and re-reviewing it would only churn the comment.
   # There is no workflow_dispatch: without a pull request there is nothing
@@ -61,9 +69,10 @@ on:
 permissions: read-all
 
 # One review per pull request: a rapid push sequence replaces the queued run
-# rather than stacking reviews of stale heads.
+# rather than stacking reviews of stale heads. A merge_group run carries no
+# pull request to number, so it groups by its own head sha instead (#412).
 concurrency:
-  group: review-${{ github.event.pull_request.number }}
+  group: review-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:

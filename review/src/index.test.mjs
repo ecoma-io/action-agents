@@ -149,7 +149,9 @@ describe("readEvent", () => {
   });
 
   it("refuses any other event name before touching the payload", () => {
-    expect(() => readEvent("issues", "/dev/null")).toThrow(/runs on 'pull_request' events only/);
+    expect(() => readEvent("issues", "/dev/null")).toThrow(
+      /runs on 'pull_request' and 'merge_group' events only/,
+    );
     expect(() => readEvent("workflow_dispatch", "/dev/null")).toThrow(/pull_request/);
   });
 
@@ -220,9 +222,11 @@ describe("readEvent", () => {
   });
 
   it("still refuses a genuinely unknown event name — the widening stops at merge_group (F-01)", () => {
-    expect(() => readEvent("push", "/dev/null")).toThrow(/runs on 'pull_request' events only/);
+    expect(() => readEvent("push", "/dev/null")).toThrow(
+      /runs on 'pull_request' and 'merge_group' events only/,
+    );
     expect(() => readEvent("repository", "/dev/null")).toThrow(
-      /runs on 'pull_request' events only/,
+      /runs on 'pull_request' and 'merge_group' events only/,
     );
   });
 });
@@ -249,7 +253,7 @@ describe("main", () => {
     try {
       const outcome = await main(runnerEnv({ eventName: "push" }));
       expect(outcome.ok).toBe(false);
-      expect(outcome.message).toMatch(/pull_request' events only/);
+      expect(outcome.message).toMatch(/merge_group' events only/);
       expect(process.exitCode).toBe(1);
     } finally {
       process.exitCode = before;
@@ -343,7 +347,7 @@ describe("run over injected io", () => {
         now: () => 0,
         info: () => undefined,
       }),
-    ).rejects.toThrow(/pull_request' events only/);
+    ).rejects.toThrow(/merge_group' events only/);
   });
 });
 

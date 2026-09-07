@@ -15,6 +15,7 @@ import {
   buildAbandonedArtifact,
   buildArtifact,
   buildDryRunArtifact,
+  buildMergeGroupSkipRecord,
   buildRedArtifact,
   buildSkippedArtifact,
   buildSkipRecord,
@@ -1989,6 +1990,53 @@ describe("buildSkipRecord", () => {
       expect(name).toMatch(/^review-artifact-.*\.json$/);
       expect(name).toContain(record.kind === "state" ? "skip" : "skip");
     }
+  });
+});
+
+describe("buildMergeGroupSkipRecord", () => {
+  /** A valid merge-group skip's inputs — the shape the entrypoint hands over (#412). */
+  const recordInput = (over = {}) => ({
+    repository: "acme/widgets",
+    headRef: HEAD,
+    reason:
+      "merge-group head — the merge queue's re-verification surface; " +
+      "each member pull request was reviewed on its own head",
+    ...over,
+  });
+
+  it("builds the reduced record — applicability version, exact keys, no invented facts", () => {
+    const record = buildMergeGroupSkipRecord(recordInput());
+    expect(record.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
+    expect(record.kind).toBe("merge-group");
+    expect(record.outcome).toEqual({
+      classification: "skip",
+      reason: recordInput().reason,
+    });
+    // A group head is not a pull request, and the run read no policy before
+    // it declined: neither fact is invented to fit the family's fuller shape.
+    const round = JSON.parse(serialiseArtifact(record));
+    expect(Object.keys(round).sort()).toEqual(
+      ["headRef", "kind", "outcome", "repository", "schemaVersion"].sort(),
+    );
+  });
+
+  it("serialises byte-deterministically — same inputs, identical bytes", () => {
+    const first = serialiseArtifact(buildMergeGroupSkipRecord(recordInput()));
+    const second = serialiseArtifact(buildMergeGroupSkipRecord(recordInput()));
+    expect(first).toBe(second);
+  });
+
+  it("refuses a bad head sha and empty text — fail-closed", () => {
+    expect(() =>
+      buildMergeGroupSkipRecord(recordInput({ headRef: "gh-readonly-queue/main/pr-7" })),
+    ).toThrow(/merge-group skip record\.headRef must be a 40-char hex commit sha/);
+    expect(() => buildMergeGroupSkipRecord(recordInput({ repository: "" }))).toThrow(ArtifactError);
+    expect(() => buildMergeGroupSkipRecord(recordInput({ reason: "" }))).toThrow(ArtifactError);
+  });
+
+  it("names a delivery file inside the artifact upload glob", () => {
+    const record = buildMergeGroupSkipRecord(recordInput());
+    expect(`review-artifact-skip-${record.headRef}.json`).toMatch(/^review-artifact-.*\.json$/);
   });
 });
 

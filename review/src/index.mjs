@@ -4,8 +4,10 @@
  * The shape is the other actions': `readInputs` is pure over an environment;
  * `run` takes inputs and runner context and drives `reviewPullRequest` over
  * the real io; `main` is the only place that touches process state. An event
- * that is not a `pull_request` is a red refusal here, exactly as a thread
- * that is neither issue nor pull request is in `triage`.
+ * that is neither a `pull_request` nor a `merge_group` is a red refusal
+ * here, exactly as a thread that is neither issue nor pull request is in
+ * `triage`; a `merge_group` run is a declared skip (#412) — the queue's
+ * re-verification surface, answered before anything assumes a pull request.
  *
  * `run` is also the red boundary (#355), the twin of harmonise's (#347): a
  * throw out of `reviewPullRequest` still leaves the run's one artifact —
@@ -43,7 +45,12 @@ import {
 } from "#core/runtime.mjs";
 
 import { reviewPullRequest } from "./run.mjs";
-import { buildRedArtifact, RED_REASON_CHARS, serialiseArtifact } from "./artifact.mjs";
+import {
+  buildMergeGroupSkipRecord,
+  buildRedArtifact,
+  RED_REASON_CHARS,
+  serialiseArtifact,
+} from "./artifact.mjs";
 import { toSarif } from "./sarif.mjs";
 import { VERDICT_REASON_CHARS } from "./verify.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
@@ -113,18 +120,67 @@ export const PULL_REQUEST_ACTIVITY_TYPES = Object.freeze([
 ]);
 
 /**
- * The event this action answers to, read once from the runner-provided
- * payload file. Any other event name — or any payload activity type outside
- * the declared set, or none at all — is a refusal, not a silent success.
+ * The event facts a pull_request run carries.
+ *
+ * @typedef {object} PullRequestEventFacts
+ * @property {"pull_request"} eventName
+ * @property {number} pullRequestNumber
+ * @property {Record<string, unknown>} event
+ */
+
+/**
+ * The event facts a merge_group run carries (#412). A merge_group payload
+ * has no pull_request object, so the one fact a run needs is the queued
+ * head the check run lands on.
+ *
+ * @typedef {object} MergeGroupEventFacts
+ * @property {"merge_group"} eventName
+ * @property {string} mergeGroupHeadSha the queued group head, full 40 hex chars
+ * @property {Record<string, unknown>} event
+ */
+
+/** @typedef {PullRequestEventFacts | MergeGroupEventFacts} EventFacts */
+
+/** A commit sha is exactly 40 hex characters; anything else is not a head. */
+const HEAD_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * @overload
+ * @param {"pull_request"} eventName
+ * @param {string} eventPath
+ * @returns {PullRequestEventFacts}
+ */
+/**
+ * @overload
+ * @param {"merge_group"} eventName
+ * @param {string} eventPath
+ * @returns {MergeGroupEventFacts}
+ */
+/**
+ * @overload
+ * @param {string} eventName
+ * @param {string} eventPath
+ * @returns {EventFacts}
+ */
+/**
+ * The events this action answers to, read once from the runner-provided
+ * payload file: `pull_request`, the enforcement surface — one review per
+ * pull request — and `merge_group` (#412), the merge queue's
+ * re-verification surface, which the run answers with a declared skip. Any
+ * other event name — or any pull_request payload activity type outside the
+ * declared set, or none at all — is a refusal, not a silent success. The
+ * overloads type the facts per event, so a caller cannot read a pull
+ * request number off a merge_group run.
  *
  * @param {string} eventName
  * @param {string} eventPath
- * @returns {{ eventName: string, pullRequestNumber: number, event: Record<string, unknown> }}
+ * @returns {EventFacts}
  */
 export function readEvent(eventName, eventPath) {
-  if (eventName !== "pull_request") {
+  if (eventName !== "pull_request" && eventName !== "merge_group") {
     throw new Error(
-      `review runs on 'pull_request' events only — this run was triggered by '${eventName}'`,
+      `review runs on 'pull_request' and 'merge_group' events only — ` +
+        `this run was triggered by '${eventName}'`,
     );
   }
   let event;
@@ -136,6 +192,23 @@ export function readEvent(eventName, eventPath) {
       `the workflow event could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
       { cause },
     );
+  }
+  if (eventName === "merge_group") {
+    const group = /** @type {Record<string, unknown>} */ (event)["merge_group"];
+    const head = /** @type {Record<string, unknown> | undefined} */ (
+      typeof group === "object" && group !== null ? group : undefined
+    )?.["head_sha"];
+    if (typeof head !== "string" || head === "") {
+      throw new Error(
+        "the merge_group event carries no merge_group.head_sha — no head to report the check run on",
+      );
+    }
+    if (!HEAD_SHA.test(head)) {
+      throw new Error(
+        "the merge_group event's head is not a 40-hex commit sha — refusing to report a check run on it",
+      );
+    }
+    return { eventName, mergeGroupHeadSha: head, event };
   }
   const action = /** @type {Record<string, unknown>} */ (event)["action"];
   if (typeof action !== "string" || !PULL_REQUEST_ACTIVITY_TYPES.includes(action)) {
@@ -179,6 +252,61 @@ export async function run(inputs, context, io = {}) {
   // head is the honest "died before the snapshot read" (#355).
   /** @type {import("./run.mjs").ReviewRedFacts} */
   const red = { headRef: null };
+  // ── The merge-group head (#412): the queue's re-verification surface ───
+  // A `merge_group` event is the merge queue re-running a group's checks
+  // against main plus every member. It is not a review subject: each member
+  // pull request was already reviewed on its own head, and under ALLGREEN a
+  // pull request only enters a group when its own required checks were
+  // green. The run declares the skip — before anything assumes a
+  // pull_request payload, which this event does not carry — and lands the
+  // `review gate` check run neutral on the group head, the skip row the
+  // terminal §8 matrix renders. A neutral check counts as reported for a
+  // required ruleset, so the queue reaches ALLGREEN with no second gate and
+  // no rule weakened; the per-PR head stays the enforcement surface.
+  if (event.eventName === "merge_group") {
+    const headSha = event.mergeGroupHeadSha;
+    const reason =
+      "merge-group head — the merge queue's re-verification surface; " +
+      "each member pull request was reviewed on its own head";
+    log(`review: ${reason}`);
+    const artifact = buildMergeGroupSkipRecord({
+      repository: `${context.owner}/${context.repo}`,
+      headRef: headSha,
+      reason,
+    });
+    // The record is the skip's whole outcome, so its write is the run's own
+    // terminal: a failed write here is a red run, never a silently
+    // unrecorded skip — the posture every other skip keeps.
+    const file = writeRunArtifact({
+      workspace: context.workspace,
+      directory: inputs.artifactPath,
+      artifact,
+    });
+    // A declared write publishes the exact file it wrote (#378).
+    setOutput("artifact-file", file);
+    log(`review: run artifact written to ${file}`);
+    try {
+      const check = renderTerminalCheckRun({
+        terminal: "skip",
+        reason,
+        gateMode: inputs.gateMode,
+      });
+      await forge.createCheckRun({
+        headSha,
+        name: check.name,
+        conclusion: check.conclusion,
+        output: { title: check.title, summary: check.summary },
+      });
+    } catch (checkCause) {
+      // Like every write site, a check that cannot land is a logged loss,
+      // never a disguised success (F-14's posture).
+      log(
+        `review: the skip's gate check run was not created: ` +
+          `${checkCause instanceof Error ? checkCause.message : String(checkCause)}`,
+      );
+    }
+    return { outcome: "skip", reason, artifact };
+  }
   let result;
   try {
     result = await reviewPullRequest({
