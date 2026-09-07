@@ -123,3 +123,14 @@ decision 3 predicts — but no review analysis has yet carried a finding, so
 the finding→alert lifecycle a confirmed finding would ride is exercised by
 tests, not yet by history, and verifying it stays part of the migration
 rather than an assumption.
+
+## Addendum — the ruleset requirement is live (2026-09-08)
+
+Decision 2's "repository that wants confirmed findings to block merges"
+is now this repository's posture: on 2026-09-08 the live `main` ruleset
+(id 21322094) gained a third code-scanning tool,
+`ecoma-io/action-agents/review`, at `alerts_threshold: all`, beside CodeQL
+and Semgrep OSS at `errors` — with `ci-gate` and `analysis-gate` and the
+merge queue unchanged. The finding→alert→block→resolve lifecycle this
+record names as unverified-by-history remains the open probe below; the
+ruleset side of the hypothesis is now configured, not assumed.

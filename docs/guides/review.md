@@ -458,8 +458,9 @@ requirement, add a code scanning protection rule for the tool
 `ecoma-io/action-agents/review` (Settings → Code security → Code scanning →
 Protection rules), or a `Require code scanning results` requirement naming
 that tool in the branch ruleset, at the threshold the repository wants.
-The consuming job needs `security-events: write` (and `actions: read`); the
-action itself needs neither. Pin `upload-sarif` by full SHA in a real
+The consuming job needs `security-events: write` (the SARIF upload is the one
+projection that leaves the repository); the action itself needs no grant beyond
+a read of the working tree. Pin `upload-sarif` by full SHA in a real
 workflow; the tag here is only for reading.
 
 ## Cost and budget controls

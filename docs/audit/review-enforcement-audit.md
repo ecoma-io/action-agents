@@ -349,9 +349,10 @@ imports, 170 files, boundary fingerprint `c45fe82a…`), I1–I17 per
    as dogfood folklore (audited: ADR 005).
 4. **Model output never composes calls or enforcement** (I4/I5, C4) — holds by
    construction and corpus; the gate reads structured canonical state only.
-5. **SARIF delivery trust**: the upload consumer will need
-   `security-events: write` and `actions: read` (artifact verification); the
-   action itself never needs either.
+5. **SARIF delivery trust**: the upload consumer needs
+   `security-events: write` (the SARIF upload is the one projection that leaves
+   the repository); the action itself needs no grant beyond a read of the
+   working tree.
 
 ## 8. Terminal × projection matrix (authoritative baseline, Phase 10 input)
 
@@ -506,7 +507,7 @@ corpus and the tools guards are `node --test` trees it never sees, so a green
    then mkdir → realpath → revalidate → cleanup on the validated path →
    write. Delivery: `artifact-file` output, upload passes the exact file,
    `include-hidden-files: true`, `if-no-files-found: warn`, post-upload
-   artifacts-API verification gated on a declared write (+`actions: read`).
+   artifacts-API verification gated on a declared write.
    Tests T15–T16.
 8. **PR8 — PR-execution trust boundary**. The §7.3 questions answered with
    evidence; decision recorded as ADR (pinned-release runtime for untrusted

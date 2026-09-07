@@ -172,4 +172,9 @@ test("GOLDEN: the real forge surface equals the frozen manifest", () => {
   );
   assert.deepEqual(extractForgeOps(forgeSource), manifest.ops);
   assert.equal(manifest.ops.length, 25);
+  // The frozen surface has no Checks API writer: the retired review gate
+  // removed `createCheckRun`, and the one that would recreate it is absent.
+  // The golden pin makes this structural (a re-added op changes both files);
+  // this line states the intent in English so a future diff knows why.
+  assert.ok(!manifest.ops.includes("createCheckRun"), "createCheckRun stays absent");
 });
