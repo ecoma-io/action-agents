@@ -1525,7 +1525,8 @@ describe("the gate surfaces", () => {
           conclusion: "neutral",
           output: {
             title: "review gate: BLOCK",
-            summary: "1 of 1 changed file was never read: src/a.mjs.",
+            summary:
+              "run verdict 'fail' never passes — an incomplete review is no pass.\n1 of 1 changed file was never read: src/a.mjs.",
           },
         },
       ]);

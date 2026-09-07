@@ -659,9 +659,16 @@ export async function reviewPullRequest({
       evidence: { digest: captured.digest, excerpt: captured.excerpt },
     };
   });
+  // The canonical verdict answers "was the review COMPLETE", a different
+  // question from "may the run publish" (the gates above). At low/medium
+  // strictness a run may publish with unread files — the merge gate then
+  // still blocks on them — so the verdict alone must carry the
+  // incompleteness (run-contract: it rides the verdict, never the state).
+  const coverageComplete =
+    outcome.coverage === undefined || outcome.coverage.uncovered.length === 0;
   const canonical = createCanonicalResult({
     head: headSha,
-    run: { state: "published", verdict: report.mayPublish ? "pass" : "fail" },
+    run: { state: "published", verdict: report.mayPublish && coverageComplete ? "pass" : "fail" },
     findings: canonicalFindings,
     coverage: outcome.coverage,
   });
