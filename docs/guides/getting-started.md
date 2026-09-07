@@ -175,7 +175,8 @@ jobs:
         with:
           name: review-run-artifact
           path: .review-artifact/review-artifact-*.json
-          if-no-files-found: ignore
+          include-hidden-files: true
+          if-no-files-found: warn
 ```
 
 `review` runs on `pull_request`, raised from within the repository. Its subject
