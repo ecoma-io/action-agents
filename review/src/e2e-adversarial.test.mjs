@@ -398,7 +398,10 @@ describe("adversarial: coverage and provenance attacks", () => {
     expect(toSarif(canonical).runs[0]?.results ?? []).toEqual([]);
     expect(gateOf(result)).toEqual({
       verdict: "BLOCK",
-      reasons: ["1 of 2 changed files were never read: src/b.mjs."],
+      reasons: [
+        "run verdict 'fail' never passes — an incomplete review is no pass.",
+        "1 of 2 changed files were never read: src/b.mjs.",
+      ],
     });
   });
 });

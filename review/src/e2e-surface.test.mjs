@@ -14,6 +14,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { parseMarker } from "#core/comment.mjs";
 
 import {
+  A_CONTENT,
+  changedFile,
   confirmedConcern,
   context,
   drainWorkspaces,
@@ -100,6 +102,31 @@ async function mixedVerdicts() {
     },
     { content: '{"verdict":"confirmed","kind":"correctness","reason":"the guard is missing"}' },
     { content: '{"verdict":"refuted","kind":"style","reason":"the naming is house style"}' },
+  ]);
+  const { io, log } = replayIo(forge, chat);
+  const result = await reviewPullRequest({
+    inputs: INPUTS,
+    context: context(workspace),
+    pullRequestNumber: 7,
+    eventName: "pull_request",
+    event: EVENT,
+    io,
+  });
+  return { workspace, forge, chat, log, result };
+}
+
+/**
+ * The incomplete-coverage scenario: two changed files, one read — the
+ * default (medium) strictness lets the run conclude and publish anyway.
+ *
+ * @returns {Promise<{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: ReturnType<typeof scriptedChat>, log: string[], result: import("./run.mjs").RunResult }>}
+ */
+async function partiallyCoveredRun() {
+  const workspace = makeWorkspace({ "src/a.mjs": A_CONTENT, "src/b.mjs": "b1\nb2\nb3\n" });
+  const forge = forgeStub({ files: [changedFile("src/a.mjs"), changedFile("src/b.mjs")] });
+  const chat = scriptedChat([
+    readTurn("src/a.mjs"),
+    { content: '{"findings":[],"summary":"nothing to report"}' },
   ]);
   const { io, log } = replayIo(forge, chat);
   const result = await reviewPullRequest({
@@ -289,5 +316,41 @@ describe("cross-surface consistency: mixed verdicts under the adversarial strate
     const observe = renderGateCheckRun({ gate, gateMode: "observe" });
     expect(observe.conclusion).toBe("neutral");
     expect(observe.title).toBe("review gate: BLOCK");
+  });
+});
+
+describe("cross-surface consistency: incomplete coverage rides the verdict, never the state", () => {
+  it("a published run that left changed files unread carries verdict fail — and every surface reads it", async () => {
+    const world = await partiallyCoveredRun();
+    const canonical = canonicalOf(world.result);
+    expect(world.result.outcome).toBe("published");
+    // The default (medium) strictness lets the run conclude — the state
+    // stays published, the run published what it concluded — but the
+    // review was not COMPLETE: the merge gate will block on the unread
+    // file regardless of strictness, so the record's verdict must be the
+    // fail that agrees with it, never a pass the gate contradicts.
+    expect(canonical.run).toEqual({ state: "published", verdict: "fail" });
+    expect(canonical.coverage).toEqual({
+      covered: ["src/a.mjs"],
+      uncovered: ["src/b.mjs"],
+      total: 2,
+    });
+    // The comment embeds exactly this record — the fail rides the thread.
+    expect(parseRecordBlock(bodyOf(world))).toEqual(canonical);
+    // The gate re-derives from the one record: same BLOCK the coverage
+    // forces, no contradiction with the verdict it now carries.
+    expect(gateOf(world.result)).toEqual(decideReviewGate(canonical));
+    expect(gateOf(world.result).verdict).toBe("BLOCK");
+    expect(gateOf(world.result).reasons).toContain(
+      "1 of 2 changed files were never read: src/b.mjs.",
+    );
+    // The SARIF projection of the same record: nothing confirmed, nothing reported.
+    expect(toSarif(canonical).runs[0]?.results ?? []).toEqual([]);
+    // The artifact — the run's machine-readable record — carries the same
+    // published classification and the same coverage facts.
+    expect(world.result.artifact).toMatchObject({
+      outcome: { classification: "published" },
+      coverage: canonical.coverage,
+    });
   });
 });

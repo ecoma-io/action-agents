@@ -126,18 +126,26 @@ jobs:
 
       # The run artifact — policy, risk table, findings with verification
       # states, gate outcomes, coverage, phase log — as a downloadable file.
-      # `always()` keeps the record for runs whose comment step failed, and a
-      # red exit leaves its refused/failed record behind too. Runs that write
-      # no file: the two carve-outs (a death before the run holds the facts
-      # an artifact is built from, and a failed artifact write itself), and
-      # the green dry-run skips, which suppress the record along with
-      # everything else. `if-no-files-found: ignore` keeps the UPLOAD step
-      # green when nothing was written — the run behind it keeps whatever
-      # colour it already had.
+      # The `if` guards both ways: `always()` keeps the record for runs whose
+      # comment step failed — a red exit leaves its refused/failed record
+      # behind — while the non-empty check makes terminals that declare no
+      # record (the two carve-outs: a death before the run holds the facts an
+      # artifact is built from, and a failed artifact write itself; plus the
+      # green dry-run skips, which suppress the record along with everything
+      # else) skip the upload silently — a lost write emits nothing, per the
+      # run contract. The path is the exact file the action declared via
+      # its `artifact-file` output — set on every declared write, a red run's
+      # refused record included — never a glob. Two knobs are load-bearing
+      # (#378): `include-hidden-files: true`, because the record directory is
+      # hidden by design and upload-artifact prunes hidden files by default —
+      # the default matched zero files and still reported success — and
+      # `if-no-files-found: warn`, because a declared write that lands
+      # nowhere must be loud, not a green step over nothing.
       - name: Upload the run artifact
-        if: always()
+        if: always() && steps.review.outputs.artifact-file != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: review-run-artifact
-          path: .review-artifact/review-artifact-*.json
-          if-no-files-found: ignore
+          path: ${{ steps.review.outputs.artifact-file }}
+          include-hidden-files: true
+          if-no-files-found: warn
