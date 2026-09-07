@@ -665,6 +665,7 @@ export async function reviewPullRequest({
   // strictness a run may publish with unread files — the merge gate then
   // still blocks on them — so the verdict alone must carry the
   // incompleteness (run-contract: it rides the verdict, never the state).
+  /** @type {boolean} every changed file read — undefined coverage counts as complete */
   const coverageComplete =
     outcome.coverage === undefined || outcome.coverage.uncovered.length === 0;
   const canonical = createCanonicalResult({
