@@ -45,11 +45,13 @@ inputs:
   artifact-path:
     description: >-
       Directory inside the workspace where the machine-readable run record is
-      written after a published review, as a JSON file named after the
-      reviewed commit. The record carries the same facts the comment renders
-      — policy, risk table, findings with their verification states, gate
-      outcomes, coverage and the phase log — and the write never leaves the
-      workspace. When the review publishes nothing, no file is written.
+      written, as a JSON file named for the run's outcome and the reviewed
+      commit. A record lands at every terminal that declares one — a published
+      review, a skip, an abandonment, a dry run, and the refused or failed red
+      terminals — each carrying what that terminal actually read, and the
+      exact file written is published as the `artifact-file` output. The write
+      never leaves the workspace. A terminal that declares no record, or whose
+      record write failed, leaves no file and logs the loss.
     required: false
     default: ".review-artifact"
   gate-mode:
@@ -67,6 +69,8 @@ outputs:
     description: The merge gate's verdict as surfaced — `PASS` or `BLOCK` in `required` mode, `OBSERVE-PASS` or `OBSERVE-BLOCK` in `observe` mode. Present after a published review.
   sarif-path:
     description: Path to the review's SARIF projection, written under the runner's temp directory. Present after a published review whose SARIF write succeeded.
+  artifact-file:
+    description: Path on the runner to the machine-readable run record this run wrote — the exact file the write laid down, published at every terminal that declares a record, on a published review and on the red boundary's record alike. Empty when the terminal declares no record or the record write failed, and the run logs that it did.
 
 runs:
   using: node24
