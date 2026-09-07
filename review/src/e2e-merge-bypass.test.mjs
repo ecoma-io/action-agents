@@ -488,6 +488,68 @@ describe("merge-bypass: the terminal §8 matrix — every non-published terminal
   }
 });
 
+describe("merge-bypass: the merge-group head reports (#412)", () => {
+  /** The queued head a merge_group event carries — where the check must land. */
+  const GROUP_HEAD = "e".repeat(40);
+
+  /** The merge_group payload the queue sends, shape-only. */
+  const GROUP_EVENT = {
+    action: "checks_requested",
+    merge_group: {
+      head_ref: `gh-readonly-queue/main/pr-7-${"ab12cd34"}`,
+      head_sha: GROUP_HEAD,
+      base_ref: "refs/heads/main",
+      base_sha: "f".repeat(40),
+    },
+  };
+
+  it("a merge_group run reports neutral on the group head and leaves its skip record", async () => {
+    const workspace = makeWorkspace({ "src/a.mjs": A_CONTENT });
+    const forge = forgeStub();
+    const chat = scriptedChat([]);
+    const settled = await driveEntrypoint({
+      workspace,
+      forge,
+      chat,
+      gateMode: "required",
+      eventName: "merge_group",
+      event: GROUP_EVENT,
+    });
+    // The declared skip resolves green: the group head is the queue's
+    // re-verification surface, not a review subject — each member pull
+    // request was reviewed on its own head.
+    expect(settled.ok).toBe(true);
+    expect(settled.result?.outcome).toBe("skip");
+    // The check the queue waits on reports, neutral, on the group head —
+    // the skip row, the same rendering any other skip terminal gets.
+    expect(forge.calls.checkRuns).toHaveLength(1);
+    expect(forge.calls.checkRuns[0]).toMatchObject({
+      headSha: GROUP_HEAD,
+      name: "review gate",
+      conclusion: "neutral",
+      output: {
+        title: "review gate: NEUTRAL (skip)",
+        summary: expect.stringContaining("merge-group head"),
+      },
+    });
+    // The record rides the same delivery as every other skip's: the
+    // artifact-file output names it and the file is in the workspace.
+    const outputs = readFileSync(settled.outFile, "utf8");
+    expect(outputs).toContain("artifact-file=");
+    expect(artifactOf(workspace, `review-artifact-skip-${GROUP_HEAD}.json`)).toMatchObject({
+      kind: "merge-group",
+      headRef: GROUP_HEAD,
+      outcome: { classification: "skip" },
+    });
+    // The gate-verdict output and the SARIF stay published-run surfaces.
+    expect(outputs).not.toContain("gate-verdict");
+    expect(readdirSync(settled.temp)).toEqual(["github-output.txt"]);
+    // A skip spends nothing: no model call, no pull-request read.
+    expect(chat.calls()).toBe(0);
+    expect(forge.calls.pullRequests).toHaveLength(0);
+  });
+});
+
 describe("merge-bypass: published-without-artifact still lands the gate surfaces (T10)", () => {
   it("a forced artifact-write failure renders the gate surfaces from the canonical", async () => {
     const workspace = makeWorkspace({ "src/a.mjs": A_CONTENT });

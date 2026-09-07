@@ -175,6 +175,56 @@ describe("readEvent", () => {
       /no pull_request\.number/,
     );
   });
+
+  it("accepts a merge_group event and reports the queued head — the queue's re-verification surface (#412)", () => {
+    const head = "e".repeat(40);
+    const env = runnerEnv({
+      eventName: "merge_group",
+      event: {
+        action: "checks_requested",
+        merge_group: {
+          head_ref: "gh-readonly-queue/main/pr-7-abcdef",
+          head_sha: head,
+          base_ref: "refs/heads/main",
+          base_sha: "f".repeat(40),
+        },
+      },
+    });
+    const read = readEvent("merge_group", /** @type {string} */ (env.GITHUB_EVENT_PATH));
+    // A merge_group payload carries no pull request, so the fact a skip needs
+    // is the group head the check run must land on — and nothing else.
+    expect(read).toMatchObject({ eventName: "merge_group", mergeGroupHeadSha: head });
+  });
+
+  it("refuses a merge_group event that names no head sha", () => {
+    const env = runnerEnv({
+      eventName: "merge_group",
+      event: {
+        action: "checks_requested",
+        merge_group: { head_ref: "gh-readonly-queue/main/pr-7" },
+      },
+    });
+    expect(() => readEvent("merge_group", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toThrow(
+      /no merge_group\.head_sha/,
+    );
+  });
+
+  it("refuses a merge_group head that is not a 40-hex commit sha", () => {
+    const env = runnerEnv({
+      eventName: "merge_group",
+      event: { action: "checks_requested", merge_group: { head_sha: "not-a-sha" } },
+    });
+    expect(() => readEvent("merge_group", /** @type {string} */ (env.GITHUB_EVENT_PATH))).toThrow(
+      /40-hex/,
+    );
+  });
+
+  it("still refuses a genuinely unknown event name — the widening stops at merge_group (F-01)", () => {
+    expect(() => readEvent("push", "/dev/null")).toThrow(/runs on 'pull_request' events only/);
+    expect(() => readEvent("repository", "/dev/null")).toThrow(
+      /runs on 'pull_request' events only/,
+    );
+  });
 });
 
 describe("main", () => {
