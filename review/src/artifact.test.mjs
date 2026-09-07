@@ -15,7 +15,6 @@ import {
   buildAbandonedArtifact,
   buildArtifact,
   buildDryRunArtifact,
-  buildMergeGroupSkipRecord,
   buildRedArtifact,
   buildSkippedArtifact,
   buildSkipRecord,
@@ -1993,50 +1992,42 @@ describe("buildSkipRecord", () => {
   });
 });
 
-describe("buildMergeGroupSkipRecord", () => {
-  /** A valid merge-group skip's inputs — the shape the entrypoint hands over (#412). */
-  const recordInput = (over = {}) => ({
+describe("a historic merge-group skip record still serialises (parse tolerance)", () => {
+  /**
+   * The exact shape buildMergeGroupSkipRecord wrote before the gate's
+   * retirement (ADR 006) — hand-built because nothing builds it any more.
+   * The schema keeps the key set so an artifact file already on a
+   * consumer's runs stays validatable; no schemaVersion was bumped
+   * (nothing about the surviving shapes changed).
+   *
+   * @returns {Record<string, unknown>}
+   */
+  const historicMergeGroupRecord = () => ({
+    schemaVersion: applicabilityArtifactSchemaVersion,
+    kind: "merge-group",
     repository: "acme/widgets",
     headRef: HEAD,
-    reason:
-      "merge-group head — the merge queue's re-verification surface; " +
-      "each member pull request was reviewed on its own head",
-    ...over,
+    outcome: {
+      classification: "skip",
+      reason:
+        "merge-group head — the merge queue's re-verification surface; " +
+        "each member pull request was reviewed on its own head",
+    },
   });
 
-  it("builds the reduced record — applicability version, exact keys, no invented facts", () => {
-    const record = buildMergeGroupSkipRecord(recordInput());
-    expect(record.schemaVersion).toBe(applicabilityArtifactSchemaVersion);
-    expect(record.kind).toBe("merge-group");
-    expect(record.outcome).toEqual({
-      classification: "skip",
-      reason: recordInput().reason,
-    });
-    // A group head is not a pull request, and the run read no policy before
-    // it declined: neither fact is invented to fit the family's fuller shape.
-    const round = JSON.parse(serialiseArtifact(record));
+  it("a pre-retirement record passes the serialiser unchanged", () => {
+    const bytes = serialiseArtifact(/** @type {any} */ (historicMergeGroupRecord()));
+    const round = JSON.parse(bytes);
+    expect(round.kind).toBe("merge-group");
     expect(Object.keys(round).sort()).toEqual(
       ["headRef", "kind", "outcome", "repository", "schemaVersion"].sort(),
     );
   });
 
-  it("serialises byte-deterministically — same inputs, identical bytes", () => {
-    const first = serialiseArtifact(buildMergeGroupSkipRecord(recordInput()));
-    const second = serialiseArtifact(buildMergeGroupSkipRecord(recordInput()));
-    expect(first).toBe(second);
-  });
-
-  it("refuses a bad head sha and empty text — fail-closed", () => {
-    expect(() =>
-      buildMergeGroupSkipRecord(recordInput({ headRef: "gh-readonly-queue/main/pr-7" })),
-    ).toThrow(/merge-group skip record\.headRef must be a 40-char hex commit sha/);
-    expect(() => buildMergeGroupSkipRecord(recordInput({ repository: "" }))).toThrow(ArtifactError);
-    expect(() => buildMergeGroupSkipRecord(recordInput({ reason: "" }))).toThrow(ArtifactError);
-  });
-
-  it("names a delivery file inside the artifact upload glob", () => {
-    const record = buildMergeGroupSkipRecord(recordInput());
-    expect(`review-artifact-skip-${record.headRef}.json`).toMatch(/^review-artifact-.*\.json$/);
+  it("the same record serialises byte-deterministically", () => {
+    expect(serialiseArtifact(/** @type {any} */ (historicMergeGroupRecord()))).toBe(
+      serialiseArtifact(/** @type {any} */ (historicMergeGroupRecord())),
+    );
   });
 });
 

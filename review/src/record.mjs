@@ -31,7 +31,7 @@
  * wins over the thread, the same order the upsert and the clearing write
  * use, and what a recovered record feeds is rendered prose only: the
  * labels, the count line and the resolved list, all sanitised at render.
- * No consequence ever reads it — the gate, the SARIF projection and every
+ * No consequence ever reads it — the SARIF projection and every
  * exit path read the current canonical record alone.
  *
  * The record is honored only from a comment this run's own token authored,

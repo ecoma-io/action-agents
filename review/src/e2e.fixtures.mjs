@@ -158,7 +158,6 @@ export function readTurn(path) {
  *   calls: {
  *     pullRequests: string[],
  *     upserts: Array<{ op: string, id?: number, body?: string }>,
- *     checkRuns: Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }>,
  *   },
  * }} RecordingForge
  *
@@ -171,8 +170,6 @@ export function forgeStub(options = {}) {
     pullRequests: [],
     /** @type {Array<{ op: string, id?: number, body?: string }>} */
     upserts: [],
-    /** @type {Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }>} */
-    checkRuns: [],
   };
   const snapshots = options.snapshotQueue ?? [snapshot()];
   return {
@@ -218,10 +215,6 @@ export function forgeStub(options = {}) {
       calls.upserts.push({ op: "updated", id, body });
     },
     async deleteComment() {},
-    async createCheckRun(input) {
-      calls.checkRuns.push(input);
-      return { id: 501 };
-    },
   };
 }
 
@@ -247,8 +240,7 @@ export function context(workspace) {
 
 /**
  * The runner-shaped env the entrypoint tests drive `run` over: a real event
- * payload file, the workspace a replay's bytes live in, and no gate-mode
- * unless the test demands one.
+ * payload file and the workspace a replay's bytes live in.
  *
  * @param {{ workspace: string, event?: unknown, eventName?: string, extra?: Record<string, string> }} options
  * @returns {Record<string, string>}
@@ -296,8 +288,8 @@ export const A_CONTENT = "line1\nline2\nline3\n";
 /**
  * The canonical concern scenario, replayed end to end: one read turn, one
  * finding (`concern`/`correctness` at `src/a.mjs:2`), one confirming
- * verdict. The published comment, the SARIF projection and the gate all
- * read the one record this replay returns.
+ * verdict. The published comment and the SARIF projection both read the
+ * one record this replay returns.
  *
  * @returns {Promise<{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: ReturnType<typeof scriptedChat>, log: string[], result: RunResult }>}
  */
@@ -362,10 +354,10 @@ export function drainEntryTemps() {
 
 /**
  * Drives the action's entrypoint over a scripted replay and reports both
- * endings the same way, plus where the runner's surfaces landed: the gate
- * output file and a runner temp that only a SARIF write could fill.
+ * endings the same way, plus where the runner's surfaces landed: the output
+ * file and a runner temp that only a SARIF write could fill.
  *
- * @param {{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: import("#core/chat.mjs").Chat, gateMode?: "observe" | "required", event?: unknown, eventName?: string, extra?: Record<string, string> }} setup
+ * @param {{ workspace: string, forge: ReturnType<typeof forgeStub>, chat: import("#core/chat.mjs").Chat, event?: unknown, eventName?: string, extra?: Record<string, string> }} setup
  * @returns {Promise<{ ok: boolean, result: import("./run.mjs").RunResult | undefined, cause: unknown, outFile: string, temp: string }>}
  */
 export async function driveEntrypoint(setup) {
@@ -385,7 +377,6 @@ export async function driveEntrypoint(setup) {
       ...(setup.eventName === undefined ? {} : { eventName: setup.eventName }),
       extra: {
         RUNNER_TEMP: temp,
-        ...(setup.gateMode === undefined ? {} : { "INPUT_GATE-MODE": setup.gateMode }),
         // Scenario inputs beyond the harness's own — the dry-run row of
         // the terminal matrix (T9) drives `INPUT_DRY-RUN` through here.
         ...(setup.extra ?? {}),

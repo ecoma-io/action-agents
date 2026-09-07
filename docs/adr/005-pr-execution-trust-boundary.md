@@ -202,3 +202,18 @@ retains the acceptance for now: `./review` keeps running as the dogfood,
 the migration stays sketched and unapplied, and #386 stays open to carry
 the migration when the owner schedules it. This addendum records the
 state; it does not reopen the decision or edit it.
+
+## Addendum — the third re-open condition is resolved by the gate's removal (2026-09-07)
+
+[ADR 006](006-code-scanning-merge-enforcement.md) retires the gate this
+record's condition 3 warned about: review no longer declares a merge
+consequence — no `gate-mode`, no check run, and no `checks: write` in the
+dogfood's grant — so the value of a forged required check run that fired
+the condition is gone rather than accepted. The acceptance itself
+(decisions 1–3: the merge-preview runtime, its secrets and its controls)
+is unchanged and stays with #386; what changed is that one grant in the
+accepted risk's worst case — check-run forgery — has left the token. The
+migration sketch above still reads `gate-mode: "observe"`; that input no
+longer exists, and the sketch's line dies with it when the day comes.
+This addendum records the state; it does not reopen the decision or edit
+it.

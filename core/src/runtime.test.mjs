@@ -175,9 +175,9 @@ describe("setOutput", () => {
     const file = p.join(mkdtempSync(p.join(tmpdir(), "outputs-")), "gh-output.txt");
     writeFileSync(file, "");
     setOutput("sarif-path", "/runner/temp/review-sarif.json", { GITHUB_OUTPUT: file });
-    setOutput("gate-verdict", "OBSERVE-BLOCK", { GITHUB_OUTPUT: file });
+    setOutput("verdict", "OBSERVE-BLOCK", { GITHUB_OUTPUT: file });
     expect(readFileSync(file, "utf8")).toBe(
-      "sarif-path=/runner/temp/review-sarif.json\ngate-verdict=OBSERVE-BLOCK\n",
+      "sarif-path=/runner/temp/review-sarif.json\nverdict=OBSERVE-BLOCK\n",
     );
   });
 
@@ -191,8 +191,8 @@ describe("setOutput", () => {
   it("logs the pair when no GITHUB_OUTPUT names a file", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
-      setOutput("gate-verdict", "PASS", {});
-      expect(spy).toHaveBeenCalledWith("output gate-verdict=PASS");
+      setOutput("verdict", "PASS", {});
+      expect(spy).toHaveBeenCalledWith("output verdict=PASS");
     } finally {
       spy.mockRestore();
     }

@@ -4,10 +4,10 @@
  * The shape is the other actions': `readInputs` is pure over an environment;
  * `run` takes inputs and runner context and drives `reviewPullRequest` over
  * the real io; `main` is the only place that touches process state. An event
- * that is neither a `pull_request` nor a `merge_group` is a red refusal
- * here, exactly as a thread that is neither issue nor pull request is in
- * `triage`; a `merge_group` run is a declared skip (#412) — the queue's
- * re-verification surface, answered before anything assumes a pull request.
+ * that is not a `pull_request` is a refusal here, exactly as a thread that
+ * is neither issue nor pull request is in `triage` — review produces, GitHub
+ * disposes (ADR 006), so a `merge_group` event is an unsupported event, not
+ * a review subject, and it reaches no write.
  *
  * `run` is also the red boundary (#355), the twin of harmonise's (#347): a
  * throw out of `reviewPullRequest` still leaves the run's one artifact —
@@ -45,14 +45,8 @@ import {
 } from "#core/runtime.mjs";
 
 import { reviewPullRequest } from "./run.mjs";
-import {
-  buildMergeGroupSkipRecord,
-  buildRedArtifact,
-  RED_REASON_CHARS,
-  serialiseArtifact,
-} from "./artifact.mjs";
+import { buildRedArtifact, RED_REASON_CHARS, serialiseArtifact } from "./artifact.mjs";
 import { toSarif } from "./sarif.mjs";
-import { VERDICT_REASON_CHARS } from "./verify.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
@@ -61,7 +55,7 @@ import { DeterministicRefusalError } from "./refusal.mjs";
 export const ACTION = "review";
 
 /**
- * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string, gateMode: "observe" | "required" }} Inputs
+ * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string }} Inputs
  */
 
 /**
@@ -79,27 +73,7 @@ export function readInputs(env = process.env) {
     // Where inside the workspace the run artifact lands. The default agrees
     // with the manifest; the write is confined below either way.
     artifactPath: getInput("artifact-path", { default: ".review-artifact" }, env),
-    // The merge gate's mode: `observe` (the default) records the verdict on
-    // the run's surfaces and blocks nothing; `required` lets the check run
-    // gate. Never defaulting to `required` is the rollout safety property.
-    gateMode: readGateMode(env),
   };
-}
-
-/**
- * Reads `gate-mode`. Unknown values are a startup failure, not a silent
- * `observe`: an operator who misspells `required` must not get a run that
- * enforces nothing while looking enforced.
- *
- * @param {Env} env
- * @returns {"observe" | "required"}
- */
-function readGateMode(env) {
-  const value = getInput("gate-mode", { default: "observe" }, env);
-  if (value !== "observe" && value !== "required") {
-    throw new Error(`gate-mode must be 'observe' or 'required' — got '${oneLine(value)}'`);
-  }
-  return value;
 }
 
 /**
@@ -129,58 +103,20 @@ export const PULL_REQUEST_ACTIVITY_TYPES = Object.freeze([
  */
 
 /**
- * The event facts a merge_group run carries (#412). A merge_group payload
- * has no pull_request object, so the one fact a run needs is the queued
- * head the check run lands on.
+ * The one event this action answers to, read once from the runner-provided
+ * payload file: `pull_request`, one review per pull request. Any other
+ * event name — `merge_group` included (ADR 006: review does not run for
+ * merge groups) — or any pull_request payload activity type outside the
+ * declared set, or none at all, is a refusal, not a silent success.
  *
- * @typedef {object} MergeGroupEventFacts
- * @property {"merge_group"} eventName
- * @property {string} mergeGroupHeadSha the queued group head, full 40 hex chars
- * @property {Record<string, unknown>} event
- */
-
-/** @typedef {PullRequestEventFacts | MergeGroupEventFacts} EventFacts */
-
-/** A commit sha is exactly 40 hex characters; anything else is not a head. */
-const HEAD_SHA = /^[0-9a-f]{40}$/;
-
-/**
- * @overload
- * @param {"pull_request"} eventName
+ * @param {string} eventName
  * @param {string} eventPath
  * @returns {PullRequestEventFacts}
  */
-/**
- * @overload
- * @param {"merge_group"} eventName
- * @param {string} eventPath
- * @returns {MergeGroupEventFacts}
- */
-/**
- * @overload
- * @param {string} eventName
- * @param {string} eventPath
- * @returns {EventFacts}
- */
-/**
- * The events this action answers to, read once from the runner-provided
- * payload file: `pull_request`, the enforcement surface — one review per
- * pull request — and `merge_group` (#412), the merge queue's
- * re-verification surface, which the run answers with a declared skip. Any
- * other event name — or any pull_request payload activity type outside the
- * declared set, or none at all — is a refusal, not a silent success. The
- * overloads type the facts per event, so a caller cannot read a pull
- * request number off a merge_group run.
- *
- * @param {string} eventName
- * @param {string} eventPath
- * @returns {EventFacts}
- */
 export function readEvent(eventName, eventPath) {
-  if (eventName !== "pull_request" && eventName !== "merge_group") {
+  if (eventName !== "pull_request") {
     throw new Error(
-      `review runs on 'pull_request' and 'merge_group' events only — ` +
-        `this run was triggered by '${eventName}'`,
+      `review runs on 'pull_request' events only — this run was triggered by '${eventName}'`,
     );
   }
   let event;
@@ -192,23 +128,6 @@ export function readEvent(eventName, eventPath) {
       `the workflow event could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
       { cause },
     );
-  }
-  if (eventName === "merge_group") {
-    const group = /** @type {Record<string, unknown>} */ (event)["merge_group"];
-    const head = /** @type {Record<string, unknown> | undefined} */ (
-      typeof group === "object" && group !== null ? group : undefined
-    )?.["head_sha"];
-    if (typeof head !== "string" || head === "") {
-      throw new Error(
-        "the merge_group event carries no merge_group.head_sha — no head to report the check run on",
-      );
-    }
-    if (!HEAD_SHA.test(head)) {
-      throw new Error(
-        "the merge_group event's head is not a 40-hex commit sha — refusing to report a check run on it",
-      );
-    }
-    return { eventName, mergeGroupHeadSha: head, event };
   }
   const action = /** @type {Record<string, unknown>} */ (event)["action"];
   if (typeof action !== "string" || !PULL_REQUEST_ACTIVITY_TYPES.includes(action)) {
@@ -238,8 +157,8 @@ export function readEvent(eventName, eventPath) {
 export async function run(inputs, context, io = {}) {
   const event = readEvent(context.eventName, /** @type {string} */ (context.eventPath));
   const log = io.info ?? ((message) => info(message));
-  // One forge for the run and for the gate surfaces the entrypoint writes
-  // after it — the check run is the same client's write, never a second one.
+  // One forge client for the whole entrypoint — the run's writes and the
+  // entrypoint's own post-run write below share it, never a second one.
   const forge =
     io.forge ??
     createForge({
@@ -252,61 +171,6 @@ export async function run(inputs, context, io = {}) {
   // head is the honest "died before the snapshot read" (#355).
   /** @type {import("./run.mjs").ReviewRedFacts} */
   const red = { headRef: null };
-  // ── The merge-group head (#412): the queue's re-verification surface ───
-  // A `merge_group` event is the merge queue re-running a group's checks
-  // against main plus every member. It is not a review subject: each member
-  // pull request was already reviewed on its own head, and under ALLGREEN a
-  // pull request only enters a group when its own required checks were
-  // green. The run declares the skip — before anything assumes a
-  // pull_request payload, which this event does not carry — and lands the
-  // `review gate` check run neutral on the group head, the skip row the
-  // terminal §8 matrix renders. A neutral check counts as reported for a
-  // required ruleset, so the queue reaches ALLGREEN with no second gate and
-  // no rule weakened; the per-PR head stays the enforcement surface.
-  if (event.eventName === "merge_group") {
-    const headSha = event.mergeGroupHeadSha;
-    const reason =
-      "merge-group head — the merge queue's re-verification surface; " +
-      "each member pull request was reviewed on its own head";
-    log(`review: ${reason}`);
-    const artifact = buildMergeGroupSkipRecord({
-      repository: `${context.owner}/${context.repo}`,
-      headRef: headSha,
-      reason,
-    });
-    // The record is the skip's whole outcome, so its write is the run's own
-    // terminal: a failed write here is a red run, never a silently
-    // unrecorded skip — the posture every other skip keeps.
-    const file = writeRunArtifact({
-      workspace: context.workspace,
-      directory: inputs.artifactPath,
-      artifact,
-    });
-    // A declared write publishes the exact file it wrote (#378).
-    setOutput("artifact-file", file);
-    log(`review: run artifact written to ${file}`);
-    try {
-      const check = renderTerminalCheckRun({
-        terminal: "skip",
-        reason,
-        gateMode: inputs.gateMode,
-      });
-      await forge.createCheckRun({
-        headSha,
-        name: check.name,
-        conclusion: check.conclusion,
-        output: { title: check.title, summary: check.summary },
-      });
-    } catch (checkCause) {
-      // Like every write site, a check that cannot land is a logged loss,
-      // never a disguised success (F-14's posture).
-      log(
-        `review: the skip's gate check run was not created: ` +
-          `${checkCause instanceof Error ? checkCause.message : String(checkCause)}`,
-      );
-    }
-    return { outcome: "skip", reason, artifact };
-  }
   let result;
   try {
     result = await reviewPullRequest({
@@ -377,40 +241,6 @@ export async function run(inputs, context, io = {}) {
           `${recordCause instanceof Error ? recordCause.message : String(recordCause)}`,
       );
     }
-    // ── The terminal check run (#377): a red run lands the review gate
-    // check its §8 row names — `refused` and `failed` are BLOCK rows
-    // (`failure` under `required`, `neutral` under `observe`) — because
-    // absence is never the enforcement state: #377 is a required ruleset
-    // pending forever on a check that never reported. The one carve-out is
-    // a run that died before the snapshot read gave it a head — the
-    // contract names that absence; it is not a posture. Like every write
-    // site here, a check that cannot land is a logged loss, and the
-    // original error still fails the step.
-    try {
-      if (red.headRef === null) {
-        log(
-          `review: the ${classification} run died before the snapshot read — ` +
-            `no head to land the review gate check on (the contract's named carve-out)`,
-        );
-      } else {
-        const check = renderTerminalCheckRun({
-          terminal: classification,
-          reason,
-          gateMode: inputs.gateMode,
-        });
-        await forge.createCheckRun({
-          headSha: red.headRef,
-          name: check.name,
-          conclusion: check.conclusion,
-          output: { title: check.title, summary: check.summary },
-        });
-      }
-    } catch (checkCause) {
-      log(
-        `review: the ${classification} run's gate check run was not created: ` +
-          `${checkCause instanceof Error ? checkCause.message : String(checkCause)}`,
-      );
-    }
     throw cause;
   }
   log(`review: ${result.reason}`);
@@ -446,13 +276,15 @@ export async function run(inputs, context, io = {}) {
     log("review: artifact publish — this terminal declared no run artifact");
   }
 
-  // ── Gate surfaces: the SARIF projection, the job outputs, the check run ──
-  // Only a published run has a canonical record and a verdict. Each surface
-  // is a logged loss on its own failure (F-14 posture for write sites that
-  // are not the run's record): the review's verdict stands on the comment
-  // and the artifact; a SARIF file or a check run that could not be written
-  // is reported, never disguised as success, and never replaces the verdict.
-  if (result.canonical !== undefined && result.gate !== undefined) {
+  // ── Post-run projection: the SARIF file, the one job output review adds ──
+  // Only a published run has a canonical record. The SARIF write is a logged
+  // loss on its own failure (F-14 posture for a write site that is not the
+  // run's record): the review's verdict stands on the comment and the
+  // artifact; a SARIF file that could not be written is reported, never
+  // disguised as success, and never replaces the verdict. There is no
+  // gate-verdict output and no check run — merge enforcement is the
+  // consumer's ruleset over Code Scanning (ADR 006), never this action.
+  if (result.canonical !== undefined) {
     try {
       const sarifPath = writeSarifFile({
         tempDir: context.runnerTemp,
@@ -465,65 +297,12 @@ export async function run(inputs, context, io = {}) {
           `${cause instanceof Error ? cause.message : String(cause)}`,
       );
     }
-    const verdictName =
-      inputs.gateMode === "observe" ? `OBSERVE-${result.gate.verdict}` : result.gate.verdict;
-    setOutput("gate-verdict", verdictName);
-    try {
-      const check = renderGateCheckRun({ gate: result.gate, gateMode: inputs.gateMode });
-      await forge.createCheckRun({
-        headSha: result.canonical.head,
-        name: check.name,
-        conclusion: check.conclusion,
-        output: { title: check.title, summary: check.summary },
-      });
-    } catch (cause) {
-      log(
-        `review: the gate check run was not created: ` +
-          `${cause instanceof Error ? cause.message : String(cause)}`,
-      );
-    }
-  } else {
-    // ── Terminal rows (#377): every non-published terminal lands the
-    // review gate check its §8 row names, from the head the snapshot read
-    // pinned — `skip`, `nothing-to-review` and `dry-run` are non-block
-    // (`neutral` in both modes, recorded and enforcing nothing);
-    // `abandoned` is a BLOCK row (`failure` under `required`, `neutral`
-    // under `observe`). `refused` and `failed` never reach this arm — they
-    // throw into the red boundary above. Absence is never the enforcement
-    // state; the one carve-out is a run that cannot name a head. The
-    // gate-verdict output and the SARIF stay published-run surfaces: only
-    // a canonical record renders those.
-    if (red.headRef === null) {
-      log(
-        `review: the ${result.outcome} run cannot name a head — ` +
-          `the review gate check stays absent (the contract's named carve-out)`,
-      );
-    } else {
-      try {
-        const check = renderTerminalCheckRun({
-          terminal: result.outcome,
-          reason: result.reason,
-          gateMode: inputs.gateMode,
-        });
-        await forge.createCheckRun({
-          headSha: red.headRef,
-          name: check.name,
-          conclusion: check.conclusion,
-          output: { title: check.title, summary: check.summary },
-        });
-      } catch (writeCause) {
-        log(
-          `review: the ${result.outcome} run's gate check run was not created: ` +
-            `${writeCause instanceof Error ? writeCause.message : String(writeCause)}`,
-        );
-      }
-    }
   }
   return result;
 }
 
 /**
- * Writes the gate's SARIF projection under the runner's temp directory —
+ * Writes the review's SARIF projection under the runner's temp directory —
  * never inside the workspace, which the checkout owns and a later step may
  * `git clean`. The bytes are exactly `JSON.stringify(toSarif(canonical))`:
  * no timestamps, no run id, so two projections of the same canonical record
@@ -543,81 +322,6 @@ export function writeSarifFile({ tempDir, canonical }) {
   const file = p.join(realpathSync(tempDir), `review-sarif-${canonical.head}.json`);
   writeFileSync(file, JSON.stringify(toSarif(canonical)), "utf8");
   return file;
-}
-
-/**
- * Renders the merge gate's check run. The conclusion mapping is the whole
- * enforcement story: `required` turns a BLOCK into `failure` (what a
- * branch ruleset reads), a PASS into `success`; `observe` renders `neutral`
- * whatever the verdict — recorded, enforcing nothing. Every rendered string
- * goes through the comment sanitiser even though the reasons are structural,
- * because the discipline is cheaper than the exception.
- *
- * @param {object} input
- * @param {import("./merge-gate.mjs").ReviewGateDecision} input.gate
- * @param {"observe" | "required"} input.gateMode
- * @returns {{ name: string, conclusion: "success" | "failure" | "neutral", title: string, summary: string }}
- */
-export function renderGateCheckRun({ gate, gateMode }) {
-  const observe = gateMode === "observe";
-  const title = sanitiseCommentText(oneLine(`review gate: ${gate.verdict}`), {
-    maxChars: RED_REASON_CHARS,
-  }).text;
-  const reasons = gate.reasons.map(
-    (reason) => sanitiseCommentText(oneLine(reason), { maxChars: VERDICT_REASON_CHARS }).text,
-  );
-  const summary =
-    gate.verdict === "PASS"
-      ? "Every finding in the closed vocabulary is either absent or below the gate's bar."
-      : reasons.length === 0
-        ? "The gate blocked without naming a reason — this sentence is the refusal to guess one."
-        : reasons.join("\n");
-  return {
-    name: "review gate",
-    conclusion: observe ? "neutral" : gate.verdict === "PASS" ? "success" : "failure",
-    title: title === "" ? "review gate" : title,
-    summary,
-  };
-}
-
-/**
- * Renders a non-published terminal's review gate check run — the §8
- * matrix's rows for the endings that never reach the published surfaces.
- * The blocking terminals — `refused`, `failed`, `abandoned` — render
- * `failure` under `required` and `neutral`-with-the-block-named under
- * `observe`; the recorded-not-enforcing terminals — `skip`,
- * `nothing-to-review`, `dry-run` — render `neutral` in both modes. Any
- * other terminal is fail-closed: it renders the BLOCK row, never an
- * absence (#377). Every string goes through the comment sanitiser — the
- * same discipline `renderGateCheckRun` keeps — because a terminal reason
- * can interpolate a thrown message.
- *
- * @param {object} input
- * @param {string} input.terminal the run's ending, in outcome vocabulary
- * @param {string | undefined} input.reason the run's own reason sentence
- * @param {"observe" | "required"} input.gateMode
- * @returns {{ name: string, conclusion: "failure" | "neutral", title: string, summary: string }}
- */
-export function renderTerminalCheckRun({ terminal, reason, gateMode }) {
-  const observe = gateMode === "observe";
-  const blocking = !(
-    terminal === "skip" ||
-    terminal === "nothing-to-review" ||
-    terminal === "dry-run"
-  );
-  const verdictName = blocking ? (observe ? "OBSERVE-BLOCK" : "BLOCK") : "NEUTRAL";
-  const title = sanitiseCommentText(oneLine(`review gate: ${verdictName} (${terminal})`), {
-    maxChars: RED_REASON_CHARS,
-  }).text;
-  const summary = sanitiseCommentText(oneLine(reason ?? "", { stripControlChars: true }), {
-    maxChars: VERDICT_REASON_CHARS,
-  }).text;
-  return {
-    name: "review gate",
-    conclusion: blocking && !observe ? "failure" : "neutral",
-    title: title === "" ? "review gate" : title,
-    summary: summary === "" ? `the run ended ${terminal} without a reason` : summary,
-  };
 }
 
 /**

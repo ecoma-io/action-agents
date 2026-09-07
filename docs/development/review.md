@@ -45,6 +45,13 @@ missing or wrong gets the same red refusal as one that triggered on the
 wrong event name, not a silent success. The same posture as `triage`'s
 thread reader.
 
+There is no `merge_group` trigger and no merge-group path
+([ADR 006](../adr/006-code-scanning-merge-enforcement.md)): review runs for
+the pull request, not for the queue. The event gate refuses any event name
+other than `pull_request` — a `merge_group` event that still reaches the
+action, because a calling workflow added the trigger back, gets the same red
+refusal as any unsupported event and writes nothing: no comment, no record.
+
 Permissions: `contents: read` and `pull-requests: write` — a comment is the
 whole write surface.
 
@@ -675,10 +682,21 @@ One turn is one model response, and the accounting is exact:
   partial, bound named;
 - the same finalisation request ends the loop when the tool-call or evidence
   ceiling fires first;
-- a response carrying no tool calls while reading turns remain is a natural
-  stop: its content is the final-answer candidate, and the review will be
-  complete if the candidate validates and — at strictness `high` — the
-  coverage ledger shows every changed file read;
+- a response carrying no tool calls while changed files are still unread is
+  heard once before it is accepted: the loop sends **one** corrective user
+  message — the uncovered list the coverage ledger computed over the expected
+  set, never the model's self-report, paths only — with the phase's tools
+  offered again for another round. A single once-guard fires it at most one
+  time per run; a second natural stop is accepted wherever coverage then
+  stands; a bound exit never reaches this arm, so a budget-ended run ends
+  incomplete exactly as before. The message is effort, not verdict: a run
+  still incomplete after it records `fail`
+  ([Coverage accounting](#coverage-accounting));
+- a response carrying no tool calls while reading turns remain — the notice
+  above having had its one hearing, or coverage standing complete — is a
+  natural stop: its content is the final-answer candidate, and the review
+  will be complete if the candidate validates and — at strictness `high` —
+  the coverage ledger shows every changed file read;
 - a structurally invalid candidate on the natural-stop path gets **one**
   re-ask — same transcript, corrective instruction, tools withheld, logged.
   The re-ask is not a reading turn and cannot itself call tools; failing it is
@@ -747,7 +765,8 @@ cannot claim it examined — at `high` the coverage gate refuses.
 and uncovered; nothing the model wrote — summary, findings, self-assessment
 — enters the computation.
 
-The verdict is strictness's to set, and strictness is the maintainer's:
+The complete-or-partial posture is strictness's to set, and strictness is
+the maintainer's:
 
 - at `high`, the expectation is the whole diff. Any unread changed file ends
   the review **PARTIAL**, the banner naming the gap ("N of M changed files
@@ -757,6 +776,14 @@ The verdict is strictness's to set, and strictness is the maintainer's:
 - at `low` and `medium`, coverage never blocks completion. The accounting
   still runs, and the count line rides in the comment, so a maintainer can
   see how much of the diff the reviewer actually opened.
+
+Whatever the strictness, the published record's verdict is code law:
+`mayPublish && coverageComplete` — a review that publishes with unread files
+records `fail`, whatever posture its comment carries. The verdict is a
+recording, never an enforcement
+([ADR 006](../adr/006-code-scanning-merge-enforcement.md)): it lands in the
+canonical record, the comment's record block and the run artifact, and no
+surface of review blocks a merge with it.
 
 A bound and a coverage gap compose the way everything else here does: the
 bound ends the review partial as before, and the examination count in the

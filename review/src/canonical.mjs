@@ -1,6 +1,6 @@
 /**
  * The canonical review result — the one source of truth a review projects
- * from (ADR 004). The comment, the SARIF upload and the merge gate are
+ * from (ADR 004). The comment, the SARIF upload and the run artifact are
  * projections; none of them records state this shape does not carry, and
  * none of them is authoritative. Two entries exist, both constructors at
  * heart: `createCanonicalResult` is the only way in — it validates the
@@ -283,8 +283,7 @@ export function createCanonicalResult({
  * write returns. Pure: the same record and outcome yield the same frozen
  * result, reusing the findings, collapsed claims and coverage by reference;
  * nothing is recomputed. The fact stays independent of the verdict by law —
- * publication success is not the review's verdict — and the merge gate
- * never reads it.
+ * publication success is not the review's verdict, and nothing reads it as one.
  *
  * @param {CanonicalResult} canonical
  * @param {string} publication the upsert's outcome — "created", "updated" or "abandoned"

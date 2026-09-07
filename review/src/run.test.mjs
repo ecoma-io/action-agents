@@ -73,7 +73,7 @@ function snapshot(over = {}) {
  * A forge stub covering the reads a full happy-path run makes.
  *
  * @param {{ files?: unknown[], config?: string | null, instruction?: string | null, repoDescription?: string, snapshotOverride?: import("#core/forge.mjs").PullRequestSnapshot, whoamiLogin?: string, whoamiError?: Error, documents?: Record<string, string> }} [options]
- * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }>, checkRuns: Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }> } }}
+ * @returns {import("./run.mjs").ReviewForge & { calls: { getPullRequests: string[], upserts: Array<{ id?: number, body?: string }> } }}
  */
 function forgeStub(options = {}) {
   const calls = {
@@ -81,8 +81,6 @@ function forgeStub(options = {}) {
     getPullRequests: [],
     /** @type {Array<{ id?: number, body?: string }> } */
     upserts: [],
-    /** @type {Array<{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }> } */
-    checkRuns: [],
   };
   return {
     calls,
@@ -146,11 +144,6 @@ function forgeStub(options = {}) {
       calls.upserts.push({ id, body });
     },
     async deleteComment() {},
-    /** @param {{ headSha: string, name: string, conclusion: string, output: { title: string, summary: string } }} input */
-    async createCheckRun(input) {
-      calls.checkRuns.push(input);
-      return { id: 501 };
-    },
   };
 }
 
@@ -638,7 +631,9 @@ describe("strictness policy and strategy", () => {
       io: io(forgeStub({ config: '{ strictness: "high", strategy: "adversarial" }' }), chat),
     });
     expect(result.outcome).toBe("published");
-    expect(requests).toHaveLength(1);
+    // The answer-at-once stop left the changed file unread, so the loop sent
+    // its one notice and asked again — the system message is requests[0] either way.
+    expect(requests).toHaveLength(2);
     const system = requests[0]?.messages?.find((message) => message.role === "system")?.content;
     expect(system).toContain('strictness "high"');
     expect(system).toContain('Review strategy — "adversarial"');
@@ -850,6 +845,9 @@ describe("coverage accounting and strict partial reviews", () => {
         ],
       },
       { content: '{"findings":[],"summary":"read both"}' },
+      // The notice's second stop: src/vanish.mjs is still unread, and the
+      // run ends partial exactly as the first stop would have ended it.
+      { content: '{"findings":[],"summary":"read both"}' },
     ]);
     const result = await reviewPullRequest({
       inputs: INPUTS,
@@ -864,6 +862,57 @@ describe("coverage accounting and strict partial reviews", () => {
     expect(body).toContain("This review is partial");
     expect(body).toContain("1 of 2 changed files were never read: src/vanish.mjs.");
     expect(body).toContain("Changed files examined: 1/2.");
+  });
+
+  it("after the loop's uncovered-files notice, a still-incomplete run records verdict fail — never pass", async () => {
+    // #424 end to end: the notice names the unread file, the model stops
+    // anyway, and the verdict law is untouched — the incompleteness rides
+    // the verdict as fail, whatever the loop said along the way.
+    const forge = forgeStub({ files: TWO_FILES, config: '{ strictness: "high" }' });
+    let completeCalls = 0;
+    const chat = {
+      async complete() {
+        completeCalls++;
+        if (completeCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [{ id: "c1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+            finishReason: "tool_calls",
+          };
+        }
+        if (completeCalls === 2) {
+          return {
+            content: '{"findings":[],"summary":"stopped after one"}',
+            toolCalls: [],
+            finishReason: "stop",
+          };
+        }
+        return {
+          content: '{"findings":[],"summary":"still incomplete"}',
+          toolCalls: [],
+          finishReason: "stop",
+        };
+      },
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge, /** @type {any} */ (chat)),
+    });
+    expect(result.outcome).toBe("published");
+    // Three calls: the read turn, the first stop, and the notice's one
+    // re-ask with the tools back — then the stop was accepted.
+    expect(completeCalls).toBe(3);
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain("This review is partial");
+    expect(body).toContain("1 of 2 changed files were never read: src/b.mjs.");
+    // The verdict law through the new path: incomplete coverage never
+    // records a pass, nudge or no nudge.
+    expect(result.canonical?.run).toMatchObject({ state: "published", verdict: "fail" });
+    expect(result.canonical?.run.verdict).not.toBe("pass");
   });
 
   it("a quarantine-only review never reads as clean — the withheld count rides instead", async () => {
@@ -1348,13 +1397,12 @@ describe("adversarial verification pass", () => {
       subject: "line2",
     });
     expect(row?.evidence?.digest).toBe(contentDigest("line2"));
-    // Refuted findings never block: the gate passes, with no reasons.
-    expect(result.gate).toEqual({ verdict: "PASS", reasons: [] });
-    // The check run is the entrypoint's surface, not the run's.
-    expect(forge.calls.checkRuns).toEqual([]);
+    // Refuted findings stand in the record but never lower the verdict:
+    // the code law reads coverage and publication, not refutations.
+    expect(result.canonical?.run.verdict).toBe("pass");
   });
 
-  it("a confirmed finding BLOCKS the gate under the all-kinds default policy", async () => {
+  it("a confirmed finding is the SARIF projection's input under the all-kinds default policy", async () => {
     const forge = forgeStub();
     const chat = scriptedChat([
       READ,
@@ -1371,11 +1419,14 @@ describe("adversarial verification pass", () => {
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "confirmed" });
-    expect(result.gate?.verdict).toBe("BLOCK");
-    expect(result.gate?.reasons).toEqual(["confirmed correctness finding at src/a.mjs:2."]);
+    // A confirmed finding never moves the verdict — coverage and publication
+    // own it — but it is exactly what the SARIF projection reports, and the
+    // SARIF alert is the merge consequence's input now (ADR 006).
+    expect(result.canonical?.run.verdict).toBe("pass");
+    expect(toSarif(/** @type {any} */ (result).canonical).runs[0]?.results).toHaveLength(1);
   });
 
-  it("an unresolved finding BLOCKS — a hollow pass is a defect", async () => {
+  it("an unresolved finding stays unresolved without moving the verdict — enforcement is not the run's", async () => {
     const forge = forgeStub();
     const chat = scriptedChat([
       READ,
@@ -1395,8 +1446,11 @@ describe("adversarial verification pass", () => {
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "unresolved" });
-    expect(result.gate?.verdict).toBe("BLOCK");
-    expect(result.gate?.reasons).toEqual(["unresolved correctness finding at src/a.mjs:2."]);
+    // An unresolved finding stands in the record and the comment, never in
+    // the SARIF projection (results carry confirmed findings only) — and
+    // the verdict stays coverage-owned, never finding-owned.
+    expect(result.canonical?.run.verdict).toBe("pass");
+    expect(toSarif(/** @type {any} */ (result).canonical).runs[0]?.results ?? []).toEqual([]);
   });
 
   it("a capture that cannot be honoured refuses the run RED — never skip-and-continue", async () => {
@@ -2259,9 +2313,10 @@ describe("run gates", () => {
       }),
     ).rejects.toThrow(/failed the output contract twice/);
     expect(logged).toContain("review: gate conclusion failed — the answer holds no JSON object");
-    // Exactly the first ask and the one re-ask: the conclusion gate's refusal
-    // fires before validation, verification or publication spend a call.
-    expect(completeCalls).toBe(2);
+    // The loop's first ask and its one notice ask, then the conclusion gate's
+    // one re-ask: the refusal fires before validation, verification or
+    // publication spend a call.
+    expect(completeCalls).toBe(3);
   });
 
   it("judges the post-drop set: at low strictness the gate sees the concern alone and the run completes", async () => {
@@ -2277,6 +2332,13 @@ describe("run gates", () => {
         content: "",
         toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
       },
+      {
+        content:
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
+          '{"severity":"nit","kind":"style","file":"src/a.mjs","line":1,"message":"style nit"}],"summary":"mixed"}',
+      },
+      // The notice's second stop answers the same — src/b.mjs stays unread
+      // and the run completes under the standard arm exactly as before.
       {
         content:
           '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
@@ -2982,7 +3044,14 @@ describe("the untrusted-data ceiling (no steering)", () => {
         },
       ],
     });
-    const chat = scriptedChat([READ, { content: steered }, VERDICT]);
+    const chat = scriptedChat([
+      READ,
+      { content: steered },
+      // The notice's second stop repeats the steering; the ledger still
+      // holds no read of lib/new.mjs, so the claim is still quarantined.
+      { content: steered },
+      VERDICT,
+    ]);
     /** @type {string[]} */
     const logged = [];
     const result = await reviewPullRequest({
@@ -4133,7 +4202,7 @@ describe("the cross-run reconciliation in the published comment", () => {
     );
   });
 
-  it("labels change only the prose: record, gate verdict and SARIF bytes are identical", async () => {
+  it("labels change only the prose: record, verdict and SARIF bytes are identical", async () => {
     const script = [READ, { content: CONCERN }, VERDICT];
     const without = forgeStub();
     const bare = await runReview(without, script);
@@ -4152,7 +4221,7 @@ describe("the cross-run reconciliation in the published comment", () => {
       ...labelled.canonical,
       run: { ...labelled.canonical.run, publication: bare.canonical.run.publication },
     }).toEqual(bare.canonical);
-    expect(labelled.gate).toEqual(bare.gate);
+    expect(labelled.canonical.run.verdict).toBe(bare.canonical.run.verdict);
     expect(JSON.stringify(toSarif(labelled.canonical))).toBe(
       JSON.stringify(toSarif(bare.canonical)),
     );

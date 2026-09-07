@@ -1,5 +1,12 @@
 # Review-enforcement program — final audit (pr10)
 
+> **Frozen historical record.** This is the program's closing audit, kept as
+> written; the enforcement it captured rode the `review gate` check run,
+> retired by
+> [ADR 006](../adr/006-code-scanning-merge-enforcement.md) (#436) — merge
+> enforcement now rides the consumer's Code Scanning ruleset over review's
+> `category: review` upload.
+
 Recorded 2026-09-06 on `hardening/pr10-final-audit` (base `main` @ `75d6630`, the
 #402 merge). This is the closing counterpart to the Phase-0 audit
 ([review-enforcement-audit.md](review-enforcement-audit.md)): where that
