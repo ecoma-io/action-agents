@@ -124,13 +124,39 @@ the finding→alert lifecycle a confirmed finding would ride is exercised by
 tests, not yet by history, and verifying it stays part of the migration
 rather than an assumption.
 
-## Addendum — the ruleset requirement is live (2026-09-08)
+## Addendum — the requirements-tool deadlock, and its resolution (2026-09-08)
 
-Decision 2's "repository that wants confirmed findings to block merges"
-is now this repository's posture: on 2026-09-08 the live `main` ruleset
-(id 21322094) gained a third code-scanning tool,
-`ecoma-io/action-agents/review`, at `alerts_threshold: all`, beside CodeQL
-and Semgrep OSS at `errors` — with `ci-gate` and `analysis-gate` and the
-merge queue unchanged. The finding→alert→block→resolve lifecycle this
-record names as unverified-by-history remains the open probe below; the
-ruleset side of the hypothesis is now configured, not assumed.
+The live requirement above surfaced a defect in this record's own
+consequence, and the owner resolved it. On 2026-09-08, after the review
+tool was added at `alerts_threshold: all`, the dogfood's own next
+maintenance pull request (a change to this action) was **blocked forever
+with zero open alerts**: the review job took the `skip` terminal ("universe
+empty" — nothing-to-review), which uploads no SARIF (`sarif-path` is gated
+behind `result.canonical`, and a skip has no canonical record), and GitHub's
+"Require code scanning results" rule treats **no analysis for the commit** as
+the required check **not satisfied** — blocking independently of whether any
+alert exists. Decision 3's "a no-findings run is indistinguishable from
+clean" assumed the empty analysis satisfies the rule; under a required
+code-scanning tool it does not, because **the absence of any analysis is not
+"clean", it is "check not passed"**.
+
+The owner's resolution, stated here as the decision it is: **the review
+tool is not a required code-scanning tool on the dogfood's `main` ruleset.**
+The ruleset (id 21322094) again requires CodeQL and Semgrep OSS only, both
+at `errors`; `ci-gate` and `analysis-gate` and the merge queue are
+unchanged. Review's SARIF upload stays — confirmed findings appear as alerts
+in the Security tab for anyone to see, and a consumer who wants them to
+block merges can still require the tool on _their_ ruleset and absorb the
+no-analysis-means-not-satisfied consequence for their own skip/refused runs.
+The dogfood opts out of that consequence.
+
+This reconciles the record with evidence: decision 3's "indistinguishable
+from clean" is qualified — it holds for a _published_ run whose empty
+analysis uploads, and it does **not** hold for a run that produces no
+analysis at all, which a required tool reads as check-not-passed. The
+"uploads nothing on non-published terminals" law (SECURITY.md ceiling 5's
+"never a verdict … with bytes that are byte-identical") is retained as the
+action's behavior; the dogfood simply does not make that behavior a merge
+condition. A consumer who requires the tool must account for the
+skip/refused terminal (an empty-analysis upload on non-published terminals,
+or accept the permanent block).
