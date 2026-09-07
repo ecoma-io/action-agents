@@ -12,6 +12,7 @@
  */
 
 import { createWorkspace } from "#core/workspace.mjs";
+import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
@@ -47,7 +48,7 @@ import { findingFingerprint, normalisePath, normaliseSubject } from "./identity.
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
 import { embedRecordBlock, previousRecord } from "./record.mjs";
 import { reconcile } from "./reconcile.mjs";
-import { renderComment, renderNothingToReview } from "./render.mjs";
+import { MESSAGE_CHARS, renderComment, renderNothingToReview } from "./render.mjs";
 import {
   applicabilitySection,
   assertFreshArtifact,
@@ -670,7 +671,16 @@ export async function reviewPullRequest({
     file: finding.file,
     line: finding.line,
     severity: finding.severity,
-    message: finding.message,
+    // The canonical record is the one place the model's claim text is
+    // sanitised on its way to every public surface: the comment renders its
+    // own copy, the SARIF projection carries `message.text` verbatim into the
+    // Code Scanning alert title, and the run artifact's validator re-caps the
+    // same field. Sanitising here (and only here) keeps those three byte-
+    // aligned with each other, and the ceiling holds — no mention parses, no
+    // structural token survives, no cap is a missing cap. Value at the
+    // identity is untouched: `message` is a rendering input, never an
+    // identity input (`canonical.mjs`), so fingerprints stay stable.
+    message: sanitiseCommentText(finding.message, { maxChars: MESSAGE_CHARS }).text,
     subject: captured.subject,
     lifecycle: finding.lifecycle ?? "unresolved",
     ...(finding.verdict !== undefined ? { verdict: finding.verdict } : {}),

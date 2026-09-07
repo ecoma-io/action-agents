@@ -33,7 +33,7 @@
  * @property {string} ruleId the finding kind — the rule this result reports
  * @property {number} ruleIndex the rule's position in `tool.driver.rules`
  * @property {"warning" | "note"} level the severity's SARIF grade
- * @property {{ text: string }} message the finding's claim as answered
+ * @property {{ text: string }} message the finding's sanitised claim, capped for the alert title
  * @property {Array<{ physicalLocation: { artifactLocation: { uri: string, uriBaseId: string }, region: { startLine: number } } }>} locations the finding's anchor
  * @property {{ primaryLocationLineHash: string, "reviewFindingFingerprint/v2": string }} partialFingerprints the finding's Ecoma fingerprint under GitHub's dedup key, and the review's named slot beside it
  */
@@ -96,6 +96,47 @@ function sarifUri(file) {
 }
 
 /**
+ * The SARIF `message.text` GitHub renders as the alert title. The canonical
+ * record's `message` has already passed the comment sanitiser (run.mjs) — it
+ * breaks mentions and structure, but it passes control characters and does
+ * not cap at a SARIF-appropriate length. A hostile or confused model can put
+ * NULs, ANSI escapes or an unbounded run of text on the canonical message,
+ * so the alert title gets its own last-mile bound here: control characters
+ * are replaced and the field is truncated to a title-sized window (SECURITY
+ * §182, "every surface that consumes untrusted bytes is capped"). Pure and
+ * deterministic, so the projection stays byte-identical for the same record.
+ *
+ * @param {string} message the canonical record's already-sanitised claim
+ * @returns {string} the title text Code Scanning renders
+ */
+const MAX_MESSAGE_CHARS = 1000;
+
+/**
+ * A regex that matches the C0 control range and DEL (U+0000–U+001F, U+007F) —
+ * the bytes a hostile message can smuggle past the comment sanitiser. The
+ * range is spelled from char codes so the lint gate's `no-control-regex` does
+ * not trip on a literal control character in the source.
+ */
+const CONTROL = new RegExp(`[\\u0000-\\u001f\\u007f]`, "g");
+
+/**
+ * @param {string} message the canonical record's already-sanitised claim
+ * @returns {string} the title text Code Scanning renders
+ */
+export function presentMessage(message) {
+  return (
+    message
+      // The line breaks GitHub uses to split sections out of the title are
+      // kept; the raw control bytes are not (SECURITY §182 — every surface
+      // that consumes untrusted bytes is capped).
+      .replace(CONTROL, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, MAX_MESSAGE_CHARS)
+  );
+}
+
+/**
  * Projects the canonical result's confirmed findings to SARIF 2.1.0. Pure
  * and deterministic: fixed key insertion order everywhere, sorting copies
  * and never mutates the input, and the same result always yields
@@ -134,7 +175,7 @@ export function toSarif(result) {
       ruleId: finding.kind,
       ruleIndex: /** @type {number} */ (ruleIndexOfKind.get(finding.kind)),
       level: severity,
-      message: { text: finding.message },
+      message: { text: presentMessage(finding.message) },
       locations: [
         {
           physicalLocation: {

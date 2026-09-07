@@ -6,8 +6,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import { sanitiseCommentText } from "#core/sanitise.mjs";
+
 import { createCanonicalResult } from "./canonical.mjs";
 import { findingFingerprint } from "./identity.mjs";
+import { presentMessage } from "./sarif.mjs";
 import { toSarif } from "./sarif.mjs";
 
 /** A publication finding as the verification pass leaves it. */
@@ -31,6 +34,38 @@ const build = (over = {}) =>
   });
 
 describe("toSarif", () => {
+  it("carries the recorded message through the projection's own title bound", () => {
+    // SARIF message.text becomes the alert title Code Scanning renders. The
+    // canonical record's message already passed the comment sanitiser
+    // (run.mjs), so the comment, the artifact and this title carry the same
+    // claim — and the projection adds its own last-mile bound for this one
+    // surface: control characters are neutralised and the title is capped
+    // (SECURITY.md §182, "every surface that consumes untrusted bytes is
+    // capped").
+    const hostile = "claim\x00\x1b[31mred\x1b[0m\n```\n@octocat please merge\n```";
+    const { text: sanitised } = sanitiseCommentText(hostile, { maxChars: 1000 });
+    const canonical = build({
+      findings: [finding({ message: sanitised })],
+    });
+    const sarif = toSarif(canonical);
+    expect(sarif.runs[0]?.results[0]?.message.text).toBe(presentMessage(sanitised));
+    // No control bytes (C0 range or DEL) reach the title.
+    const text = sarif.runs[0]?.results[0]?.message.text ?? "";
+    for (const character of text) {
+      const code = character.codePointAt(0);
+      expect(code !== undefined ? code < 0x20 || code === 0x7f : true).toBe(false);
+    }
+    // No mention can parse: the zero-width non-joiner already broke the `@`.
+    expect(sarif.runs[0]?.results[0]?.message.text).not.toMatch(/@\w+/);
+  });
+
+  it("caps the alert title at a title-sized window", () => {
+    const long = "x".repeat(5000);
+    const canonical = build({ findings: [finding({ message: long })] });
+    const sarif = toSarif(canonical);
+    expect(sarif.runs[0]?.results[0]?.message.text.length).toBeLessThanOrEqual(1000);
+  });
+
   it("publishes only confirmed findings", () => {
     const result = build({
       findings: [

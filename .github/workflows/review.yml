@@ -80,13 +80,16 @@ jobs:
     timeout-minutes: 15
     # Writes are the job's, stated here rather than inherited: the marker
     # comment and — only after a published review — the code scanning
-    # upload. `actions: read` is the audit §7.5 consumer grant (artifact
-    # verification); the action itself never needs either write.
+    # upload. The action itself needs no read beyond the working tree
+    # (`contents`) and no other grant; there is no Checks API write and
+    # `actions: read` was a dead grant — the artifact route is
+    # `upload-artifact`, which needs `actions: write`, not `read`, and the
+    # §7.5 artifacts-API verification was a one-off manual pass, never a
+    # runtime read.
     permissions:
       contents: read
       pull-requests: write
       security-events: write
-      actions: read
     steps:
       # Unlike `triage`, whose reads all go through the API, `review`'s
       # subject IS the working tree — this checkout is the snapshot the tools

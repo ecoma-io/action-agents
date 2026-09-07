@@ -424,6 +424,16 @@ surfaces:
   dismissal are that ruleset's vocabulary, never an input of this action. A
   repository that opts out still gets the visibility: the alerts exist in
   the Security tab either way.
+- The dogfood opts out: this repository's `main` ruleset does **not** require
+  the review tool (only CodeQL and Semgrep OSS, at `errors`; ADR 006's
+  2026-09-08 addendum). Requiring the tool is the consumer's choice — but a
+  requirer must account for the runs that produce no SARIF at all (`sarif-path`
+  exists only after a published review; skip/refused/failed terminals upload
+  nothing), because GitHub's "Require code scanning results" rule treats
+  **no analysis for the commit** as the required check not satisfied, not as
+  clean. The dogfood's own deadlock on 2026-09-08 — a find-free maintenance PR
+  blocked forever with zero alerts because the review job skipped — is the
+  evidence that drove this posture (ADR 006 addendum).
 
 The upload is the consumer's step:
 
@@ -458,8 +468,9 @@ requirement, add a code scanning protection rule for the tool
 `ecoma-io/action-agents/review` (Settings → Code security → Code scanning →
 Protection rules), or a `Require code scanning results` requirement naming
 that tool in the branch ruleset, at the threshold the repository wants.
-The consuming job needs `security-events: write` (and `actions: read`); the
-action itself needs neither. Pin `upload-sarif` by full SHA in a real
+The consuming job needs `security-events: write` (the SARIF upload is the one
+projection that leaves the repository); the action itself needs no grant beyond
+a read of the working tree. Pin `upload-sarif` by full SHA in a real
 workflow; the tag here is only for reading.
 
 ## Cost and budget controls

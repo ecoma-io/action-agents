@@ -20,13 +20,13 @@ it):
 
 - **Trigger.** `pull_request` with types `opened, synchronize, reopened,
 ready_for_review` — never `pull_request_target`, never `workflow_dispatch`
-  (`review.yml:47-53`).
+  (`review.yml:48-58`).
 - **Checkout.** `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`
   (a full-commit pin) with `persist-credentials: false` and `fetch-depth: 1`
-  (`review.yml:91-94`). Under `pull_request` the action's default ref is
+  (`review.yml:97-100`). Under `pull_request` the action's default ref is
   GitHub's merge preview, `refs/pull/N/merge`.
 - **The runtime is the merge preview.** The action is invoked as
-  `uses: ./review` (`review.yml:97`), resolved from that same checkout, and
+  `uses: ./review` (`review.yml:103`), resolved from that same checkout, and
   `review/action.yaml` declares `runs: using: node24` with
   `main: src/index.mjs`. Every byte the run executes — every ceiling, guard
   and sanitiser in it — is therefore the pull request's own. The workflow
@@ -36,21 +36,21 @@ ready_for_review` — never `pull_request_target`, never `workflow_dispatch`
   maintainer's own push."
 - **Credentials and bounds.** `github-token: ${{ secrets.GITHUB_TOKEN }}`
   and `api-url`/`api-key` from `ECOMA_LLM_BASE_URL`/`ECOMA_LLM_API_KEY`
-  (`review.yml:99-101`), under a workflow-level `permissions: read-all`
-  floor (`review.yml:61`) that the job's block replaces rather than widens
-  (`review.yml:81-86`) — `contents: read`, `pull-requests: write`,
-  `checks: write` and, since PR5, `security-events: write` and
-  `actions: read` for the Code Scanning upload — beside a
-  per-pull-request `concurrency` group (`review.yml:65-67`). Live mode:
-  `dry-run: "false"`, `gate-mode: "observe"` (`review.yml:103-110`).
+  (`review.yml:106`), under a workflow-level `permissions: read-all`
+  floor (`review.yml:66`) that the job's block replaces rather than widens
+  (`review.yml:89-92`) — `contents: read`, `pull-requests: write` and,
+  since PR5, `security-events: write` for the Code Scanning upload —
+  beside a per-pull-request `concurrency` group (`review.yml:70-72`).
+  Live mode: `dry-run: "false"` (ADR 006 removed `gate-mode`).
 - **Write surface.** One upserted marker comment guarded by a
-  pre-publication re-read of state and head, a `neutral` `review gate`
-  check run, and the run artifact uploaded from the workspace — plus, only
-  after a published review, the SARIF upload to Code Scanning
-  (`review.yml:121-126`: gated on the run's `sarif-path` output, published
-  runs only, confirmed findings only, an explicit `review` category,
-  pinned `tag@digest`). `contents` stays read-only, so the job's token can
-  write no commit, ref, release or setting.
+  pre-publication re-read of state and head and the run artifact uploaded
+  from the workspace — plus, only after a published review, the SARIF
+  upload to Code Scanning (`review.yml:124-129`: gated on the run's
+  `sarif-path` output, published runs only, confirmed findings only, an
+  explicit `review` category, pinned `tag@digest`). ADR 006 removed the
+  `review gate` check run this block previously named. `contents` stays
+  read-only, so the job's token can write no commit, ref, release or
+  setting.
 - **What a pull-request author can steer.** The executed runtime itself
   (any file under `review/` in the merge preview), the reviewed bytes — the
   working tree is the review subject — and the pull request's title and
@@ -87,13 +87,13 @@ is only what the platform bounds.
    repository — today, the single maintainer — can raise a pull request
    whose merge preview executes arbitrary code on the Actions runner with
    the job's `GITHUB_TOKEN` granted `contents: read`, `pull-requests:
-write`, `checks: write`, `security-events: write`, `actions: read`, and
-   — because the run takes its workflow definition from the merge ref —
+write` and `security-events: write` — and, because the run takes its
+   workflow definition from the merge ref —
    any repository secret that branch's
    workflow names: today `ECOMA_LLM_BASE_URL`, `ECOMA_LLM_API_KEY`,
    `ECOMA_APP_ID`, `ECOMA_APP_KEY`, plus the job-scoped runner environment
    GitHub always gives a run. Worst case: those secrets exfiltrated to a
-   host of the author's choosing, comments, check runs and Code Scanning
+   host of the author's choosing, comments and Code Scanning
    uploads forged within the token's grants, the ephemeral hosted runner
    abused — never a contents write, a release or a settings change with
    `GITHUB_TOKEN`, since
@@ -123,14 +123,16 @@ write`, `checks: write`, `security-events: write`, `actions: read`, and
 3. **Compensating controls already in place.** `pull_request` only —
    SECURITY.md documents the `pull_request_target` line these workflows
    stay behind; a `read-all` permissions floor whose job-level block is
-   stated, not inherited — `contents` read-only, PR5's `security-events`
-   and `actions: read` scoped to the Code Scanning upload they serve;
+   stated, not inherited — `contents` read-only and PR5's
+   `security-events: write` scoped to the Code Scanning upload it serves
+   (`actions: read` rode on a now-removed artifact-verification grant and
+   is gone; ADR 006 removed `checks: write`);
    `persist-credentials: false` on the checkout and, in the released
    runtime, the `.git` refusal of the fourth ceiling; a code-pinned write
-   surface (one guarded marker comment, a `neutral` observe check run, a
-   workspace artifact) and a per-pull-request concurrency group; policy
-   resolved from the base branch at an immutable SHA. The five ceilings and
-   the run contract bind the released runtime — the one consumers run.
+   surface (one guarded marker comment and a workspace artifact) and a
+   per-pull-request concurrency group; policy resolved from the base branch
+   at an immutable SHA. The five ceilings and the run contract bind the
+   released runtime — the one consumers run.
 4. **Re-open conditions.** The acceptance is pinned to today's posture;
    when one of these turns true, the migration below is the fix, not a
    fresh acceptance (tracked in #386): the write-collaborator set grows
@@ -217,3 +219,16 @@ migration sketch above still reads `gate-mode: "observe"`; that input no
 longer exists, and the sketch's line dies with it when the day comes.
 This addendum records the state; it does not reopen the decision or edit
 it.
+
+## Addendum — the reduced grant, restated (2026-09-08)
+
+The body's current-state blocks above have been reconciled to the token a
+merge-preview run carries today. With ADR 006's removal of `checks: write`
+and the retirement of the one-off `actions: read` artifact-verification
+grant, the worst case is no longer "check runs": the job's `GITHUB_TOKEN`
+holds `contents: read`, `pull-requests: write` and `security-events:
+write`, and the only surfaces that can be mutated are the marker comment,
+the run artifact, and — after a published review — the Code Scanning
+upload. What review writes at a merge is the repository ruleset's decision
+(ADR 006), not the run's. The accepted-risk decision (1–3) is unchanged
+and #386 stays open to carry its migration when the owner schedules it.

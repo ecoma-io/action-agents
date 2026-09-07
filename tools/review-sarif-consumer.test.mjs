@@ -53,6 +53,14 @@ test("the Code Scanning write stays in the job that uploads, per §7.5", () => {
   // nothing (analysis.yml's rule — a job-level block replaces, not merges).
   assert.match(workflow, /^permissions: read-all$/m);
   const job = workflow.split(/^ {2}review:\n/m)[1] ?? "";
-  assert.match(job, /security-events: write/);
-  assert.match(job, /actions: read/);
+  const perm = job.match(/ {4}permissions:\n([\s\S]*?)\n {4}\S/)?.[1] ?? "";
+  assert.match(perm, /security-events: write/);
+  // Only the three grants a review run genuinely needs may appear in the
+  // job's permission block. `checks:` would be the retired gate's write
+  // grant, and `actions: read` rode on a one-off §7.5 artifact-verification
+  // grant that was never a runtime read (the artifact route is
+  // `upload-artifact`, which needs `actions: write`, not `read`) — both
+  // must stay absent from the block, not merely absent from one line.
+  assert.doesNotMatch(perm, /checks:/);
+  assert.doesNotMatch(perm, /actions:/);
 });
