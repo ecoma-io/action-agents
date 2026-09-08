@@ -569,6 +569,53 @@ describe("strictness policy and strategy", () => {
     expect(logged).toContain("review: nit dropped at low strictness — src/a.mjs:1 style nit");
   });
 
+  it("flattens control characters on the drop log, so a raw message cannot forge a runner workflow command", async () => {
+    // A hostile message embeds a line break so the `::add-mask::` would land
+    // on its own log line, where the runner would interpret it as a command
+    // this repository never wrote. The oneLine collapse turns the whole
+    // message into a single uninterpretable line.
+    const forgedMessage = "lurking\n::add-mask::5up3rs3cr3t";
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+      },
+      {
+        content: JSON.stringify({
+          findings: [
+            { severity: "nit", kind: "style", file: "src/a.mjs", line: 1, message: "style nit" },
+            {
+              severity: "nit",
+              kind: "style",
+              file: "src/a.mjs",
+              line: 1,
+              message: forgedMessage,
+            },
+          ],
+          summary: "two nits",
+        }),
+      },
+    ]);
+    /** @type {string[]} */
+    const logged = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: {
+        forge: forgeStub({ config: '{ strictness: "low" }' }),
+        chat,
+        now: () => 0,
+        info: (m) => logged.push(m),
+      },
+    });
+    expect(result.outcome).toBe("published");
+    expect(logged.some((line) => line.startsWith("::add-mask::"))).toBe(false);
+    expect(logged).not.toContain("::add-mask::5up3rs3cr3t");
+  });
+
   it("at medium the same answer keeps its nit, and absent strategy equals explicit standard byte for byte", async () => {
     const forgeDefault = forgeStub();
     const forgeExplicit = forgeStub({ config: '{ strategy: "standard" }' });

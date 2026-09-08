@@ -8,7 +8,23 @@
  * readable finding that notifies someone or forges the comment's structure
  * is the bug the rules exist to prevent.
  *
- * The four rules, each testable, in the order they run:
+ * The rules, each testable, in the order they run:
+ *
+ * 0. **No non-text control character survives.** C0 controls beyond the
+ *    three whitespace controls — TAB, LF and CR are legitimate, layout-
+ *    carrying text on every surface that consumes this module — are mapped
+ *    to a space before any other rule. What is stripped is the class a
+ *    hostile message has no clean use for: NUL, BEL, other graphic and line
+ *    controls, DEL. Those never render as text, and on the run log a lone
+ *    line-break control before `::` can start a runner workflow command the
+ *    action never wrote — the boundary this rule guards is the class of
+ *    bytes the SARIF projection already strips (`presentMessage`), kept
+ *    byte-aligned for the never-text controls while TAB/LF/CR survive to do
+ *    their job. The one strictly-line-shaped classifier the log surfaces
+ *    apply — `one-line.mjs` maps the full C0 range — flattens where this
+ *    module preserves, because a log line is one line by construction and a
+ *    comment body is not. U+2028/U+2029 are code-point separators, not C0;
+ *    they are not stripped here.
  *
  * 1. **No structural token survives.** The comment's own scaffolding is
  *    built from HTML comments — the marker and any metadata around it — so
@@ -58,12 +74,36 @@ export function sanitiseCommentText(text, options = {}) {
   /** @type {string[]} */
   const notes = [];
 
-  const stripped = stripStructural(text, options.forbidden ?? [], notes);
+  const uncontrol = stripControlChars(text);
+  const stripped = stripStructural(uncontrol, options.forbidden ?? [], notes);
   const escaped = escapeTags(stripped);
   const unmentionable = breakMentions(escaped);
   const capped = cap(unmentionable, options.maxChars ?? DEFAULT_MAX_CHARS, notes);
 
   return { text: capped, notes };
+}
+
+/**
+ * Rule 0. C0 controls beyond TAB, LF and CR — plus DEL — are mapped to
+ * spaces before anything else. The three whitespace controls are real text
+ * (a multi-line comment and a record carry them); the rest of C0 (NUL, BEL,
+ * the graphic/line packages) and DEL are never text on these surfaces, and
+ * `one-line.mjs` on the log flattens even TAB/LF/CR because a log line is
+ * one line by construction. This keeps the never-text class byte-aligned
+ * with the SARIF projection's `presentMessage` while layout survives.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function stripControlChars(text) {
+  /** @type {string[]} */
+  const out = [];
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    const isLayoutControl = code === 0x09 || code === 0x0a || code === 0x0d;
+    out.push((code <= 0x1f && !isLayoutControl) || code === 0x7f ? " " : char);
+  }
+  return out.join("");
 }
 
 /**
