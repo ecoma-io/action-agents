@@ -18,7 +18,7 @@ a link that goes nowhere.
 | [ADR 006 — merge enforcement is GitHub's](adr/006-code-scanning-merge-enforcement.md) | Review produces, GitHub disposes: no gate, no check run; enforcement rides Code Scanning rulesets               |
 | [Audit: review-enforcement audit](audit/review-enforcement-audit.md)                  | Historical record of the review-enforcement program's audit phase                                               |
 | [Audit: review-enforcement final](audit/review-enforcement-final.md)                  | Historical record of the program's closure — the verdict law, the enforcement captures, the §11 risks           |
-| [Development: configuration](development/configuration.md)                            | The shared config-file mechanism — discovery, format, the default branch, precedence                            |
+| [Development: configuration](development/configuration.md)                            | The shared config-file mechanism — discovery, format, the resolved policy source, precedence                    |
 | [Development: `triage`](development/triage.md)                                        | `triage`'s full design — schema, prompt, pipeline                                                               |
 | [Development: `harmonise`](development/harmonise.md)                                  | `harmonise`'s full design — document model, prompt, pull request                                                |
 | [Development: `review`](development/review.md)                                        | `review`'s full design — config, tool surface, agent loop                                                       |
@@ -28,7 +28,6 @@ a link that goes nowhere.
 | [Guide: `triage`](guides/triage.md)                                                   | The label sheet, size from the diff, the marker comment, failure modes and recipes                              |
 | [Guide: `review`](guides/review.md)                                                   | The agent loop, the tool surface, the applicability policy, the run artifact, failure modes                     |
 | [Guide: `harmonise`](guides/harmonise.md)                                             | The language map, the glossary, skip directives, the pull request, failure modes                                |
-| Configuration                                                                         | `.github/action-agents/<action>.json5`, and the inputs each action takes                                        |
 | Providers                                                                             | Pointing the actions at an OpenAI-compatible endpoint, keyed or keyless                                         |
 
 Doctrine comes first deliberately. The rows below it describe behaviour that
