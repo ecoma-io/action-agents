@@ -75,6 +75,7 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
       "documentation",
       "enhancement",
       "question",
+      "accepted-risk",
       "good first issue",
       "size/xs",
       "size/s",
@@ -87,6 +88,7 @@ statuses — are stated in [the core ceilings](ceilings.md#the-retry-ceiling).
       documentation: "semantic-classification",
       enhancement: "semantic-classification",
       question: "semantic-classification",
+      "accepted-risk": "semantic-classification",
       "good first issue": "routing-area",
     },
 

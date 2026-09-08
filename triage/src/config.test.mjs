@@ -7,6 +7,7 @@
 // configured path that is absent is an error) are the configuration page's
 // and are pinned against a fake forge, path by path.
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -603,5 +604,62 @@ describe("effectiveSheet", () => {
     const empty = validateConfig({ instructions: {} });
     const { sheet } = effectiveSheet({ config: empty, threadType: "issue", narrowing: [] });
     expect(sheet).toBeNull();
+  });
+});
+
+describe("the dogfood sheet — this repository's own triage.json5", () => {
+  // The policy this repository runs on itself, read the way a run reads it:
+  // off the checkout, through the same loader and validator a live run uses.
+  // A sheet entry without a test is a label the model may pick that no gate
+  // has ever seen — issue #460 is the live consequence of exactly that gap,
+  // a maintainer-classified thread the sheet could not name.
+  const content = readFileSync(
+    new URL("../../.github/action-agents/triage/triage.json5", import.meta.url),
+    "utf8",
+  );
+  const forge = fakeForge({ [JSON5_PATH]: { content } });
+
+  const load = async () => {
+    const { raw } = await loadConfigFile({ forge, configPath: "", source: SOURCE });
+    const { raw: migrated } = migrateConfig(raw);
+    const config = validateConfig(migrated);
+    if (config === null) throw new Error("the dogfood policy validated to nothing");
+    return config;
+  };
+
+  it("parses and validates as the schema this build runs", async () => {
+    await expect(load()).resolves.toBeDefined();
+  });
+
+  it("offers accepted-risk as a semantic classification", async () => {
+    // The register classification must be reachable: a thread the maintainer
+    // classifies as accepted-risk (issue #386) must be classifiable by the
+    // model the same way, or every re-triage of it re-applies enhancement
+    // over the maintainer's label.
+    const config = await load();
+    expect(config.labels.use.has("accepted-risk")).toBe(true);
+    expect(config.labels.roles.get("accepted-risk")).toBe("semantic-classification");
+    const { sheet } = effectiveSheet({ config, threadType: "issue", narrowing: [] });
+    expect(sheet?.has("accepted-risk")).toBe(true);
+  });
+
+  it("keeps every declared category on the offered sheet, and the machinery off it", async () => {
+    const config = await load();
+    const { sheet } = effectiveSheet({ config, threadType: "issue", narrowing: [] });
+    const offered = [...(sheet?.keys() ?? [])].sort();
+    expect(offered).toEqual([
+      "accepted-risk",
+      "bug",
+      "documentation",
+      "enhancement",
+      "good first issue",
+      "question",
+    ]);
+    // The queue marker and the size rungs stay code-owned: named in `use`
+    // because they are applied like any other label, never offered.
+    expect(offered).not.toContain("needs triage");
+    for (const rung of ["size/xs", "size/s", "size/m", "size/l", "size/xl"]) {
+      expect(offered).not.toContain(rung);
+    }
   });
 });

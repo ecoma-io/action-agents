@@ -11,6 +11,11 @@ OpenAI-compatible model, and its own bar is the documentation in
   README content, including the action manifests' descriptions.
 - Use `enhancement` for a proposed new capability or an improvement to an
   existing one, `bug` for behaviour that regressed or is plainly wrong.
+- Use `accepted-risk` when the thread records a risk the maintainers have
+  deliberately accepted and keep tracked — a risk-register entry, not
+  scheduled work. It is a disposition, not a proposal: prefer it over
+  `enhancement` when the thread names a risk and its acceptance rather than
+  asking for a change.
 - Reserve `good first issue` for issues a newcomer could take with no
   prior context: a small, sharp defect or typo hunt, not a design change.
 
