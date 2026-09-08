@@ -64,7 +64,7 @@ jobs:
           model: ${{ vars.LLM_MODEL }}
 ```
 
-Hành vi thuộc về kho lưu trữ hơn là một workflow nằm trong `.github/action-agents/<action>/<action>.json5` — một tệp cho mỗi hành động, đồng nằm cùng các tệp đặc thù của hành động. Nó được đọc từ nhánh mặc định, vì vậy một pull request không thể chỉnh sửa chính sách điều khiển nó, và mọi hành động chạy mà không cần tệp của nó: tệp thêm chính sách, nó không bao giờ ngăn chặn thực thi — `harmonise` là ngoại lệ, từ chối thay vì chạy xanh khi không có gì, vì lý do trang phát triển của nó đề cập. Các cài đặt văn bản — một rubrik đánh giá, ngôn ngữ mà một tài liệu được harmonised chống lại — là các tệp markdown mà tệp cấu hình của hành động trỏ tới, vì văn bản thuộc về tài liệu.
+Hành vi thuộc về kho lưu trữ hơn là một workflow nằm trong `.github/action-agents/<action>/<action>.json5` — một tệp cho mỗi hành động, đồng nằm cùng các tệp đặc thù của hành động. Nó được đọc từ **nguồn chính sách được phân giải** của hành động — nhánh mặc định trên hầu hết các sự kiện, nhánh base của pull request trên các sự kiện pull request — tại một commit SHA bất biến, vì vậy một pull request không thể chỉnh sửa chính sách điều khiển nó, và mọi hành động chạy mà không cần tệp của nó: tệp thêm chính sách, nó không bao giờ ngăn chặn thực thi — `harmonise` là ngoại lệ, từ chối thay vì chạy xanh khi không có gì, vì lý do trang phát triển của nó đề cập. Các cài đặt văn bản — một rubrik đánh giá, ngôn ngữ mà một tài liệu được harmonised chống lại — là các tệp markdown mà tệp cấu hình của hành động trỏ tới, vì văn bản thuộc về tài liệu.
 
 ## The actions
 
