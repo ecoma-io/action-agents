@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.1](https://github.com/ecoma-io/action-agents/compare/v0.11.0...v0.11.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **review:** reject provider-truncated review answers ([#445](https://github.com/ecoma-io/action-agents/issues/445)) ([3317221](https://github.com/ecoma-io/action-agents/commit/33172214df50bbd8316ac4d4ef1b793539409a8e))
+* **review:** retire the oversized skip; capacity refusal is never reclassified ([#441](https://github.com/ecoma-io/action-agents/issues/441)) ([0460d49](https://github.com/ecoma-io/action-agents/commit/0460d49e37470c3bc8408ea20527e964867044bf))
+* **review:** strip control bytes before they reach a comment or a log ([#443](https://github.com/ecoma-io/action-agents/issues/443)) ([d0af851](https://github.com/ecoma-io/action-agents/commit/d0af851a2547509941d4241663c423c5c623f240))
+
 ## [0.11.0](https://github.com/ecoma-io/action-agents/compare/v0.10.0...v0.11.0) (2026-09-07)
 
 
