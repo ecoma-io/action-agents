@@ -207,6 +207,17 @@ export async function runLoop({
       messages: [...transcript, ...pending],
       ...(offeredTools === undefined ? {} : { tools: offeredTools }),
     });
+    // Provider-declared truncation is model/provider failure, not review
+    // capacity or applicability. A truncated response cannot become a
+    // natural-stop candidate, a bound-finalisation candidate, or anything
+    // the gates can judge; it fails the run before any downstream surface
+    // (comment, artifact, SARIF) can project incomplete model text.
+    if (response.finishReason === "length") {
+      throw new Error(
+        "the provider truncated its response (finish_reason: length) — " +
+          "the model's output is incomplete and cannot be judged as a review answer",
+      );
+    }
     return { response, transcript };
   }
 
@@ -445,6 +456,15 @@ export async function reaskFinalAnswer({ chat, model, transcript }) {
       },
     ],
   });
+  // Provider-declared truncation on the corrective re-ask is the same
+  // failure as truncation on any other response: the model produced an
+  // incomplete answer and it cannot be judged as a review.
+  if (response.finishReason === "length") {
+    throw new Error(
+      "the provider truncated the corrective re-ask response (finish_reason: length) — " +
+        "the model's output is incomplete and cannot be judged as a review answer",
+    );
+  }
   return response.content;
 }
 

@@ -13,7 +13,7 @@ import { createEvidence } from "#core/untrusted.mjs";
 import { createWorkspace } from "#core/workspace.mjs";
 
 import { canConcludeReview } from "./coverage.mjs";
-import { estimateTokens, runLoop } from "./loop.mjs";
+import { estimateTokens, reaskFinalAnswer, runLoop } from "./loop.mjs";
 import { createTools } from "./tools.mjs";
 
 /** @typedef {import("#core/chat.mjs").ChatMessage} ChatMessage */
@@ -466,6 +466,84 @@ describe("fatal wire defects", () => {
         contextWindow: 128_000,
       }),
     ).rejects.toThrow(/wire contract is broken/);
+  });
+});
+
+describe("provider truncation (finish_reason: length)", () => {
+  /**
+   * A chat stub that always answers with a given finishReason, no tools.
+   *
+   * @param {string} finishReason
+   * @param {Array<{ content: string }>} script
+   */
+  function truncatingChat(finishReason, script) {
+    /** @type {{ messages: ChatMessage[], tools: unknown }[]} */
+    const requests = [];
+    let cursor = 0;
+    return {
+      requests,
+      /** @param {{ messages: ChatMessage[], tools?: unknown }} request */
+      complete: async ({ messages, tools }) => {
+        requests.push({ messages, tools });
+        const next = script[Math.min(cursor, script.length - 1)];
+        cursor++;
+        return { content: next?.content ?? "", toolCalls: [], finishReason };
+      },
+    };
+  }
+
+  it("fails a natural-stop candidate whose finish_reason is length — not a stop, not a pass", async () => {
+    const chat = truncatingChat("length", [{ content: '{"findings":[],"summary":"looks fine"}' }]);
+    await expect(
+      runLoop({
+        chat: /** @type {any} */ (chat),
+        model: "m",
+        tools: toolsForRoot(),
+        messages: BASE_MESSAGES,
+        maxTurns: 30,
+        contextWindow: 128_000,
+        expectedPaths: ["src/a.mjs"],
+      }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  it("fails a bound-finalisation candidate whose finish_reason is length — the partial never publishes", async () => {
+    const chat = truncatingChat("length", [{ content: "partial" }]);
+    await expect(
+      runLoop({
+        chat: /** @type {any} */ (chat),
+        model: "m",
+        tools: toolsForRoot(),
+        messages: BASE_MESSAGES,
+        maxTurns: 1,
+        contextWindow: 128_000,
+      }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  it("fails the corrective re-ask whose finish_reason is length — reask cannot rescue a truncated answer", async () => {
+    const chat = truncatingChat("length", [{ content: "not json" }]);
+    await expect(
+      reaskFinalAnswer({
+        chat: /** @type {any} */ (chat),
+        model: "m",
+        transcript: BASE_MESSAGES,
+      }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  it("a non-length finish reason still produces a natural-stop candidate", async () => {
+    const chat = scriptedChat([{ content: '{"findings":[],"summary":"done"}' }]);
+    const outcome = await runLoop({
+      chat: /** @type {any} */ (chat),
+      model: "m",
+      tools: toolsForRoot(),
+      messages: BASE_MESSAGES,
+      maxTurns: 30,
+      contextWindow: 128_000,
+    });
+    expect(outcome.naturalStopped).toBe(true);
+    expect(outcome.candidate).toContain('"summary":"done"');
   });
 });
 
