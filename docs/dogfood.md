@@ -492,24 +492,24 @@ Fifteen classes; the class names the outcome, so the mapping is a function.
 When a dogfood finding is filed against action-agents, its title carries the
 class:
 
-| #     | Class                     | Outcome                                                                                                    |
-| ----- | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| F-01  | event-name-unsupported    | `failed`                                                                                                   |
-| F-01a | event-action-unsupported  | review `failed`; triage re-triages                                                                         |
-| F-02  | config-invalid/absent     | `refused` for the validation arm — triage, review, harmonise; `failed` for the reader arm (triage, review) |
-| F-03  | policy-source-unavailable | `failed`                                                                                                   |
-| F-04  | transport-5xx/429         | `failed` after retries                                                                                     |
-| F-05  | transport-timeout         | `failed` (non-idempotent writes: one attempt)                                                              |
-| F-06  | auth (401/403)            | `failed`, zero writes                                                                                      |
-| F-07  | not-found-mid-write       | treated as applied                                                                                         |
-| F-08  | rate-limit-exhausted      | `failed`                                                                                                   |
-| F-09  | provider-invalid-answer   | `refused` or `failed` — off-sheet/junk/truncation per action                                               |
-| F-10  | provider-refusal          | reserved, unused                                                                                           |
-| F-11  | ceiling-exceeded          | typed refusal, else `failed`                                                                               |
-| F-12  | subject-moved             | `abandoned` (triage, review); `failed` (harmonise)                                                         |
-| F-13  | partial-mutation          | `failed` (triage); `partial` (harmonise)                                                                   |
-| F-14  | artifact-write-failure    | the run's own terminal verdict stands (logged loss)                                                        |
-| F-15  | internal-unknown          | `failed` — a bug, and the record says so                                                                   |
+| #     | Class                     | Outcome                                                                                                                                                                                                                        |
+| ----- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F-01  | event-name-unsupported    | `failed`                                                                                                                                                                                                                       |
+| F-01a | event-action-unsupported  | review `failed`; triage re-triages                                                                                                                                                                                             |
+| F-02  | config-invalid/absent     | `refused` for the validation arm — triage, review, harmonise; `failed` for the reader arm (triage, review): a path absent, a policy declared twice, a foreign schema major, a file that does not parse or is past the byte cap |
+| F-03  | policy-source-unavailable | `failed`                                                                                                                                                                                                                       |
+| F-04  | transport-5xx/429         | `failed` after retries                                                                                                                                                                                                         |
+| F-05  | transport-timeout         | `failed` (non-idempotent writes: one attempt)                                                                                                                                                                                  |
+| F-06  | auth (401/403)            | `failed`, zero writes                                                                                                                                                                                                          |
+| F-07  | not-found-mid-write       | treated as applied                                                                                                                                                                                                             |
+| F-08  | rate-limit-exhausted      | `failed`                                                                                                                                                                                                                       |
+| F-09  | provider-invalid-answer   | `refused` or `failed` — off-sheet/junk/truncation per action                                                                                                                                                                   |
+| F-10  | provider-refusal          | reserved, unused                                                                                                                                                                                                               |
+| F-11  | ceiling-exceeded          | typed refusal, else `failed`                                                                                                                                                                                                   |
+| F-12  | subject-moved             | `abandoned` (triage, review); `failed` (harmonise)                                                                                                                                                                             |
+| F-13  | partial-mutation          | `failed` (triage); `partial` (harmonise)                                                                                                                                                                                       |
+| F-14  | artifact-write-failure    | the run's own terminal verdict stands (logged loss)                                                                                                                                                                            |
+| F-15  | internal-unknown          | `failed` — a bug, and the record says so                                                                                                                                                                                       |
 
 The full table with the rule each class pins is
 [the run contract's](run-contract.md#failure-taxonomy).

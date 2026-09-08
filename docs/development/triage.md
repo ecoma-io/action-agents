@@ -520,7 +520,8 @@ Where it is written, per terminal path:
   F-02 names (#472), typed at the validation wrap so a misconfiguration never
   reads as a defect. The reader arm stays `failed`: a configured
   `config-path` naming a file the branch does not have, a policy declared
-  twice, a foreign schema major.
+  twice, a foreign schema major, a file that does not parse, a file past the
+  byte cap — the core loader throws them all outside the validation wrap.
 - a **downgraded plan** — opt-in verification refused every operation the
   decision proposed: there is nothing left to write, the mutate call never
   happens, and the run ends `refused` — green, a refusal being the ceilings

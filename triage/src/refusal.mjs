@@ -14,8 +14,9 @@
  * foreign schema major — are environment breaks and defects: they fail, they
  * do not refuse, because the reading call interleaves transport breaks a
  * blanket retype would mislabel. Absent default locations are no fault at
- * all — policy-empty, the posture the run contract blesses — and a run on
- * them has no sheet, so it has no label writes to refuse.
+ * all while no narrowing input stands — policy-empty, the posture the run
+ * contract blesses; a `labels:` narrowing against no file is a fault again,
+ * and records `failed` like the reader faults.
  *
  * The class lives in `triage/` rather than `core/` because which throws are
  * ceilings is this action's domain, not shared infrastructure; it duplicates
