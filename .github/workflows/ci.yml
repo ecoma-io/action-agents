@@ -206,6 +206,20 @@ jobs:
       - name: Check documented uses refs
         run: pnpm check-uses-refs
 
+      # Judges every pin the covered documents show — README.md, README.vi.md
+      # and the guides under docs/guides/ — against tools/action-pins.json in
+      # both directions: a document showing a pin the manifest does not
+      # declare (the drift that shipped stale @v0.10 examples until #450
+      # caught it by hand), and a declared pin no document shows. The gate
+      # this step runs resolves nothing against git — pure text against the
+      # manifest — so unlike check-uses-refs above it needs no tags in the
+      # checkout, which is also why it can run in pre-commit where
+      # check-uses-refs cannot. The direction this gate cannot see — a
+      # release moving the version to a line the pins do not describe — is
+      # release.yml's job, by design: see that workflow.
+      - name: Check documented action pins
+        run: pnpm check-action-pins
+
       # Holds every action.yaml and the code behind it to the same list of
       # inputs, in both directions. The runner enforces neither: an input a
       # workflow passes that the manifest never declared is a warning nobody

@@ -26,8 +26,13 @@
  * Coverage is explicit: `DOC_PATHS` below names every file the gate reads. A
  * file on the list that is missing from the tree fails the run rather than
  * quietly shrinking coverage. The list starts exactly where #346 found the
- * drift; `docs/guides/harmonise.md` is the known next candidate — widening
- * the gate to it is one line here plus aligning that page's pins.
+ * drift; `docs/guides/harmonise.md` joined once its pins reached the current
+ * line (#447), and the next guide is one line here plus pins aligned to it.
+ *
+ * The gate runs in CI's Verify job and in pre-commit (lefthook.yml). It reads
+ * no git at all — the manifest is the whole truth, not a tag list — which is
+ * exactly why it can run in a hook while `check-uses-refs`, whose verdicts
+ * need real tags in the clone, cannot.
  *
  * Refs are matched in the same shape the documents actually write them —
  * `ecoma-io/action-agents[/action]@ref` — inside prose, tables and YAML
@@ -57,6 +62,7 @@ export const DOC_PATHS = [
   "README.md",
   "README.vi.md",
   "docs/guides/getting-started.md",
+  "docs/guides/harmonise.md",
   "docs/guides/review.md",
   "docs/guides/triage.md",
 ];
