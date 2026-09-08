@@ -120,7 +120,7 @@ instructions) — classification is written as a comment rather than as labels.
 
 The file is read at an immutable commit SHA from the **resolved policy source**:
 
-- For `issues` events and `workflow_dispatch`: the repository's default branch.
+- For `issues` events: the repository's default branch.
 - For `pull_request` events: the pull request's base branch.
 
 This means a pull request cannot edit the policy that governs its own triage.
@@ -386,6 +386,13 @@ payload this action was not built for is not classified as a no-op. To run
 only on the events that matter, list them in your workflow's `on:` block; the
 matrix is the action's belt-and-braces guard for whatever your trigger sends
 it.
+
+The matrix covers `issues` and `pull_request` payloads, and those two names are
+the only events the entrypoint accepts. A run triggered by anything else —
+`workflow_dispatch`, `push`, `schedule` — throws at startup and ends red with
+no record (run contract F-01): triage classifies threads, and a dispatch or a
+schedule tick carries no thread. Declare no other trigger in the `on:` block;
+[`harmonise`](harmonise.md) is the action built for schedule ticks.
 
 ### Redelivery
 

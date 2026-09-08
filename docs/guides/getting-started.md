@@ -95,7 +95,6 @@ on:
     types: [opened, edited, reopened]
   pull_request:
     types: [opened, edited, synchronize, reopened]
-  workflow_dispatch:
 
 permissions:
   contents: read
