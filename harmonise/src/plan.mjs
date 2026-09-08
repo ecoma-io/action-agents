@@ -230,7 +230,10 @@ export function preparePair({
  * Translates one prepared pair: prompt, one chat request, contract parsing,
  * placeholder restoration, structural comparison. The model's degrees of
  * freedom end at prose and the three contract fields — everything else was
- * already decided when the text was prepared.
+ * already decided when the text was prepared. A provider-declared truncated
+ * response (`finish_reason: length`) never reaches parsing: it fails the
+ * pair naming truncation, unretried (#449), the same law review's loop
+ * holds (#445).
  *
  * @param {object} input
  * @param {PreparedPair} input.prepared
@@ -256,7 +259,22 @@ export async function translatePair(input) {
     evidence: input.evidence,
   });
 
-  const { content } = await input.chat.complete({ model: input.model, messages });
+  const { content, finishReason } = await input.chat.complete({ model: input.model, messages });
+
+  // Provider-declared truncation (#449): a response the provider cut short
+  // (finish_reason: length) is an incomplete answer — it is never parsed and
+  // never judged against the contract, and it is never retried, because the
+  // same prompt would cut the same answer again. It fails the pair naming
+  // the cause, the same law review's loop holds (#445), in the recovery
+  // policy's refusal class — the never-retried class — while the run's
+  // record keeps it a defect line: the provider cut the answer, which is no
+  // ceiling of this action's declining to act.
+  if (finishReason === "length") {
+    throw new RefusalError(
+      "the provider truncated its response (finish_reason: length) — " +
+        "the model's output is incomplete and cannot be judged as a translation",
+    );
+  }
 
   // Everything from the answer's arrival to the verdict is the answer's
   // contract surface: parse, the script gate, restoration, the byte cap,

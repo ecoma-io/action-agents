@@ -8,11 +8,14 @@
  * parsed into a typed `Assessment`. An answer that never presented the JSON
  * object the prompt asked for earns exactly one more ask (#261) — a
  * provider fumble, not a judgement; an answer that parses is taken as it
- * stands, off-sheet refusals included, and is never re-asked. Parsing
- * tolerates provider drift (the JSON5 parser), matching tolerates none of
- * it — and matching is the policy engine's job, not the model's and not
- * this module's. This module turns bytes into a typed judgement; it never
- * decides what gets mutated.
+ * stands, off-sheet refusals included, and is never re-asked. An answer the
+ * provider declares truncated (`finish_reason: length`) is neither fumble
+ * nor judgement (#448): an incomplete answer is failed before parsing, so
+ * no prefix of it is ever parsed, published or re-asked — the same law
+ * review's loop holds (#445). Parsing tolerates provider drift (the JSON5
+ * parser), matching tolerates none of it — and matching is the policy
+ * engine's job, not the model's and not this module's. This module turns
+ * bytes into a typed judgement; it never decides what gets mutated.
  */
 
 import { AnswerShapeError, parseJsonish } from "#core/answer-json.mjs";
@@ -90,6 +93,22 @@ export const ASSESSMENT_VERSION = 1;
  * @property {EvidenceWrapper} evidenceWrapper
  */
 /**
+ * The failure a provider-declared truncated answer is (#448), in review's
+ * wording (#445) so all three actions speak one language about truncation.
+ * Built outside any catch, because the caught shape error of a first answer
+ * is not the cause of a later response being cut short.
+ *
+ * @param {string} which which response the provider cut short — `its` or `the re-asked`
+ * @returns {Error}
+ */
+function truncationError(which) {
+  return new Error(
+    `the provider truncated ${which} response (finish_reason: length) — ` +
+      "the model's output is incomplete and cannot be judged as a triage answer",
+  );
+}
+
+/**
  * Makes the run's single chat call and parses the answer into an
  * `Assessment`. The prompt's shape (sheet present or not) selects which
  * answer contract the model is asked for, and the matching parser.
@@ -116,14 +135,22 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
   // answers in a row that a third ask cleared. An answer that parses is
   // taken as it stands: an off-sheet refusal or a missed contract is the
   // model's decision, and a decision is never retried. The log line names
-  // the shape class, never the answer's bytes.
-  let { content } = await chat.complete({ model, messages });
+  // the shape class, never the answer's bytes. Provider-declared truncation
+  // is neither fumble nor decision (#448): a response the provider cut
+  // short (finish_reason: length) is an incomplete answer, and it fails the
+  // run before parsing — its prefix must never become a classification, and
+  // the shape-failure re-ask cannot help it, because the same ask would cut
+  // the same answer again. The wording is review's (#445), so all three
+  // actions speak one language about truncation.
+  let { content, finishReason } = await chat.complete({ model, messages });
+  if (finishReason === "length") throw truncationError("its");
   try {
     parseJsonish(content);
   } catch (cause) {
     if (!(cause instanceof AnswerShapeError)) throw cause;
     info(`triage: the model's answer was unusable (${cause.message}) — asking once more`);
-    ({ content } = await chat.complete({ model, messages }));
+    ({ content, finishReason } = await chat.complete({ model, messages }));
+    if (finishReason === "length") throw truncationError("the re-asked");
     try {
       parseJsonish(content);
     } catch (retryCause) {

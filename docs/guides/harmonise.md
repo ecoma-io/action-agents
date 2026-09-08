@@ -397,7 +397,10 @@ restoration, the byte cap, frontmatter identity, structural preservation and
 link identity. The scope is the arriving answer: one that repeats the
 published translation byte-for-byte is a no-op and returns before the gates —
 an endorsed publication is not re-judged. A refusal is never retried — the
-same answer fails the same way.
+same answer fails the same way. An answer the provider declares truncated
+(`finish_reason: length`) never reaches the gates at all: the pair fails
+naming the truncation, unretried — no prefix of a cut answer is parsed or
+proposed.
 
 The **script gate** checks that the candidate's translatable prose is written
 in the target language's script: a `vi` target must come back in Latin
@@ -479,6 +482,7 @@ calls — the action detects staleness from the diff before asking the model.
 | "PR title exceeds 200 characters"                                 | The rendered title is too long.                                                                                                                          | Shorten the template or the number of changed documents.                                                                                                                                                                 |
 | "Manual-edit conflict"                                            | A target document was edited outside the action.                                                                                                         | Resolve the conflict manually. The action reports the pair as failed and moves on.                                                                                                                                       |
 | "Provider unreachable"                                            | The `api-url` endpoint did not respond.                                                                                                                  | Check the endpoint and the timeout.                                                                                                                                                                                      |
+| "the provider truncated its response (finish_reason: length)"     | The provider hit its output cap mid-answer and declared it incomplete.                                                                                   | Raise the provider-side output budget (e.g. `max_tokens`), then re-run — a cut answer is never parsed, retried or proposed.                                                                                              |
 | "… the candidate does not preserve the protected content's order" | The translation moved a later protected term's first occurrence ahead of an earlier one — often a legitimate target-language reorder, not model failure. | Reorder the source's protected firsts, drop the term from the glossary, or wait for the next run (a refusal is never re-asked in-run, but the next scheduled run makes a fresh model call); hand-translate if it recurs. |
 
 ## Recipes

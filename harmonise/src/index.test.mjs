@@ -941,6 +941,42 @@ describe("run", () => {
     expect(chatDouble.calls()).toBe(1);
   });
 
+  it("fails a provider-truncated answer naming truncation, unretried (#449)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let calls = 0;
+    const chatDouble = /** @type {any} */ ({
+      calls: () => calls,
+      async complete() {
+        calls++;
+        // A body cut mid-string: without the guard this dies as a generic
+        // invalid-answer failure that names nothing but the body's shape.
+        return {
+          content: '{"drift":true,"summary":"kept in s',
+          toolCalls: [],
+          finishReason: "length",
+        };
+      },
+    });
+    const ioDouble = io(forge(makeRepo()));
+    ioDouble.chat = chatDouble;
+
+    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
+    // The honest cause in the run's own verdict: the pair line names the
+    // provider's cut, and the recovery policy spent nothing re-asking it.
+    expect(error.message).toMatch(/every pair failed/);
+    expect(error.message).toMatch(/the provider truncated its response \(finish_reason: length\)/);
+    expect(error.message).toMatch(/classified refusal, give-up/);
+    expect(chatDouble.calls()).toBe(1);
+    // The record carries the same honest cause as a failed run — a defect
+    // line, not a refusal ceiling this action declined under.
+    expect(ioDouble.records).toHaveLength(1);
+    expect(ioDouble.records[0].outcome).toBe("failed");
+    expect(ioDouble.records[0].reason).toContain(
+      "the provider truncated its response (finish_reason: length)",
+    );
+    expect(ioDouble.records[0].pairs).toMatchObject({ failed: 1 });
+  });
+
   it("refuses an answer whose content is whitespace only", async () => {
     const ioDouble = io(forge(makeRepo()), [proposes("\n\n"), proposes("   \n ")]);
 

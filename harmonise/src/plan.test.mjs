@@ -237,9 +237,11 @@ describe("translatePair", () => {
    * and counts the requests it received.
    *
    * @param {string[]} bodies
+   * @param {string} [finishReason] the finish reason every answer carries —
+   *   "length" is a provider that cut the answer short (#449)
    * @returns {import("#core/chat.mjs").Chat & { calls: () => number }}
    */
-  function chatWith(bodies) {
+  function chatWith(bodies, finishReason = "stop") {
     let cursor = 0;
     let calls = 0;
     return /** @type {import("#core/chat.mjs").Chat & { calls: () => number }} */ ({
@@ -248,7 +250,7 @@ describe("translatePair", () => {
         const body = bodies[Math.min(cursor, bodies.length - 1)];
         cursor++;
         calls++;
-        return { content: body ?? "", toolCalls: [], finishReason: "stop" };
+        return { content: body ?? "", toolCalls: [], finishReason };
       },
     });
   }
@@ -481,6 +483,55 @@ describe("translatePair", () => {
     });
     expect(result.outcome).toBe("noop");
     expect(result.summary).toBe("kept in step");
+  });
+
+  it("refuses a provider-truncated answer before parsing, unretried (#449)", async () => {
+    const prepared = prepare();
+    // A body whose parseable prefix would otherwise reach the judge — the cut
+    // is what fails the pair, not the body's shape.
+    const cut =
+      '{"drift":true,"summary":"kept in step","content":"' + prepared.protectedText.slice(0, 8);
+    const chat = chatWith([cut], "length");
+    const pending = translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    await expect(pending).rejects.toThrowError(
+      "the provider truncated its response (finish_reason: length) — " +
+        "the model's output is incomplete and cannot be judged as a translation",
+    );
+    // The never-retried class: a RefusalError under the recovery policy, and
+    // not a DeterministicRefusalError — the run's record keeps it a defect
+    // line, the provider's cut, not a ceiling this action declined under.
+    await expect(pending).rejects.toBeInstanceOf(RefusalError);
+    await expect(pending).rejects.not.toBeInstanceOf(DeterministicRefusalError);
+    expect(chat.calls()).toBe(1);
+  });
+
+  it("keeps failing an identical body on the invalid-answer path when the provider did not cut it", async () => {
+    const prepared = prepare();
+    const chat = chatWith(["not json at all", "not json at all"]);
+    const pending = translatePair({
+      prepared,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    // The control: finish_reason stop means the body is judged on its own
+    // bytes — a generic invalid-answer failure, never a truncation claim.
+    await expect(pending).rejects.toThrowError(/the model's answer/);
+    await expect(pending).rejects.not.toThrowError(/truncated/u);
+    expect(chat.calls()).toBe(1);
   });
 });
 
