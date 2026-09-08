@@ -127,7 +127,7 @@ This is the same wiring this repository's own dogfood workflows use
 (`.github/workflows/triage.yml`, `review.yml`, `harmonise.yml` here). The model
 ids are literal per-action names (`triage`, `review`) because the gateway route
 serves one model per action; that the same routes resolve for the targets is an
-**assumption** carried by the first dispatch — a run that refuses or fails on
+**assumption** carried by the first run — a run that refuses or fails on
 the model name names it in the record's `reason`.
 
 **Token.** `secrets.GITHUB_TOKEN`, not an App token, on both actions. Neither
@@ -169,7 +169,6 @@ on:
     types: [opened, edited, reopened, labeled]
   pull_request:
     types: [opened, edited, synchronize, ready_for_review, reopened, labeled]
-  workflow_dispatch:
 
 permissions: read-all
 
@@ -212,7 +211,7 @@ Why it looks the way it does, and where it differs from this repository's own
 | Workflow-level `read-all`; job-level `contents: read`, `issues: write`, `pull-requests: write` | The same grants this repository's own triage workflow holds, arranged like the review workflow's: a job-level block **replaces** the workflow-level one, so a job added later inherits read-only instead of silently widening. `pull-requests: write` is load-bearing even though triage only writes labels — GitHub refuses the issues-API label write on a pull request number without it. The dry-run phases hold these write grants without exercising them; the ladder below is why — the sheet can go live the moment its checklist passes, with no permissions diff riding along. |
 | No `security-events`, no `actions` grants                                                      | Triage never touches them; a dogfood workflow that grants more than its action needs is a defect before it runs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | No checkout step                                                                               | This repository's workflow checks out only so the runner can find the action at `./triage`; a target references the released action by ref, and triage reads everything through the API. One less thing in the workspace.                                                                                                                                                                                                                                                                                                                                                                |
-| Triggers `issues` + `pull_request` + `workflow_dispatch`                                       | The action's event matrix re-triages `opened`, `edited`, `reopened`, `labeled` (queue-marker cases only) and `synchronize` / `ready_for_review` on pull requests, and skips the rest. `workflow_dispatch` is how the first dry runs happen without filing a thread.                                                                                                                                                                                                                                                                                                                      |
+| Triggers `issues` + `pull_request`                                                             | The action's event matrix re-triages `opened`, `edited`, `reopened`, `labeled` (queue-marker cases only) and `synchronize` / `ready_for_review` on pull requests, and skips the rest. There is no `workflow_dispatch` — the entrypoint refuses every event but these two (run contract F-01), and a dispatched run has no thread to classify. The first dry runs come from real threads: wait for the target's first real issue or pull request, or file a throwaway issue to produce one.                                                                                               |
 | `ready_for_review` present                                                                     | A draft's flip to ready changes the evidence a classification rests on. This repository's own workflow omits it; the targets should not — drafts are expected in loom and archkeep (assumption).                                                                                                                                                                                                                                                                                                                                                                                         |
 | Concurrency keyed on the thread, `cancel-in-progress: true`                                    | As in this repository's own workflow: a rapid edit sequence replaces the queued run instead of stacking classifications of stale text. The [`triage` guide](guides/triage.md#redelivery) recommends leaving it off for conservative adopters; the repair story (a run re-derives from live state, removals before additions) is what makes cancellation acceptable here.                                                                                                                                                                                                                 |
 | `dry-run: "true"`                                                                              | The rollout's starting posture on every target. The flip to `"false"` is a deliberate step with its own checklist.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -583,10 +582,11 @@ before its own ladder below has completed.
 
 Per target, in this order:
 
-1. **Triage dry-run** (phase 1: no config file). Dispatch the workflow once
-   (`workflow_dispatch`), then let real events run.
+1. **Triage dry-run** (phase 1: no config file). Let real events run: wait for
+   the target's first real issue or pull request — or file a throwaway issue to
+   produce one, since the workflow only fires on real threads.
 2. **Triage phase 2**: commit the starter sheet and create the four labels;
-   dispatch again, still dry-run.
+   let a real event re-run it, still dry-run.
 3. **Triage live**: flip `dry-run: "false"`.
 4. **Review** (loom, archkeep): start `dry-run: "true"`, first runs on the
    next real pull request; flip to `"false"` after the first-run checklist
@@ -685,16 +685,17 @@ evidence.
        are re-copied from the tag's `.github/workflows/*.yml`.
 4. [ ] loom: `triage` workflow committed exactly as
        [above](#triage--one-workflow-all-three-targets), `dry-run: "true"`.
-5. [ ] loom: dispatch run completes; [first-run checklist](#rollout-order-and-first-run-verification)
+5. [ ] loom: a first dry run completes on a real thread (file a throwaway
+       issue if none is in flight); [first-run checklist](#rollout-order-and-first-run-verification)
        items 1–2 and 4–5 pass; item 3 passes in the dry-run form.
 6. [ ] loom: real-issue and real-PR dry runs observed through the phase-1
        window; [success criteria](#success-criteria) triage rows green.
 7. [ ] loom: sheet committed (`.github/action-agents/triage/triage.json5`,
        `schemaVersion: 2`) and the four labels created (`bug`, `enhancement`,
-       `documentation`, `question`); dispatch run stays green, still dry-run.
+       `documentation`, `question`); real-thread re-run stays green, still dry-run.
 8. [ ] loom: `review` workflow committed, `dry-run: "true"`; next real pull
        request produces a `-dry-run-` artifact and no comment; checklist passes.
-9. [ ] archkeep: triage phases 1–2 as steps 4–7 (own dispatch, own dry-run
+9. [ ] archkeep: triage phases 1–2 as steps 4–7 (own threads, own dry-run
        window, own sheet and labels) — with the form-label collision resolved
        first: the audit named in [Targets](#ecoma-ioarchkeep) reads the issue
        forms' actual `labels:` entries and picks one owner for `bug` before

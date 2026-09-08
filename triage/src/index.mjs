@@ -97,6 +97,18 @@ import { applyVerification, mintVerificationPlan, verifyDecision } from "./verif
 export const ACTION = "triage";
 
 /**
+ * The event names the entrypoint accepts: `issues` and `pull_request`, the
+ * two `threadFromEvent` resolves a thread from. Any other event name is the
+ * F-01 throw — a red run with a name, never a silent skip — and no input
+ * widens the set. Exported as the truth the event-parity gate
+ * (tools/event-parity.mjs) holds every declared surface to; the throw is the
+ * runtime's own enforcement of the same set.
+ *
+ * @type {readonly string[]}
+ */
+export const ACCEPTED_EVENTS = Object.freeze(["issues", "pull_request"]);
+
+/**
  * @typedef {SharedInputs & { labels: string[], dryRun: boolean, configPath: string, recordPath: string, requestTimeoutMs: number, verify: boolean }} Inputs
  */
 
