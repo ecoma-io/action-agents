@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/ecoma-io/action-agents/compare/v0.11.3...v0.11.4) (2026-09-08)
+
+
+### Bug Fixes
+
+* **docs:** stop promising triage the workflow_dispatch its runtime refuses ([#466](https://github.com/ecoma-io/action-agents/issues/466)) ([9c99b2d](https://github.com/ecoma-io/action-agents/commit/9c99b2de7f7ad165195a71afb5d22ed6e3676710))
+
 ## [0.11.3](https://github.com/ecoma-io/action-agents/compare/v0.11.2...v0.11.3) (2026-09-08)
 
 
