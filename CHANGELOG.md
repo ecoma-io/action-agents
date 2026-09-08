@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.3](https://github.com/ecoma-io/action-agents/compare/v0.11.2...v0.11.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* **triage:** the dogfood sheet classifies accepted-risk ([#460](https://github.com/ecoma-io/action-agents/issues/460)) ([#461](https://github.com/ecoma-io/action-agents/issues/461)) ([86fbbfd](https://github.com/ecoma-io/action-agents/commit/86fbbfd9b93612d0dc99915e59714aa5f36c614d))
+
 ## [0.11.2](https://github.com/ecoma-io/action-agents/compare/v0.11.1...v0.11.2) (2026-09-08)
 
 
