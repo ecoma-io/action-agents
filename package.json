@@ -47,6 +47,7 @@
     "typecheck": "tsc --noEmit",
     "arch": "archkeep check",
     "arch:canary": "node tools/check-arch-canary.mjs",
+    "arch:canary-extended": "node tools/check-arch-canary-extended.mjs",
     "arch:transport-seam": "node tools/check-transport-seam.mjs",
     "arch:http-monopoly": "node tools/check-http-monopoly.mjs",
     "arch:forge-monopoly": "node tools/check-forge-monopoly.mjs",

@@ -1,0 +1,28 @@
+{
+  "projects": {
+    "declared": [
+      {
+        "name": "canary-review",
+        "root": "canary-review",
+        "tags": ["layer:action", "scope:canary-review"]
+      },
+      {
+        "name": "canary-triage",
+        "root": "canary-triage",
+        "tags": ["layer:action", "scope:canary-triage"]
+      }
+    ]
+  },
+  "coverage": {
+    "exempt": [
+      {
+        "path": "module-boundaries.config.mjs",
+        "reason": "The boundary law itself, which no project owns — the same exemption the repository's own archkeep.json gives its law"
+      },
+      {
+        "path": "canary-review/**",
+        "reason": "The trap this fixture pins: a glob reaching into a project's own interior — the loader must refuse this config, not honor it. See module-boundaries.config.mjs beside this file"
+      }
+    ]
+  }
+}

@@ -117,8 +117,13 @@ as literals. A dynamic specifier — `import(someVariable)` — that fails to
 resolve stays exit-neutral: it is named in `coverage.blindSpots` and does not
 withhold the verdict. This is an upstream narrowing decision (their own gate
 would refuse their own workspace otherwise), not this repository's choice; it
-is recorded here as a known limit, and the canary deliberately does not pin
-that class, so an upstream widening will be re-measured, not absorbed.
+is recorded here as a known limit, and pinned as one:
+`tools/fixtures/boundary-canary-dynamic-computed/` measures the exact pair — a
+green verdict with `coverage.complete: true` over exactly one `dynamic: true`
+blind spot naming the site — so an upstream change to either half is
+re-measured, never absorbed. Until that fixture landed the class was
+deliberately left unpinned, so a widening could not be absorbed silently; it
+is load-bearing now.
 
 **The decisionRef asymmetry.** `architecture-intent.json` wires every required
 project to `adr:001-core-boundary`, and the boundary rows may cite decisions
@@ -230,7 +235,13 @@ the canaries existed. Two fixtures, judged on every change:
 
 That pair is I13's two halves at the current pin: the judged refusal names its
 constraint; the unresolvable one names its coverage reason. A third fixture
-keeps the transport seam loud the same way. The rule the canaries encode is
+keeps the transport seam loud the same way. Four more, judged by
+`tools/check-arch-canary-extended.mjs` in the same CI step, pin the config
+contracts the edge canaries do not reach: a coverage exemption cannot claim a
+file a project owns, a tracked analyzable file no project owns is refused by
+name, a computed dynamic import is a declared blind spot over a green verdict,
+and depConstraints tag matching is exact on both axes. The rule the canaries
+encode is
 the one this whole page runs on: an assertion the tool does not honor is a
 new fail-open — fix the gate, never the canary, and re-measure before
 re-pinning.
