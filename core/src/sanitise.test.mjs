@@ -1,6 +1,6 @@
 // Tests for the comment-text sanitiser.
 //
-// Each of the four rules is pinned by the failure it exists to prevent: a
+// Each rule is pinned by the failure it exists to prevent: a log forgery, a
 // notification nobody asked for, raw HTML rendering inside an action's
 // comment, model text forging the comment's structure, and a silent cut.
 // Sanitising is lossy on purpose — the mangled finding is the intended
@@ -9,6 +9,35 @@
 import { describe, expect, it } from "vitest";
 
 import { sanitiseCommentText } from "./sanitise.mjs";
+
+describe("rule 0 — no non-text control character survives", () => {
+  it("maps non-layout C0 controls and DEL to spaces", () => {
+    const { text } = sanitiseCommentText("a\u0000b\u001fc\u007fd");
+
+    expect(text).toBe("a b c d");
+  });
+
+  it("preserves the whitespace controls TAB, LF and CR", () => {
+    // These three are real text on a multi-line surface: a finding message
+    // carries newlines and the comment and the record are meant to keep
+    // them. Only the never-text class of C0 is stripped here; the log
+    // surfaces flatten TAB/LF/CR separately through `one-line.mjs`.
+    const { text } = sanitiseCommentText("a\tb\nc\rd");
+    expect(text).toBe("a\tb\nc\rd");
+  });
+
+  it("strips NUL, BEL and the graphic/line controls a hostile message uses for nothing else", () => {
+    const { text } = sanitiseCommentText("\u0000\u0007\b\v\f\u000e\u000f\u001b\u001f\u007f");
+
+    expect(text).toBe(" ".repeat(10));
+  });
+
+  it("leaves U+2028/U+2029 and ordinary punctuation alone", () => {
+    const { text } = sanitiseCommentText("line break here");
+
+    expect(text).toBe("line break here");
+  });
+});
 
 describe("rule 1 — no structural token survives", () => {
   it("removes comment delimiters, and says so", () => {

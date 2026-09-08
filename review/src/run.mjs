@@ -12,6 +12,7 @@
  */
 
 import { createWorkspace } from "#core/workspace.mjs";
+import { oneLine } from "#core/one-line.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { markerLine, parseMarker, resolveOwnLogins, upsertComment } from "#core/comment.mjs";
@@ -567,7 +568,7 @@ export async function reviewPullRequest({
   for (const quarantined of anchored.quarantined) {
     io.info(
       `review: finding quarantined — unanchored: ${quarantined.finding.file}:${String(quarantined.finding.line)} ` +
-        `${quarantined.finding.message}`,
+        oneLine(quarantined.finding.message, { stripControlChars: true }),
     );
   }
   // Strictness is review policy, not a rendering detail: at low the nits
@@ -962,7 +963,8 @@ function applyStrictness(findings, strictness, info) {
   for (const finding of findings) {
     if (finding.severity === "nit") {
       info(
-        `review: nit dropped at low strictness — ${finding.file}:${String(finding.line)} ${finding.message}`,
+        `review: nit dropped at low strictness — ${finding.file}:${String(finding.line)} ` +
+          oneLine(finding.message, { stripControlChars: true }),
       );
       continue;
     }
