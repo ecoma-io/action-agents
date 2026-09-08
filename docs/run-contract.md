@@ -34,6 +34,32 @@ And every run carries a verdict: `pass`, `fail`, or `unknown`.
 - Terminal state alone is never write evidence: `abandoned` and `skip` can
   still have written, so a record carries what applied, not just how it ended.
 
+### The semantics are frozen
+
+The applicability-vs-capacity line is a contract law for every action, and the
+closed vocabulary above is the only one a run ends in:
+
+- **Eligibility and scope are independent axes.** Eligibility (the
+  `applicability` key) answers "should this review run at all?" — a matching
+  `run: false` rule ends green as `skip`, before diff accounting and before any
+  model call. Scope (`ignore`, `maxDiffLines`, path-scoped rules) answers "what
+  should the reviewer inspect once it does?" — exceeding the diff-line budget is
+  a **capacity refusal**, terminal `refused`, red. The two never borrow each
+  other's outcomes: a scope refusal stays `refused`, an eligibility skip stays
+  `skip`.
+- **`cannot review` is never encoded as `not applicable`.** Capacity exhaustion
+  — the diff past `maxDiffLines` (#355), the prompt past its headroom — ends the
+  run `refused`, loudly. It is never reclassified into a green eligibility
+  `skip`. A repository that wants huge changes reviewed refuses them honestly,
+  as capacity, as a `refused` record; only a policy decision ("we will not
+  review this class of change") is a `skip`, and it is recorded with the rule
+  and its measured numbers, so an intentional skip is never mistaken for "no
+  review needed."
+- **`refused` is not `failed`**, and `skip` is neither (state table above). A
+  dashboard that collapses the three cannot tell "the policy decided not to
+  review" from "the budget could not fit the diff" from "a defect or an
+  environment break" — three operationally different outcomes.
+
 ## What today's outcomes map to
 
 | Action      | Today's outcome                                                                       | Contract state                                                                                                                                                                                     |

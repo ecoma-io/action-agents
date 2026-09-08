@@ -208,18 +208,20 @@ Four laws the validator enforces rather than asks reviewers to remember:
   non-`external` context; `when.author.isBot: true` — bot-ness is a GitHub
   attestation (`user.type`), nobody but GitHub can mint it, the attestation
   may not be negated (`isBot` accepts only `true`; `equals` narrows, it
-  never anchors); or `when.changes` — the one author-writable anchor, the
-  resource exception: the size-based no-review outcome already exists in
-  the scope layer as the `maxDiffLines` refusal, so the predicate widens no
-  author capability — it reclassifies that outcome from a red refusal to a
-  green, recorded, measured skip. A convention — title, branch, base,
-  paths, labels — never governs alone;
+  never anchors); or `when.changes` — the one author-writable anchor. A size
+  rule is an _explicit eligibility decision_ narrowing who consumes a review
+  run, and it reads the pre-ignore totals by design. It is never a way to
+  reclassify the scope layer's `maxDiffLines` refusal into a green skip: a
+  diff past that budget is refused (red) as capacity, and a size rule that
+  would have swallowed that outcome is exactly the conflation the run
+  contract freezes against (the eligibility and capacity axes are
+  independent — [the semantics are frozen](../run-contract.md#the-semantics-are-frozen)).
+  A convention — title, branch, base, paths, labels — never governs alone;
 - the pinned context, when one is named on a `run: false` rule, is never
   `external` — the external context is frozen; full review is what an
   untrusted contribution is for, and the new anchors do not open it: a
-  contextless size rule skips oversized external pull requests because the
-  scope layer already refused them; a rule that names `external` skips
-  nothing;
+  size rule on a non-`external` context skips only the pull requests it
+  explicitly names; a rule that names `external` skips nothing;
 - a non-standard posture declares its mode-scoped instruction document, and
   neither it nor its document rides a `run: false` skip — a skipped run took
   no posture ([the posture axis](#the-posture-axis)); and
@@ -294,10 +296,13 @@ full run would write its artifact — the same repository/head/pull-request
 facts, `outcome: skipped` with the reason naming the rule (`#N matched
 applicability rule '<id>' — review intentionally not run`; when the
 deciding rule carries `when.changes` and the totals exist, a measured
-parenthetical rides along — `#3 matched applicability rule 'oversized'
-(9000 changed lines across 1 file) — review intentionally not run` —
+parenthetical rides along — `#3 matched applicability rule
+'no-large-external' (9000 changed lines across 1 file) — review
+intentionally not run` —
 numbers only, never title or login text), and the applicability fact with
-`applicable: false`, posture `standard`, and the deciding rule's id. A pull request already skipped by its draft or
+`applicable: false`, posture `standard`, and the deciding rule's id. (The
+repository's own policy ships no size anchor — see the sample config below —
+so this id is illustrative of the general shape, not the dogfood rule.) A pull request already skipped by its draft or
 closed state writes the same reduced record **when the policy is on**, with
 basis `state` — under a policy, a skip is recorded honestly rather than only
 logged; without one, a **skip record** still leaves the run: the
@@ -349,84 +354,120 @@ file alone.
 
 ## The config file
 
-`.github/action-agents/review/review.json5`, in full:
+`.github/action-agents/review/review.json5` in this repository, in full:
 
 ```json5
 {
-  // The inclusion bar for findings — one dial, not a wall of toggles.
-  //   low     concerns only
-  //   medium  concerns and nits, nits collapsed   (the default)
-  //   high    everything, nothing collapsed — style observations as nits
-  // Strictness is not tone: how findings are worded lives in the
-  // instruction document, not here.
-  strictness: "medium",
-
-  // The review's strategy, orthogonal to strictness. "standard" (the
-  // default) reviews normally; "adversarial" tells the reviewer to treat
-  // its candidate findings as hypotheses pending verification. It shapes
-  // how the model reviews — never what the contract enforces.
-  strategy: "standard",
-
-  // The language findings are written in, as a BCP-47 tag.
-  language: "en",
-
-  // Paths the reviewer never reads, never comments on — and never counts:
-  // ignored files are dropped from the maxDiffLines basis too. The guard
-  // exists to bound reading effort, and an ignored file costs none.
-  ignore: ["pnpm-lock.yaml", "dist/**", "**/*.min.js"],
-
-  // A diff with more than this many counted lines is refused outright.
-  // A half-reviewed monster presented as a complete review is the worse
-  // failure, and this is how it is made impossible.
-  maxDiffLines: 5000,
-
-  // Path-scoped rubrics. `include` takes globs, and `!` negates within them.
-  // A rule's document is its name in the log, and it must exist on the
-  // resolved policy source — declaring a rule and leaving its file absent is
-  // a startup error. Only the convention paths under `instructions` are
-  // optional; a declared rule is required.
-  rules: [
-    {
-      include: ["src/**/*.ts", "!src/generated/**"],
-      instruction: ".github/action-agents/review/rules/typescript.md",
-    },
+  // This repository's own policy for its own reviewer.
+  //
+  // strictness stays at the default on purpose: concerns plus collapsed
+  // nits is the bar a maintainer actually reads. language follows the
+  // repository's English-first convention for public artifacts.
+  //
+  // The ignore set is a universe filter, not a suggestion: ignored paths
+  // cost nothing against maxDiffLines, are invisible to rule matching, and
+  // cannot be reached by the tools either.
+  ignore: [
+    "pnpm-lock.yaml",
+    "coverage/**",
+    "dist/**",
+    ".claude/**",
+    ".agents/**",
+    ".codex/**",
+    ".opencode/**",
   ],
 
-  // Whether review applies to a pull request at all — the eligibility
-  // axis. Absent, the key is off entirely and nothing else changes. `bots`
-  // allowlists the logins that classify as automation (exact bytes);
-  // `rules` are first-match-wins: declare conjunctive `when` conditions —
-  // title, branch and base as regular-expression sources, paths as globs,
-  // labels as exact names matched any-of, author facts (`isBot` declared
-  // only as true, `equals` as exact logins), `changes` as size guards over
-  // the pre-ignore totals (lines, files; each `gt` a whole number ≥ 0) —
-  // and whether review runs. A `run: false` rule is anchored: a pinned
-  // non-`external` context, `when.author.isBot: true`, or `when.changes` —
-  // a rule naming `external` never skips. A rule may also declare
-  // a non-standard `posture` with its instruction document — a
-  // non-`external` context only — and an `intensity` strictness override:
-  // lowering anchors to a non-`external` context, deepening is free. See
-  // [the applicability axis](#the-applicability-axis), [the posture
-  // axis](#the-posture-axis) and [the intensity axis](#the-intensity-axis).
+  // A resource budget, not a PR-size rule. The count is additions plus
+  // deletions over the post-ignore universe; a diff past it is refused
+  // outright (red, recorded `refused`) rather than half-reviewed.
+  // No eligibility rule reclassifies that outcome — never skipped green.
+  maxDiffLines: 3000,
+
+  // The eligibility axis — whether a pull request consumes a review run at
+  // all. Every skip here is anchored by one of the three anchors the
+  // validator enforces: a pinned context, GitHub's bot attestation, or a
+  // measurement. Title, branch, path and label conventions never anchor a
+  // skip; they only narrow rules the anchor already governs.
   applicability: {
-    bots: ["ecoma-io", "renovate[bot]"],
+    // GitHub-attested bots classified as `automation`. Exact logins.
+    bots: ["ecoma-io[bot]"],
     rules: [
       {
+        // Release pull requests contain no hand-written code. Pinned
+        // context anchors the skip; the title and branch narrow it to
+        // actual release pull requests.
         id: "release-prs",
         context: "automation",
-        when: { title: "^chore\\(release\\)", branch: "^release/" },
+        when: {
+          title: "^chore\\(workspace\\): release",
+          branch: "^release-please--",
+        },
         run: false,
       },
       {
-        // GitHub attests user.type; nobody but GitHub can mint it.
+        // Every other GitHub-attested bot. `user.type` is GitHub's own
+        // attestation: nobody but GitHub can mint it.
         id: "unlisted-bots",
         when: { author: { isBot: true } },
         run: false,
       },
+    ],
+  },
+
+  // Path-scoped rubrics. Every document here must exist on the default
+  // branch — a declared rule with no file is a startup error, not dormancy.
+  rules: [
+    {
+      include: ["core/src/**/*.mjs", "*/src/**/*.mjs"],
+      instruction: ".github/action-agents/review/rules/runtime-mjs.md",
+    },
+    {
+      include: ["docs/**/*.md"],
+      instruction: ".github/action-agents/review/rules/docs.md",
+    },
+  ],
+}
+```
+
+An **illustrative consumer configuration**, exercising the keys this
+repository's own config does not use — a size anchor (a `run: false` rule
+over the pre-ignore totals: an explicit eligibility decision, never a
+reclassification of the budget), a posture with an instruction document, and
+an `intensity` strictness override. The numbers are the consumer's own; this
+repository ships **no size anchor** in its dogfood policy:
+
+```json5
+{
+  // The inclusion bar for findings — one dial, not a wall of toggles.
+  strictness: "medium",
+
+  // Paths the reviewer never reads — and never counts.
+  ignore: ["dist/**", "**/*.min.js"],
+
+  // A resource budget, not a PR-size rule. The count is additions plus
+  // deletions over the post-ignore universe; a diff past it is refused
+  // outright — red, recorded `refused`.
+  maxDiffLines: 5000,
+
+  // Path-scoped rubrics. `include` takes globs, and `!` negates within them.
+  rules: [
+    {
+      include: ["src/**/*.ts", "!src/generated/**"],
+      instruction: "rules/typescript.md",
+    },
+  ],
+
+  applicability: {
+    bots: ["renovate[bot]"],
+    rules: [
       {
-        // The scope layer would refuse this diff anyway (maxDiffLines);
-        // this rule records the same outcome as a green, measured skip.
-        id: "oversized",
+        // An explicit eligibility decision, never a reclassification of
+        // the budget: this consumer intentionally will not review pull
+        // requests past this many pre-ignore changed lines. It reads the
+        // pre-ignore totals; the budget counts the post-ignore universe.
+        // A diff past the budget that this rule does not catch is refused
+        // (red) as capacity — never silently skipped.
+        id: "no-large-external",
         when: { changes: { lines: { gt: 8000 } } },
         run: false,
       },
@@ -435,7 +476,7 @@ file alone.
         context: "maintainer",
         when: { paths: ["docs/**"] },
         posture: "maintainer",
-        instruction: ".github/action-agents/review/postures/docs.md",
+        instruction: "postures/docs.md",
         intensity: { strictness: "low" },
       },
     ],
@@ -443,7 +484,7 @@ file alone.
 
   // Prose, pointed at rather than embedded; this path is the default.
   instructions: {
-    instruction: ".github/action-agents/review/instruction.md",
+    instruction: "instruction.md",
   },
 }
 ```
@@ -513,8 +554,9 @@ naming the counted total and the excluded remainder. The split is
 deterministic: files accumulate in ascending path order — byte-wise, UTF-8
 byte order, the only collation this document means wherever it says "sorted" —
 until the budget breaks; that file and everything after it in that order is
-the remainder. A half-reviewed diff presented as a complete review is
-refused, not truncated.
+the remainder. The refusal happens before any file is read — nothing is
+half-reviewed, and the refusal is never reclassified into an eligibility
+skip (see [the semantics are frozen](../run-contract.md#the-semantics-are-frozen)).
 
 Each non-ignored changed file's patch enters the prompt as its own evidence
 block, capped at 64 KiB like any tool result. Where GitHub supplies no patch —

@@ -5,14 +5,28 @@
 > normatively in [`review`](review.md): the context and `run` axes (PR 1),
 > the posture axis (PR 2), and the eligibility conditions (this change):
 > the bot attestation (`when.author.isBot` — GitHub's own `user.type`
-> attestation, never a title convention) and the size guard (`when.changes`)
-> that reclassifies the scope layer's `maxDiffLines` refusal as a green,
-> measured skip. The intensity axis (PR 3) — the one
+> attestation, never a title convention) and the size guard (`when.changes`).
+> The intensity axis (PR 3) — the one
 > `strictness` delta, absolute per matched rule, with the lower-gates the
 > design proposed: lowering anchored to a pinned non-`external` context,
 > deepening free everywhere. The implementation contract lives in
 > [`review`](review.md#the-applicability-axis); nothing below describes
 > open work.
+>
+> **2026-09-08 supersession.** Part of the wording above — that the size
+> guard "reclassifies the scope layer's `maxDiffLines` refusal as a green,
+> measured skip" — is superseded. A reclassification of a capacity refusal
+> into an eligibility skip is exactly the "cannot review → not applicable"
+> conflation this repository has since decided to forbid ([#440](https://github.com/ecoma-io/action-agents/issues/440), [the run
+> contract](../run-contract.md#the-semantics-are-frozen)). The `changes` guard
+> remains a legitimate `run: false` anchor, but it is an _explicit
+> eligibility decision_ a maintainer makes ("we intentionally will not
+> review this class of change"), never a way to turn a budget refusal green.
+> The repository's own `review.json5` no longer ships the `oversized` rule;
+> a diff past `maxDiffLines` is refused (`refused`, red), declared as
+> capacity. The normative text in [`review`](review.md#the-applicability-axis)
+> and the corrected ordering (classification precedes the budget refusal)
+> below still stand.
 
 `review` today applies one full human-style review to every pull request. The
 `strictness`, `strategy` and `ignore` dials vary review _intensity_; nothing

@@ -112,6 +112,19 @@ invariants — written once in
 anything a run's outcome rides on: a new outcome word, failure class, or
 invariant lands there first and in code second.
 
+**Prefer the smallest coherent, independently verifiable change.** Split work
+into the smallest units that each make sense on their own and are each
+self-contained enough to judge — not because big diffs are bad, but because a
+change this repository can review completely is a change it can hold
+accountable. `maxDiffLines` (the review's reading budget) and the `applicability`
+size guard (`when.changes`) are resource numbers and eligibility decisions
+respectively — never PR-size targets; see [the run contract](docs/run-contract.md#the-semantics-are-frozen). A diff past the budget is
+refused as capacity (red, recorded `refused`) — never reclassified into a
+green skip by a size rule. Precisely two shapes end green: an _eligibility_
+`run: false` decision (a bot attestation or an explicit policy rule) ends as
+a recorded skip, and a diff the `ignore` set shrinks under the budget
+reviews cleanly rather than being refused.
+
 ## Before you say a change is done
 
 `pnpm lint`, `pnpm typecheck`, `pnpm arch`, `pnpm test` and `pnpm check-skills`

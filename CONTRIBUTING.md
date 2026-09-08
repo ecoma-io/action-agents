@@ -477,6 +477,38 @@ the job list does not.
 4. Keep it focused. Unrelated cleanup found along the way is welcome as its own
    pull request — mixed into this one it makes the real change unreviewable.
 
+### Keeping a change reviewable
+
+A change that this repository's review action can review **completely** is the
+practical target — not a line budget to hit or stay under. `review`'s
+`maxDiffLines` is a resource budget on what a single run will read, and the
+`applicability` size guard is an eligibility decision, so **neither is a PR-size
+rule** ([the run contract](docs/run-contract.md#the-semantics-are-frozen)). The
+guidance here is about structuring work:
+
+- prefer the **smallest coherent, independently verifiable change**; a reviewer
+  should be able to hold the whole diff in one judgement;
+- keep generated output, lockfiles and vendored files out of the diff where the
+  repository already ignores them — they are not review content;
+- when a change genuinely is large, split it along the seams a reviewer can
+  verify one at a time, rather than leaving the action to refuse or truncate;
+- a diff past `maxDiffLines` is **refused**, red, declared as capacity — it is
+  never "skipped" by default; only an _eligibility_ `run: false` decision (a bot
+  attestation or an explicit policy rule) ends green as a recorded skip, never a
+  size rule reclassifying the refusal. That is the action being honest, not a bug.
+
+**How you know a diff is the honest size** — no number hunting. The
+repository's own budget is generous for a whole small pull request:
+`maxDiffLines: 3000` is counted over the **post-ignore** universe, and the
+`ignore` set drops the lockfile, generated output and agent tooling. If the
+`review` job (`.github/workflows/review.yml`) is green, the pull request was
+**completely** reviewable — being under the budget is definitional, not
+aspirational. If the run refuses, split the pull request along reviewable
+seams rather than raising or reclassifying; a refusal is the contract
+declining to half-review, and a `refused` run is the honest, visible outcome
+(the `maxDiffLines` refusal is pinned in the semantic-boundary tests and
+raised in `review/src/run.mjs`).
+
 ### How a pull request lands
 
 **Squash, always.** Three things follow:

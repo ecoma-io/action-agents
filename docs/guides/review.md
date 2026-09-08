@@ -157,9 +157,15 @@ ignore: [
 
 #### `maxDiffLines`
 
-The maximum counted diff lines (additions + deletions) the action processes. A
-diff exceeding this ceiling stops the review before the first model call. Raise
-it for large repositories:
+A resource budget for the review run, not a PR-size rule. It is the maximum
+counted diff lines (additions + deletions, over the post-ignore universe) the
+action processes. A diff exceeding it is **refused** before the first model
+call — recorded `refused`, red — rather than half-reviewed. It bounds how much
+of a diff a review reads; it is not a judgement of whether a pull request is
+too big, and it is not merge policy — merge enforcement is entirely a consumer
+ruleset decision (ADR 006). The `applicability` axis is the separate question
+of whether a pull request consumes a review run at all (see below); a budget
+refusal is never reclassified into an eligibility skip.
 
 ```json5
 maxDiffLines: 10000,
@@ -277,8 +283,10 @@ without reading any review content:
         run: false,
       },
       {
-        // Larger than the scope budget would ever review; recorded as a
-        // skip instead of refused as a half-reviewed monster.
+        // An explicit eligibility decision to not review pull requests past
+        // this many pre-ignore changed lines — never a way to turn the
+        // scope budget's refusal green. A diff past the budget that this
+        // rule does not catch is refused (red) as capacity.
         id: "oversized",
         when: { changes: { lines: { gt: 8000 } } },
         run: false,
@@ -298,23 +306,27 @@ without reading any review content:
 
 #### Rule fields
 
-| Field         | Required | What it does                                                                                                                                                                                                                                                       |
-| ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`          | yes      | Name the audit record carries.                                                                                                                                                                                                                                     |
-| `context`     | no       | Matches only this execution context. Absent matches every context.                                                                                                                                                                                                 |
-| `when`        | no       | Conditions: `title`, `branch` and `base` (regex sources), `paths` (glob array), `labels` (exact names, any-of), `author` (`isBot: true` and/or `equals` logins), `changes` (`lines`/`files`, each `{ gt: N }` over the pre-ignore totals). Combined conjunctively. |
-| `run`         | no       | Whether review applies. Defaults to `true`.                                                                                                                                                                                                                        |
-| `posture`     | no       | Non-standard posture: `"maintainer"` or `"automation"`. Present only with a deviation from standard.                                                                                                                                                               |
-| `instruction` | no       | The posture document's path alongside a non-standard posture.                                                                                                                                                                                                      |
-| `intensity`   | no       | The strictness override: `{ strictness: "high" }`.                                                                                                                                                                                                                 |
+| Field         | Required | What it does                                                                                                                                                                                                                                                                                                                                      |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | yes      | Name the audit record carries.                                                                                                                                                                                                                                                                                                                    |
+| `context`     | no       | Matches only this execution context. Absent matches every context.                                                                                                                                                                                                                                                                                |
+| `when`        | no       | Conditions: `title`, `branch` and `base` (regex sources), `paths` (glob array), `labels` (exact names, any-of), `author` (`isBot: true` and/or `equals` logins), `changes` (`lines`/`files`, each `{ gt: N }` over the **pre-ignore** totals — an explicit eligibility decision, never a reclassification of the budget). Combined conjunctively. |
+| `run`         | no       | Whether review applies. Defaults to `true`.                                                                                                                                                                                                                                                                                                       |
+| `posture`     | no       | Non-standard posture: `"maintainer"` or `"automation"`. Present only with a deviation from standard.                                                                                                                                                                                                                                              |
+| `instruction` | no       | The posture document's path alongside a non-standard posture.                                                                                                                                                                                                                                                                                     |
+| `intensity`   | no       | The strictness override: `{ strictness: "high" }`.                                                                                                                                                                                                                                                                                                |
 
 A rule that sets `run: false` skips review entirely — but only when the rule
 is anchored: a pinned non-`external` `context`, `when.author.isBot: true`
 (bot-ness is GitHub's own attestation — `user.type` — and cannot be faked by
-a pull request's contents), or `when.changes` (a pull request bigger than
-the scope budget would refuse anyway; the skip records that outcome honestly
-instead). A skip rule naming `external` or anchored only on a title, branch,
-base, path or label convention is refused at startup. A rule that sets a
+a pull request's contents), or `when.changes` (an explicit eligibility
+decision to not review a change past a pre-ignore size you choose; the skip
+records the rule and its measured totals so it is never mistaken for "no
+review needed"). A size rule never reclassifies the scope budget's refusal —
+a diff past `maxDiffLines` is refused (red) as capacity, and only the rule you
+actually declare skips green ([the semantics are frozen](../run-contract.md#the-semantics-are-frozen); the recipe below
+shows the deliberate form). A skip rule naming `external` or anchored only on
+a title, branch, base, path or label convention is refused at startup. A rule that sets a
 non-standard `posture` must also set an `instruction` path for that posture's
 document.
 
@@ -475,13 +487,13 @@ workflow; the tag here is only for reading.
 
 ## Cost and budget controls
 
-| Control              | Default  | Effect                                                              |
-| -------------------- | -------- | ------------------------------------------------------------------- |
-| `max-turns`          | `30`     | Ceiling on agent turns. More turns = more model calls.              |
-| `context-window`     | `128000` | Token budget before compaction. Match to your model.                |
-| `maxDiffLines`       | `5000`   | Ceiling on diff size. Large diffs stop before the first model call. |
-| `dry-run`            | `false`  | Review and log, comment nothing. Model calls still count.           |
-| `request-timeout-ms` | `120000` | Per-attempt timeout for one provider call.                          |
+| Control              | Default  | Effect                                                                                    |
+| -------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `max-turns`          | `30`     | Ceiling on agent turns. More turns = more model calls.                                    |
+| `context-window`     | `128000` | Token budget before compaction. Match to your model.                                      |
+| `maxDiffLines`       | `5000`   | Resource budget on counted diff lines (post-ignore). Past it: refused, not half-reviewed. |
+| `dry-run`            | `false`  | Review and log, comment nothing. Model calls still count.                                 |
+| `request-timeout-ms` | `120000` | Per-attempt timeout for one provider call.                                                |
 
 The agent loop reads one file per tool call. The number of model calls depends
 on the diff size and the model's decisions about what to read. The `max-turns`
@@ -504,15 +516,15 @@ These are enforced in code across every action. See the
 | Symptom                                                                                         | Cause                                                                                              | Resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | "Run would publish nothing — read-only token"                                                   | Fork's pull request with no write token.                                                           | `review` is designed for same-repo PRs. Under `pull_request` a fork gets a read-only token and no secrets, so the action cannot run on forks at all. Reaching for `pull_request_target` is the trap: that trigger runs the base repository's workflow with full secrets, and **combining it with a checkout of `github.event.pull_request.head.sha` is the "pwn request" pattern** that hands an attacker your secrets regardless of which action you then call. If you use `pull_request_target`, never check out the head SHA and never run the pull request's code — but prefer not using it at all; a PAT does not make reviewing a fork safe. |
-| "the diff counts … lines against a …-line budget"                                               | The pull request diff is past `maxDiffLines`.                                                      | Raise `maxDiffLines`, or split the PR. Recorded `refused`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| "the assembled prompt estimates at … tokens, past half the …-token window"                      | The assembled prompt cannot fit half the configured context window.                                | Split the PR, or point `context-window` at a model with a larger window. Recorded `refused`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| "the diff counts … lines against a …-line budget"                                               | The pull request diff is past `maxDiffLines`.                                                      | The review run's budget was exceeded; it is refused (red) rather than half-reviewed — recorded `refused`, which is a capacity outcome, not an eligibility one. Raise the budget for _this repository_ (it is a resource budget, not a PR-size rule — see above), or split the pull request. Only a deliberate, declared policy decision to not review large pull requests at all makes a green skip legitimate — see [Skip oversized pull requests, deliberately](#skip-oversized-pull-requests-deliberately) — and it is a last resort, never the default escape from a refusal. This is a config decision, not a rule about PR size.             |
+| "the assembled prompt estimates at … tokens, past half the …-token window"                      | The assembled prompt cannot fit half the configured context window.                                | The run's prompt would exceed half the configured window; it is refused (red) rather than truncated — recorded `refused`. Point `context-window` at a model with a larger window, or split the pull request into contexts a run can hold. Not a rule about PR size.                                                                                                                                                                                                                                                                                                                                                                                |
 | "the final answer failed the output contract twice"                                             | The provider's final answer was not the contract JSON, on both attempts.                           | Usually transient at the provider — re-run the job; if it persists, check the endpoint's model and protocol. Recorded `refused`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | "the posture document '…' does not exist on branch '…'", or "… is … bytes, past the …-byte cap" | A non-standard posture rule's `instruction` document is missing or oversized at the policy source. | Add the document, or bring it under the 8 KiB cap. Recorded `failed` — the loader's own error.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | "Config file exceeds 64 KiB"                                                                    | Config file too large.                                                                             | Reduce it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | "Document exceeds 8 KiB"                                                                        | A rule or instruction document is too large.                                                       | Shorten it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | "No config file at PATH"                                                                        | `config-path` set to a non-existent path.                                                          | Fix the path or remove it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | "schemaVersion Y is not supported"                                                              | Config declares an unknown schema version.                                                         | Update the action tag or downgrade `schemaVersion`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| "max-turns reached"                                                                             | The agent loop hit the ceiling.                                                                    | Raise `max-turns`, or split the PR into smaller reviews.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| "max-turns reached"                                                                             | The agent loop hit the ceiling.                                                                    | Raise `max-turns`. A capped run concludes **partial** (published with the bound named) — it is a capacity outcome, not a PR-size rule.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Provider unreachable                                                                            | The `api-url` endpoint did not respond.                                                            | Check the endpoint and the timeout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ## Recipes
@@ -597,13 +609,29 @@ else GitHub classifies as a bot. Allowlisted bots never reach this rule: the
 }
 ```
 
-### Skip oversized pull requests
+### Skip oversized pull requests, deliberately
 
-Without this rule, a diff over `maxDiffLines` is refused — red, half-reviewed
-monster never shown. With it, the same pull request ends green with a skip
-record naming the rule and its measured totals (`9000 changed lines across 12
-files`). The guard reads the **pre-ignore** totals; `maxDiffLines` counts the
-post-ignore universe.
+This recipe is an **explicit eligibility decision** to not review pull requests
+past a size you choose — not a way to make large diffs green. It is a `run:
+false` applicability rule, so classification runs **before** the `maxDiffLines`
+refusal: a matching pull request ends green with a skip record naming the rule
+and its measured totals (`9000 changed lines across 12 files`); a pull request
+that matches no rule still reaches the budget refusal exactly as it does today.
+Without this decision, a diff past `maxDiffLines` is refused (red) — capacity
+outcome, stated as such.
+
+Two things to read before you add it:
+
+- **The guard reads the pre-ignore totals; `maxDiffLines` counts the
+  post-ignore universe.** An ignored giant file (a lockfile, generated output)
+  counts toward the guard but not the budget. Set this threshold on the change
+  you actually mean to skip reviewing, and note that a pull request the ignore
+  set has already shrunk to something reviewable may be under your threshold
+  precisely because it is reviewable.
+- **A skip means "intentionally not reviewed" — never "no review needed."**
+  A consumer must be able to tell the intentional skip apart from something
+  the review should have looked at. The skip record carries the rule id and
+  the measured numbers, so the record says which.
 
 ```json5
 {
