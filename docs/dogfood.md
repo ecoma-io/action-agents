@@ -54,8 +54,9 @@ composition library with Tailwind and design tokens. Both actions apply —
 (accessibility, token contracts, composition API) rewards a reviewer that reads
 the diff rather than the title.
 
-Expected event volume, as assumptions to be replaced by observed numbers after
-the first two weeks: roughly 10–20 issues and 15–30 pull requests per month.
+Expected event volume, as assumptions — refreshed with the first observed
+numbers at the day-7 audit, closed at the day-30 review: roughly 10–20 issues
+and 15–30 pull requests per month.
 
 Risk notes: highest cost exposure of the three (volume × model calls), and the
 largest noise surface if a live run misbehaves — which is why loom starts in
@@ -67,10 +68,22 @@ appear, the `ignore` set, not the budget, is the first lever.
 
 The npm governance tool whose verdicts gate every repository in the
 organisation. A defect here propagates, so `review` earns its cost despite a
-modest volume (assumption: 5–10 issues, 10–15 pull requests per month). Its
-issue forms (`bug` and the missed-violation form) apply their own labels
-(assumption); the starter sheet below adds categories the forms do not carry,
-so the two label sources stay disjoint.
+modest volume (assumption: 5–10 issues, 10–15 pull requests per month).
+
+**Its issue forms and the sheet share a label — a known collision, resolved
+before the sheet goes live, not after.** Archkeep's `bug` issue form applies
+the `bug` label (assumption — read `.github/ISSUE_TEMPLATE/*.yml` to confirm),
+and `bug` is one of the four labels the starter sheet below declares. The
+collision is not cosmetic: the triage policy holds single-valued roles to one
+label per thread across the thread's _existing_ labels and the assessment
+together, so a bug-form issue that arrives already carrying `bug` and is then
+classified by the model into a different category of that role is refused as a
+red run — no mutation, but a refusal the sheet itself manufactured, inflating
+the refusal-rate row below. The day-7 audit resolves the ownership before
+phase 2 goes live: read the forms' actual `labels:` entries, then either drop
+`bug` from the sheet (the form keeps it; the model never offers it) or remove
+the label from the forms (the sheet owns it). One owner per label; the audit
+records which way it went.
 
 Risk notes: low volume means slow signal accumulation — judge archkeep on
 verdict quality per run, not on weekly counts. Review findings here are
@@ -82,10 +95,11 @@ rubric problem, not a reviewer problem.
 Under construction, not adopted anywhere yet. `triage` applies and doubles as
 the cheapest live validation of the plumbing: labels notify nobody and are
 reversible in one click. `review` does **not** start here — the pull request
-stream is the maintainer's own scaffolding (assumption: 2–4 pull requests per
-month), so agent review is cost without readership. The criterion to add it:
-sustained merged-pull-request rate above ~8 per month or a second contributor.
-Until then the review section of this page does not apply to release-craft.
+stream is the maintainer's own scaffolding (assumption: 2–4 issues and 2–4
+pull requests per month), so agent review is cost without readership. The
+criterion to add it: sustained merged-pull-request rate above ~8 per month or
+a second contributor. Until then the review section of this page does not
+apply to release-craft.
 
 Risk notes: earliest-stage codebase; mislabels are low-consequence, which is
 exactly why it is safe to let triage go live here first.
@@ -157,10 +171,7 @@ on:
     types: [opened, edited, synchronize, ready_for_review, reopened, labeled]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  issues: write
-  pull-requests: write
+permissions: read-all
 
 concurrency:
   group: triage-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -170,6 +181,10 @@ jobs:
   triage:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     steps:
       - uses: ecoma-io/action-agents/triage@v0.11.2 # roadmap ref
         with:
@@ -192,16 +207,22 @@ jobs:
 Why it looks the way it does, and where it differs from this repository's own
 `triage.yml`:
 
-| Choice                                                      | Why                                                                                                                                                                                                                                                                                                                                                                      |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `contents: read`, `issues: write`, `pull-requests: write`   | Exactly this repository's own triage grants. `pull-requests: write` is load-bearing even though triage only writes labels — GitHub refuses the issues-API label write on a pull request number without it.                                                                                                                                                               |
-| No `security-events`, no `actions` grants                   | Triage never touches them; a dogfood workflow that grants more than its action needs is a defect before it runs.                                                                                                                                                                                                                                                         |
-| No checkout step                                            | This repository's workflow checks out only so the runner can find the action at `./triage`; a target references the released action by ref, and triage reads everything through the API. One less thing in the workspace.                                                                                                                                                |
-| Triggers `issues` + `pull_request` + `workflow_dispatch`    | The action's event matrix re-triages `opened`, `edited`, `reopened`, `labeled` (queue-marker cases only) and `synchronize` / `ready_for_review` on pull requests, and skips the rest. `workflow_dispatch` is how the first dry runs happen without filing a thread.                                                                                                      |
-| `ready_for_review` present                                  | A draft's flip to ready changes the evidence a classification rests on. This repository's own workflow omits it; the targets should not — drafts are expected in loom and archkeep (assumption).                                                                                                                                                                         |
-| Concurrency keyed on the thread, `cancel-in-progress: true` | As in this repository's own workflow: a rapid edit sequence replaces the queued run instead of stacking classifications of stale text. The [`triage` guide](guides/triage.md#redelivery) recommends leaving it off for conservative adopters; the repair story (a run re-derives from live state, removals before additions) is what makes cancellation acceptable here. |
-| `dry-run: "true"`                                           | The rollout's starting posture on every target. The flip to `"false"` is a deliberate step with its own checklist.                                                                                                                                                                                                                                                       |
-| Upload glob `.triage-record/triage-record-*.json`           | Triage has no per-file output; the glob is what this repository's own workflow uploads, with the two knobs above.                                                                                                                                                                                                                                                        |
+| Choice                                                                                         | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workflow-level `read-all`; job-level `contents: read`, `issues: write`, `pull-requests: write` | The same grants this repository's own triage workflow holds, arranged like the review workflow's: a job-level block **replaces** the workflow-level one, so a job added later inherits read-only instead of silently widening. `pull-requests: write` is load-bearing even though triage only writes labels — GitHub refuses the issues-API label write on a pull request number without it. The dry-run phases hold these write grants without exercising them; the ladder below is why — the sheet can go live the moment its checklist passes, with no permissions diff riding along. |
+| No `security-events`, no `actions` grants                                                      | Triage never touches them; a dogfood workflow that grants more than its action needs is a defect before it runs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| No checkout step                                                                               | This repository's workflow checks out only so the runner can find the action at `./triage`; a target references the released action by ref, and triage reads everything through the API. One less thing in the workspace.                                                                                                                                                                                                                                                                                                                                                                |
+| Triggers `issues` + `pull_request` + `workflow_dispatch`                                       | The action's event matrix re-triages `opened`, `edited`, `reopened`, `labeled` (queue-marker cases only) and `synchronize` / `ready_for_review` on pull requests, and skips the rest. `workflow_dispatch` is how the first dry runs happen without filing a thread.                                                                                                                                                                                                                                                                                                                      |
+| `ready_for_review` present                                                                     | A draft's flip to ready changes the evidence a classification rests on. This repository's own workflow omits it; the targets should not — drafts are expected in loom and archkeep (assumption).                                                                                                                                                                                                                                                                                                                                                                                         |
+| Concurrency keyed on the thread, `cancel-in-progress: true`                                    | As in this repository's own workflow: a rapid edit sequence replaces the queued run instead of stacking classifications of stale text. The [`triage` guide](guides/triage.md#redelivery) recommends leaving it off for conservative adopters; the repair story (a run re-derives from live state, removals before additions) is what makes cancellation acceptable here.                                                                                                                                                                                                                 |
+| `dry-run: "true"`                                                                              | The rollout's starting posture on every target. The flip to `"false"` is a deliberate step with its own checklist.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Upload glob `.triage-record/triage-record-*.json`                                              | Triage has no per-file output; the glob is what this repository's own workflow uploads, with the two knobs above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+**Fork pull requests** end red by design: a fork's pull request carries
+neither org secret nor a write token, so the run fails at startup — the
+required `api-url` input is empty — and writes nothing. That is the guide's
+documented posture for triage (fail loudly rather than run green over
+nothing), and it is not an incident.
 
 ### `review` — loom and archkeep
 
@@ -326,10 +347,16 @@ maintainer makes, not a rollout default), no `priority`, no instruction
 documents.
 
 Phase 3 — **go live** (`dry-run: "false"`). In sheet mode the write surface is
-labels: add-only categories, plus — on issues only, by code and never by model
-choice — the `needsMoreInfo` / routing / priority labels if the config ever
-declares them, and one marked signal comment when an issue is judged
-incomplete or a near-duplicate. Nothing is closed, assigned or mentioned.
+labels: add-only categories, plus — on issues only — one marked signal comment
+when an issue is judged incomplete or a near-duplicate. Some labels are
+applied **by code, never offered to the model**: `needsMoreInfo` (added when
+the model judges the thread incomplete, but chosen by code), priority rungs
+(severity answers mapped through the config's `priority` map), workflow
+markers (cleared, not added). A **routing-area** label is the one partial
+exception: the routing map applies it by code when an issue's form id matches,
+but a routing-area label on the sheet is also an ordinary model choice — the
+starter sheet declares none, so on this rollout every label the model can add
+is a category. Nothing is closed, assigned or mentioned.
 
 What a later config change means, so nobody re-litigates it mid-rollout:
 adding `size` turns on diff measurement and size-label replacement; adding
@@ -375,10 +402,13 @@ carries one verdict:
 | `skip`      | nothing to do — dry-run, draft, eligibility rule, all-in-step                          |
 | `failed`    | a defect or environment break; the failure class names which                           |
 
-Verdicts (`review` only): `pass`, `fail`, `unknown` — and `unknown` never
-passes. `refused` is not `failed`: the first is the ceilings working, the
-second is a defect. Conflating them is how red herrings enter this rollout's
-weekly read.
+Verdicts (`review` only): `pass`, `fail`, `unknown`. A fresh run's code
+assigns only the first two — `mayPublish && coverageComplete ? "pass" :
+"fail"` — so a review a bound cut short publishes with verdict `fail` and the
+bound named; `unknown` is reserved vocabulary a recovered record may carry,
+never a fresh-run outcome, and it never passes wherever it appears.
+`refused` is not `failed`: the first is the ceilings working, the second is a
+defect. Conflating them is how red herrings enter this rollout's weekly read.
 
 **Where the evidence lands.** Every terminal the actions declare writes one
 machine-readable record inside the runner's workspace, and the workflow's
@@ -426,15 +456,18 @@ files); `applicability`'s execution context once a policy file exists.
 - **Healthy**: published comments whose verdicts are `pass` or an honest
   `fail` with the bound named (`max-turns reached`, partial coverage);
   skip records for drafts; red terminals that are rare and explained.
-- **Degraded**: `unknown` verdicts (the review could not complete its
-  coverage — a hollow pass would be a defect, and there are none by
-  construction, so `unknown` is the honest shape of "too small a budget" and
-  is fixed with `max-turns` / `context-window` / `ignore`, never by reading
-  less and claiming more); `refused` records naming the diff-line budget or
-  the prompt-headroom ceiling (capacity — fix with `ignore` or a budget
-  decision, never by reclassifying to a skip); a SARIF write failure would be
-  a logged loss with the verdict standing (not applicable to the targets
-  until the Code Scanning surface is added).
+- **Degraded**: published `fail` verdicts — the code's own law is
+  `mayPublish && coverageComplete ? "pass" : "fail"`, so a review a bound cut
+  short (`max-turns reached`, the prompt past its context headroom) publishes
+  with verdict `fail` and the bound named in the record; a run of them is a
+  signal to raise the ceilings (`max-turns` / `context-window` / `ignore`),
+  not to read less and claim more. `refused` records naming the diff-line
+  budget or the prompt-headroom ceiling (capacity — fix with `ignore` or a
+  budget decision, never by reclassifying to a skip). A SARIF write failure
+  would be a logged loss with the verdict standing (not applicable to the
+  targets until the Code Scanning surface is added). `unknown` is **not** a
+  degradation signal to count here: no fresh-run code path assigns it — it
+  exists in the vocabulary for recovered records and it never passes.
 
 ### `harmonise` — the self-hosted baseline, read weekly
 
@@ -446,9 +479,10 @@ Fields to watch: `outcome`; `reason`; `pairs` (`selected`, `proposed`,
   (everything in step, or a dry run); `unchanged` dominating `proposed`
   week over week.
 - **Degraded**: `partial` (read which pair line failed before the next
-  scheduled run); `refused` pairs — the typed deterministic refusals are the
-  script gate (a candidate not in the target language's script, I17), the
-  placeholder-order verdict, or the byte cap; `failed` — a transport break, a
+  scheduled run); refused pairs — counted under `pairs.skipped`, each with a
+  typed deterministic refusal reason: the script gate (a candidate not in the
+  target language's script, I17), the placeholder-order verdict, or the byte
+  cap; `failed` — pairs that errored after every retry: a transport break, a
   junk answer, a manual-edit conflict. A refusal recurring on two consecutive
   weekly runs is a model or language-map problem by the gate's own reading,
   not a document problem.
@@ -485,19 +519,26 @@ The full table with the rule each class pins is
 
 These are **decision rules to observe and record, not SLOs to enforce** —
 wrong-but-measurable beats right-but-unmeasurable, and every threshold below is
-revisited at the day-30 close with the observed distribution in hand. Windows:
-triage and review are judged on their **first 20 (triage) / 15 (review) runs or
-14 days, whichever comes first**, per target. Evidence source is named per
-rule; "runs" always means runs with a record.
+revisited at the day-30 close with the observed distribution in hand.
+
+**Every row is posture-keyed, and no denominator mixes postures.** A dry-run
+triage record ends `skip`, never `published` — the dry run gates the write,
+never the decision, and the record carries the full decision plan — so the
+phase-1 audit reads **decision blocks out of dry-run records**, and the
+live-phase rows count **live runs only**. Windows: per target, whichever
+comes **last** of the run count and 14 days — loom 20, archkeep 10,
+release-craft 8 decision-bearing runs — so the window guarantees the minimum
+sample the volumes assumed in [Targets](#targets) can actually fill, inside
+the fortnight to a month it may span. Evidence source is named per rule.
 
 ### `triage`, per target
 
-| Counter               | Continue                                      | Pause and fix                                                       | Roll back                                              | Evidence                                     |
-| --------------------- | --------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------- |
-| Sample-audit accuracy | ≥ 8 of 10 sampled `published` decisions right | < 8 of 10, or ≥ 2 maintainer-reported mislabels rooted in the sheet | > 10% of labelled threads reported wrong in the window | records vs live thread state, sampled weekly |
-| Refusal rate          | ≤ 20% of runs                                 | > 20% (sheet too narrow, or gateway junk — read `refusals` first)   | —                                                      | records, `outcome: refused`                  |
-| Abandoned rate        | ≤ 10% of runs                                 | > 10% (concurrency or process thrash)                               | —                                                      | records, `outcome: abandoned`                |
-| Truncated answers     | 0                                             | —                                                                   | —                                                      | records, `failed` + truncation reason        |
+| Counter               | Continue                                                                                                         | Pause and fix                                                       | Roll back                                              | Evidence                                                                                                                |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Sample-audit accuracy | ≥ 8 of 10 sampled decisions right — dry-run phase: the record's decision block; live phase: the applied decision | < 8 of 10, or ≥ 2 maintainer-reported mislabels rooted in the sheet | > 10% of labelled threads reported wrong in the window | phase 1: dry-run records' decision blocks vs thread state; phase 3: published decisions vs thread state; sampled weekly |
+| Refusal rate          | ≤ 20% of live runs                                                                                               | > 20% (sheet too narrow, or gateway junk — read `refusals` first)   | —                                                      | records, `outcome: refused`, counted over live runs only                                                                |
+| Abandoned rate        | ≤ 10% of live runs                                                                                               | > 10% (concurrency or process thrash)                               | —                                                      | records, `outcome: abandoned`                                                                                           |
+| Truncated answers     | 0                                                                                                                | —                                                                   | —                                                      | records, `failed` + truncation reason                                                                                   |
 
 Any occurrence in the truncation row is filed against action-agents with the
 record attached (expected zero after #451) — it pauses the target until
@@ -506,20 +547,20 @@ blocker, and the contract refuses it before that can happen.
 
 ### `review`, per target (loom and archkeep)
 
-| Counter                | Continue                                                                | Pause and fix                                                                                             | Roll back | Evidence                                  |
-| ---------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------- | ----------------------------------------- |
-| `unknown` verdicts     | ≤ 20% of runs                                                           | > 20% — raise `max-turns` / `context-window`, or add `ignore`, then re-judge                              | —         | artifacts, verdict field                  |
-| Capacity refusals      | ≤ 20% of runs                                                           | > 20% — add `ignore` entries or raise `maxDiffLines` as a measured capacity decision                      | —         | artifacts named `-refused-`, reason class |
-| Finding acceptance     | ≥ 30% of confirmed findings accepted (fixed or filed) by the maintainer | sustained < 30% across the window — the rubric is noise: drop `strictness`, or stop review on this target | —         | comment threads, maintainer dispositions  |
-| Verdict mix (recorded) | trend recorded weekly, no threshold                                     | —                                                                                                         | —         | artifacts, counted weekly                 |
+| Counter                                     | Continue                                                                | Pause and fix                                                                                             | Roll back | Evidence                                                 |
+| ------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------- | -------------------------------------------------------- |
+| Budget-cut publishes (`fail` + bound named) | ≤ 20% of live published runs                                            | > 20% — raise `max-turns` / `context-window`, or add `ignore`, then re-judge                              | —         | artifacts: verdict field + the bound named in the record |
+| Capacity refusals                           | ≤ 20% of live runs                                                      | > 20% — add `ignore` entries or raise `maxDiffLines` as a measured capacity decision                      | —         | artifacts named `-refused-`, reason class                |
+| Finding acceptance                          | ≥ 30% of confirmed findings accepted (fixed or filed) by the maintainer | sustained < 30% across the window — the rubric is noise: drop `strictness`, or stop review on this target | —         | comment threads, maintainer dispositions                 |
+| Verdict mix (recorded)                      | trend recorded weekly, no threshold                                     | —                                                                                                         | —         | artifacts, counted weekly                                |
 
 ### `harmonise` — self-hosted baseline, weekly
 
-| Counter                | Action                                                                                    | Evidence                    |
-| ---------------------- | ----------------------------------------------------------------------------------------- | --------------------------- |
-| `failed` outcome       | any occurrence → issue in action-agents naming the F-class, before the next scheduled run | records                     |
-| Recurring refused pair | same pair refused two consecutive runs → investigate model / language map                 | records, `pairs.failed` ids |
-| `partial` outcome      | read the failed pair line before the next run                                             | records                     |
+| Counter                | Action                                                                                    | Evidence                                                                                                                                                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `failed` outcome       | any occurrence → issue in action-agents naming the F-class, before the next scheduled run | records                                                                                                                                                                                                                                                                                          |
+| Recurring refused pair | same pair refused two consecutive runs → investigate model / language map                 | refusal **count** from `pairs.skipped` in the records (a refusal lands there — `pairs.failed` is pairs that errored after every retry, not refusals; the record holds counts, no pair ids — identify the pair from the typed-refusal reason text in the record or the run log, an operator read) |
+| `partial` outcome      | read the failed pair line before the next run                                             | records                                                                                                                                                                                                                                                                                          |
 
 ### The day-30 close
 
@@ -567,10 +608,17 @@ Per target, in this order:
    - review dry-run — **no** comment on the pull request;
    - review live — exactly one marker comment, upserted in place on the next
      run, never duplicated.
-4. No secret reaches the log: download the run's log archive and search it for
-   the `ECOMA_LLM_API_KEY` value (a distinctive prefix suffices) — zero hits.
-   The endpoint URL may appear only in transport-error lines; anywhere else is
-   an incident.
+4. No secret reaches the log — asserted on three levels. Both actions mask the
+   key and token at startup (add-mask on the workflow log), and GitHub masks
+   secrets in rendered and archived logs regardless, so **a log search for the
+   key value cannot be the check** — it is vacuously green by construction.
+   What an operator asserts from the downloaded archive: (i) the endpoint URL
+   appears only inside transport-error lines, nowhere else; (ii) no literal
+   key-shaped value (a long opaque token, masked or not) appears anywhere. The
+   authoritative leak control is outside the runner: the organisation gateway
+   in front of `ECOMA_LLM_BASE_URL` sees every request with the key and is the
+   one place a leak to a foreign host would show — its request log is read
+   once per target at the first live flip, not per run.
 5. The record's `reason` and `decision` read coherent against the thread —
    the first human read of model output on this target.
 
@@ -646,11 +694,14 @@ evidence.
        `documentation`, `question`); dispatch run stays green, still dry-run.
 8. [ ] loom: `review` workflow committed, `dry-run: "true"`; next real pull
        request produces a `-dry-run-` artifact and no comment; checklist passes.
-9. [ ] archkeep: triage phases 1–3 as steps 4–7 (own dispatch, own dry-run
-       window, own sheet and labels).
+9. [ ] archkeep: triage phases 1–2 as steps 4–7 (own dispatch, own dry-run
+       window, own sheet and labels) — with the form-label collision resolved
+       first: the audit named in [Targets](#ecoma-ioarchkeep) reads the issue
+       forms' actual `labels:` entries and picks one owner for `bug` before
+       the sheet is committed.
 10. [ ] archkeep: `review` workflow committed, `dry-run: "true"`; checklist
         passes on the next real pull request.
-11. [ ] release-craft: triage phases 1–3 as steps 4–7 (triage only — no review
+11. [ ] release-craft: triage phases 1–2 as steps 4–7 (triage only — no review
         workflow; the phase-1 window still runs in full).
 12. [ ] First live flip — release-craft triage: `dry-run: "false"`; checklist
         item 3 passes in the live form (labels exactly as the sheet declares).
@@ -662,8 +713,9 @@ evidence.
 15. [ ] Harmonise deliberately absent on all three (not multilingual); the
         self-hosted weekly run here continues and its records stay on the weekly
         read.
-16. [ ] Day-7 audit: sample records read; volumes replace the assumptions in
-        [Targets](#targets).
+16. [ ] Day-7 audit: sample records read; the first observed volumes refresh
+        the assumptions in [Targets](#targets) — the day-30 close, not this
+        audit, finalises them.
 17. [ ] Day-30 close: per (repo, action) decision — continue / adjust / roll
         back — recorded with its numbers.
 18. [ ] The rollout log carries: every flip's date and commit, every incident
