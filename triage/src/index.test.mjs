@@ -10,7 +10,14 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import * as p from "node:path";
 import { tmpdir } from "node:os";
 
@@ -21,7 +28,7 @@ import { reasonDigest } from "./verify.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { PartialMutationError } from "./mutate.mjs";
 import { PastFileCeilingError } from "#core/forge.mjs";
-import { TransportError } from "#core/transport-errors.mjs";
+import { HttpError, TransportError } from "#core/transport-errors.mjs";
 import { readContext } from "#core/runtime.mjs";
 
 import { ACTION, main, readInputs, run, writeRunRecord } from "./index.mjs";
@@ -1970,6 +1977,160 @@ describe("run — the run record", () => {
     expect(workflow).toContain("if: always()");
     expect(workflow).toContain("include-hidden-files: true");
     expect(workflow).toContain("if-no-files-found: warn");
+  });
+});
+
+/**
+ * Fault-injection pins for the record-at-every-terminal law (issue #469).
+ * Each test injects one fault and holds the pair of facts the run contract
+ * binds: the terminal the step ends in, and the `outcome` word the record on
+ * disk carries. The `refused` word's records are held by the opt-in
+ * verification suite and the off-sheet tests above; the `skip` word by the
+ * dry-run and event-gate suites. What was unpinned was the `failed` family's
+ * own INPUT→RECORD pair, the event gate's record trip through the real
+ * `main(env)`, and I15's byte-determinism across two whole runs — the facts
+ * #463's correction comment proved in production and no test held whole.
+ */
+describe("run — fault-injection pins: the record at the red terminals (#469)", () => {
+  /** @param {string} name */
+  const readPinRecord = (name) =>
+    JSON.parse(readFileSync(p.join(WORKSPACE, ".triage-record", name), "utf8"));
+
+  it("an unsupported event name through the real main(env) rejects and still writes its failed record (F-01)", async () => {
+    // Offline by construction: the event gate throws before any transport
+    // read, so the real `run` executes with no fetch, no forge and no model
+    // behind it. The pin's reason to exist is placement: the gate's throw
+    // sits INSIDE run()'s record-writing try, and the catch writes before it
+    // rethrows — a refactor that moves the gate outside that try ships a red
+    // run with no record, and this test fails the moment that happens.
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const workspace = mkdtempSync(p.join(tmpdir(), "triage-pin-gate-"));
+    const env = {
+      ...runner,
+      GITHUB_WORKSPACE: workspace,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_EVENT_PATH: p.join(workspace, "event.json"),
+    };
+    writeFileSync(env.GITHUB_EVENT_PATH, JSON.stringify({}));
+
+    const result = await main(env);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe(
+      "triage runs on 'issues' and 'pull_request' events — this run was 'workflow_dispatch'",
+    );
+    // The record's file names the event, per the run record's naming rule
+    // for a run that died before the thread was known — and it sits inside
+    // the upload glob the workflow's `if: always()` step delivers.
+    const file = p.join(workspace, ".triage-record", "triage-record-workflow_dispatch.json");
+    expect(existsSync(file)).toBe(true);
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    expect(record.outcome).toBe("failed");
+    expect(record.thread).toBeNull();
+    expect(record.policy).toBeNull();
+    expect(record.dryRun).toBe(true);
+    expect(record.event).toEqual({ eventName: "workflow_dispatch", action: "" });
+    expect(record.reason).toBe(result.message);
+    expect("decision" in record).toBe(false);
+  });
+
+  it("that event-gate record is byte-identical across two runs on the same env — no wall-clock anywhere (I15)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const workspace = mkdtempSync(p.join(tmpdir(), "triage-pin-bytes-"));
+    const env = {
+      ...runner,
+      GITHUB_WORKSPACE: workspace,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_EVENT_PATH: p.join(workspace, "event.json"),
+    };
+    writeFileSync(env.GITHUB_EVENT_PATH, JSON.stringify({}));
+
+    await main(env);
+    const file = p.join(workspace, ".triage-record", "triage-record-workflow_dispatch.json");
+    const first = readFileSync(file, "utf8");
+    await main(env);
+    const second = readFileSync(file, "utf8");
+
+    expect(first).toBe(second);
+    expect(first).not.toBe("");
+    // Compact JSON, keys sorted, no trailing newline — the serialisation
+    // posture I15 names, now held across two whole `main` runs rather than
+    // two builds of one record object.
+    expect(first.endsWith("\n")).toBe(false);
+    const record = JSON.parse(first);
+    expect(Object.keys(record)).toEqual([...Object.keys(record)].sort());
+  });
+
+  it("a provider 5xx fails the run after the declared retries and records failed — never the refused word (F-04)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let calls = 0;
+    /** @type {typeof globalThis.fetch} */
+    const fetchImpl = async () => {
+      calls += 1;
+      return new Response("the gateway is unhappy", { status: 500 });
+    };
+    const forge = fakeForge({});
+    const world = /** @type {any} */ ({ forge, fetchImpl, readEvent: async () => issueEvent() });
+
+    // The transport's declared default: three attempts, then stop — F-04's
+    // "retry with backoff, then stop". The 429 arm shares the retryable set.
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(/HTTP 500/u);
+    expect(calls).toBe(3);
+
+    const record = readPinRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toMatch(/HTTP 500/u);
+    expect("decision" in record).toBe(false);
+    expect(forge.writes).toEqual([]);
+  }, 30_000);
+
+  it("an auth-class read failure records failed with zero writes and no model call (F-06)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The transport refuses 401 and 403 outright — no retry — and the run
+    // treats a dead token as the environment break F-06 names: red, a
+    // `failed` record, nothing written, and the model is never asked.
+    for (const status of [401, 403]) {
+      const world = io({});
+      world.forge.listRepositoryLabelsDetailed = async () => {
+        throw new HttpError("the request was refused", {
+          status,
+          url: "https://api.github.com/repos/ecoma-io/action-agents/labels",
+        });
+      };
+
+      await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+        new RegExp(`HTTP ${String(status)}`, "u"),
+      );
+
+      expect(world.forge.writes).toEqual([]);
+      expect(world.asks()).toHaveLength(0);
+      const record = readPinRecord("triage-record-issue-7.json");
+      expect(record.outcome).toBe("failed");
+      expect(record.reason).toMatch(new RegExp(`HTTP ${String(status)}`, "u"));
+    }
+  });
+
+  it("a config that does not validate records failed — the catch's class, zero writes, no model call", async () => {
+    // Observable truth, held so any change must be explicit: the run
+    // contract's F-02 row names `refused` for triage's config-invalid arm,
+    // but the runtime puts a validation throw in run()'s catch, which writes
+    // `failed` — the same disposition docs/development/triage.md's failure
+    // posture describes ("a config that does not validate — the step goes
+    // red"). This pin holds today's word; if the contract or the code moves,
+    // this test is what flips with it.
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ files: { ".github/action-agents/triage/triage.json5": '{"nope": true}' } });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /unknown config key 'nope'/u,
+    );
+
+    expect(world.forge.writes).toEqual([]);
+    expect(world.asks()).toHaveLength(0);
+    const record = readPinRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toContain("unknown config key 'nope'");
+    expect("decision" in record).toBe(false);
   });
 });
 

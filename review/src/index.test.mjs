@@ -343,6 +343,68 @@ describe("run over injected io", () => {
   });
 });
 
+/**
+ * The F-01a carve-out, pinned at the filesystem (issue #469): the event gate
+ * sits before run()'s red boundary, so a refusal there is the one red exit
+ * that leaves no artifact file — the run died before it held the facts an
+ * artifact is built from, and the workflow's upload step skips silently. If
+ * a change "fixes" review into writing records for unsupported events, these
+ * tests force that contract change to be explicit.
+ */
+describe("run — the unrecorded carve-out (F-01a)", () => {
+  it("an unsupported event name creates no artifact file", async () => {
+    const root = mkdtempSync(p.join(tmpdir(), "review-carve-out-"));
+    const head = "e".repeat(40);
+    const env = runnerEnv({
+      eventName: "merge_group",
+      event: {
+        action: "checks_requested",
+        merge_group: {
+          head_ref: "gh-readonly-queue/main/pr-7-abcdef",
+          head_sha: head,
+          base_ref: "refs/heads/main",
+          base_sha: "f".repeat(40),
+        },
+      },
+      extra: { GITHUB_WORKSPACE: root },
+    });
+
+    await expect(
+      run(readInputs(env), readContext(env), {
+        forge: /** @type {any} */ ({}),
+        chat: /** @type {any} */ ({}),
+        now: () => 0,
+        info: () => undefined,
+      }),
+    ).rejects.toThrow(/pull_request' events only/);
+
+    expect(existsSync(p.join(root, ".review-artifact"))).toBe(false);
+  });
+
+  it("an unsupported pull_request activity type creates no artifact file either", async () => {
+    // `readEvent` re-checks the payload's `action` against the declared set,
+    // so the same carve-out holds for an event the workflow's own `types:`
+    // filter would have kept out — a calling workflow without the filter
+    // cannot widen the set, and the refusal writes nothing either way.
+    const root = mkdtempSync(p.join(tmpdir(), "review-carve-out-"));
+    const env = runnerEnv({
+      event: { action: "edited", pull_request: { number: 41 } },
+      extra: { GITHUB_WORKSPACE: root },
+    });
+
+    await expect(
+      run(readInputs(env), readContext(env), {
+        forge: /** @type {any} */ ({}),
+        chat: /** @type {any} */ ({}),
+        now: () => 0,
+        info: () => undefined,
+      }),
+    ).rejects.toThrow(/runs on pull_request activity types/);
+
+    expect(existsSync(p.join(root, ".review-artifact"))).toBe(false);
+  });
+});
+
 describe("run over the real forge", () => {
   it("sends the GitHub API calls to the runner's GITHUB_API_URL, not api.github.com", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
