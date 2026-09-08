@@ -509,9 +509,13 @@ function validateRule(entry, index, ids, fileStrictness) {
   // the external context is frozen, and a convention never governs alone —
   // with exactly two attestation-or-measurement anchors besides a pinned
   // context: GitHub-attested bot authorship (`when.author.isBot`), and the
-  // measured size of the change itself (`when.changes`), whose no-review
-  // outcome already exists in the scope layer as the maxDiffLines refusal.
-  // A login list (`equals`) narrows, it never anchors; a convention — title,
+  // measured size of the change itself (`when.changes`). The size anchor is
+  // an explicit eligibility decision, measured on the pre-ignore change; the
+  // scope layer's `maxDiffLines` budget is a separate post-ignore capacity
+  // outcome (a red `refused`) that the skip never borrows or merges with — a
+  // size rule skips what it names, it never reclassifies a budget refusal
+  // (the semantics are frozen in the run contract). A login list (`equals`)
+  // narrows, it never anchors; a convention — title,
   // branch, base, paths, labels — never governs alone.
   if (!run && context === "external") {
     throw new Error(

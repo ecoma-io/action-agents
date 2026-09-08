@@ -5,9 +5,10 @@
  * loader, validated by the production validator, and its eligibility rules
  * are evaluated with the production evaluator against the real author
  * shapes this repository sees: the release-please pull request (the exact
- * shape of #335), an unlisted bot, a human maintainer, and an oversized
- * human change. The configuration is product input here — editing it badly
- * fails this suite, the same way editing source badly fails its tests.
+ * shape of #335), an unlisted bot, a human maintainer, and a change large
+ * enough that only the capacity ceiling meets it. The configuration is
+ * product input here — editing it badly fails this suite, the same way
+ * editing source badly fails its tests.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -85,7 +86,6 @@ describe("the repository's own eligibility policy", () => {
     expect(config.applicability?.rules.map((rule) => rule.id)).toEqual([
       "release-prs",
       "unlisted-bots",
-      "oversized",
     ]);
   });
 
@@ -140,46 +140,27 @@ describe("the repository's own eligibility policy", () => {
     expect(evaluated).toMatchObject({ applicable: true, matchedRule: null });
   });
 
-  it("an oversized human change skips with its measured totals", async () => {
-    const applicability = (await ownPolicy()).applicability;
-    const files = [
-      { filename: "src/generated-000.mjs", status: "modified", additions: 6000, deletions: 0 },
-      { filename: "src/generated-001.mjs", status: "modified", additions: 4000, deletions: 0 },
-    ];
-    const { evaluated } = decide(applicability, {
+  it("a large human change stays applicable — no size rule reclassifies a review", async () => {
+    // The seed above deliberately ships no `oversized` rule: a human change
+    // that outgrows the review budget is refused by the capacity ceiling
+    // (maxDiffLines, red), never skipped green by an eligibility rule.
+    // Eligibility stays pure policy; capacity stays honest refusal. Here the
+    // applicability stage sees 10000 pre-ignore lines and still runs.
+    const { evaluated } = decide(await ownPolicy().then((c) => c.applicability), {
       number: 340,
       login: "johnitvn",
       type: "User",
       association: "MEMBER",
       branch: "codegen/regenerate-all",
       title: "chore: regenerate the generated modules",
-      files,
-    });
-    expect(evaluated).toMatchObject({
-      applicable: false,
-      matchedRule: "oversized",
-    });
-    expect(changeTotals(files)).toEqual({ files: 2, lines: 10000 });
-  });
-
-  it("pre-ignore totals below the guard stay reviewable — the ignored paths change nothing here", async () => {
-    // The guard reads pre-ignore totals by design, so whether these paths
-    // sit in the scope layer's ignore set is irrelevant to it: 7500 < 8000
-    // is reviewable at the eligibility stage. (Downstream, an
-    // ignored-paths-only change meets an empty universe and becomes the
-    // nothing-to-review skip — the scope layer's own honest outcome.)
-    const { evaluated } = decide(await ownPolicy().then((c) => c.applicability), {
-      number: 341,
-      login: "johnitvn",
-      type: "User",
-      association: "MEMBER",
-      branch: "chore/skill-sync",
-      title: "chore: sync vendored skills",
       files: [
-        { filename: ".claude/skills/a.md", status: "modified", additions: 4000, deletions: 1000 },
-        { filename: ".agents/skills/a.md", status: "modified", additions: 2000, deletions: 500 },
+        { filename: "src/generated-000.mjs", status: "modified", additions: 6000, deletions: 0 },
+        { filename: "src/generated-001.mjs", status: "modified", additions: 4000, deletions: 0 },
       ],
     });
+    // No size anchor in the policy: applicability does not skip. The
+    // capacity refusal is what a run past the budget meets (run.mjs F-11),
+    // recorded `refused` — never reclassified to a skip.
     expect(evaluated).toMatchObject({ applicable: true, matchedRule: null });
   });
 });

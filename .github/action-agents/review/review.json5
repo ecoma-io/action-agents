@@ -7,8 +7,7 @@
   //
   // The ignore set is a universe filter, not a suggestion: ignored paths
   // cost nothing against maxDiffLines, are invisible to rule matching, and
-  // cannot be reached by the tools either. The eligibility size guard
-  // below reads the pre-ignore totals instead.
+  // cannot be reached by the tools either.
   ignore: [
     "pnpm-lock.yaml",
     "coverage/**",
@@ -19,11 +18,11 @@
     ".opencode/**",
   ],
 
-  // Generous but bounded: the largest diffs this repository sees are
-  // vendored-skill syncs, and those are exactly the ones worth refusing to
-  // half-review. The eligibility size guard sits above this budget: a
-  // diff beyond it is not half-reviewed, it is skipped with its measured
-  // totals recorded.
+  // A resource budget, not a PR-size rule. The count is additions plus
+  // deletions over the post-ignore universe; a diff past it is refused
+  // outright (red, recorded `refused`) rather than half-reviewed. No
+  // eligibility rule reclassifies that outcome — a change this repository
+  // cannot review completely is stated as such, never skipped green.
   maxDiffLines: 3000,
 
   // The eligibility axis — whether a pull request consumes a review run at
@@ -62,17 +61,6 @@
         // full review; everything not listed lands here.
         id: "unlisted-bots",
         when: { author: { isBot: true } },
-        run: false,
-      },
-      {
-        // The resource exception. The scope layer would refuse this diff
-        // outright (maxDiffLines) — a half-reviewed monster presented as
-        // a complete review is the worse failure. This rule reclassifies
-        // that outcome as a green, recorded, measured skip: same no-review
-        // result, honest evidence instead of a red run. Reads the
-        // pre-ignore totals of the whole change.
-        id: "oversized",
-        when: { changes: { lines: { gt: 8000 } } },
         run: false,
       },
     ],
