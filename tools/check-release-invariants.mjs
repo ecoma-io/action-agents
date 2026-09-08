@@ -12,12 +12,31 @@
  *   5. Every consumer-resolvable path (`ecoma-io/action-agents/<X>@<tag>`)
  *      resolves against the tree
  *   6. The root action stub cannot accidentally execute a child action
+ *   7. At the release SHA only (`--at-release`): the floating pin declared in
+ *      tools/action-pins.json shares the released version's minor line, so a
+ *      patch release needs no pin edits and a minor release whose pins were
+ *      not refreshed fails loud with the fix in the message
  *
  * WHY THIS FILE EXISTS.  The release workflow's inline validation runs once
  * at release time and can only fail.  This gate runs on every commit and
  * catches invariant drift _before_ it reaches a release PR.  A broken root
  * stub, a missing manifest, or an undocumented action directory is caught
  * here first.
+ *
+ * WHY INVARIANT 7 IS RELEASE-ONLY.  A minor release's pins refresh cannot
+ * precede the release: a release pull request is an ordinary pull request,
+ * check-uses-refs resolves every documented `uses:` ref against tags that
+ * exist, and the v0.12 tag cannot exist before release.yml cuts v0.12.0 — so
+ * demanding the refresh pre-merge would make every minor release pull request
+ * unsatisfiable rather than merely red. The two directions CI can judge
+ * pre-merge are already judged there (check-action-pins: documents and
+ * manifest agree; check-uses-refs: every documented ref is published); the
+ * one direction only a release can reveal — the version moved to a line the
+ * pins do not describe — is judged at the release SHA, where the exact tag
+ * exists and the floating tag is about to move. A failure there leaves the
+ * release created but the floating tag unmoved (floating-tag needs the
+ * release job green), which is the recoverable order, and the failure message
+ * carries the convergence sequence.
  */
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -35,14 +54,36 @@ export const MANIFEST_NAMES = ["action.yaml", "action.yml"];
 /** GitHub Marketplace caps the action description at this many characters. */
 export const MAX_DESCRIPTION_LENGTH = 125;
 
+/** The pins manifest the covered consumer documents are judged against. */
+export const PINS_MANIFEST = "tools/action-pins.json";
+
+/** The release-please manifest holding the last released version under ".". */
+export const RELEASE_MANIFEST = ".release-please-manifest.json";
+
+/**
+ * The one flag, passed by release.yml, that turns on the release-only
+ * invariants. Unknown arguments are refused rather than ignored, so a
+ * misspelled flag fails the run instead of silently checking less.
+ *
+ * @type {string}
+ */
+export const AT_RELEASE_FLAG = "--at-release";
+
+/** The shape a floating pin has: `v0.11` — the grammar check-action-pins judges. */
+const FLOATING_PIN = /^v\d+\.\d+$/;
+
+/** The shape of a released semver version: `0.11.1`. */
+const RELEASED_VERSION = /^\d+\.\d+\.\d+$/;
+
 /**
  * @param {object} input
  * @param {(path: string) => string} input.read  read a file relative to root
  * @param {(path: string) => boolean} input.exists  check file existence
  * @param {string[]} [input.discoveredDirs]  directories with action.yaml found by the caller
+ * @param {boolean} [input.atRelease]  the release-only invariants run (release.yml, at the release SHA)
  * @returns {{ failures: string[], checks: number }}
  */
-export function evaluate({ read, exists, discoveredDirs = [] }) {
+export function evaluate({ read, exists, discoveredDirs = [], atRelease = false }) {
   /** @type {string[]} */
   const failures = [];
   let checks = 0;
@@ -191,6 +232,74 @@ export function evaluate({ read, exists, discoveredDirs = [] }) {
       }
     }
   }
+
+  // ── 5. The floating pin is the line this release delivers (#447) ────────
+  //
+  // Runs only at the release SHA; the header of this file carries the reason
+  // the check is release-only rather than a pre-merge gate. The rule is the
+  // minor-line rule: a patch release (0.11.2 against floating `v0.11`) shares
+  // the line and passes with no pin edits at all, and a minor release whose
+  // pins were left behind fails loud with the convergence sequence in the
+  // message. The pins the documents may show have their own gate
+  // (tools/check-action-pins.mjs); this is the one direction that gate cannot
+  // see — the version moved without the manifest following.
+  if (atRelease) {
+    checks += 1;
+    if (!hasFile(PINS_MANIFEST) || !hasFile(RELEASE_MANIFEST)) {
+      failures.push(
+        !hasFile(PINS_MANIFEST)
+          ? `${PINS_MANIFEST} is missing — the pins manifest is the source of truth the covered ` +
+              `documents are judged against, and this release ships without it.`
+          : `${RELEASE_MANIFEST} is missing — the released version this gate judges the pins ` +
+              `against does not exist at this SHA.`,
+      );
+    } else {
+      const pins = JSON.parse(readFile(PINS_MANIFEST));
+      const released = /** @type {Record<string, unknown>} */ (
+        JSON.parse(readFile(RELEASE_MANIFEST))
+      )["."];
+
+      if (typeof pins.floating !== "string" || !FLOATING_PIN.test(pins.floating)) {
+        failures.push(
+          `${PINS_MANIFEST}: 'floating' must be a minor-line pin like 'v0.11', got ` +
+            `${JSON.stringify(pins.floating) ?? "undefined"} — the same grammar ` +
+            `tools/check-action-pins.mjs judges, so one bump keeps both gates green.`,
+        );
+      } else if (typeof released !== "string" || !RELEASED_VERSION.test(released)) {
+        failures.push(
+          `${RELEASE_MANIFEST}: expected the released version like '0.11.1' under '.', got ` +
+            `${JSON.stringify(released) ?? "undefined"}.`,
+        );
+      } else {
+        const pinLine = pins.floating.replace(/^v/, "");
+        const releasedLine = released.split(".").slice(0, 2).join(".");
+        if (pinLine !== releasedLine) {
+          failures.push(
+            `${PINS_MANIFEST}: floating pin '${pins.floating}' is not on the minor line of the ` +
+              `released version '${released}' — a minor release moved the floating line without ` +
+              `refreshing the pins consumers copy out of the documents. The refresh cannot ` +
+              `precede the tag (check-uses-refs refuses a documented ref no tag publishes yet), ` +
+              `so converge after this release: bump floating, exact and rootExact in ` +
+              `${PINS_MANIFEST} to the v${releasedLine} line and update every pin the covered ` +
+              `documents show, in one pull request — the tags exist now, so it merges green — ` +
+              `then move the floating tag at this release. The floating ref does not exist yet ` +
+              `(the job that moves it was skipped), so PATCH and fall back to POST-create, the ` +
+              `same move release.yml itself makes, with the SHA resolved from the release tag ` +
+              `that does exist — never HEAD, which by then is the convergence commit, not the ` +
+              `release (fetch tags first if this clone lacks them):\n` +
+              `  sha="$(git rev-parse 'v${released}^{commit}')" && ` +
+              `gh api -X PATCH repos/<owner>/<repo>/git/refs/tags/v${releasedLine} ` +
+              `-f sha="$sha" -F force=true || ` +
+              `gh api -X POST repos/<owner>/<repo>/git/refs ` +
+              `-f ref=refs/tags/v${releasedLine} -f sha="$sha"\n` +
+              `Until then this release ships with no floating tag and consumers pinned to ` +
+              `${pins.floating} stay on their line.`,
+          );
+        }
+      }
+    }
+  }
+
   return { failures, checks };
 }
 
@@ -311,6 +420,16 @@ function isProgramEntry(moduleUrl, argv1 = process.argv[1]) {
 }
 
 function main() {
+  const args = process.argv.slice(2);
+  const unknown = args.filter((arg) => arg !== AT_RELEASE_FLAG);
+  if (unknown.length > 0) {
+    console.error(
+      `✗ unknown argument(s): ${unknown.join(" ")} — the only flag is ${AT_RELEASE_FLAG}, the ` +
+        `one release.yml passes to turn on the release-only invariants at the release SHA.`,
+    );
+    process.exit(1);
+  }
+
   const read = (/** @type {string} */ p) => readFileSync(p, "utf8");
   const exists = (/** @type {string} */ p) => existsSync(p);
 
@@ -332,6 +451,7 @@ function main() {
     read,
     exists,
     discoveredDirs,
+    atRelease: args.includes(AT_RELEASE_FLAG),
   });
 
   if (failures.length > 0) {

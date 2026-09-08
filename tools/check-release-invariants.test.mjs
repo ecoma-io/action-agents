@@ -5,7 +5,9 @@
 // and no git.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { evaluate } from "./check-release-invariants.mjs";
 
@@ -470,6 +472,139 @@ test("changelog: flags a CHANGELOG with no release heading", () => {
   );
 });
 
+// ── Floating pin against the released version (release-only, #447) ────────
+
+/**
+ * A tree that passes every other invariant, carrying the version files and
+ * the pins manifest the release-only invariant reads.
+ *
+ * @param {string} released the version `.release-please-manifest.json` records
+ * @param {string} floating the floating pin `tools/action-pins.json` declares
+ */
+function releaseTree(released, floating) {
+  return {
+    ...FULL_TREE,
+    "release-please-config.json": JSON.stringify({
+      packages: { ".": { "initial-version": "0.1.0" } },
+    }),
+    ".release-please-manifest.json": JSON.stringify({ ".": released }),
+    "package.json": JSON.stringify({ version: released }),
+    "CHANGELOG.md": `# Changelog\n\n## [${released}](https://example.com/compare) (2026-09-08)\n`,
+    "tools/action-pins.json": JSON.stringify({
+      floating,
+      exact: `v${released}`,
+      rootExact: `v${released}`,
+    }),
+  };
+}
+
+const ALL_ACTIONS = ["triage", "review", "harmonise"];
+
+test("pins: a patch release needs no pin edits — floating on the same minor line passes", () => {
+  // Both shapes the rule has to keep green: the tree as it stands (0.11.1
+  // against v0.11) and the next patch cut from it (0.11.2 against v0.11).
+  for (const released of ["0.11.1", "0.11.2"]) {
+    const { failures } = evaluate({
+      ...stubFs(releaseTree(released, "v0.11")),
+      discoveredDirs: ALL_ACTIONS,
+      atRelease: true,
+    });
+    assert.deepEqual(failures, [], `0.11-line tree with ${released} should pass`);
+  }
+});
+
+test("pins: a minor release whose pins were left behind fails loud and names the fix", () => {
+  const { failures } = evaluate({
+    ...stubFs(releaseTree("0.12.0", "v0.11")),
+    discoveredDirs: ALL_ACTIONS,
+    atRelease: true,
+  });
+  const pins = failures.find((f) => f.includes("tools/action-pins.json"));
+  assert.ok(pins, `expected a pins failure, got: ${failures.join(", ")}`);
+  assert.match(pins, /v0\.11' is not on the minor line of the released version '0\.12\.0'/);
+  // The message carries the convergence sequence, not just the verdict: what
+  // to bump, why it cannot happen earlier, and how the floating tag moves.
+  assert.match(pins, /bump floating, exact and rootExact/);
+  assert.match(pins, /check-uses-refs refuses a documented ref no tag publishes yet/);
+  // The move command survives contact with release day: on the first minor of
+  // a line the floating ref does not exist yet (the job that moves it was
+  // skipped), so PATCH alone 404s and the POST-create fallback must be
+  // carried; and the SHA is resolved from the release tag that does exist —
+  // HEAD, by the time anyone reads this, is the convergence commit, not the
+  // release. Both defects were found in review; the second assertion pins the
+  // HEAD expansion out for good.
+  assert.match(pins, /PATCH[^]*?fall back to POST-create[^]*?release\.yml/);
+  assert.match(
+    pins,
+    /sha="\$\(git rev-parse 'v0\.12\.0\^\{commit\}'\)" && gh api -X PATCH repos\/<owner>\/<repo>\/git\/refs\/tags\/v0\.12 -f sha="\$sha" -F force=true \|\| gh api -X POST repos\/<owner>\/<repo>\/git\/refs -f ref=refs\/tags\/v0\.12 -f sha="\$sha"/,
+  );
+  assert.doesNotMatch(pins, /rev-parse HEAD/);
+});
+
+test("pins: the invariant is release-only — the same drifted tree without the flag stays green", () => {
+  // The gating itself is pinned here: a pre-merge run (CI's Verify job, a
+  // release pull request) must not demand a pins refresh the tag-existence
+  // rule makes unsatisfiable before the release exists.
+  const { failures } = evaluate({
+    ...stubFs(releaseTree("0.12.0", "v0.11")),
+    discoveredDirs: ALL_ACTIONS,
+  });
+  assert.deepEqual(failures, []);
+});
+
+test("pins: a release shipping without the pins manifest fails", () => {
+  const tree = releaseTree("0.11.1", "v0.11");
+  delete tree["tools/action-pins.json"];
+  const { failures } = evaluate({
+    ...stubFs(tree),
+    discoveredDirs: ALL_ACTIONS,
+    atRelease: true,
+  });
+  assert.ok(
+    failures.some((f) => f.includes("tools/action-pins.json is missing")),
+    `expected missing-manifest failure, got: ${failures.join(", ")}`,
+  );
+});
+
+test("pins: a release shipping without the release-please manifest fails", () => {
+  const tree = releaseTree("0.11.1", "v0.11");
+  delete tree[".release-please-manifest.json"];
+  const { failures } = evaluate({
+    ...stubFs(tree),
+    discoveredDirs: ALL_ACTIONS,
+    atRelease: true,
+  });
+  assert.ok(
+    failures.some((f) => f.includes(".release-please-manifest.json is missing")),
+    `expected missing-manifest failure, got: ${failures.join(", ")}`,
+  );
+});
+
+test("pins: a floating pin off the vX.Y grammar fails rather than comparing garbage", () => {
+  const { failures } = evaluate({
+    ...stubFs(releaseTree("0.11.1", "latest")),
+    discoveredDirs: ALL_ACTIONS,
+    atRelease: true,
+  });
+  const pins = failures.find((f) => f.includes("'floating' must be"));
+  assert.ok(pins, `expected a shape failure, got: ${failures.join(", ")}`);
+  assert.match(pins, /"latest"/);
+});
+
+test("pins: a release-please manifest with no version under '.' fails", () => {
+  const tree = releaseTree("0.11.1", "v0.11");
+  tree[".release-please-manifest.json"] = "{}";
+  const { failures } = evaluate({
+    ...stubFs(tree),
+    discoveredDirs: ALL_ACTIONS,
+    atRelease: true,
+  });
+  assert.ok(
+    failures.some((f) => f.includes("expected the released version")),
+    `expected released-version failure, got: ${failures.join(", ")}`,
+  );
+});
+
 // ── Checks count ──────────────────────────────────────────────────────────
 
 test("checks: counts at least one check per invariant category", () => {
@@ -479,4 +614,35 @@ test("checks: counts at least one check per invariant category", () => {
   });
   // 1 root + 3 children (each with 2 checks: manifest + entry point) + 1 surprise + 1 version
   assert.ok(checks >= 5, `expected at least 5 checks, got ${checks}`);
+});
+
+// ── Wiring ────────────────────────────────────────────────────────────────
+
+test("wiring: release.yml turns the release-only invariant on at the release SHA", () => {
+  // The flag is the difference between invariant 7 running and not: without
+  // it the release verification silently narrows back to invariants 1–6, and
+  // a minor release could ship its pins behind. Pinned here — anchored to the
+  // whole line, so a mangled flag or a chained command fails — so unwiring it
+  // is a failed test rather than a quiet return to the #447 status quo.
+  const release = readFileSync(
+    fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
+    "utf8",
+  );
+  assert.match(release, /^ {8}run: node tools\/check-release-invariants\.mjs --at-release$/m);
+});
+
+test("wiring: the floating tag moves only behind a green release job", () => {
+  // The two lines that make "release verification red ⇒ floating tag unmoved"
+  // true: the job depends on the release job (a red dependency is skipped)
+  // and runs only when that job reported an actual release. Delete either and
+  // a failed verification — the minor-release-failed-loud path this unit is
+  // built on — would still move the tag consumers are pinned to.
+  const release = readFileSync(
+    fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
+    "utf8",
+  );
+  const job = release.split("\n  floating-tag:")[1];
+  assert.ok(job, "the floating-tag job is missing from release.yml");
+  assert.match(job, /^ {4}needs: \[release\]$/m);
+  assert.match(job, /^ {4}if: needs\.release\.outputs\.released == 'true'$/m);
 });

@@ -166,6 +166,7 @@ them — not in anticipation that one might.
 | `pnpm check-docs-links`         | Every markdown link, prose `docs/…` citation, and path named in a `.yml`/`.yaml` resolves                                                               |
 | `pnpm check-anchors`            | Every `(file#fragment)` link resolves against a heading that is really there — duplicate headings included                                              |
 | `pnpm check-uses-refs`          | Every documented `uses: ecoma-io/action-agents/<action>@<ref>` resolves against a tag that exists, and an action that ships at it                       |
+| `pnpm check-action-pins`        | Every pin the covered documents show matches `tools/action-pins.json`, in both directions — an undeclared pin and a stale declaration both fail         |
 | `pnpm check-action-inputs`      | Every `action.yaml` and the code behind it declare and read the same inputs — in both directions                                                        |
 | `pnpm check-workflow-inputs`    | Every workflow under `.github/workflows` passes only inputs the action manifest it runs declares, and passes every required one                         |
 | `pnpm check-release-invariants` | Root stub contract, child manifests, entry points, surprise action detection, version consistency, and the CHANGELOG head matching the version files    |
@@ -177,6 +178,13 @@ them — not in anticipation that one might.
 
 Everything above except `pnpm format` and `pnpm sync-skills` is a gate. Run them
 before you push; a shorter local run just moves the red to the pull request.
+
+One gate on that list reads git: `pnpm check-uses-refs` resolves its refs
+against the repository's real tags, so a local clone needs
+`git fetch --tags --force` before a green run means anything — CI's
+full-history checkout already fetches them, which is why that gate runs in CI
+and not in pre-commit. `pnpm check-action-pins` reads no git at all, which is
+what makes it safe to run in pre-commit.
 
 Notice what is **not** on that list: there is no `build`, and no step that
 produces an artifact. That is the point of the previous two sections.

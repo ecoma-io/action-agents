@@ -11,7 +11,9 @@
 // checker must catch on the next release bump).
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { evaluate, parseManifest, REF, DOC_PATHS } from "./check-action-pins.mjs";
 
@@ -178,7 +180,61 @@ test("the covered list is the #346 surface, pinned so coverage cannot shrink sil
     "README.md",
     "README.vi.md",
     "docs/guides/getting-started.md",
+    "docs/guides/harmonise.md",
     "docs/guides/review.md",
     "docs/guides/triage.md",
   ]);
+});
+
+test("a drifted pin in docs/guides/harmonise.md fails, naming the guide (#447 coverage)", () => {
+  const result = evaluate({
+    files: [doc("- uses: ecoma-io/action-agents/harmonise@v0.9\n", "docs/guides/harmonise.md")],
+    pins: PINS,
+  });
+  // The undeclared-pin failure is joined by the two stale-pin failures —
+  // nothing in this document uses the declared values either.
+  assert.equal(result.failures.length, 3);
+  const drift = result.failures[0];
+  assert.match(drift, /^docs\/guides\/harmonise\.md:1/);
+  assert.match(drift, /`harmonise@v0\.9` is not declared/);
+});
+
+test("harmonise.md showing only declared pins passes and is counted like any covered document", () => {
+  const result = evaluate({
+    files: [
+      doc(
+        "The current line: `ecoma-io/action-agents/harmonise@v0.10`\n",
+        "docs/guides/harmonise.md",
+      ),
+      doc("The tables: `ecoma-io/action-agents/review@v0.10.0`\n"),
+    ],
+    pins: PINS,
+  });
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.checked, 2);
+});
+
+// The gate ran nowhere in automation when #447 was filed — that absence, not
+// the drift itself, is the defect. These pin the wiring, the way the unit
+// tests above pin the judgment: a refactor that unwires either invocation
+// fails here instead of quietly returning the gate to decorative status.
+
+test("the gate is wired where drift can block a change: CI's Verify job", () => {
+  const ci = readFileSync(
+    fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.url)),
+    "utf8",
+  );
+  // Anchored to whole lines, so a step reduced to a comment, a chained
+  // command (`pnpm check-action-pins && …`), or a renamed step fails here.
+  assert.match(ci, /^ {6}- name: Check documented action pins\n {8}run: pnpm check-action-pins$/m);
+});
+
+test("the gate is wired where drift can block a change: the pre-commit hook", () => {
+  const hook = readFileSync(fileURLToPath(new URL("../lefthook.yml", import.meta.url)), "utf8");
+  // Same anchoring: the job line, its comment block, and a bare `run:` line —
+  // nothing chained after the command, nothing renamed.
+  assert.match(
+    hook,
+    /^ {4}- name: action-pins\n(?: {6}#[^\n]*\n)* {6}run: pnpm check-action-pins$/m,
+  );
 });

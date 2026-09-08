@@ -64,3 +64,12 @@ pre-commit:
       # otherwise land a `with:` key nobody declares or a required input no
       # step passes.
       run: pnpm check-workflow-inputs
+
+    - name: action-pins
+      # Same reasoning as doc-links, skills and workflow-inputs: a commit that
+      # bumps tools/action-pins.json can leave a covered document behind, and
+      # a commit that edits a document's pin can leave the manifest behind —
+      # the failure is the tree, not a staged path. Reads six small files and
+      # no git at all, which is why it runs here and check-uses-refs, whose
+      # verdicts need real tags in the clone, does not.
+      run: pnpm check-action-pins

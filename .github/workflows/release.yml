@@ -148,12 +148,26 @@ jobs:
       # at it, which is the recoverable order: delete the release, fix the tree,
       # release again.
       #
+      # It runs with `--at-release`, which turns on the one invariant that is
+      # release-only by design (#447): the floating pin declared in
+      # tools/action-pins.json must share the minor line of the version being
+      # released. Demanding the pins refresh any earlier would demand an
+      # unpublished tag — a release pull request is an ordinary pull request
+      # and check-uses-refs refuses a documented ref no tag publishes yet, so
+      # `@v0.12` cannot enter the tree before v0.12.0 exists. That makes the
+      # patch shape free (0.11.2 against a floating `v0.11` passes with no pin
+      # edits at all) and the minor shape loud: a release whose pins were left
+      # behind fails here, leaving the release created but the floating tag
+      # unmoved — `floating-tag` needs this job green — which is the
+      # recoverable order, with the convergence sequence carried in the
+      # failure message itself.
+      #
       # It is invoked with `node`, not `pnpm`: this workflow runs no install
       # and the script is plain Node with no dependencies, so it must not need
       # a package manager that is not on the PATH.
       - name: Verify every action resolves at this tag
         if: steps.release.outputs.release_created
-        run: node tools/check-release-invariants.mjs
+        run: node tools/check-release-invariants.mjs --at-release
 
   # The floating tag is what a consumer pins to get fixes without editing their
   # workflow, so what it is allowed to deliver decides its shape.
