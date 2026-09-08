@@ -55,6 +55,17 @@ import { DeterministicRefusalError } from "./refusal.mjs";
 export const ACTION = "review";
 
 /**
+ * The one event name the entrypoint accepts. `readEvent` throws on any other
+ * — `merge_group` included (ADR 006) — a red refusal that writes nothing, and
+ * no input widens the set. Exported as the truth the event-parity gate
+ * (tools/event-parity.mjs) holds every declared surface to; the throw is the
+ * runtime's own enforcement of the same set.
+ *
+ * @type {readonly string[]}
+ */
+export const ACCEPTED_EVENTS = Object.freeze(["pull_request"]);
+
+/**
  * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string }} Inputs
  */
 

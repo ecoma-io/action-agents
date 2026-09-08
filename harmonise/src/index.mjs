@@ -86,6 +86,24 @@ import {
 export const ACTION = "harmonise";
 
 /**
+ * The event names the entrypoint resolves a policy source for: the three
+ * names `core/policy.mjs` handles specifically (`pull_request`, `push`,
+ * `workflow_dispatch`) plus `schedule` for the cron trigger and a catch-all
+ * for anything else. Harmonise classifies documents, not threads, so it does
+ * not gate on event name — every run resolves a policy source and proceeds.
+ * Exported as the truth the event-parity gate (tools/event-parity.mjs) holds
+ * the workflow template and docs declarations to.
+ *
+ * @type {readonly string[]}
+ */
+export const ACCEPTED_EVENTS = Object.freeze([
+  "pull_request",
+  "push",
+  "schedule",
+  "workflow_dispatch",
+]);
+
+/**
  * The caller's half of the recovery contract: `recovery.mjs` names a delay,
  * this file pays it in milliseconds. `short` is the transport layer's own
  * backoff step — `DEFAULT_RETRY_DELAY_MS`, shared by import rather than
