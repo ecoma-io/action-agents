@@ -5,7 +5,10 @@
 > retired by
 > [ADR 006](../adr/006-code-scanning-merge-enforcement.md) (#436) — merge
 > enforcement now rides the consumer's Code Scanning ruleset over review's
-> `category: review` upload.
+> `category: review` upload. ADR 006's 2026-09-08 addendum later resolved a
+> requirements-tool deadlock by reverting the dogfood `main` ruleset to
+> CodeQL and Semgrep OSS as its only required code-scanning tools; the §10
+> ruleset snapshot predates that revert.
 
 Recorded 2026-09-06 on `hardening/pr10-final-audit` (base `main` @ `75d6630`, the
 #402 merge). This is the closing counterpart to the Phase-0 audit

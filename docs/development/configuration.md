@@ -69,15 +69,18 @@ read the same way: from the resolved policy source, never the working tree.
 
 ### `schemaVersion`
 
-A config file may declare `"schemaVersion": 1` — the major this generation of
-actions parses. An absent field is accepted, so files written before
-versioning keep working; a file declaring a **higher major** is refused at
-startup with a message naming the branch, the SHA, the path, the version found
-and the version supported. A string (`"1"`) or a fractional value (`1.5`) is
-refused the same way — a version is a number, and guessing what `"1"` meant is
-how a policy change ships silently. Minor and patch versions do not exist in
-the policy schema: a breaking policy change is a new major, and an action that
-does not understand it says so instead of improvising.
+A config file may declare a schema major, and each action accepts its own
+window: `review` and `harmonise` understand 1 only, while `triage` reads 1
+and 2 — schema 1 is a migration window there, accepted and migrated to the
+current shape on read. An absent field is accepted everywhere, so files
+written before versioning keep working; anything outside the action's
+window — an older major, a **higher major**, a string (`"1"`), a fractional
+value (`1.5`) — is refused at startup with a message naming the branch, the
+SHA, the path, the version found and the majors the action understands: a
+version is a number, and guessing what `"1"` meant is how a policy change
+ships silently. Minor and patch versions do not exist in the policy schema:
+a breaking policy change is a new major, and an action that does not
+understand it says so instead of improvising.
 
 ## Instruction documents
 

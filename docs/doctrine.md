@@ -19,7 +19,7 @@ harmonise/     action.yaml + src/
 ```
 
 Three actions over one shared layer. The unit a consumer adopts is a directory:
-`ecoma-io/action-agents/review@v0.1` names one, and that directory plus `core/`
+`ecoma-io/action-agents/review@v0.11` names one, and that directory plus `core/`
 is the whole of what runs. Adopting `review` never brings `triage` along.
 
 Two edges are mechanical rather than remembered, and `pnpm arch` is what judges

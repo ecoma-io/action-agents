@@ -48,10 +48,10 @@ harmonise/action.yaml harmonise/src/
 
 Each directory beside `core/` is a whole action: the `action.yaml` a consumer
 names in `uses:`, and the source that runs. A consumer writes
-`ecoma-io/action-agents/review@v0.1`, which is that directory and nothing else.
+`ecoma-io/action-agents/review@v0.11`, which is that directory and nothing else.
 
 The root `action.yml` is a composite stub that always fails with guidance
-pointing to the real actions — it exists so that `ecoma-io/action-agents@v0.1`
+pointing to the real actions — it exists so that `ecoma-io/action-agents@v0.11`
 resolves against a tag (following the
 [github/codeql-action](https://github.com/github/codeql-action) pattern). It is
 not a runnable action and must never become one.

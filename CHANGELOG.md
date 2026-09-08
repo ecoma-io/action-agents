@@ -170,8 +170,6 @@
 * **workspace:** harden the action-agents monorepo toward v1.0.0 ([#223](https://github.com/ecoma-io/action-agents/issues/223)) ([b395199](https://github.com/ecoma-io/action-agents/commit/b3951997c256a0c46a08b038424d93723aaa5e91))
 * **workspace:** measure folded-blank and plain-scalar description length ([#187](https://github.com/ecoma-io/action-agents/issues/187)) ([ff2efdb](https://github.com/ecoma-io/action-agents/commit/ff2efdbe97359a52f220342abb73c8fe23296a10))
 
-## [Unreleased]
-
 ### Migration notes
 
 - **triage config schema 2.** The config is now a policy, not a label
