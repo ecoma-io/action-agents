@@ -369,3 +369,92 @@ describe("assess — the one retry a fumbled answer earns (#261)", () => {
     log.mockRestore();
   });
 });
+
+describe("assess — provider truncation (finish_reason: length, #448)", () => {
+  /**
+   * A chat stub answering from a scripted sequence of contents, each with
+   * its own finish reason — the shape a truncating provider produces.
+   *
+   * @param {{ content: string, finishReason: string }[]} script
+   */
+  function truncatingChat(script) {
+    let cursor = 0;
+    return {
+      complete: vi.fn(async () => {
+        const next = script[Math.min(cursor, script.length - 1)];
+        cursor++;
+        return {
+          content: next?.content ?? "",
+          toolCalls: [],
+          finishReason: next?.finishReason ?? "stop",
+        };
+      }),
+    };
+  }
+
+  it("fails a no-sheet truncated answer before parsing — the prefix never becomes a classification", async () => {
+    // The object closes, so extractObject would hand the prefix to the
+    // parser; with the guard it must never get there.
+    const chat = truncatingChat([
+      {
+        content: '{"classification":"a bug whose rationale was cut"}{"dimen',
+        finishReason: "length",
+      },
+    ]);
+    await expect(
+      assess(input({ chat, evidence: { ...input().evidence, sheet: null } })),
+    ).rejects.toThrow(
+      "the provider truncated its response (finish_reason: length) — " +
+        "the model's output is incomplete and cannot be judged as a triage answer",
+    );
+    // Truncation earns no re-ask: the same ask would cut the same answer.
+    expect(chat.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a truncated answer whose JSON5 was cut mid-string — before the doomed re-ask", async () => {
+    const chat = truncatingChat([
+      {
+        content: '{"labels":["bug"],"rationale":"the buffer ran out mid-sent',
+        finishReason: "length",
+      },
+    ]);
+    await expect(
+      assess(
+        input({ chat, evidence: { ...input().evidence, sheet: new Map([["bug", "a bug"]]) } }),
+      ),
+    ).rejects.toThrow(/truncated its response \(finish_reason: length\)/);
+    // The shape-failure re-ask (#261) must not fire for truncation: one ask.
+    expect(chat.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails truncation inside the re-ask window too — a stop-fumble then a length-cut", async () => {
+    const chat = truncatingChat([
+      { content: "just prose, not json", finishReason: "stop" },
+      { content: '{"classification":"bug', finishReason: "length" },
+    ]);
+    await expect(
+      assess(input({ chat, evidence: { ...input().evidence, sheet: null } })),
+    ).rejects.toThrow(
+      "the provider truncated the re-asked response (finish_reason: length) — " +
+        "the model's output is incomplete and cannot be judged as a triage answer",
+    );
+    expect(chat.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the shape-failure re-ask for a non-truncated bad shape — stop, not length", async () => {
+    // The control: the same prose fumble with finish_reason stop still earns
+    // its one redelivery, and a good second answer is judged normally.
+    const chat = truncatingChat([
+      { content: "", finishReason: "stop" },
+      {
+        content: '{"classification":"a bug","rationale":"the retry answered"}',
+        finishReason: "stop",
+      },
+    ]);
+    const assessment = await assess(
+      input({ chat, evidence: { ...input().evidence, sheet: null } }),
+    );
+    expect(assessment).toMatchObject({ intent: "comment", classification: "a bug" });
+    expect(chat.complete).toHaveBeenCalledTimes(2);
+  });
+});

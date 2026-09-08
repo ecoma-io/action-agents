@@ -309,7 +309,9 @@ function fakeForge(options = {}) {
  * options plus the event, the model seam's answers and — for the opt-in
  * verification pass — the verify seam's answers, which are the second and
  * later asks. `request()` stays the decide call; `asks()` is every ask in
- * order, so a test can pin how many calls a run made.
+ * order, so a test can pin how many calls a run made. `finishReason` is the
+ * decide call's finish reason — `length` is a provider that cut the answer
+ * short (#448).
  *
  * @param {Parameters<typeof fakeForge>[0] & {
  *   event?: Record<string, unknown>,
@@ -317,6 +319,7 @@ function fakeForge(options = {}) {
  *   chatFailure?: Error,
  *   verifyAnswer?: string,
  *   verifyFailure?: Error,
+ *   finishReason?: string,
  * }} [options]
  */
 function io(options = {}) {
@@ -354,7 +357,11 @@ function io(options = {}) {
         }
         if (options.chatFailure) throw options.chatFailure;
         asks.push(ask);
-        return { content: options.answer ?? LABELS_ANSWER, toolCalls: [], finishReason: undefined };
+        return {
+          content: options.answer ?? LABELS_ANSWER,
+          toolCalls: [],
+          finishReason: options.finishReason,
+        };
       },
     },
     evidence: createEvidence(() => "aaaabbbb"),
@@ -1963,6 +1970,92 @@ describe("run — the run record", () => {
     expect(workflow).toContain("if: always()");
     expect(workflow).toContain("include-hidden-files: true");
     expect(workflow).toContain("if-no-files-found: warn");
+  });
+});
+
+/**
+ * A provider that declares its answer truncated (`finish_reason: length`,
+ * issue #448) never gets judged: the run fails naming truncation, one ask —
+ * the shape-failure re-ask cannot help a cut answer — and nothing the model
+ * said is written or recorded as a decision.
+ */
+describe("run — provider truncation (finish_reason: length, #448)", () => {
+  /** Reads a record from the fixture workspace's default record directory.
+   *
+   * @param {string} name
+   */
+  const readRecord = (name) =>
+    JSON.parse(readFileSync(p.join(WORKSPACE, ".triage-record", name), "utf8"));
+
+  it("fails a no-sheet truncated answer — the parseable prefix never becomes the comment", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The object closes, so without the guard the prefix would parse into a
+    // classification and be published as the marker comment.
+    const world = io({
+      files: {},
+      answer: '{"classification":"bug whose rationale was cut"}{"dimen',
+      finishReason: "length",
+    });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      "the provider truncated its response (finish_reason: length) — " +
+        "the model's output is incomplete and cannot be judged as a triage answer",
+    );
+
+    // Nothing was asked twice, nothing was written, and the record carries the
+    // honest cause rather than any prefix of the answer.
+    expect(world.asks()).toHaveLength(1);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toContain("the provider truncated its response");
+    expect("decision" in record).toBe(false);
+  });
+
+  it("fails a sheet-mode truncated JSON5 answer — no doomed re-ask", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The cut lands mid-string, so without the guard the JSON5 parse would
+    // fail as a shape fumble and earn the re-ask that cannot succeed.
+    const world = io({
+      answer: '{"labels":["bug"],"rationale":"the buffer ran out mid-sent',
+      finishReason: "length",
+    });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      /truncated its response \(finish_reason: length\)/u,
+    );
+
+    expect(world.asks()).toHaveLength(1);
+    expect(world.forge.writes).toEqual([]);
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toContain("the provider truncated its response");
+    expect("decision" in record).toBe(false);
+  });
+
+  it("keeps the shape-failure re-ask for a non-truncated fumble — stop, not length", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The control: the same unusable answer with finish_reason stop still
+    // earns its one redelivery, and the run proceeds on the retry's answer.
+    const answers = ["", LABELS_ANSWER];
+    let attempt = 0;
+    const world = io();
+    world.chat = {
+      /**
+       * @param {{ model: string, messages: import("#core/chat.mjs").ChatMessage[] }} ask
+       */
+      complete: async (ask) => {
+        world.asks().push(ask);
+        const content = answers[Math.min(attempt, answers.length - 1)] ?? "";
+        attempt += 1;
+        return { content, toolCalls: [], finishReason: undefined };
+      },
+    };
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.asks()).toHaveLength(2);
+    expect(world.forge.writes).toEqual([{ op: "addLabels", args: [7, ["bug"]] }]);
   });
 });
 
