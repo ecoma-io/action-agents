@@ -17,8 +17,11 @@
  * THE TWO DIRECTIONS.
  *
  * - A surface declaring a trigger the entrypoint refuses is a FAILURE: a run
- *   on that trigger ends `failed` before any decision, with no record to
- *   upload. This is the direction that bit (#463).
+ *   on that trigger ends `failed` at the event gate, before any decision.
+ *   What the red run leaves behind is action-specific, and the run contract
+ *   says so: triage's gate throws inside the record-writing try, so its
+ *   `failed` record is still written; review's refusal is the F-01a carve-out
+ *   — red, no artifact. This is the direction that bit (#463).
  * - An accepted event no surface declares is DRIFT, surfaced but not red: the
  *   runtime is the more permissive side, so an undeclared acceptance is a fact
  *   to notice, not a defect to block on. `harmonise` is the live case — it
@@ -463,9 +466,8 @@ export function evaluate({ workflows, templates, errors, accepted }) {
       failures.push(
         `${surface.surface}:${String(trigger.line)}: declares '${trigger.name}' for ${surface.action}, ` +
           `which accepts ${allowed.map((name) => `'${name}'`).join(" and ")}. ` +
-          `A run on '${trigger.name}' refuses at the entrypoint's event gate (run contract F-01) — ` +
-          `a red run with no record to upload (#463). Remove the trigger, or move the workflow ` +
-          `to an action that accepts it.`,
+          `A run on '${trigger.name}' refuses at the entrypoint's event gate (run contract F-01). ` +
+          `Remove the trigger, or move the workflow to an action that accepts it.`,
       );
     }
   }

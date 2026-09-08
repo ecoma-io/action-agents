@@ -389,10 +389,11 @@ it.
 
 The matrix covers `issues` and `pull_request` payloads, and those two names are
 the only events the entrypoint accepts. A run triggered by anything else —
-`workflow_dispatch`, `push`, `schedule` — throws at startup and ends red with
-no record (run contract F-01): triage classifies threads, and a dispatch or a
-schedule tick carries no thread. Declare no other trigger in the `on:` block;
-[`harmonise`](harmonise.md) is the action built for schedule ticks.
+`workflow_dispatch`, `push`, `schedule` — throws at startup and ends red,
+writing its `failed` record (run contract F-01): triage classifies threads, and
+a dispatch or a schedule tick carries no thread. Declare no other trigger in
+the `on:` block; [`harmonise`](harmonise.md) is the action built for schedule
+ticks.
 
 ### Redelivery
 

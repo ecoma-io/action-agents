@@ -28,8 +28,8 @@ on:
     types: [opened, edited, synchronize, reopened, labeled]
   # There is no workflow_dispatch: the entrypoint refuses every event but
   # `issues` and `pull_request` (run contract F-01), and a dispatched run has
-  # no thread to classify — it would go red at the event gate with no record
-  # to upload. The first dry runs come from real threads instead; the
+  # no thread to classify — it would go red at the event gate and write its
+  # `failed` record. The first dry runs come from real threads instead; the
   # rollout ladder in docs/dogfood.md is written that way.
 
 # `labeled` is the queue-marker lifecycle event (item 1 of #224): the issue
