@@ -514,6 +514,13 @@ Where it is written, per terminal path:
   to mask the original. A run that dies before the payload parses names no
   thread and no policy pin — the record carries `null`s and the filename
   falls back to the event name.
+- a **config refusal** — the policy file is present but does not validate: the
+  run ends in `run`'s catch like a failure, but the record says
+  `outcome: "refused"` — the deterministic startup refusal the run contract's
+  F-02 names (#472), typed at the validation wrap so a misconfiguration never
+  reads as a defect. The reader arm stays `failed`: a configured
+  `config-path` naming a file the branch does not have, a policy declared
+  twice, a foreign schema major.
 - a **downgraded plan** — opt-in verification refused every operation the
   decision proposed: there is nothing left to write, the mutate call never
   happens, and the run ends `refused` — green, a refusal being the ceilings
@@ -540,10 +547,11 @@ durable form of that path.
 validator refuses anything else. Today's paths use `published` (a landed
 mutation), `skip` (a dry run or an event-gate exit), `abandoned` (a write
 the freshness gate withheld — the thread changed while the run was in
-flight), `refused` (opt-in verification downgraded every operation the
-decision proposed — nothing left to write) and `failed` (what lands in the
-catch: a defect or an environment break — the ceilings refuse as a decision,
-not a throw).
+flight), `refused` (a deterministic refusal: opt-in verification downgraded
+every operation the decision proposed — nothing left to write — or a policy
+file present but failing to validate, the startup refusal #472 typed) and
+`failed` (what lands in the catch: a defect or an environment break; the
+config refusal is the one refusal the catch records, and it arrives typed).
 
 Delivery: the file lands under the `record-path` directory (default
 `.triage-record`), named `triage-record-<type>-<number>.json` for a parsed
@@ -556,11 +564,14 @@ this repository's own triage workflow uploads with `if: always()`.
 A run fails loudly. The provider unreachable after retries, a config that does
 not validate, an answer entirely off-sheet — the step goes red rather than
 green-on-nothing, and a workflow that wants triage soft uses
-`continue-on-error`. Refused labels are logged before the run ends, so the
-annotation says what was refused and why. The record write has its own
-two-tier posture, stated in [the run record](#the-run-record): after the
-run's own outcome has landed it is a logged loss, everywhere else it is the
-red run.
+`continue-on-error`. The config that does not validate records `refused` —
+the record word for the ceilings declining a misconfiguration (#472), never a
+defect; a config that cannot be read at all (a configured `config-path`
+naming a file the branch does not have) records `failed`. Refused labels are
+logged before the run ends, so the annotation says what was refused and why.
+The record write has its own two-tier posture, stated in
+[the run record](#the-run-record): after the run's own outcome has landed it
+is a logged loss, everywhere else it is the red run.
 
 ## What `triage` never does
 
