@@ -282,10 +282,18 @@ export function evaluate({ read, exists, discoveredDirs = [], atRelease = false 
               `so converge after this release: bump floating, exact and rootExact in ` +
               `${PINS_MANIFEST} to the v${releasedLine} line and update every pin the covered ` +
               `documents show, in one pull request — the tags exist now, so it merges green — ` +
-              `then move the floating tag at this release: ` +
+              `then move the floating tag at this release. The floating ref does not exist yet ` +
+              `(the job that moves it was skipped), so PATCH and fall back to POST-create, the ` +
+              `same move release.yml itself makes, with the SHA resolved from the release tag ` +
+              `that does exist — never HEAD, which by then is the convergence commit, not the ` +
+              `release (fetch tags first if this clone lacks them):\n` +
+              `  sha="$(git rev-parse 'v${released}^{commit}')" && ` +
               `gh api -X PATCH repos/<owner>/<repo>/git/refs/tags/v${releasedLine} ` +
-              `-f sha="$(git rev-parse HEAD)" -F force=true. Until then this release ships with ` +
-              `no floating tag and consumers pinned to ${pins.floating} stay on their line.`,
+              `-f sha="$sha" -F force=true || ` +
+              `gh api -X POST repos/<owner>/<repo>/git/refs ` +
+              `-f ref=refs/tags/v${releasedLine} -f sha="$sha"\n` +
+              `Until then this release ships with no floating tag and consumers pinned to ` +
+              `${pins.floating} stay on their line.`,
           );
         }
       }

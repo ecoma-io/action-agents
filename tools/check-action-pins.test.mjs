@@ -224,10 +224,17 @@ test("the gate is wired where drift can block a change: CI's Verify job", () => 
     fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.url)),
     "utf8",
   );
-  assert.match(ci, /- name: Check documented action pins\n {8}run: pnpm check-action-pins/);
+  // Anchored to whole lines, so a step reduced to a comment, a chained
+  // command (`pnpm check-action-pins && …`), or a renamed step fails here.
+  assert.match(ci, /^ {6}- name: Check documented action pins\n {8}run: pnpm check-action-pins$/m);
 });
 
 test("the gate is wired where drift can block a change: the pre-commit hook", () => {
   const hook = readFileSync(fileURLToPath(new URL("../lefthook.yml", import.meta.url)), "utf8");
-  assert.match(hook, /- name: action-pins\n( +#[^\n]*\n)* *run: pnpm check-action-pins/);
+  // Same anchoring: the job line, its comment block, and a bare `run:` line —
+  // nothing chained after the command, nothing renamed.
+  assert.match(
+    hook,
+    /^ {4}- name: action-pins\n(?: {6}#[^\n]*\n)* {6}run: pnpm check-action-pins$/m,
+  );
 });

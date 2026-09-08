@@ -526,7 +526,19 @@ test("pins: a minor release whose pins were left behind fails loud and names the
   // to bump, why it cannot happen earlier, and how the floating tag moves.
   assert.match(pins, /bump floating, exact and rootExact/);
   assert.match(pins, /check-uses-refs refuses a documented ref no tag publishes yet/);
-  assert.match(pins, /gh api -X PATCH repos\/<owner>\/<repo>\/git\/refs\/tags\/v0\.12/);
+  // The move command survives contact with release day: on the first minor of
+  // a line the floating ref does not exist yet (the job that moves it was
+  // skipped), so PATCH alone 404s and the POST-create fallback must be
+  // carried; and the SHA is resolved from the release tag that does exist —
+  // HEAD, by the time anyone reads this, is the convergence commit, not the
+  // release. Both defects were found in review; the second assertion pins the
+  // HEAD expansion out for good.
+  assert.match(pins, /PATCH[^]*?fall back to POST-create[^]*?release\.yml/);
+  assert.match(
+    pins,
+    /sha="\$\(git rev-parse 'v0\.12\.0\^\{commit\}'\)" && gh api -X PATCH repos\/<owner>\/<repo>\/git\/refs\/tags\/v0\.12 -f sha="\$sha" -F force=true \|\| gh api -X POST repos\/<owner>\/<repo>\/git\/refs -f ref=refs\/tags\/v0\.12 -f sha="\$sha"/,
+  );
+  assert.doesNotMatch(pins, /rev-parse HEAD/);
 });
 
 test("pins: the invariant is release-only — the same drifted tree without the flag stays green", () => {
@@ -609,11 +621,28 @@ test("checks: counts at least one check per invariant category", () => {
 test("wiring: release.yml turns the release-only invariant on at the release SHA", () => {
   // The flag is the difference between invariant 7 running and not: without
   // it the release verification silently narrows back to invariants 1–6, and
-  // a minor release could ship its pins behind. Pinned here so unwiring it
+  // a minor release could ship its pins behind. Pinned here — anchored to the
+  // whole line, so a mangled flag or a chained command fails — so unwiring it
   // is a failed test rather than a quiet return to the #447 status quo.
   const release = readFileSync(
     fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
     "utf8",
   );
-  assert.match(release, /run: node tools\/check-release-invariants\.mjs --at-release/);
+  assert.match(release, /^ {8}run: node tools\/check-release-invariants\.mjs --at-release$/m);
+});
+
+test("wiring: the floating tag moves only behind a green release job", () => {
+  // The two lines that make "release verification red ⇒ floating tag unmoved"
+  // true: the job depends on the release job (a red dependency is skipped)
+  // and runs only when that job reported an actual release. Delete either and
+  // a failed verification — the minor-release-failed-loud path this unit is
+  // built on — would still move the tag consumers are pinned to.
+  const release = readFileSync(
+    fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
+    "utf8",
+  );
+  const job = release.split("\n  floating-tag:")[1];
+  assert.ok(job, "the floating-tag job is missing from release.yml");
+  assert.match(job, /^ {4}needs: \[release\]$/m);
+  assert.match(job, /^ {4}if: needs\.release\.outputs\.released == 'true'$/m);
 });
