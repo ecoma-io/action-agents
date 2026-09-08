@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2](https://github.com/ecoma-io/action-agents/compare/v0.11.1...v0.11.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** run check-action-pins in automation and hold releases to the floating pin line ([#455](https://github.com/ecoma-io/action-agents/issues/455)) ([83f9a46](https://github.com/ecoma-io/action-agents/commit/83f9a46f1105244254b2c068c57cc8c523425555))
+* **triage,harmonise:** reject provider-truncated answers ([#451](https://github.com/ecoma-io/action-agents/issues/451)) ([f45b6b6](https://github.com/ecoma-io/action-agents/commit/f45b6b652e1d645d7a0fd55b31825ba36532975f))
+
 ## [0.11.1](https://github.com/ecoma-io/action-agents/compare/v0.11.0...v0.11.1) (2026-09-08)
 
 
