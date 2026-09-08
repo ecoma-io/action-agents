@@ -10,7 +10,7 @@ here; read those two for the work.
 
 Three trusted, bounded, auditable GitHub Actions for repository upkeep — `triage`, `review`,
 `harmonise` — against any OpenAI-compatible model. Each one is a
-separate action a consumer adopts on its own: `ecoma-io/action-agents/triage@v0.1`
+separate action a consumer adopts on its own: `ecoma-io/action-agents/triage@v0.11`
 names a directory, and that directory holds everything the action is.
 
 ```text
