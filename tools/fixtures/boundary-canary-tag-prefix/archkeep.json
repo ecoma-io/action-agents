@@ -1,0 +1,30 @@
+{
+  "tsConfig": "tsconfig.base.json",
+  "projects": {
+    "declared": [
+      {
+        "name": "canary-core",
+        "root": "canary-core",
+        "tags": ["layer:core", "scope:shared"]
+      },
+      {
+        "name": "canary-corex",
+        "root": "canary-corex",
+        "tags": ["layer:corex", "scope:shared-2"]
+      },
+      {
+        "name": "canary-app",
+        "root": "canary-app",
+        "tags": ["layer:action", "scope:canary-app"]
+      }
+    ]
+  },
+  "coverage": {
+    "exempt": [
+      {
+        "path": "module-boundaries.config.mjs",
+        "reason": "The boundary law itself, which no project owns — the same exemption the repository's own archkeep.json gives its law"
+      }
+    ]
+  }
+}

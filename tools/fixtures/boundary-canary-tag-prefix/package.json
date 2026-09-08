@@ -1,0 +1,9 @@
+{
+  "name": "boundary-canary-tag-prefix",
+  "version": "0.0.0",
+  "type": "module",
+  "imports": {
+    "#canary-core/*.mjs": "./canary-core/src/*.mjs",
+    "#canary-corex/*.mjs": "./canary-corex/src/*.mjs"
+  }
+}

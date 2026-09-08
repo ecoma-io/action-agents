@@ -137,8 +137,18 @@ jobs:
       # header records the fail-open that makes this worth a step of its own:
       # an import the resolver cannot see is reported `allowed`, so a broken
       # gate looks exactly like a green one.
+      #
+      # `tools/check-arch-canary-extended.mjs` pins four more measured
+      # contracts the edge canaries do not reach: a coverage exemption cannot
+      # claim a project's own files (the load refuses), a tracked analyzable
+      # file no project owns is refused by name, a dynamic import site is a
+      # declared blind spot over a green verdict, and depConstraints tag
+      # matching is exact on both axes. Same runner shape, same rule: fix the
+      # gate, never the canary.
       - name: Check the boundary gate stays loud
-        run: pnpm arch:canary
+        run: |
+          pnpm arch:canary
+          pnpm arch:canary-extended
 
       # The boundary canary above proves the gate still bites on a relative
       # cross-action import. The transport seam — an action never imports the
