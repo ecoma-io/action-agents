@@ -116,8 +116,8 @@ importers:
         specifier: ^21.2.2
         version: 21.2.2
       '@ecoma-io/archkeep':
-        specifier: 0.25.0
-        version: 0.25.0(typescript@5.9.3)
+        specifier: 0.27.0
+        version: 0.27.0(typescript@5.9.3)
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.10.0(jiti@2.6.1))
@@ -276,8 +276,8 @@ packages:
     resolution: {integrity: sha512-aalGyl7dbB5PArRebDIX43ZvBlXrYm9uWzGJ26t+4SzJVPsOuvfILGGbw5X4yX7i50YEmJ8zvbiWnqH/AAnZqg==}
     engines: {node: '>=22'}
 
-  '@ecoma-io/archkeep@0.25.0':
-    resolution: {integrity: sha512-oLVZXGw30h0/q91N/HdlSKVCc+b0z1QwLrWEiYW5wJovG4ktBcAAcoTqBbitFUYxvPdRMDIbydwymDSniQTAog==}
+  '@ecoma-io/archkeep@0.27.0':
+    resolution: {integrity: sha512-dTgchMZLSEeeF7hpdeYJAzwLy+POcVaPNIsqpsD7EuX41e3rtUfMO9V9m9Tbq57yGMczA9IX+3yTIXYMNcq3Ag==}
     engines: {node: '>=22'}
     hasBin: true
     peerDependencies:
@@ -1536,7 +1536,7 @@ snapshots:
 
   '@conventional-changelog/template@1.4.0': {}
 
-  '@ecoma-io/archkeep@0.25.0(typescript@5.9.3)':
+  '@ecoma-io/archkeep@0.27.0(typescript@5.9.3)':
     dependencies:
       smol-toml: 1.8.0
       typescript: 5.9.3
