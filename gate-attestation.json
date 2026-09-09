@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repository": "ecoma-io/action-agents",
-  "commit": "2232ed07ed597b78a993c64713153d70b59ebcfa",
+  "commit": "a842c23c007c5e544eef9a03dd7041d318337a9b",
   "tool": {
     "name": "@ecoma-io/archkeep",
     "version": "0.27.0"
