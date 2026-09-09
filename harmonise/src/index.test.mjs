@@ -1861,6 +1861,48 @@ describe("run with recorded state", () => {
     expect(chatDouble.calls()).toBe(0);
     expect(forgeDouble.writes).toEqual([]);
   });
+
+  it("proceeds with an adopted pair — the record lifts the refusal, the model still runs", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The refusal above is only for *unrecorded* pairs. A hand-adopted
+    // record (#476) carries the same shape a publication writes — its policy
+    // fingerprint an opaque placeholder, never a digest fold of a real
+    // policy — and that is enough for the gate: manual-edit protection has
+    // a recorded publication to stand on, so the pair proceeds. The
+    // placeholder can never equal this run's folded digest, so the pair is
+    // policy-stale every run and the model is consulted exactly as before:
+    // adoption never overwrites the human's file, and it never refuses.
+    const chatDouble = chat([proposes("# Dev\n\nNouvelle prose.\n")]);
+    const forgeDouble = forge(
+      makeRepo({
+        documents: { "manual/dev.md": SOURCE, "manual/vi/dev.md": TRANSLATED },
+        state: renderState([
+          {
+            schemaVersion: STATE_SCHEMA_VERSION,
+            sourcePath: "manual/dev.md",
+            destinationPath: "manual/vi/dev.md",
+            language: "vi",
+            sourceFingerprint: contentFingerprint(SOURCE),
+            translationFingerprint: contentFingerprint(TRANSLATED),
+            policyFingerprint: contentFingerprint("adopted by hand"),
+            transformationVersion: TRANSFORMATION_VERSION,
+          },
+        ]),
+      }),
+    );
+    const ioDouble = /** @type {any} */ ({ forge: forgeDouble, chat: chatDouble, evidence });
+
+    await expect(
+      run({ ...readInputs(runner), dryRun: false }, context(), ioDouble),
+    ).resolves.toBeUndefined();
+
+    expect(chatDouble.calls()).toBe(1);
+    const out = logged(log);
+    expect(out).not.toMatch(/every pair failed/);
+    expect(out).not.toMatch(/manual-edit protection refused/);
+    expect(out).toMatch(/translated vi manual\/dev\.md/);
+    expect(forgeDouble.writes.map((w) => w.op)).toContain("upsertPullRequest");
+  });
 });
 
 describe("run with manual-edit protection and three-way merge", () => {
