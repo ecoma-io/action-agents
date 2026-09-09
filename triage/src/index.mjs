@@ -58,6 +58,10 @@ import { MAX_SEARCH_CANDIDATES, createForge } from "#core/forge.mjs";
 import { oneLine } from "#core/one-line.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
+// Deliberate gate probe for the external-consumer attestation (never merge):
+// an action reaching into the transport client over its public subpath is
+// exactly the violation shape the transport seam forbids.
+import { TransportError } from "#core-transport/transport-errors.mjs";
 import {
   getBooleanInput,
   getInput,
@@ -96,6 +100,9 @@ import { applyVerification, mintVerificationPlan, verifyDecision } from "./verif
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
 export const ACTION = "triage";
+
+/** Present so the probe import above is a live dependency, not dead code. */
+export const gateProbeTransportError = TransportError;
 
 /**
  * The event names the entrypoint accepts: `issues` and `pull_request`, the
