@@ -385,6 +385,12 @@ call, no mutation. An event that is not on the matrix is re-triaged, never
 silently skipped; `labeled` re-triages only when the change could move the
 queue lifecycle, and `unlabeled` always skips.
 
+One branch reads live before a skip becomes final: a `labeled` event whose
+changed label carries the `semantic-classification` role while the config
+declares queue markers arbitrates the payload's "not queued" claim against
+one live labels read at the call site, re-deciding when a marker the payload
+does not show is actually there; `events.mjs` itself stays pure.
+
 The model's answer is matched exactly against the sheet, in the Policy stage:
 `bug `, `Bug` and `BUG` are not `bug`, an off-sheet label is refused and
 logged rather than coerced, and an answer entirely off-sheet fails the run

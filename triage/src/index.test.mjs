@@ -832,6 +832,95 @@ describe("run — the event gate (PR-E)", () => {
     );
   });
 
+  // The triage race (#480): a template applies its queue marker inside the
+  // `opened` run, that run is cancelled, and the surviving `labeled` run
+  // carries a payload that predates the marker. The skip matrix would call
+  // the thread unqueued and write nothing; the gate arbitrates the claim
+  // against the live thread before the skip becomes final.
+  it("a stale labeled claim that hides a live marker completes the queue lifecycle", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: labeled("bug", { labels: ["bug"] }),
+      liveLabels: ["needs triage", "bug"],
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    // One arbitrating read, then the ordinary queued-classification
+    // pipeline: one model call, the marker cleared once classified.
+    expect(world.request()).not.toBeNull();
+    expect(world.asks()).toHaveLength(1);
+    expect(world.forge.writes).toEqual([{ op: "removeLabel", args: [7, "needs triage"] }]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toContain(
+      "triage: the event's label list was stale — the live thread still carries a queue marker; re-triaged",
+    );
+    expect(lines).not.toContain(
+      "triage: nothing written — the event changed no triage-relevant evidence",
+    );
+    const record = JSON.parse(
+      readFileSync(p.join(WORKSPACE, ".triage-record", "triage-record-issue-7.json"), "utf8"),
+    );
+    expect(record.outcome).toBe("published");
+  });
+
+  it("an already-decided thread is unchanged — a no-marker live read leaves the skip byte-identical", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: labeled("bug", { labels: ["bug"] }),
+      liveLabels: ["bug"],
+    });
+    // A landed decision is the only code path that removes a marker, so a
+    // live read showing none re-decides nothing: the skip stands with the
+    // grammar's own reason, the arbitrating read being the only new cost.
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.request()).toBeNull();
+    expect(world.forge.writes).toEqual([]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).not.toContain("re-triaged");
+    const record = JSON.parse(
+      readFileSync(p.join(WORKSPACE, ".triage-record", "triage-record-issue-7.json"), "utf8"),
+    );
+    expect(record.outcome).toBe("skip");
+    expect(record.reason).toBe(
+      "'bug' is neither a queue marker nor a classification of a queued thread — content evidence is unchanged",
+    );
+  });
+
+  it("records abandoned when the thread moves after arbitration — the marker is gone by the freshness gate", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      ...withConfig(),
+      event: labeled("bug", { labels: ["bug"] }),
+    });
+    // The arbitrating read sees the marker; the mutation's live re-read
+    // sees it already cleared — the thread moved while the run was in
+    // flight, and the freshness gate fences the write.
+    let markerSeen = true;
+    world.forge.getIssue = async () => {
+      const labels = markerSeen ? ["needs triage", "bug"] : ["bug"];
+      markerSeen = false;
+      return { labels };
+    };
+
+    await run(inputs(), readContext(runner), world);
+
+    expect(world.forge.writes).toEqual([]);
+    const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(lines).toContain("nothing written — the thread changed while this run was in flight");
+    const record = JSON.parse(
+      readFileSync(p.join(WORKSPACE, ".triage-record", "triage-record-issue-7.json"), "utf8"),
+    );
+    expect(record.outcome).toBe("abandoned");
+    expect(record.reason).toBe(
+      "the labels are now [bug], not the [needs triage, bug] the event carried",
+    );
+  });
+
   it("skips a closed issue — no model call, no mutation", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const world = io({ ...withConfig(), event: { action: "closed", ...issueEvent() } });
