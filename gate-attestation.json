@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "repository": "ecoma-io/action-agents",
+  "commit": "2232ed07ed597b78a993c64713153d70b59ebcfa",
+  "tool": {
+    "name": "@ecoma-io/archkeep",
+    "version": "0.27.0"
+  },
+  "gate": {
+    "command": "pnpm arch",
+    "blocking": true
+  },
+  "proof": {
+    "violationExitCode": 1,
+    "recoveryExitCode": 0
+  }
+}
