@@ -286,7 +286,7 @@ export async function run(inputs, context, io) {
     // policy's own declarations; `events.mjs` documents the whole matrix.
     const eventAction = draft.eventAction;
     const changedLabel = eventChangedLabel(event);
-    const eventCall = decideEvent({
+    let eventCall = decideEvent({
       eventName: context.eventName,
       action: eventAction,
       changedLabel,
@@ -297,6 +297,42 @@ export async function run(inputs, context, io) {
     info(
       eventAuditLine({ eventName: context.eventName, action: eventAction, decision: eventCall }),
     );
+    // The payload's label list is a claim, not a read. A `labeled` skip that
+    // rests on it can be wrong in exactly one direction that matters — the
+    // triage race (#480): the marker the cancelled `opened` run applied lands
+    // after the surviving event was delivered, so the payload shows an
+    // unqueued thread while the queue still holds it, and the skip would
+    // strand the thread. When the changed label is the classification case
+    // the skip matrix reasons about, the claim is arbitrated against the
+    // live thread with one read; `events.mjs` itself stays pure, and a live
+    // read showing no marker leaves the skip byte-identical — a landed
+    // decision is the only code path that removes a marker.
+    if (
+      eventCall.mode === "skip" &&
+      eventAction === "labeled" &&
+      changedLabel !== null &&
+      config !== null &&
+      config.labels.workflowMarkers.length > 0 &&
+      config.labels.roles.get(changedLabel) === "semantic-classification"
+    ) {
+      const live = await world.forge.getIssue(thread.number);
+      if (config.labels.workflowMarkers.some((marker) => live.labels.includes(marker))) {
+        // Reconcile the claim: the evidence gathering, the marker-clear
+        // policy and the freshness gate all judge against `thread.labels`.
+        thread.labels = live.labels;
+        eventCall = decideEvent({
+          eventName: context.eventName,
+          action: eventAction,
+          changedLabel,
+          markerLabels: config.labels.workflowMarkers,
+          roleOf: (name) => config.labels.roles.get(name),
+          threadLabels: live.labels,
+        });
+        info(
+          "triage: the event's label list was stale — the live thread still carries a queue marker; re-triaged",
+        );
+      }
+    }
     if (eventCall.mode === "skip") {
       info("triage: nothing written — the event changed no triage-relevant evidence");
       // A skip's record is the skip's whole outcome, so a failed write here is
