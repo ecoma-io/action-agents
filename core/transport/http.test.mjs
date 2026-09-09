@@ -233,16 +233,41 @@ describe("retries", () => {
     expect(recorder.calls).toHaveLength(1);
   });
 
-  it("retries a network failure and surfaces TransportError when none succeed", async () => {
+  it("retries a dropped socket and succeeds on the next attempt", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
     const http = createHttpClient({
       baseUrl: "https://api.example",
-      fetchImpl: scripted([new TypeError("fetch failed"), new TypeError("fetch failed")]),
+      fetchImpl: scripted([new TypeError("fetch failed"), ok('"done"')], recorder),
+      ...FAST,
+    });
+
+    await expect(http.request("/x")).resolves.toMatchObject({ status: 200, text: '"done"' });
+    // The socket failure was transient: attempt two carried the request.
+    expect(recorder.calls).toHaveLength(2);
+  });
+
+  it("exhausts the attempt budget on dropped sockets, then surfaces TransportError", async () => {
+    /** @type {{ calls?: RecordedCall[] }} */
+    const recorder = {};
+    const http = createHttpClient({
+      baseUrl: "https://api.example",
+      fetchImpl: scripted(
+        [
+          new TypeError("fetch failed"),
+          new TypeError("fetch failed"),
+          new TypeError("fetch failed"),
+        ],
+        recorder,
+      ),
       ...FAST,
     });
 
     const error = await http.request("/x").catch((cause) => cause);
     expect(error).toBeInstanceOf(TransportError);
     expect(error.message).toMatch(/fetch failed/);
+    // The default budget of three attempts was spent before the terminal.
+    expect(recorder.calls).toHaveLength(3);
   });
 
   it("surfaces a timeout as TransportError, naming the timeout", async () => {

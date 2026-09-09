@@ -227,15 +227,18 @@ export function createHttpClient(config) {
         }
         return result;
       } catch (cause) {
-        if (
-          (isAbort(cause) || cause instanceof TransportError) &&
-          number < limit &&
-          !(cause instanceof BodyTooLargeError)
-        ) {
+        // Classify before deciding to retry: a connection-level failure
+        // arrives as a raw TypeError ("fetch failed"), and only the wrap
+        // gives it the TransportError name the retryable class reads. The
+        // wrapped class is exactly "the request never produced a response"
+        // — a timeout or a dropped socket retries, while a response verdict
+        // (HttpError, a past-cap body) passes through unchanged and stops.
+        const failure = wrapTransport(url, cause);
+        if (failure instanceof TransportError && number < limit) {
           await sleep(backoff(number));
           continue;
         }
-        throw wrapTransport(url, cause);
+        throw failure;
       }
     }
   }
