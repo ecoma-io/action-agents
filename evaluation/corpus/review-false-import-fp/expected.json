@@ -1,0 +1,20 @@
+{
+  "outcome": "published",
+  "findings": [
+    {
+      "file": "src/check-conformance.test.ts",
+      "line": 7,
+      "severity": "nit",
+      "valid": true,
+      "note": "loadManifest uses readFileSync — the function call on line 7 is the genuine usage site that proves the import is not dead"
+    },
+    {
+      "file": "src/check-conformance.test.ts",
+      "line": 1,
+      "severity": "nit",
+      "valid": false,
+      "note": "the vitest import is ordinary; a finding here would be invented"
+    }
+  ],
+  "verdicts": {}
+}

@@ -1,0 +1,5 @@
+{
+  "content": "{\"findings\":[{\"severity\":\"nit\",\"file\":\"src/check-conformance.test.ts\",\"line\":3,\"message\":\"readFileSync is imported but never used — this import is dead code\",\"kind\":\"correctness\"}],\"summary\":\"Reviewed 1 changed file; flagged one unused import.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

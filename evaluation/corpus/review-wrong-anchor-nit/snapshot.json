@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": ""
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "opened",
+    "payload": {
+      "action": "opened",
+      "pull_request": {
+        "number": 9201,
+        "base": {
+          "ref": "main",
+          "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 9201,
+    "title": "ci: instrument CI runs with a machine-readable performance record",
+    "body": "Adds a build script that records CI timing. Synthetic description modelled on archkeep PR 807.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": null,
+      ".github/action-agents/review/instruction.md": null
+    }
+  },
+  "headFiles": {
+    "src/build.mjs": "\"use strict\";\n\nexport function normalise(name) {\n  return name.replaceAll(\"/\", \"_\");\n}\n\n// CLI entry\nconst args = process.argv;\nconst jobName = normalise(args[2]);\n\nrecord.jobs[jobName] = {};\n\n// CLI entry\nexport function run(config) {\n  return record;\n}"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": {
+      "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a"
+    },
+    "getPullRequest": {
+      "number": 9201,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "ci: instrument CI runs with a machine-readable performance record",
+      "body": "Adds a build script that records CI timing. Synthetic description modelled on archkeep PR 807.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "feat/synthetic-9201",
+        "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+      }
+    },
+    "listPullRequestFiles": [
+      {
+        "filename": "src/build.mjs",
+        "status": "added",
+        "additions": 16,
+        "deletions": 0,
+        "patch": "@@ -0,0 +1,16 @@\n+\"use strict\";\n+\n+export function normalise(name) {\n+  return name.replaceAll(\"/\", \"_\");\n+}\n+\n+// CLI entry\n+const args = process.argv;\n+const jobName = normalise(args[2]);\n+\n+record.jobs[jobName] = {};\n+\n+// CLI entry\n+export function run(config) {\n+  return record;\n+}"
+      }
+    ],
+    "listComments": [],
+    "whoami": {
+      "login": "github-actions[bot]"
+    }
+  }
+}
