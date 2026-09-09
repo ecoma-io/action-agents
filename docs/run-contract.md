@@ -316,7 +316,28 @@ give the shape its authority:
   the quarantine channel: counted and named in the log, rendered in the
   comment's withheld sentence when nothing else publishes, never part of
   the canonical result, never run-fatal — the run proceeds to the terminal
-  its gates already determined, carrying only the surviving findings. And
+  its gates already determined, carrying only the surviving findings. A
+  span the tree honours is still not the claim itself: before the
+  verification pass, a finding whose message quotes evidence — a span in
+  backticks or single or double quotes — must find at least one quoted
+  span inside the anchor's window (the anchor line and
+  `EXCERPT_CONTEXT_LINES` on each side, cut from the same reviewed bytes
+  the capture boundary reads, one bounded read per anchor). Quoted
+  evidence that appears nowhere in that window withholds the finding
+  through the same quarantine channel — counted and named in the log,
+  rendered in the same withheld sentence, never part of the canonical
+  result, never run-fatal, and no model call spent on it — at every
+  severity, anchor-scoped; a message that quotes nothing passes
+  vacuously, there being no quoted evidence to judge. Quotes are read at
+  word boundaries, on both ends and twice over: a quote mark flanked by
+  word characters is an apostrophe in a word, not an evidence delimiter,
+  and a quoted span counts as present only where the characters flanking
+  the match are non-word or the window's edge — `run` does not certify
+  `runTime`, `line1` does not certify `line10`. The gate stays a
+  best-effort precision filter against the honest wrong-anchor class,
+  not an adversarial one, and its residual is named: a finding that
+  quotes a word-boundary token genuinely present near whatever anchor it
+  cites passes the gate. And
   the birth site that
   binds the record retypes a record its own shapes reject as a typed
   refusal (`refused`, the red error), never an undeclared crash: a terminal

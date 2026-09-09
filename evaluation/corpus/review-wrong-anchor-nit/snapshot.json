@@ -38,7 +38,7 @@
     }
   },
   "headFiles": {
-    "src/build.mjs": "\"use strict\";\n\nexport function normalise(name) {\n  return name.replaceAll(\"/\", \"_\");\n}\n\n// CLI entry\nconst args = process.argv;\nconst jobName = normalise(args[2]);\n\nrecord.jobs[jobName] = {};\n\n// CLI entry\nexport function run(config) {\n  return record;\n}"
+    "src/build.mjs": "\"use strict\";\n\nexport function normalise(name) {\n  return name.replaceAll(\"/\", \"_\");\n}\n\n// CLI entry\nconst args = process.argv;\nconst jobName = normalise(args[2]);\n\nrecord.jobs[jobName] = {};\n\nrecord.jobs[jobName].startedAt = Date.now();\n\nexport function run(config) {\n  return record;\n}\n\n// CLI entry\nexport function register(config) {\n  record.jobs[config.name] = config;\n  return record;\n}"
   },
   "world": {
     "getRepository": {

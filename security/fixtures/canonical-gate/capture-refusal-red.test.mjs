@@ -1,21 +1,23 @@
-// Capture refusal — the evidence boundary refuses, and the run goes red.
+// Capture refusal — the evidence boundary holds at the span gate.
 //
 // Attack: a compromised or hallucinating model anchors a finding on a line
-// that the checked-out tree does not spell. Between anchor validation and
-// the capture boundary the reviewed bytes are the only witness that can
-// confirm the finding's evidence — so a divergence between what the answer
-// named and what the tree carries must refuse the run, never skip the
-// capture and publish a finding whose digest confirms nothing. The window
-// is real: the checkout can shrink under a run (a rebase, a forced push
-// re-checkout, a concurrent `git clean`), and validation saw the old bytes.
-// This fixture manufactures exactly that divergence — the scripted verdict
-// turn deletes the anchored file's lines synchronously, the one honest way
-// to move the tree between validation and capture — and pins the bounded
-// outcome end to end: `reviewPullRequest` throws the typed deterministic
-// refusal naming file and line, and nothing is written — the comment that
-// would have carried the unconfirmed finding never lands. The run ends
-// refused per the failure taxonomy; a refused capture refuses the finding's
-// evidence, and a finding without a digest is not confirmed by anything.
+// the checked-out tree does not spell — or the tree moves under the run
+// after validation saw the old bytes (a rebase, a forced push re-checkout,
+// a concurrent `git clean`). Since #479 the capture rides the span gate,
+// synchronously after anchor validation and behind a one-read-per-anchor
+// memo: validation and capture read the same bytes, so a finding the tree
+// cannot spell is rejected upstream, and a tree that shrinks mid-run can
+// no longer graft its movement onto the record. What this fixture pins is
+// the containment that replaced the old mid-run red refusal: the verdict
+// turn moves the tree, and the published finding still carries the digest
+// of the bytes the gate held — evidence bound by code before any verdict
+// could move the tree, never by the model's claim. A finding without a
+// digest is not confirmed by anything; a digest of gate-held bytes is
+// confirmed by the checkout exactly as it was read.
+//
+// The red refusal itself stays law for anchors no read can honour; its
+// reachable matrix — absent path, binary, empty, out-of-range — is pinned
+// in review/src/capture.test.mjs.
 //
 // Deterministic and offline: a temp workspace, a scripted model, a
 // recording forge.
@@ -27,7 +29,6 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
 import { reviewPullRequest } from "../../../review/src/run.mjs";
-import { DeterministicRefusalError } from "../../../review/src/refusal.mjs";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -124,12 +125,10 @@ function forgeStub() {
   };
 }
 
-describe("the capture boundary refuses a finding the tree does not spell", () => {
-  it("a checkout that shrinks under the run refuses it red — naming file and line, writing nothing", async () => {
+describe("the capture boundary holds the bytes the span gate read", () => {
+  it("a checkout that shrinks under the run publishes the gate-held bytes — never the moved tree", async () => {
     const workspace = makeWorkspace();
     const forge = forgeStub();
-    /** @type {string[][]} */
-    const turns = [];
     let turn = 0;
     const chat = {
       async complete() {
@@ -149,10 +148,10 @@ describe("the capture boundary refuses a finding the tree does not spell", () =>
             finishReason: "stop",
           };
         }
-        // The verdict turn moves the tree: by the time the run reaches the
-        // capture boundary, the anchor the answer named no longer exists.
+        // The verdict turn moves the tree — after the span gate has
+        // already held the anchor's bytes (#479): the capture is one
+        // bounded read per anchor, taken synchronously with validation.
         writeFileSync(join(workspace, "src", "a.mjs"), "line1\n");
-        turns.push([]);
         return {
           content: '{"verdict":"confirmed","kind":"correctness","reason":"the guard is real"}',
           toolCalls: [],
@@ -160,26 +159,20 @@ describe("the capture boundary refuses a finding the tree does not spell", () =>
         };
       },
     };
-    await assert.rejects(
-      reviewPullRequest({
-        inputs: INPUTS,
-        context: CONTEXT,
-        pullRequestNumber: 7,
-        eventName: "pull_request",
-        event: EVENT,
-        io: { forge, chat, now: () => 0, info: () => undefined },
-      }),
-      (error) => {
-        assert.ok(error instanceof DeterministicRefusalError);
-        // The refusal names the anchor — file and line — never a paraphrase.
-        assert.match(
-          /** @type {Error} */ (error).message,
-          /capture refused for src\/a\.mjs:2 — the reviewed file carries 1 line/,
-        );
-        return true;
-      },
-    );
-    // The unconfirmed finding never reached a surface: no comment stands.
-    assert.deepEqual(forge.calls.upserts, []);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: () => undefined },
+    });
+    // The record carries the gate's capture, not the moved tree: the
+    // subject is the line exactly as the gate read it, digest-bound.
+    assert.equal(result.outcome, "published");
+    assert.equal(result.canonical?.run.state, "published");
+    assert.deepEqual(result.canonical?.findings[0]?.subject, "line2");
+    // The comment stands — the containment is evidence binding, not silence.
+    assert.equal(forge.calls.upserts.length, 1);
   });
 });

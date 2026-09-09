@@ -41,6 +41,7 @@ export const MESSAGE_CHARS = 1000;
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the deterministic read-coverage report; rendered as a count line when the expected set is non-empty
  * @property {number} [quarantinedCount] findings withheld as unanchored before publication — rendered when nothing published, so a withheld review never reads as clean
  * @property {number} [withheldUnspannedCount] findings withheld because their anchor line carries no span to certify — rendered beside the unanchored count when nothing published, under the same never-a-clean-bill law
+ * @property {number} [withheldUnmatchedCount] findings withheld because their message's quoted evidence appears nowhere within the anchor window — rendered beside the other withheld counts when nothing published, under the same law
  * @property {import("#core/policy.mjs").PolicySource} [policySource] the resolved policy source — the comment's provenance line, so the verdict names the branch and commit that governed it
  * @property {readonly import("./reconcile.mjs").ReconciledFinding[]} [resolvedFindings] the previous run's findings this run retired — present only when the previous published record was recovered, which turns on the cross-run labels, the count line and the resolved section
  */
@@ -59,6 +60,7 @@ export function renderComment({
   coverage,
   quarantinedCount,
   withheldUnspannedCount,
+  withheldUnmatchedCount,
   policySource,
   resolvedFindings,
 }) {
@@ -112,34 +114,41 @@ export function renderComment({
   if (findings.length === 0 && status === "Complete") {
     // A clean re-review must clear whatever an earlier push left behind.
     // "No findings." is for none at all: findings the run withheld — as
-    // unanchored, or as anchored on a line that certifies no span — are
-    // counted, never flattened into a clean bill.
+    // unanchored, as anchored on a line that certifies no span, or as
+    // quoting evidence its anchor window does not carry — are counted,
+    // never flattened into a clean bill.
     const unanchored = quarantinedCount ?? 0;
     const unspanned = withheldUnspannedCount ?? 0;
-    if (unanchored > 0 && unspanned > 0) {
-      const oneA = unanchored === 1;
-      const oneB = unspanned === 1;
-      lines.push(
-        "",
-        `No published findings — ${String(unanchored)} ${oneA ? "finding" : "findings"} withheld: ` +
-          `no recorded read reaches ${oneA ? "its" : "their"} anchor line${oneA ? "" : "s"}; ` +
-          `${String(unspanned)} more withheld: ` +
-          `${oneB ? "its" : "their"} anchor line${oneB ? "" : "s"} ${oneB ? "carries" : "carry"} no span to certify.`,
-      );
-    } else if (unanchored > 0) {
-      const one = unanchored === 1;
-      lines.push(
-        "",
-        `No published findings — ${String(unanchored)} ${one ? "finding" : "findings"} withheld: ` +
-          `no recorded read reaches ${one ? "its" : "their"} anchor line${one ? "" : "s"}.`,
-      );
-    } else if (unspanned > 0) {
-      const one = unspanned === 1;
-      lines.push(
-        "",
-        `No published findings — ${String(unspanned)} ${one ? "finding" : "findings"} withheld: ` +
-          `${one ? "its" : "their"} anchor line${one ? "" : "s"} ${one ? "carries" : "carry"} no span to certify.`,
-      );
+    const unmatched = withheldUnmatchedCount ?? 0;
+    /** @type {Array<[number, (one: boolean) => string]>} */
+    const kinds = [
+      [
+        unanchored,
+        (one) => `no recorded read reaches ${one ? "its" : "their"} anchor line${one ? "" : "s"}`,
+      ],
+      [
+        unspanned,
+        (one) =>
+          `${one ? "its" : "their"} anchor line${one ? "" : "s"} ${one ? "carries" : "carry"} no span to certify`,
+      ],
+      [
+        unmatched,
+        (one) => `${one ? "its" : "their"} quoted evidence is absent from the anchor window`,
+      ],
+    ];
+    /** @type {string[]} */
+    const clauses = [];
+    for (const [count, reason] of kinds) {
+      if (count === 0) continue;
+      const one = count === 1;
+      const lead =
+        clauses.length === 0
+          ? `${String(count)} ${one ? "finding" : "findings"} withheld: `
+          : `${String(count)} more withheld: `;
+      clauses.push(`${lead}${reason(one)}`);
+    }
+    if (clauses.length > 0) {
+      lines.push("", `No published findings — ${clauses.join("; ")}.`);
     } else {
       lines.push("", "No findings.");
     }

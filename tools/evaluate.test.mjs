@@ -560,11 +560,13 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
   );
   assert.equal(harmoniseRefusal.threshold, "unbounded (reported)");
   assert.equal(harmoniseRefusal.met, true);
-  // The #479 dogfood FP fixtures (review-wrong-anchor-nit, review-false-import-fp,
-  // review-false-count-fp) each publish one wrong finding: 6 tp / 3 fp / 4 tn.
+  // The #479 dogfood FP fixtures (review-wrong-anchor-nit, review-false-import-fp)
+  // carry the verbatim dogfood texts, so the quoted-evidence span gate withholds
+  // their wrong findings before publication: 6 tp / 1 fp / 4 tn (only
+  // review-false-count-fp still publishes a wrong finding — no quoted span, by design).
   for (const [name, wanted] of [
-    ["review precision", 2 / 3],
-    ["review false-positive-rate", 3 / 7],
+    ["review precision", 6 / 7],
+    ["review false-positive-rate", 1 / 5],
     ["review severity-agreement", 1],
     ["review verifier-agreement", 0.6],
     ["review verification-accuracy", 1],

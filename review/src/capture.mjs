@@ -24,7 +24,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
 import { contentDigest } from "./digest.mjs";
-import { EVIDENCE_EXCERPT_CHARS } from "./verify.mjs";
+import { EVIDENCE_EXCERPT_CHARS, EXCERPT_CONTEXT_LINES } from "./verify.mjs";
 import { BINARY_SNIFF_BYTES, MAX_READ_BYTES } from "./tools.mjs";
 
 /** @typedef {import("#core/workspace.mjs").Workspace} Workspace */
@@ -40,7 +40,112 @@ export class CaptureRefusal extends Error {}
  * @property {string} subject the anchor line exactly as the reviewed bytes carry it — the canonical tuple's span input, normalised downstream
  * @property {string} digest sha256 (lowercase hex) over the anchor line's UTF-8 bytes, restatable by whoever re-reads the same path at the recorded head
  * @property {string} excerpt the anchor line through the sanitiser, capped at the evidence-retention ceiling — the canonical finding's evidence excerpt
+ * @property {string | null} window the anchor's window — the anchor line plus `EXCERPT_CONTEXT_LINES` on each side, CR-folded, joined with "\n" — the bytes the run's span gate matches the finding's quoted evidence against
  */
+
+/**
+ * The quoted spans one finding's message carries — backtick-quoted,
+ * single-quoted and double-quoted substrings, in message order, scanned
+ * left to right with each span ending at its own next quote. A single
+ * quote is an evidence delimiter only at a word boundary: it opens where
+ * the preceding character is not a word character and closes where the
+ * following one is not — the apostrophe inside a contraction or a
+ * possessive is text, never a delimiter. An empty quoted span is not
+ * evidence and is dropped. The message is the model's claim — untrusted
+ * data this only reads: nothing in it can widen what counts as a span.
+ * Pure.
+ *
+ * @param {string} message the finding's message, exactly as validated
+ * @returns {string[]} the non-empty quoted spans, in message order
+ */
+export function extractQuotedSpans(message) {
+  /** @type {string[]} */
+  const spans = [];
+  for (const match of message.matchAll(/`([^`]*)`|(?<!\w)'([^']*)'(?!\w)|"([^"]*)"/g)) {
+    const span = match[1] ?? match[2] ?? match[3] ?? "";
+    if (span !== "") spans.push(span);
+  }
+  return spans;
+}
+
+/**
+ * The window around one anchor: the anchor line plus `EXCERPT_CONTEXT_LINES`
+ * on each side, clamped to the file, each line folded the way the capture
+ * folds its subject (a trailing CR is a checkout artifact, not content).
+ * `null` when the content ends before the anchor — bytes that do not exist
+ * window nothing. Pure.
+ *
+ * @param {string} content the reviewed bytes, exactly as the bounded read returned them
+ * @param {number} line the finding's 1-based anchor line
+ * @returns {string | null}
+ */
+export function anchorWindow(content, line) {
+  const lines = content.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  if (!Number.isInteger(line) || line < 1 || line > lines.length) return null;
+  const start = Math.max(1, line - EXCERPT_CONTEXT_LINES);
+  const end = Math.min(lines.length, line + EXCERPT_CONTEXT_LINES);
+  return lines
+    .slice(start - 1, end)
+    .map((text) => text.replace(/\r$/, ""))
+    .join("\n");
+}
+/**
+ * Whether one character is a word character; the empty string is an edge.
+ *
+ * @param {string | undefined} text the character to judge, "" for the window's edge
+ * @returns {boolean}
+ */
+function isWordChar(text) {
+  return text !== undefined && text !== "" && /\w/.test(text);
+}
+
+/**
+ * Whether `span` occurs in `window` at word boundaries: the characters
+ * flanking a match must be non-word characters or the window's edge —
+ * `run` does not occur in `runTime`, `line1` not in `line10`, `run` in
+ * `(run)`. Scanned with `indexOf` — no pattern is ever built from the
+ * message's text. Pure.
+ *
+ * @param {string} window the anchor's window text
+ * @param {string} span one quoted span
+ * @returns {boolean}
+ */
+function spanAtWordBoundaries(window, span) {
+  let at = window.indexOf(span);
+  while (at !== -1) {
+    const after = at + span.length;
+    if (
+      !isWordChar(at === 0 ? "" : window[at - 1]) &&
+      !isWordChar(after === window.length ? "" : window[after])
+    ) {
+      return true;
+    }
+    at = window.indexOf(span, at + 1);
+  }
+  return false;
+}
+
+/**
+ * The span gate's predicate: does the finding's quoted evidence reach its
+ * anchor window? A message that quotes nothing passes vacuously — no
+ * quoted evidence, no deterministic opinion. Otherwise at least one quoted
+ * span must appear in the window, the anchor line included —
+ * case-sensitive, at word boundaries: the characters flanking a match are
+ * non-word or the window's edge; multiple quoted spans need only one hit.
+ * A `null` window fails closed: quoted evidence demanded with no window to
+ * show is quoted evidence absent. Pure.
+ *
+ * @param {string} message the finding's message
+ * @param {string | null} window the anchor's window, from `anchorWindow`
+ * @returns {boolean} whether the message's quoted evidence certifies the anchor's window
+ */
+export function quotedEvidenceInWindow(message, window) {
+  const spans = extractQuotedSpans(message);
+  if (spans.length === 0) return true;
+  if (window === null) return false;
+  return spans.some((span) => spanAtWordBoundaries(window, span));
+}
 
 /**
  * Captures one finding's anchor from the working tree: reads the reviewed
@@ -98,6 +203,7 @@ export function captureFindingEvidence({ workspace, file, line }) {
     subject,
     digest: contentDigest(subject),
     excerpt: sanitiseCommentText(subject, { maxChars: EVIDENCE_EXCERPT_CHARS }).text,
+    window: anchorWindow(content, line),
   };
 }
 
