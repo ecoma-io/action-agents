@@ -447,16 +447,19 @@ The file name states the outcome before it is opened:
 `review-artifact-<head>.json` (published), `-abandoned-`, `-dry-run-`,
 `-skip-`, `-refused-<head>`, `-failed-<head>`; a run that died before
 resolving a head writes `no-head` in the sha's place. Fields to watch: the
-verdict (`pass` / `fail` / `unknown`); the declared gates' outcomes —
+declared gates' outcomes —
 conclusion, bound, coverage, provenance, verification, each recorded, a
 missing fact a typed refusal; the coverage ledger (examined files vs changed
 files); `applicability`'s execution context once a policy file exists.
 A dry run writes the reduced `-dry-run-` artifact — `{schemaVersion,
 repository, pullRequest, headRef, outcome}` (plus `applicability` once a
-policy file exists) — nothing more, so the verdict, the gates' outcomes and
-the coverage ledger appear in no dry-run record: during a dry run that
-evidence lives in the run log, which carries the comment the run would have
-published.
+policy file exists) — nothing more: the gates' outcomes and the coverage
+ledger appear in no dry-run record, and during a dry run that evidence
+lives in the run log, which carries the comment the run would have
+published. The verdict (`pass` / `fail` / `unknown`) is no artifact field
+in any shape — it rides the published comment's embedded record, derived
+from `gates` + `coverage` by the code's law (`mayPublish &&
+coverageComplete`).
 
 - **Healthy**: published comments whose verdicts are `pass` or an honest
   `fail` with the bound named (`max-turns reached`, partial coverage);
