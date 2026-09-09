@@ -447,10 +447,19 @@ The file name states the outcome before it is opened:
 `review-artifact-<head>.json` (published), `-abandoned-`, `-dry-run-`,
 `-skip-`, `-refused-<head>`, `-failed-<head>`; a run that died before
 resolving a head writes `no-head` in the sha's place. Fields to watch: the
-verdict (`pass` / `fail` / `unknown`); the declared gates' outcomes —
+declared gates' outcomes —
 conclusion, bound, coverage, provenance, verification, each recorded, a
 missing fact a typed refusal; the coverage ledger (examined files vs changed
 files); `applicability`'s execution context once a policy file exists.
+A dry run writes the reduced `-dry-run-` artifact — `{schemaVersion,
+repository, pullRequest, headRef, outcome}` (plus `applicability` once a
+policy file exists) — nothing more: the gates' outcomes and the coverage
+ledger appear in no dry-run record, and during a dry run that evidence
+lives in the run log, which carries the comment the run would have
+published. The verdict (`pass` / `fail` / `unknown`) is no artifact field
+in any shape — it rides the published comment's embedded record, derived
+from `gates` + `coverage` by the code's law (`mayPublish &&
+coverageComplete`).
 
 - **Healthy**: published comments whose verdicts are `pass` or an honest
   `fail` with the bound named (`max-turns reached`, partial coverage);
@@ -546,12 +555,12 @@ blocker, and the contract refuses it before that can happen.
 
 ### `review`, per target (loom and archkeep)
 
-| Counter                                     | Continue                                                                | Pause and fix                                                                                             | Roll back | Evidence                                                 |
-| ------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------- | -------------------------------------------------------- |
-| Budget-cut publishes (`fail` + bound named) | ≤ 20% of live published runs                                            | > 20% — raise `max-turns` / `context-window`, or add `ignore`, then re-judge                              | —         | artifacts: verdict field + the bound named in the record |
-| Capacity refusals                           | ≤ 20% of live runs                                                      | > 20% — add `ignore` entries or raise `maxDiffLines` as a measured capacity decision                      | —         | artifacts named `-refused-`, reason class                |
-| Finding acceptance                          | ≥ 30% of confirmed findings accepted (fixed or filed) by the maintainer | sustained < 30% across the window — the rubric is noise: drop `strictness`, or stop review on this target | —         | comment threads, maintainer dispositions                 |
-| Verdict mix (recorded)                      | trend recorded weekly, no threshold                                     | —                                                                                                         | —         | artifacts, counted weekly                                |
+| Counter                                     | Continue                                                                | Pause and fix                                                                                             | Roll back | Evidence                                                                                                                                  |
+| ------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Budget-cut publishes (`fail` + bound named) | ≤ 20% of live published runs                                            | > 20% — raise `max-turns` / `context-window`, or add `ignore`, then re-judge                              | —         | artifacts: `gates` + `coverage` — no `verdict` field, the verdict derives from them per the law; the bound in the failing gate's `reason` |
+| Capacity refusals                           | ≤ 20% of live runs                                                      | > 20% — add `ignore` entries or raise `maxDiffLines` as a measured capacity decision                      | —         | artifacts named `-refused-`, reason class                                                                                                 |
+| Finding acceptance                          | ≥ 30% of confirmed findings accepted (fixed or filed) by the maintainer | sustained < 30% across the window — the rubric is noise: drop `strictness`, or stop review on this target | —         | comment threads, maintainer dispositions                                                                                                  |
+| Verdict mix (recorded)                      | trend recorded weekly, no threshold                                     | —                                                                                                         | —         | artifacts, counted weekly                                                                                                                 |
 
 ### `harmonise` — self-hosted baseline, weekly
 
