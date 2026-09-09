@@ -704,6 +704,36 @@ describe("failure posture", () => {
     expect(forge.calls.upserts).toHaveLength(0);
   });
 
+  it("drops an anchor past the file's last line individually — logged, never fatal", async () => {
+    const forge = forgeStub();
+    /** @type {string[]} */
+    const logged = [];
+    const bad = chatStub(
+      '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":999,' +
+        '"message":"off-by-one"}],"summary":"past the end"}',
+    );
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat: bad, now: () => 0, info: (m) => logged.push(m) },
+    });
+    // The answer contract's own law: an invalid finding drops individually,
+    // named in the log with the line that does not exist — the run itself
+    // survives and publishes the empty surviving set. No refusal: the
+    // capture boundary never even sees an anchor validation has rejected.
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings).toEqual([]);
+    expect(
+      logged.some(
+        (line) => line.includes("finding rejected") && line.includes("line 999 does not exist"),
+      ),
+    ).toBe(true);
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
   it("fails red when the prompt cannot fit half the window", async () => {
     const forge = forgeStub({
       files: Array.from({ length: 30 }, (_, i) => ({
