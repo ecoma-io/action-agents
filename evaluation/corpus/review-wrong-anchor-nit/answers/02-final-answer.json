@@ -1,5 +1,5 @@
 {
-  "content": "{\"findings\":[{\"severity\":\"nit\",\"file\":\"src/build.mjs\",\"line\":11,\"message\":\"// CLI entry appears twice — this comment header is duplicated elsewhere in the file\",\"kind\":\"style\"}],\"summary\":\"Reviewed 1 changed file; flagged a duplicated comment header.\"}",
+  "content": "{\"findings\": [{\"severity\": \"nit\", \"file\": \"src/build.mjs\", \"line\": 11, \"message\": \"duplicate `// CLI entry` header comments — this file repeats the header; consolidate to one\", \"kind\": \"style\"}], \"summary\": \"Reviewed 1 changed file; flagged a duplicated comment header.\"}",
   "toolCalls": [],
   "finishReason": "stop"
 }

@@ -6,7 +6,7 @@
       "line": 7,
       "severity": "nit",
       "valid": true,
-      "note": "the first // CLI entry header at line 7; the duplicate is at line 13 — the correct anchor pair"
+      "note": "the first // CLI entry header at line 7; the duplicate is at line 19 — the correct anchor pair"
     },
     {
       "file": "src/build.mjs",
