@@ -107,8 +107,9 @@ behavior the 0.22.0 pin added (the fix for upstream issue #595; at 0.21.0 the
 same tree passed silently, which is why the canary existed in the visibility
 form it kept until this pin).
 
-**`coverage.complete`.** True only when nothing went unanalyzed, no blind
-spots remain, and something was analyzed. A green run with
+**`coverage.complete`.** True only when everything that went unanalyzed is an
+explicitly declared dynamic blind spot — the declared limit below — and
+something was analyzed. A green run with
 `complete: false` is impossible at this pin — incompleteness refuses the
 verdict rather than decorating the green.
 
