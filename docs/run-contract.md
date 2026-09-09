@@ -243,7 +243,10 @@ windows that remain are named, not implied away:
    is the remaining full-run window.
 4. **Cancellation** — `cancel-in-progress` kills a run at an arbitrary
    operation boundary; the re-run re-derives from live state, never replays
-   the plan (the F-13 rule).
+   the plan (the F-13 rule). The event gate joins the discipline: a skip
+   premised on the payload's label claim is arbitrated against the live
+   thread before it is written, so a marker applied in the delivery window
+   re-derives a re-triage instead of stranding the thread.
 
 Records carry the subject head so a stale record is detectable instead of
 authoritative, and every shape that carries a policy section — review's full

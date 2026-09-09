@@ -381,6 +381,13 @@ the model would classify. `unlabeled` always skips: removing a label changes
 no content evidence, and removing the queue marker is a human dequeue triage
 respects rather than rewrites.
 
+The skip's "not queued" premise comes from the event payload's label list, a
+claim rather than a read. When the changed label is a classification one in a
+marker-configured repository, the gate arbitrates the claim against the live
+thread: a marker applied between the event's delivery and the gate — the race
+where a template's `opened` run is cancelled by its `labeled` sibling — still
+completes the queue lifecycle instead of stranding the thread.
+
 An event that is not on the matrix is re-triaged, never silently skipped — a
 payload this action was not built for is not classified as a no-op. To run
 only on the events that matter, list them in your workflow's `on:` block; the
