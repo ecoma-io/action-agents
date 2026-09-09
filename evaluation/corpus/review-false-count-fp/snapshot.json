@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": ""
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "opened",
+    "payload": {
+      "action": "opened",
+      "pull_request": {
+        "number": 9203,
+        "base": {
+          "ref": "main",
+          "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 9203,
+    "title": "chore: verify composition conformance of packages",
+    "body": "Extends the composition conformance test suite. Synthetic description modelled on loom PR 285.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": null,
+      ".github/action-agents/review/instruction.md": null
+    }
+  },
+  "headFiles": {
+    "src/check-conformance.test.ts": "import { describe, it } from \"vitest\";\nimport { strict as assert } from \"node:assert\";\n\nconst CASES = [\n  [\"alpha\", 1],\n  [\"bravo\", 2],\n  [\"charlie\", 3],\n  [\"delta\", 4],\n  [\"echo\", 5],\n];\n\ndescribe(\"composition conformance\", () => {\n  it(\"every package has a manifest\", () => {\n    for (const [name] of CASES) {\n      assert.ok(name);\n    }\n  });\n  it(\"every manifest is valid JSON\", () => {\n    for (const [, id] of CASES) {\n      assert.ok(id > 0);\n    }\n  });\n  it(\"no duplicate package names\", () => {\n    const names = CASES.map(([n]) => n);\n    assert.equal(new Set(names).size, names.length);\n  });\n  it(\"all required fields present\", () => {\n    for (const [name, id] of CASES) {\n      assert.ok(typeof name === \"string\");\n      assert.ok(typeof id === \"number\");\n    }\n  });\n});"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": {
+      "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a"
+    },
+    "getPullRequest": {
+      "number": 9203,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "chore: verify composition conformance of packages",
+      "body": "Extends the composition conformance test suite. Synthetic description modelled on loom PR 285.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "feat/synthetic-9203",
+        "sha": "c3d4e5f60718293a4b5c6d7e8f90123456789012"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+      }
+    },
+    "listPullRequestFiles": [
+      {
+        "filename": "src/check-conformance.test.ts",
+        "status": "added",
+        "additions": 38,
+        "deletions": 0,
+        "patch": "@@ -0,0 +1,38 @@\n+import { describe, it } from \"vitest\";\n+import { strict as assert } from \"node:assert\";\n+\n+const CASES = [\n+  [\"alpha\", 1],\n+  [\"bravo\", 2],\n+  [\"charlie\", 3],\n+  [\"delta\", 4],\n+  [\"echo\", 5],\n+];\n+\n+describe(\"composition conformance\", () => {\n+  it(\"every package has a manifest\", () => {\n+    for (const [name] of CASES) {\n+      assert.ok(name);\n+    }\n+  });\n+  it(\"every manifest is valid JSON\", () => {\n+    for (const [, id] of CASES) {\n+      assert.ok(id > 0);\n+    }\n+  });\n+  it(\"no duplicate package names\", () => {\n+    const names = CASES.map(([n]) => n);\n+    assert.equal(new Set(names).size, names.length);\n+  });\n+  it(\"all required fields present\", () => {\n+    for (const [name, id] of CASES) {\n+      assert.ok(typeof name === \"string\");\n+      assert.ok(typeof id === \"number\");\n+    }\n+  });\n+});"
+      }
+    ],
+    "listComments": [],
+    "whoami": {
+      "login": "github-actions[bot]"
+    }
+  }
+}

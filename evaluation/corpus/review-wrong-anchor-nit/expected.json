@@ -1,0 +1,20 @@
+{
+  "outcome": "published",
+  "findings": [
+    {
+      "file": "src/build.mjs",
+      "line": 7,
+      "severity": "nit",
+      "valid": true,
+      "note": "the first // CLI entry header at line 7; the duplicate is at line 13 — the correct anchor pair"
+    },
+    {
+      "file": "src/build.mjs",
+      "line": 4,
+      "severity": "nit",
+      "valid": false,
+      "note": "the normalise function body carries no style defect; a finding here would be invented"
+    }
+  ],
+  "verdicts": {}
+}

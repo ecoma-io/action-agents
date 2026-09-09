@@ -1,0 +1,5 @@
+{
+  "content": "{\"findings\":[{\"severity\":\"nit\",\"file\":\"src/check-conformance.test.ts\",\"line\":14,\"message\":\"the ledger at docs/ledger.md lists 28 gate fixtures but the checked-in suite has only 4 it() cases — the fixture count differs from the ledger claim\",\"kind\":\"correctness\"}],\"summary\":\"Reviewed 1 changed file; flagged a fixture-count mismatch against the ledger.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

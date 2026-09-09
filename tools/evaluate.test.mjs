@@ -547,8 +547,8 @@ test("loadCorpus refuses malformed JSON", async () => {
 test("evaluate replays the real corpus and clears every loose threshold", async () => {
   const result = await evaluate({ corpusRoot: CORPUS_ROOT });
   assert.deepEqual(result.defects, []);
-  assert.deepEqual(result.corpusCounts, { triage: 6, review: 4, harmonise: 3 });
-  assert.deepEqual(result.replayed, { triage: 6, review: 4, harmonise: 3 });
+  assert.deepEqual(result.corpusCounts, { triage: 6, review: 7, harmonise: 3 });
+  assert.deepEqual(result.replayed, { triage: 6, review: 7, harmonise: 3 });
   const byMetric = new Map(result.rows.map((row) => [row.metric, row]));
   const refusal = byMetric.get("triage refusal-rate");
   assert.ok(refusal && refusal.value !== null && Math.abs(refusal.value - 3 / 5) < 1e-12);
@@ -560,9 +560,11 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
   );
   assert.equal(harmoniseRefusal.threshold, "unbounded (reported)");
   assert.equal(harmoniseRefusal.met, true);
+  // The #479 dogfood FP fixtures (review-wrong-anchor-nit, review-false-import-fp,
+  // review-false-count-fp) each publish one wrong finding: 6 tp / 3 fp / 4 tn.
   for (const [name, wanted] of [
-    ["review precision", 1],
-    ["review false-positive-rate", 0],
+    ["review precision", 2 / 3],
+    ["review false-positive-rate", 3 / 7],
     ["review severity-agreement", 1],
     ["review verifier-agreement", 0.6],
     ["review verification-accuracy", 1],
@@ -579,7 +581,7 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
     "harmonise.createTree": 2,
     "harmonise.upsertBranch": 2,
     "harmonise.upsertPullRequest": 2,
-    "review.createComment": 2,
+    "review.createComment": 5,
     "triage.addLabels": 3,
   });
   assert.equal(result.ok, true);

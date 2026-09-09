@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": ""
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "opened",
+    "payload": {
+      "action": "opened",
+      "pull_request": {
+        "number": 9202,
+        "base": {
+          "ref": "main",
+          "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 9202,
+    "title": "chore: verify composition conformance of packages",
+    "body": "Adds a test that checks package composition rules. Synthetic description modelled on loom PR 285.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": null,
+      ".github/action-agents/review/instruction.md": null
+    }
+  },
+  "headFiles": {
+    "src/check-conformance.test.ts": "import { describe, it } from \"vitest\";\nimport { strict as assert } from \"node:assert\";\nimport { readFileSync } from \"node:fs\";\nimport { join } from \"node:path\";\n\nfunction loadManifest(fixture) {\n  const raw = readFileSync(join(import.meta.dirname, fixture));\n  return JSON.parse(raw);\n}\n\ndescribe(\"composition conformance\", () => {\n  it(\"every package has a manifest\", () => {\n    const pkg = loadManifest(\"./fixture.json\");\n    assert.ok(pkg.name);\n  });\n});"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": {
+      "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a"
+    },
+    "getPullRequest": {
+      "number": 9202,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "chore: verify composition conformance of packages",
+      "body": "Adds a test that checks package composition rules. Synthetic description modelled on loom PR 285.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "feat/synthetic-9202",
+        "sha": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0f9e8d7c6b5a4938271605948372615049382716"
+      }
+    },
+    "listPullRequestFiles": [
+      {
+        "filename": "src/check-conformance.test.ts",
+        "status": "added",
+        "additions": 19,
+        "deletions": 0,
+        "patch": "@@ -0,0 +1,19 @@\n+import { describe, it } from \"vitest\";\n+import { strict as assert } from \"node:assert\";\n+import { readFileSync } from \"node:fs\";\n+import { join } from \"node:path\";\n+\n+function loadManifest(fixture) {\n+  const raw = readFileSync(join(import.meta.dirname, fixture));\n+  return JSON.parse(raw);\n+}\n+\n+describe(\"composition conformance\", () => {\n+  it(\"every package has a manifest\", () => {\n+    const pkg = loadManifest(\"./fixture.json\");\n+    assert.ok(pkg.name);\n+  });\n+});"
+      }
+    ],
+    "listComments": [],
+    "whoami": {
+      "login": "github-actions[bot]"
+    }
+  }
+}
