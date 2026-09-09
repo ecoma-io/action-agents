@@ -328,7 +328,16 @@ give the shape its authority:
   rendered in the same withheld sentence, never part of the canonical
   result, never run-fatal, and no model call spent on it — at every
   severity, anchor-scoped; a message that quotes nothing passes
-  vacuously, there being no quoted evidence to judge. And
+  vacuously, there being no quoted evidence to judge. Quotes are read at
+  word boundaries, on both ends and twice over: a quote mark flanked by
+  word characters is an apostrophe in a word, not an evidence delimiter,
+  and a quoted span counts as present only where the characters flanking
+  the match are non-word or the window's edge — `run` does not certify
+  `runTime`, `line1` does not certify `line10`. The gate stays a
+  best-effort precision filter against the honest wrong-anchor class,
+  not an adversarial one, and its residual is named: a finding that
+  quotes a word-boundary token genuinely present near whatever anchor it
+  cites passes the gate. And
   the birth site that
   binds the record retypes a record its own shapes reject as a typed
   refusal (`refused`, the red error), never an undeclared crash: a terminal

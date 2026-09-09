@@ -181,6 +181,16 @@ describe("the quoted-span gate helpers", () => {
     expect(extractQuotedSpans("an `unclosed span never matches")).toEqual([]);
   });
 
+  it("reads a single quote as a delimiter only at word boundaries", () => {
+    // The apostrophe inside a contraction or a possessive is text, never
+    // an evidence delimiter.
+    expect(extractQuotedSpans("doesn't handle it and isn't")).toEqual([]);
+    // Genuine single-quoted code in prose still extracts.
+    expect(extractQuotedSpans("the 'guard' clause")).toEqual(["guard"]);
+    // Both in one message: the possessive stays text, the quote carries.
+    expect(extractQuotedSpans("file's 'quoted'")).toEqual(["quoted"]);
+  });
+
   it("cuts the anchor's window at three lines on each side, clamped to the file", () => {
     const content = Array.from({ length: 20 }, (_, i) => `line${String(i + 1)}`).join("\n");
     expect(anchorWindow(content, 10)).toBe("line7\nline8\nline9\nline10\nline11\nline12\nline13");
@@ -233,6 +243,17 @@ describe("the quoted-span gate helpers", () => {
     const window = anchorWindow("line1\nline2\nline3\n", 2);
     expect(quotedEvidenceInWindow("`line2` is missing", window)).toBe(true);
     expect(quotedEvidenceInWindow("`LINE2` is missing", window)).toBe(false);
+  });
+
+  it("matches a span only where its flanking characters are non-word or the edge", () => {
+    // A prefix-glued twin does not certify `run`, a suffix-glued one does
+    // not certify `line1`.
+    expect(quotedEvidenceInWindow("`run` is missing", "only runTime and runtime here")).toBe(false);
+    expect(quotedEvidenceInWindow("`line1` is missing", "the line10 decoy")).toBe(false);
+    // Punctuation-flanked and window-edge occurrences still certify.
+    expect(quotedEvidenceInWindow("`run` is missing", "call (run) now")).toBe(true);
+    expect(quotedEvidenceInWindow("`run` is missing", "run time")).toBe(true);
+    expect(quotedEvidenceInWindow("`run` is missing", "time run")).toBe(true);
   });
 
   it("binds the window the capture reads — clamped and CR-folded like the helpers cut it", () => {
