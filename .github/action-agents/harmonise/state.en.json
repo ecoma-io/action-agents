@@ -1,0 +1,14 @@
+{
+  "records": [
+    {
+      "destinationPath": "README.vi.md",
+      "language": "vi",
+      "policyFingerprint": "c261112af9aa38e025eb9a1f6904b46d5675ad357d919a51e6396c4acff816d2",
+      "schemaVersion": 1,
+      "sourceFingerprint": "f131fa6a2c24330cbf71066d913f4bdb1a53c9c1c47cb2a2e1fecf948c3e3237",
+      "sourcePath": "README.md",
+      "transformationVersion": 1,
+      "translationFingerprint": "af77750044ee7d72f265c6cd05a202c7a0c15a932235dd5fc09ace71d309b6d5"
+    }
+  ]
+}
