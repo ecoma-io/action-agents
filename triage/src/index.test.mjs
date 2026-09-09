@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { buildTriageRecord, REASON_CHARS, serialiseTriageRecord } from "./run-record.mjs";
 import { decisionWriteOps } from "./decision.mjs";
 import { reasonDigest } from "./verify.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 
 import { createEvidence } from "#core/untrusted.mjs";
 import { PartialMutationError } from "./mutate.mjs";
@@ -1832,6 +1833,35 @@ describe("run — the run record", () => {
     expect("decision" in record).toBe(false);
   });
 
+  it("absent default locations are policy-empty — the no-sheet run stays green, its only write the comment (F-02)", async () => {
+    // The policy-empty posture the run contract blesses (#472): no file at
+    // the default locations and no narrowing is no fault at all. The record
+    // carries the resolved policy pin even though no file was read at it,
+    // the decision is the comment kind, and no label write exists to make.
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ files: {}, answer: COMMENT_ANSWER });
+
+    await run(inputs(), readContext(runner), world);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("published");
+    expect(record.policy).toEqual({ basis: "default", branch: "main", sha: "0".repeat(40) });
+    expect(record.decision).toMatchObject({ kind: "comment", add: [], remove: [] });
+    expect(world.forge.writes.map((write) => write.op)).toEqual(["createComment"]);
+
+    // The dry run on the same policy-empty world writes nothing at all, and
+    // its skip record still carries the comment decision.
+    const dry = io({ files: {}, answer: COMMENT_ANSWER });
+
+    await run(inputs({ dryRun: true }), readContext(runner), dry);
+
+    expect(dry.forge.writes).toEqual([]);
+    const skip = readRecord("triage-record-issue-7.json");
+    expect(skip.outcome).toBe("skip");
+    expect(skip.dryRun).toBe(true);
+    expect(skip.decision).toMatchObject({ kind: "comment" });
+  });
+
   it("writes a failed record when the model call dies, and the original error still surfaces", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const world = io({ chatFailure: new Error("the provider's response body is not JSON") });
@@ -1985,11 +2015,12 @@ describe("run — the run record", () => {
  * Each test injects one fault and holds the pair of facts the run contract
  * binds: the terminal the step ends in, and the `outcome` word the record on
  * disk carries. The `refused` word's records are held by the opt-in
- * verification suite and the off-sheet tests above; the `skip` word by the
- * dry-run and event-gate suites. What was unpinned was the `failed` family's
- * own INPUT→RECORD pair, the event gate's record trip through the real
- * `main(env)`, and I15's byte-determinism across two whole runs — the facts
- * #463's correction comment proved in production and no test held whole.
+ * verification suite, the off-sheet tests above and the config-refusal pin
+ * below; the `skip` word by the dry-run and event-gate suites. What was
+ * unpinned was the `failed` family's own INPUT→RECORD pair, the event gate's
+ * record trip through the real `main(env)`, and I15's byte-determinism across
+ * two whole runs — the facts #463's correction comment proved in production
+ * and no test held whole.
  */
 describe("run — fault-injection pins: the record at the red terminals (#469)", () => {
   /** @param {string} name */
@@ -2110,26 +2141,48 @@ describe("run — fault-injection pins: the record at the red terminals (#469)",
     }
   });
 
-  it("a config that does not validate records failed — the catch's class, zero writes, no model call", async () => {
-    // Observable truth, held so any change must be explicit: the run
-    // contract's F-02 row names `refused` for triage's config-invalid arm,
-    // but the runtime puts a validation throw in run()'s catch, which writes
-    // `failed` — the same disposition docs/development/triage.md's failure
-    // posture describes ("a config that does not validate — the step goes
-    // red"). This pin holds today's word; if the contract or the code moves,
-    // this test is what flips with it.
+  it("a config that does not validate records refused — the typed startup refusal (F-02), zero writes, no model call", async () => {
+    // Resolved as #472 adjudicated it: a policy present but failing to
+    // validate is a deterministic startup refusal, not a defect — the
+    // validation wrap retypes it DeterministicRefusalError and the catch
+    // reads that class into the record's outcome word.
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const world = io({ files: { ".github/action-agents/triage/triage.json5": '{"nope": true}' } });
 
-    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
-      /unknown config key 'nope'/u,
-    );
+    const running = run(inputs(), readContext(runner), world);
+    await expect(running).rejects.toThrow(DeterministicRefusalError);
+    await expect(running).rejects.toThrow(/unknown config key 'nope'/u);
+
+    expect(world.forge.writes).toEqual([]);
+    expect(world.asks()).toHaveLength(0);
+    const record = readPinRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("refused");
+    expect(record.reason).toContain("unknown config key 'nope'");
+    expect("decision" in record).toBe(false);
+  });
+
+  it("a configured config-path pointing at an absent file records failed — the reader arm (F-02)", async () => {
+    // The reader arm stays failed: the reading call interleaves transport,
+    // so a blanket retype would mislabel a transport break as a policy
+    // refusal — the validation wrap's comment holds the reasoning. The
+    // policy source resolved, so the record pins it, and the run went red
+    // before any model call on a workflow bug: a path the branch lacks.
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ files: {} });
+
+    await expect(
+      run(inputs({ configPath: "policies/absent.json5" }), readContext(runner), world),
+    ).rejects.toThrow(/config-path names 'policies\/absent\.json5', which does not exist/u);
 
     expect(world.forge.writes).toEqual([]);
     expect(world.asks()).toHaveLength(0);
     const record = readPinRecord("triage-record-issue-7.json");
     expect(record.outcome).toBe("failed");
-    expect(record.reason).toContain("unknown config key 'nope'");
+    expect(record.policy).toEqual({ basis: "default", branch: "main", sha: "0".repeat(40) });
+    expect(record.reason).toBe(
+      `config-path names 'policies/absent.json5', which does not exist on branch 'main' at ` +
+        `${"0".repeat(40)} — the policy source resolved for this run`,
+    );
     expect("decision" in record).toBe(false);
   });
 });

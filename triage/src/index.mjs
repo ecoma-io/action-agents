@@ -81,6 +81,7 @@ import { assessIssueForm, loadIssueForms } from "./issue-forms.mjs";
 import { gatherEvidence } from "./evidence.mjs";
 import { assess } from "./assessment.mjs";
 import { decide } from "./policy.mjs";
+import { DeterministicRefusalError } from "./refusal.mjs";
 import { mutate, ThreadMovedError } from "./mutate.mjs";
 import { measureSize } from "./size.mjs";
 import { decideEvent, eventAuditLine, eventChangedLabel } from "./events.mjs";
@@ -249,14 +250,34 @@ export async function run(inputs, context, io) {
 
     // The config file is fetched once, pinned to the resolved source. A pull
     const loaded = await loadConfigFile({ forge: policy, configPath: inputs.configPath, source });
-    const migration = migrateConfig(loaded.raw);
+    /** @type {ReturnType<typeof migrateConfig>} */
+    let migration;
+    /** @type {ReturnType<typeof validateConfig>} */
+    let config;
+    try {
+      migration = migrateConfig(loaded.raw);
+      config = validateConfig(migration.raw);
+    } catch (cause) {
+      // migrateConfig and validateConfig are pure over the parsed file
+      // (config.mjs's contract): every throw reaching here is a startup
+      // refusal (F-02), so the boundary retypes it once instead of every
+      // raise site carrying the class. The reader faults that never reach
+      // this try — loadConfigFile above: a configured path that is absent, a
+      // policy declared twice, a foreign schema major — stay plain errors,
+      // recorded `failed`, not `refused`, a deliberate difference from
+      // harmonise's loader, which retypes its reader failures too (#347),
+      // because that reading call interleaves transport breaks a blanket
+      // retype would mislabel.
+      throw new DeterministicRefusalError(cause instanceof Error ? cause.message : String(cause), {
+        cause,
+      });
+    }
     if (migration.migrated) {
       warning(
         `the config file at '${loaded.path}' is schema 1 — migrated to the schema 2 labels.use policy; ` +
           `descriptions are now read from GitHub, and a top-level triageMarker becomes labels.workflowMarkers`,
       );
     }
-    const config = validateConfig(migration.raw);
     info(policySourceAuditLine({ eventName: context.eventName, source, path: loaded.path }));
     // The event gate (item 1 of #224): whether this event could have changed
     // triage-relevant evidence. A skip logs one audit line and stops before
@@ -578,13 +599,16 @@ export async function run(inputs, context, io) {
   } catch (cause) {
     // The failure record first, then the original error — never masked by
     // the record's own write failing. What lands here is a defect or an
-    // environment break; the ceilings' refusals are decided upstream, as a
-    // `refusals` entry or a skip, not thrown.
+    // environment break, recorded `failed`; the one exception is the typed
+    // class that arrives thrown: a policy present but failing to validate is
+    // a deterministic startup refusal (F-02), retyped at the validation wrap
+    // above, and it records `refused`.
+    const outcome = cause instanceof DeterministicRefusalError ? "refused" : "failed";
     try {
       writeRunRecord({
         workspace: context.workspace,
         directory: inputs.recordPath,
-        record: buildRecord("failed", writeReason(cause)),
+        record: buildRecord(outcome, writeReason(cause)),
       });
     } catch (recordCause) {
       warning(`triage: the run record was not written: ${writeReason(recordCause)}`);

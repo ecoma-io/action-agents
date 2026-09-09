@@ -130,12 +130,12 @@ The full mechanism is in the [configuration page](../development/configuration.m
 
 The file is JSON5 (comments, trailing commas, single quotes).
 
-| Key             | Required | What it does                                                                                                                                                                  |
-| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | no       | Absent is accepted (pre-versioning files keep working); `1` and `2` are readable — a schema-1 file is migrated on read with a warning; anything else is refused at startup.   |
-| `labels`        | no       | The policy block: `use` (the usable set), `roles` (what each label is for), `exclusive`, `workflowMarkers`, `triageOwned`, `priority`, `needsMoreInfo`, `routing`. See below. |
-| `size`          | no       | Size measurement from the diff: `exclude` (globs), `ladder` (rungs with `upTo` and `label`). The catch-all rung has no `upTo`.                                                |
-| `instructions`  | no       | Paths to instruction documents: `instruction` (both), `issue-instruction` (issues only), `pr-instruction` (pull requests only).                                               |
+| Key             | Required | What it does                                                                                                                                                                                                                         |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schemaVersion` | no       | Absent is accepted (pre-versioning files keep working); `1` and `2` are readable — a schema-1 file is migrated on read with a warning; anything else is a startup error — the run goes red before any model call, recorded `failed`. |
+| `labels`        | no       | The policy block: `use` (the usable set), `roles` (what each label is for), `exclusive`, `workflowMarkers`, `triageOwned`, `priority`, `needsMoreInfo`, `routing`. See below.                                                        |
+| `size`          | no       | Size measurement from the diff: `exclude` (globs), `ladder` (rungs with `upTo` and `label`). The catch-all rung has no `upTo`.                                                                                                       |
+| `instructions`  | no       | Paths to instruction documents: `instruction` (both), `issue-instruction` (issues only), `pr-instruction` (pull requests only).                                                                                                      |
 
 #### `labels` — a policy, not a registry
 
