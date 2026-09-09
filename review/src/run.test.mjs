@@ -27,7 +27,6 @@ import { findingIdentity } from "./answer.mjs";
 import { createCanonicalResult } from "./canonical.mjs";
 import { embedRecordBlock, parseRecordBlock } from "./record.mjs";
 import { toSarif } from "./sarif.mjs";
-import { DeterministicRefusalError } from "./refusal.mjs";
 import { VERIFIER_MAX_EVIDENCE_BYTES, VERIFIER_MAX_TOOL_CALLS } from "./verify.mjs";
 
 const HEAD = "a".repeat(40);
@@ -1500,7 +1499,7 @@ describe("adversarial verification pass", () => {
     expect(toSarif(/** @type {any} */ (result).canonical).runs[0]?.results ?? []).toEqual([]);
   });
 
-  it("a capture that cannot be honoured refuses the run RED — never skip-and-continue", async () => {
+  it("captures at the span gate — a checkout that shrinks during verification publishes the bytes the gate held", async () => {
     const forge = forgeStub();
     /** @type {import("#core/chat.mjs").ChatMessage[][]} */
     const calls = [];
@@ -1509,8 +1508,10 @@ describe("adversarial verification pass", () => {
       async complete() {
         calls.push([]);
         turn++;
-        // The checkout shrinks between anchor validation and the capture
-        // boundary — the window every real capture refusal rides in on.
+        // The checkout shrinks during the verification pass — after the
+        // span gate has already held the anchor's bytes. The capture
+        // boundary moved before verification (#479): the record carries
+        // the bytes the gate read, and the run is not refused.
         if (turn === 3) {
           writeFileSync(p.join(wsRoot, "src", "a.mjs"), "line1\n");
         }
@@ -1527,9 +1528,9 @@ describe("adversarial verification pass", () => {
         };
       },
     });
-    let thrown;
+    let result;
     try {
-      await reviewPullRequest({
+      result = await reviewPullRequest({
         inputs: INPUTS,
         context: CONTEXT,
         pullRequestNumber: 7,
@@ -1537,15 +1538,16 @@ describe("adversarial verification pass", () => {
         event: EVENT,
         io: { forge, chat, now: () => 0, info: () => undefined },
       });
-    } catch (cause) {
-      thrown = cause;
     } finally {
       writeFileSync(p.join(wsRoot, "src", "a.mjs"), A_CONTENT);
     }
-    expect(thrown).toBeInstanceOf(DeterministicRefusalError);
-    expect(/** @type {Error} */ (thrown).message).toBe(
-      "capture refused for src/a.mjs:2 — the reviewed file carries 1 line(s)",
-    );
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings[0]).toMatchObject({
+      file: "src/a.mjs",
+      line: 2,
+      subject: "line2",
+      lifecycle: "confirmed",
+    });
   });
 
   it("verifies only planned findings — a skim-lane nit at standard strategy never reaches a verdict call", async () => {
@@ -4391,5 +4393,120 @@ describe("the #411 withheld-span law", () => {
           line.includes("src/blank.mjs:2"),
       ),
     ).toBe(true);
+  });
+});
+
+describe("the quoted-evidence span gate (#479)", () => {
+  /** The dogfood shape, shrunk to a fixture: the anchor sits on a decoy
+   * line while the quoted evidence lives seventeen lines away — outside
+   * the anchor's three-line window on either side. */
+  const DUP_LINES = Array.from({ length: 20 }, (_, i) => `line${String(i + 1)}`);
+  DUP_LINES[2] = "record.jobs[jobName] = entry;";
+  DUP_LINES[16] = "// CLI entry";
+  const DUP_CONTENT = `${DUP_LINES.join("\n")}\n`;
+  const DUP_PATCH = `@@ -1 +1,20 @@\n${DUP_LINES.map((l) => `+${l}`).join("\n")}`;
+
+  it("withholds a finding whose quoted evidence is absent from its anchor window — before the plan spends a call", async () => {
+    writeFileSync(p.join(wsRoot, "src", "dup.mjs"), DUP_CONTENT);
+    const forge = forgeStub({
+      files: [
+        {
+          filename: "src/dup.mjs",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          patch: DUP_PATCH,
+        },
+      ],
+    });
+    /** @type {string[]} */
+    const logged = [];
+    let chatCalls = 0;
+    const script = [
+      {
+        content: "",
+        toolCalls: [
+          { id: "r1", name: "read_file", arguments: JSON.stringify({ path: "src/dup.mjs" }) },
+        ],
+      },
+      {
+        content:
+          '{"findings":[{"severity":"concern","kind":"style","file":"src/dup.mjs","line":3,' +
+          '"message":"duplicate `// CLI entry` header comments"}],"summary":"wrong anchor"}',
+      },
+    ];
+    const chat = {
+      async complete() {
+        chatCalls += 1;
+        const next = script[Math.min(chatCalls - 1, script.length - 1)];
+        if (next === undefined || chatCalls > script.length) throw new Error("script exhausted");
+        return {
+          content: next.content,
+          toolCalls: next.toolCalls ?? [],
+          finishReason: next.toolCalls !== undefined ? "tool_calls" : "stop",
+        };
+      },
+    };
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings).toEqual([]);
+    expect(result.canonical?.run).toEqual({
+      state: "published",
+      verdict: "pass",
+      publication: "created",
+    });
+    const body = forge.calls.upserts[0]?.body ?? "";
+    expect(body).toContain(
+      "No published findings — 1 finding withheld: its quoted evidence is absent from the anchor window.",
+    );
+    expect(
+      logged.some(
+        (line) =>
+          line.includes("finding withheld") &&
+          line.includes("absent from its anchor window") &&
+          line.includes("src/dup.mjs:3"),
+      ),
+    ).toBe(true);
+    // Two calls — read and answer. The concern was plannable, and the plan
+    // never saw it: the gate withheld it before verification spent a call.
+    expect(chatCalls).toBe(2);
+  });
+
+  it("publishes a finding whose quoted evidence the anchor window carries", async () => {
+    const forge = forgeStub();
+    /** @type {string[]} */
+    const logged = [];
+    const chat = readingChat([
+      {
+        content: "",
+        toolCalls: [
+          { id: "r1", name: "read_file", arguments: JSON.stringify({ path: "src/a.mjs" }) },
+        ],
+      },
+      {
+        content:
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,' +
+          '"message":"the guard `line2` is missing"}],"summary":"evidence in window"}',
+      },
+    ]);
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+    });
+    expect(result.outcome).toBe("published");
+    expect(result.canonical?.findings).toHaveLength(1);
+    expect(result.canonical?.findings[0]).toMatchObject({ file: "src/a.mjs", line: 2 });
+    expect(logged.some((line) => line.includes("absent from its anchor window"))).toBe(false);
   });
 });

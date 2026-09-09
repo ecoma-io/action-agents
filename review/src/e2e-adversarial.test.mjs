@@ -278,7 +278,7 @@ describe("adversarial: corrupted answer shapes", () => {
     expect(readdirSync(settled.temp)).toEqual(["github-output.txt", `review-sarif-${HEAD}.json`]);
   });
 
-  it("the entrypoint turns a mid-run capture refusal into a refused artifact and nothing else", async () => {
+  it("the entrypoint captures at the span gate — a tree that moves during verification publishes the bytes the gate held", async () => {
     const workspace = makeWorkspace({ "src/a.mjs": A_CONTENT });
     const forge = forgeStub();
     let cursor = 0;
@@ -302,9 +302,10 @@ describe("adversarial: corrupted answer shapes", () => {
             finishReason: "stop",
           };
         }
-        // The verdict turn moves the tree: the answer validated against the
-        // intact bytes, and by the time the run reaches the capture
-        // boundary the anchor it named no longer exists in the checkout.
+        // The verdict turn moves the tree — after the span gate has
+        // already held the anchor's bytes. The capture boundary moved
+        // before verification (#479): the record carries the bytes the
+        // gate read, and the run publishes instead of refusing mid-pass.
         writeFileSync(join(workspace, "src", "a.mjs"), "line1\n");
         return {
           content: '{"verdict":"confirmed","kind":"correctness","reason":"the guard is real"}',
@@ -314,20 +315,15 @@ describe("adversarial: corrupted answer shapes", () => {
       },
     };
     const settled = await driveEntrypoint({ workspace, forge, chat });
-    expect(settled.ok).toBe(false);
-    expect(settled.cause).toBeInstanceOf(DeterministicRefusalError);
-    expect(settled.cause).toMatchObject({
-      message: expect.stringContaining(
-        "capture refused for src/a.mjs:2 — the reviewed file carries 1 line",
-      ),
-    });
-    const artifact = artifactOf(workspace, `review-artifact-refused-${HEAD}.json`);
-    expect(artifact.outcome).toMatchObject({ classification: "refused" });
-    expect(forge.calls.upserts).toEqual([]);
-    // The refusal owns nothing but its red artifact: no comment upsert, no
-    // SARIF projection — the runner temp holds the output file alone, and
-    // no surface anywhere names the refusal but the artifact on disk.
-    expect(readdirSync(settled.temp)).toEqual(["github-output.txt"]);
+    expect(settled.ok).toBe(true);
+    const artifact = artifactOf(workspace, `review-artifact-${HEAD}.json`);
+    expect(artifact.outcome).toMatchObject({ classification: "published" });
+    // The confirmed verdict binds the verifier's own window as the
+    // finding's retained evidence — the window the gate's bytes fed.
+    expect(artifact.findings[0].evidence?.excerpt).toContain("line2");
+    // The comment and its SARIF projection both stand.
+    expect(forge.calls.upserts).toHaveLength(1);
+    expect(readdirSync(settled.temp)).toEqual(["github-output.txt", `review-sarif-${HEAD}.json`]);
   });
 });
 

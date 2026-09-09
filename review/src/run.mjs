@@ -43,7 +43,7 @@ import {
   VERIFIER_MAX_EVIDENCE_BYTES,
   VERIFIER_MAX_TOOL_CALLS,
 } from "./verify.mjs";
-import { captureFindingEvidence, CaptureRefusal } from "./capture.mjs";
+import { CaptureRefusal, captureFindingEvidence, quotedEvidenceInWindow } from "./capture.mjs";
 import { buildCanonicalRecord, withRunPublication } from "./canonical.mjs";
 import { findingFingerprint, normalisePath, normaliseSubject } from "./identity.mjs";
 import { attachProvenance, readsFromRecordedReads } from "./provenance.mjs";
@@ -575,12 +575,64 @@ export async function reviewPullRequest({
   // leave the published set here — each drop logged, concerns untouchable.
   const findings = applyStrictness(anchored.published, runStrictness, (line) => io.info(line));
 
-  // The verification pass sits between the nit-drop and rendering: planned
+  // The span gate sits between the nit-drop and the verification plan: a
+  // finding whose message quotes evidence must find that evidence within
+  // the window around its anchor — the wrong-anchor failure class quotes a
+  // span that lives elsewhere in the file. The judgment is code's, over
+  // the reviewed bytes the capture boundary reads, and it withholds
+  // through the quarantine channel (run contract: counted, named in the
+  // log, never in the canonical result, never run-fatal, no model call
+  // spent on it). The memo keeps the law at one bounded read per anchor —
+  // the capture before rendering reuses these bytes. A blank anchor line
+  // is left to the capture boundary's own law (#411), which judges it
+  // after the pass; a message that quotes nothing passes vacuously — no
+  // quoted evidence, no deterministic opinion.
+  /** The one bounded capture per (file, line): the gate's, then the capture's. */
+  const captures = new Map();
+  /** @type {(finding: import("./answer.mjs").Finding) => import("./capture.mjs").CapturedEvidence} */
+  const captureFor = (finding) => {
+    const key = `${finding.file}\u0000${String(finding.line)}`;
+    let captured = captures.get(key);
+    if (captured === undefined) {
+      try {
+        captured = captureFindingEvidence({ workspace, file: finding.file, line: finding.line });
+      } catch (cause) {
+        if (cause instanceof CaptureRefusal) {
+          throw new DeterministicRefusalError(cause.message, { cause });
+        }
+        throw cause;
+      }
+      captures.set(key, captured);
+    }
+    return captured;
+  };
+  /** @type {import("./answer.mjs").Finding[]} */
+  const plannable = [];
+  /** @type {Array<{ file: string, line: number }>} */
+  const withheldUnmatched = [];
+  for (const finding of findings) {
+    const captured = captureFor(finding);
+    if (
+      normaliseSubject(captured.subject) !== "" &&
+      !quotedEvidenceInWindow(finding.message, captured.window)
+    ) {
+      withheldUnmatched.push({ file: finding.file, line: finding.line });
+      continue;
+    }
+    plannable.push(finding);
+  }
+  for (const { file, line } of withheldUnmatched) {
+    io.info(
+      `review: finding withheld — its quoted evidence is absent from its anchor window: ${file}:${String(line)}`,
+    );
+  }
+
+  // The verification pass sits between the span gate and rendering: planned
   // findings each get their own bounded investigation, and verdicts assign
   // each one its lifecycle state — refuted and unresolved publish, labeled.
   // What it publishes is what renders and what the count names.
   const verified = await runVerificationPass({
-    findings,
+    findings: plannable,
     policy: { strategy: config.strategy, strictness: runStrictness },
     lanes,
     recordedReads,
@@ -632,7 +684,9 @@ export async function reviewPullRequest({
   // Every finding the run will carry gets its evidence captured from the
   // working tree at its own (file, line) anchor — the integration point
   // [ADR 004](../../docs/adr/004-canonical-review-result.md) left outside
-  // the pure constructor, because the constructor does no I/O. A refused
+  // the pure constructor, because the constructor does no I/O. The read
+  // itself already happened at the span gate: each capture here reuses the
+  // gate's memo, one bounded read per anchor for the whole run. A refused
   // capture refuses the run RED, never skip-and-continue: a finding whose
   // anchor cannot be captured has no digest, and a finding without a
   // digest is not confirmed by anything. A capture the tree honours but
@@ -647,15 +701,7 @@ export async function reviewPullRequest({
   /** @type {Array<{ file: string, line: number }>} */
   const withheldUnspanned = [];
   for (const finding of published) {
-    let captured;
-    try {
-      captured = captureFindingEvidence({ workspace, file: finding.file, line: finding.line });
-    } catch (cause) {
-      if (cause instanceof CaptureRefusal) {
-        throw new DeterministicRefusalError(cause.message, { cause });
-      }
-      throw cause;
-    }
+    const captured = captureFor(finding);
     if (normaliseSubject(captured.subject) === "") {
       withheldUnspanned.push({ file: finding.file, line: finding.line });
       continue;
@@ -770,6 +816,7 @@ export async function reviewPullRequest({
     strictness: runStrictness,
     quarantinedCount: anchored.quarantined.length,
     withheldUnspannedCount: withheldUnspanned.length,
+    withheldUnmatchedCount: withheldUnmatched.length,
     ...(reconciled !== undefined ? { resolvedFindings: reconciled.previous } : {}),
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
@@ -986,7 +1033,7 @@ function applyStrictness(findings, strictness, info) {
  * into the run log.
  *
  * @param {object} input
- * @param {import("./answer.mjs").Finding[]} input.findings the post-nit-drop set
+ * @param {import("./answer.mjs").Finding[]} input.findings the span gate's survivors — the post-nit-drop set minus its quoted-evidence mismatches
  * @param {{ strategy: import("./config.mjs").Strategy, strictness: import("./config.mjs").Strictness }} input.policy the config's strategy and strictness — the gate's mode policy is derived from both
  * @param {import("./lanes.mjs").LaneAssignment[]} input.lanes the lanes code assigned before the loop
  * @param {ReadonlyMap<string, string>} input.recordedReads the loop's captured read bytes

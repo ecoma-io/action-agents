@@ -13,7 +13,13 @@ import { createWorkspace } from "#core/workspace.mjs";
 
 import { contentDigest } from "./digest.mjs";
 import { EVIDENCE_EXCERPT_CHARS } from "./verify.mjs";
-import { CaptureRefusal, captureFindingEvidence } from "./capture.mjs";
+import {
+  CaptureRefusal,
+  anchorWindow,
+  captureFindingEvidence,
+  extractQuotedSpans,
+  quotedEvidenceInWindow,
+} from "./capture.mjs";
 
 /** @type {string} */
 let root;
@@ -152,5 +158,89 @@ describe("captureFindingEvidence", () => {
         ),
       );
     }
+  });
+});
+
+describe("the quoted-span gate helpers", () => {
+  it("extracts backtick-, single- and double-quoted spans in message order", () => {
+    expect(extractQuotedSpans("duplicate `// CLI entry` header comments")).toEqual([
+      "// CLI entry",
+    ]);
+    expect(extractQuotedSpans("the 'unused import' never fires")).toEqual(["unused import"]);
+    expect(extractQuotedSpans('the "ledger fixtures" differ')).toEqual(["ledger fixtures"]);
+    expect(extractQuotedSpans("'single' then `back` then \"double\"")).toEqual([
+      "single",
+      "back",
+      "double",
+    ]);
+  });
+
+  it("drops empty spans and carries nothing for plain or unclosed quotes", () => {
+    expect(extractQuotedSpans("empty `` and '' and \"\" carry no evidence")).toEqual([]);
+    expect(extractQuotedSpans("a plain off-by-one claim")).toEqual([]);
+    expect(extractQuotedSpans("an `unclosed span never matches")).toEqual([]);
+  });
+
+  it("cuts the anchor's window at three lines on each side, clamped to the file", () => {
+    const content = Array.from({ length: 20 }, (_, i) => `line${String(i + 1)}`).join("\n");
+    expect(anchorWindow(content, 10)).toBe("line7\nline8\nline9\nline10\nline11\nline12\nline13");
+    expect(anchorWindow(content, 1)).toBe("line1\nline2\nline3\nline4");
+    expect(anchorWindow(content, 20)).toBe("line17\nline18\nline19\nline20");
+  });
+
+  it("windows nothing for an anchor past the file's end and folds checkout CRs", () => {
+    const content = Array.from({ length: 20 }, (_, i) => `line${String(i + 1)}`).join("\n");
+    expect(anchorWindow(content, 21)).toBeNull();
+    expect(anchorWindow(content, 0)).toBeNull();
+    expect(anchorWindow(content, 1.5)).toBeNull();
+    expect(anchorWindow("one\r\ntwo\r\n", 2)).toBe("one\ntwo");
+  });
+
+  it("passes vacuously when the message quotes nothing, whatever the window", () => {
+    expect(quotedEvidenceInWindow("a plain off-by-one claim", null)).toBe(true);
+    expect(quotedEvidenceInWindow("a plain off-by-one claim", "any window")).toBe(true);
+  });
+
+  it("withholds a quoted span that appears nowhere in the anchor's window", () => {
+    // The dogfood shape that cost a review its credibility: the anchor
+    // points at a decoy line while the quoted evidence lives elsewhere.
+    const lines = Array.from({ length: 20 }, (_, i) => `line${String(i + 1)}`);
+    lines[2] = "record.jobs[jobName] = entry;";
+    lines[16] = "// CLI entry";
+    const content = lines.join("\n");
+    const window = anchorWindow(content, 3);
+    expect(window).not.toContain("// CLI entry");
+    expect(quotedEvidenceInWindow("duplicate `// CLI entry` header comments", window)).toBe(false);
+    // The mirror-image pass: anchoring the real header certifies it.
+    expect(
+      quotedEvidenceInWindow("duplicate `// CLI entry` header comments", anchorWindow(content, 17)),
+    ).toBe(true);
+  });
+
+  it("passes on one hit among several quoted spans, and on a span at the window's edge", () => {
+    const content = Array.from({ length: 20 }, (_, i) => `line${String(i + 1)}`).join("\n");
+    const window = anchorWindow(content, 5);
+    expect(quotedEvidenceInWindow("`nowhere` and `line4` and `nowhere either`", window)).toBe(true);
+    // The edges: three lines out is the window's rim, four is outside it.
+    expect(quotedEvidenceInWindow("`line2` is missing", window)).toBe(true);
+    expect(quotedEvidenceInWindow("`line1` is missing", window)).toBe(false);
+    expect(quotedEvidenceInWindow("`line8` is missing", window)).toBe(true);
+    expect(quotedEvidenceInWindow("`line9` is missing", window)).toBe(false);
+  });
+
+  it("fails closed on demanded evidence with no window, and matches case-sensitively", () => {
+    expect(quotedEvidenceInWindow("`line3` is missing", null)).toBe(false);
+    const window = anchorWindow("line1\nline2\nline3\n", 2);
+    expect(quotedEvidenceInWindow("`line2` is missing", window)).toBe(true);
+    expect(quotedEvidenceInWindow("`LINE2` is missing", window)).toBe(false);
+  });
+
+  it("binds the window the capture reads — clamped and CR-folded like the helpers cut it", () => {
+    expect(captureFindingEvidence({ workspace, file: "src/a.mjs", line: 2 }).window).toBe(
+      "first line\nsecond line\nthird line",
+    );
+    expect(captureFindingEvidence({ workspace, file: "src/crlf.mjs", line: 1 }).window).toBe(
+      "one\ntwo",
+    );
   });
 });

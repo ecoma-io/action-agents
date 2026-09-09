@@ -176,6 +176,50 @@ describe("renderComment", () => {
     );
   });
 
+  it("a quoted-evidence-withheld-only complete names the span gate instead of a clean bill", () => {
+    const one = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "high",
+      withheldUnmatchedCount: 1,
+    });
+    expect(one).toContain(
+      "No published findings — 1 finding withheld: its quoted evidence is absent from the anchor window.",
+    );
+    expect(one).not.toContain("No findings.");
+    const two = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "high",
+      withheldUnmatchedCount: 2,
+    });
+    expect(two).toContain(
+      "No published findings — 2 findings withheld: their quoted evidence is absent from the anchor window.",
+    );
+  });
+
+  it("all three withheld kinds render one combined sentence, unanchored then unspanned then unmatched", () => {
+    const body = renderComment({
+      status: "Complete",
+      headSha: HEAD,
+      summary: "s",
+      findings: [],
+      strictness: "high",
+      quarantinedCount: 2,
+      withheldUnspannedCount: 1,
+      withheldUnmatchedCount: 3,
+    });
+    expect(body).toContain(
+      "No published findings — 2 findings withheld: no recorded read reaches their anchor lines; " +
+        "1 more withheld: its anchor line carries no span to certify; " +
+        "3 more withheld: their quoted evidence is absent from the anchor window.",
+    );
+  });
+
   it("defangs inventory-derived paths before they enter backticks", () => {
     const body = renderComment({
       status: "Complete",
