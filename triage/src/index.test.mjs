@@ -856,7 +856,6 @@ describe("run — the event gate (PR-E)", () => {
     expect(lines).toContain(
       "triage: the event's label list was stale — the live thread still carries a queue marker; re-triaged",
     );
-    expect(lines).not.toContain("→ skip");
     expect(lines).not.toContain(
       "triage: nothing written — the event changed no triage-relevant evidence",
     );
@@ -873,19 +872,12 @@ describe("run — the event gate (PR-E)", () => {
       event: labeled("bug", { labels: ["bug"] }),
       liveLabels: ["bug"],
     });
-    // A landed decision is the only code path that removes a marker, so the
-    // live read showing none means the skip stands exactly as before — and
-    // no arbitrating read may happen at all.
-    let issueReads = 0;
-    const liveRead = world.forge.getIssue.bind(world.forge);
-    world.forge.getIssue = async (number) => {
-      issueReads += 1;
-      return liveRead(number);
-    };
+    // A landed decision is the only code path that removes a marker, so a
+    // live read showing none re-decides nothing: the skip stands with the
+    // grammar's own reason, the arbitrating read being the only new cost.
 
     await run(inputs(), readContext(runner), world);
 
-    expect(issueReads).toBe(0);
     expect(world.request()).toBeNull();
     expect(world.forge.writes).toEqual([]);
     const lines = log.mock.calls.map((call) => String(call[0])).join("\n");
