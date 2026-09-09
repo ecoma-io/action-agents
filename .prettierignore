@@ -23,8 +23,12 @@ CHANGELOG.md
 .claude/skills/
 .agents/skills/
 
-# Translations authored by the harmonise action. The action ships with no
-# dependencies, so it cannot run Prettier on the runner before proposing a
-# document; what it writes is judged on GitHub's diff like any contributor's
-# prose, not re-wrapped here. Revisit if the config grows a formatter hook.
+# Translations and records authored by the harmonise action. The action ships
+# with no dependencies, so it cannot run Prettier on the runner before
+# proposing a document — tm.en.json is minified single-line JSON by design and
+# state.en.json is written byte-for-byte from its record. What harmonise writes
+# is judged on GitHub's diff like any contributor's prose, not re-wrapped here.
+# Revisit if the config grows a formatter hook.
 README.vi.md
+.github/action-agents/harmonise/tm.en.json
+.github/action-agents/harmonise/state.en.json

@@ -3,12 +3,12 @@
     {
       "destinationPath": "README.vi.md",
       "language": "vi",
-      "policyFingerprint": "c261112af9aa38e025eb9a1f6904b46d5675ad357d919a51e6396c4acff816d2",
+      "policyFingerprint": "9cbff3b3e2930e588a467f01c74c06cc79df057e944aee9d7ed1258e98c477c1",
       "schemaVersion": 1,
       "sourceFingerprint": "f131fa6a2c24330cbf71066d913f4bdb1a53c9c1c47cb2a2e1fecf948c3e3237",
       "sourcePath": "README.md",
       "transformationVersion": 1,
-      "translationFingerprint": "af77750044ee7d72f265c6cd05a202c7a0c15a932235dd5fc09ace71d309b6d5"
+      "translationFingerprint": "21ffdce9c16b2c4468c770d8987f02d8dd4d60b31380e11c0c918b5bddb7d974"
     }
   ]
 }
