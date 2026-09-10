@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.12.0](https://github.com/ecoma-io/action-agents/compare/v0.11.4...v0.12.0) (2026-09-09)
+
+
+### Features
+
+* **review:** withhold findings whose quoted evidence misses their anchor window ([#479](https://github.com/ecoma-io/action-agents/issues/479)) ([#484](https://github.com/ecoma-io/action-agents/issues/484)) ([65ff6db](https://github.com/ecoma-io/action-agents/commit/65ff6db4cec7539dc943689186740848503c1a88))
+
+
+### Bug Fixes
+
+* **core:** retry a dropped socket like any other transient failure ([#489](https://github.com/ecoma-io/action-agents/issues/489)) ([2b4d201](https://github.com/ecoma-io/action-agents/commit/2b4d2015a25a1150b4e630de367d3f1a535e83fe))
+* **harmonise:** cover the record files with the formatter-gate exemption ([#494](https://github.com/ecoma-io/action-agents/issues/494)) ([f83106c](https://github.com/ecoma-io/action-agents/commit/f83106c21179f1bde70cc124c73a4832f891d105))
+* **triage:** arbitrate stale labeled claims against the live thread ([#480](https://github.com/ecoma-io/action-agents/issues/480)) ([#491](https://github.com/ecoma-io/action-agents/issues/491)) ([caabc95](https://github.com/ecoma-io/action-agents/commit/caabc95cdfe0e3f8b6c12d5a3638f953566d9762))
+* **triage:** record a config-validation failure as refused, not failed ([#473](https://github.com/ecoma-io/action-agents/issues/473)) ([c89df4e](https://github.com/ecoma-io/action-agents/commit/c89df4e180557b3b6418c36a4a492a1de4bfe660))
+
 ## [0.11.4](https://github.com/ecoma-io/action-agents/compare/v0.11.3...v0.11.4) (2026-09-08)
 
 
