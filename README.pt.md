@@ -1,8 +1,22 @@
+<!-- harmonise:skip-start -->
 <p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — GitHub Actions confiáveis, limitadas e auditáveis para a manutenção de repositórios: triage, review e harmonise, cada uma uma ação autossuficiente com qualquer modelo OpenAI-compatible" width="100%" />
+  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml/badge.svg" alt="Analysis" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0" /></a>
+  <a href="https://github.com/ecoma-io/action-agents/releases"><img src="https://img.shields.io/github/v/release/ecoma-io/action-agents.svg" alt="Latest release" /></a>
 </p>
+<!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — GitHub Actions confiáveis, limitadas e auditáveis para a manutenção de repositórios: triage, review e harmonise, cada uma uma ação autossuficiente com qualquer modelo OpenAI-compatible" width="64px" />
+</p>
 <h1 align="center">Action Agents</h1>
+
+<!-- harmonise:skip-start -->
+<p align="center">
+<a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
+</p>
+<!-- harmonise:skip-end -->
 
 <p align="center">
   <strong>GitHub Actions confiáveis, limitadas e auditáveis para a manutenção de repositórios.</strong><br />
@@ -13,32 +27,15 @@
   <em>O que o runner executa é o código-fonte que você pode ler na tag que você fixou.</em>
 </p>
 
-<!-- harmonise:skip-start -->
 <p align="center">
-  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml/badge.svg" alt="Analysis" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <a href="https://github.com/ecoma-io/action-agents/releases"><img src="https://img.shields.io/github/v/release/ecoma-io/action-agents.svg" alt="Latest release" /></a>
-</p>
-<!-- harmonise:skip-end -->
-
-<!-- harmonise:skip-start -->
-
-<a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
-<!-- harmonise:skip-end -->
-
-<p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <a href="docs/README.md">Documentação</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">Reportar um bug</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">Sugerir um recurso</a>
 </p>
 
----
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — GitHub Actions confiáveis, limitadas e auditáveis para a manutenção de repositórios: triage, review e harmonise, cada uma uma ação autossuficiente com qualquer modelo OpenAI-compatible" width="100%" />
+</p>
 
 A manutenção de um repositório é o trabalho que ninguém agenda: rotular o que chega, ler um diff corretamente, evitar que os documentos traduzidos divirjam. Um modelo consegue fazer a maior parte disso — mas entregar a um modelo um token de escrita só é seguro se o que ele pode fazer estiver limitado por algo além do prompt. Essas três ações traçam esse limite no código: **um modelo nunca monta uma chamada de API — ele escolhe de uma lista que você escreveu, e nada que seja irreversível, ou que envie e-mail a um humano, pode entrar nessa lista** — e tudo o que é lido de uma thread ou de um diff é evidência, nunca instrução.
 
@@ -125,13 +122,3 @@ A contribuição mais valiosa é **uma ação agindo fora do que lhe é permitid
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) e os contribuidores do Action Agents. Apache-2.0 pela sua concessão explícita de patentes.
-
----
-
-<p align="center">
-  <sub>
-    Mantido por <a href="https://ecoma.io">Ecoma</a> ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

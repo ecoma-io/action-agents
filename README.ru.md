@@ -1,16 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — доверенные, ограниченные, проверяемые GitHub Actions для обслуживания репозитория: triage, review и harmonise — каждое действие самодостаточно и работает с любой OpenAI-compatible моделью" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>Доверенные, ограниченные, проверяемые GitHub Actions для обслуживания репозитория.</strong><br />
-  Три действия, у каждого своя ответственность — triage, review, harmonise — работают внутри GitHub Actions с любой OpenAI-compatible моделью, включая ту, что вы размещаете сами.
-  Нет пакета, которому нужно доверять, нет зависимостей, которые нужно проверять, нет установки перед запуском.<br />
-  <em>Что выполняет раннер — это исходный код, который вы можете прочитать на теге, который вы закрепили.</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -20,23 +7,33 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — доверенные, ограниченные, проверяемые GitHub Actions для обслуживания репозитория: triage, review и harmonise — каждое действие самодостаточно и работает с любой OpenAI-compatible моделью" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>Доверенные, ограниченные, проверяемые GitHub Actions для обслуживания репозитория.</strong><br />
+  Три действия, у каждого своя ответственность — triage, review, harmonise — работают внутри GitHub Actions с любой OpenAI-compatible моделью, включая ту, что вы размещаете сами.
+  Нет пакета, которому нужно доверять, нет зависимостей, которые нужно проверять, нет установки перед запуском.<br />
+  <em>Что выполняет раннер — это исходный код, который вы можете прочитать на теге, который вы закрепили.</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">Документация</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">Сообщить об ошибке</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">Запросить функцию</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — доверенные, ограниченные, проверяемые GitHub Actions для обслуживания репозитория: triage, review и harmonise — каждое действие самодостаточно и работает с любой OpenAI-compatible моделью" width="100%" />
+</p>
 
 Обслуживание репозитория — это работа, которую никто не планирует: назначить метки тому, что пришло, прочитать diff как следует, не дать переводам документации разойтись. Модель справится с большинством этого — но давать модели токен записи безопасно только тогда, когда её возможности ограничены чем-то помимо промпта. Эти три действия проводят эту границу в коде: **модель никогда не составляет API-вызов — она выбирает из списка, который написали вы, и в этот список не допускается ничего необратимого или того, что отправляет письмо человеку**, а всё прочитанное из треда или diff — это улика, а не инструкция.
 
@@ -123,13 +120,3 @@ jobs:
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) и участники Action Agents. Apache-2.0 за прямую патентную лицензию.
-
----
-
-<p align="center">
-  <sub>
-    Поддерживается <a href="https://ecoma.io">Ecoma</a> ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

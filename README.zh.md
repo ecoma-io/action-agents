@@ -1,15 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — 值得信赖、边界明确、可审计的 GitHub Actions，用于仓库维护：triage、review 和 harmonise，每一个都是针对任意兼容 OpenAI 模型的独立 Action" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>值得信赖、边界明确、可审计的 GitHub Actions，用于仓库维护。</strong><br />
-  三个 Action，各自只负责一件事——triage、review、harmonise——运行在 GitHub Actions 之中，面向任意兼容 OpenAI 的模型，包括你自己托管的模型。无需信任的捆绑包，无需审计的依赖，启动前无需任何安装。<br />
-  <em>运行器执行的内容，就是你在所固定（pin）的标签上能读到的源码。</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -19,23 +7,32 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — 值得信赖、边界明确、可审计的 GitHub Actions，用于仓库维护：triage、review 和 harmonise，每一个都是针对任意兼容 OpenAI 模型的独立 Action" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>值得信赖、边界明确、可审计的 GitHub Actions，用于仓库维护。</strong><br />
+  三个 Action，各自只负责一件事——triage、review、harmonise——运行在 GitHub Actions 之中，面向任意兼容 OpenAI 的模型，包括你自己托管的模型。无需信任的捆绑包，无需审计的依赖，启动前无需任何安装。<br />
+  <em>运行器执行的内容，就是你在所固定（pin）的标签上能读到的源码。</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">文档</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">报告错误</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">功能请求</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — 值得信赖、边界明确、可审计的 GitHub Actions，用于仓库维护：triage、review 和 harmonise，每一个都是针对任意兼容 OpenAI 模型的独立 Action" width="100%" />
+</p>
 
 仓库维护是没人会主动安排的工作：给新到的内容打标签、认真读懂一份 diff、防止多语言文档彼此偏离。模型可以完成其中大部分工作——但把写入令牌交给模型，只有当它的行为边界由提示词之外的机制来约束时才安全。这三个 Action 用代码画出这条边界：**模型永远不会自行构造 API 调用——它从你写好的清单里选择，而任何不可逆的操作、任何会给人类发邮件的操作都不允许出现在清单上**，并且从线程或 diff 中读到的一切都是证据，而非指令。
 
@@ -122,13 +119,3 @@ jobs:
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) 与 Action Agents 的贡献者们。Apache-2.0 因其明确的专利授权。
-
----
-
-<p align="center">
-  <sub>
-    由 <a href="https://ecoma.io">Ecoma</a> 维护 ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

@@ -1,15 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — đáng tin cậy, có giới hạn, có thể kiểm toán GitHub Actions cho việc bảo trì kho lưu trữ: triage, review và harmonise, mỗi một là hành động độc lập đối với bất kỳ mô hình OpenAI-compatible nào" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>Đáng tin cậy, có giới hạn, có thể kiểm toán GitHub Actions cho việc bảo trì kho lưu trữ.</strong><br />
-  Ba hành động, mỗi hành động một trách nhiệm — triage, review, harmonise — chạy bên trong GitHub Actions với bất kỳ mô hình OpenAI-compatible nào, bao gồm một mô hình bạn tự host. Không có gói nào để tin cậy, không có phụ thuộc nào để kiểm toán, không cần cài đặt trước khi chúng khởi chạy.<br />
-  <em>Những gì runner thực thi là mã nguồn mà bạn có thể đọc tại thẻ bạn đã ghim.</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -19,23 +7,32 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — đáng tin cậy, có giới hạn, có thể kiểm toán GitHub Actions cho việc bảo trì kho lưu trữ: triage, review và harmonise, mỗi một là hành động độc lập đối với bất kỳ mô hình OpenAI-compatible nào" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>Đáng tin cậy, có giới hạn, có thể kiểm toán GitHub Actions cho việc bảo trì kho lưu trữ.</strong><br />
+  Ba hành động, mỗi hành động một trách nhiệm — triage, review, harmonise — chạy bên trong GitHub Actions với bất kỳ mô hình OpenAI-compatible nào, bao gồm một mô hình bạn tự host. Không có gói nào để tin cậy, không có phụ thuộc nào để kiểm toán, không cần cài đặt trước khi chúng khởi chạy.<br />
+  <em>Những gì runner thực thi là mã nguồn mà bạn có thể đọc tại thẻ bạn đã ghim.</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">Tài liệu</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">Báo lỗi</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">Đề xuất tính năng</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — đáng tin cậy, có giới hạn, có thể kiểm toán GitHub Actions cho việc bảo trì kho lưu trữ: triage, review và harmonise, mỗi một là hành động độc lập đối với bất kỳ mô hình OpenAI-compatible nào" width="100%" />
+</p>
 
 Bảo trì kho lưu trữ là công việc mà không ai lên lịch: gán nhãn cho những gì vừa đến, đọc diff một cách chính xác, giữ các tài liệu đã dịch không bị trôi dạt. Một mô hình có thể thực hiện hầu hết — nhưng đưa token ghi cho mô hình chỉ an toàn nếu những gì nó có thể làm được giới hạn bởi thứ gì đó ngoài prompt. Ba hành động này vẽ ra ranh giới trong mã: **một mô hình không bao giờ tạo lời gọi API — nó chọn từ danh sách bạn đã viết, và không có gì không thể đảo ngược, hay gửi email cho con người, được phép trong danh sách**, và mọi thứ đọc từ một luồng hay diff là bằng chứng, không phải là hướng dẫn.
 
@@ -122,13 +119,3 @@ Sự đóng góp có giá trị nhất là **một hành động vượt quá nh
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) và các cộng tác viên của Action Agents. Apache-2.0 vì giấy phép cấp bằng sáng chế rõ ràng.
-
----
-
-<p align="center">
-  <sub>
-    Được duy trì bởi <a href="https://ecoma.io">Ecoma</a> ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>
