@@ -526,6 +526,39 @@ English source, three targets, per-language instructions.
 }
 ```
 
+### A multilingual README with protected badges and selector
+
+Documents that translate themselves should not translate their machinery. A
+README's badge row and its language selector are the same bytes in every
+language — a translation that re-renders them drifts the set apart, and a later
+run would preserve that drift rather than repair it. Protect both with regions,
+and place them identically in every twin so the headers stay byte-comparable:
+
+```markdown
+<h1>Your action</h1>
+
+<p>Your intro.</p>
+
+<!-- harmonise:skip-start -->
+<p>
+  <a href="…"><img src="…" alt="CI" /></a>
+</p>
+<!-- harmonise:skip-end -->
+
+<!-- harmonise:skip-start -->
+
+<a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a>
+
+<!-- harmonise:skip-end -->
+```
+
+The convention this repository's own README follows: the canonical document
+carries the content; every twin carries the same two protected regions, the
+same selector line, and structural headings left in the source language so
+anchors keep resolving across languages. A twin that has never been written is
+a missing document, not an English fallback — the configured language fails
+until its document exists, and the harmonise run proposes creating it.
+
 ### App token for CI on the harmonise PR
 
 ```yaml
