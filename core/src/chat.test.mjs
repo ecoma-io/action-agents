@@ -320,3 +320,65 @@ describe("tool calls", () => {
     );
   });
 });
+
+describe("the unusable-answer class (#499)", () => {
+  const CHAT_TOOLS = [{ name: "read_file" }];
+
+  it("classifies a reasoning-only completion (reasoning_content, no content) as the retryable unusable class", async () => {
+    const { chat } = withFetch(
+      () =>
+        new Response(
+          '{"choices":[{"message":{"role":"assistant","reasoning_content":"We need to produce findings",' +
+            '"content":null},"finish_reason":"stop"}]}',
+        ),
+    );
+
+    const error = await chat.complete({ model: "m", messages: MESSAGES }).catch((c) => c);
+    expect(error).toBeInstanceOf(ChatError);
+    expect(error.message).toMatch(/no choices\[0\]\.message\.content/);
+    expect(error.kind).toBe("unusable-answer");
+  });
+
+  it("classifies an empty completion without reasoning the same, tools offered or not", async () => {
+    const withoutTools = withFetch(
+      () => new Response('{"choices":[{"message":{"content":null},"finish_reason":"stop"}]}'),
+    );
+    const error = await withoutTools.chat
+      .complete({ model: "m", messages: MESSAGES })
+      .catch((c) => c);
+    expect(error).toBeInstanceOf(ChatError);
+    expect(error.kind).toBe("unusable-answer");
+
+    const offeringTools = withFetch(
+      () => new Response('{"choices":[{"message":{"content":null,"tool_calls":[]}}]}'),
+    );
+    const toolsError = await offeringTools.chat
+      .complete({ model: "m", messages: MESSAGES, tools: CHAT_TOOLS })
+      .catch((c) => c);
+    expect(toolsError).toBeInstanceOf(ChatError);
+    expect(toolsError.message).toMatch(/neither content nor/);
+    expect(toolsError.kind).toBe("unusable-answer");
+  });
+
+  it("classifies a length-declared reasoning-only answer as the same retryable class — and junk stays terminal", async () => {
+    const lengthDeclared = withFetch(
+      () =>
+        new Response(
+          '{"choices":[{"message":{"role":"assistant","reasoning_content":"thinking",' +
+            '"content":null},"finish_reason":"length"}]}',
+        ),
+    );
+    const error = await lengthDeclared.chat
+      .complete({ model: "m", messages: MESSAGES })
+      .catch((c) => c);
+    expect(error).toBeInstanceOf(ChatError);
+    expect(error.message).toMatch(/no choices\[0\]\.message\.content/);
+    expect(error.kind).toBe("unusable-answer");
+
+    const junk = withFetch(() => new Response("<html>gateway</html>"));
+    const malformed = await junk.chat.complete({ model: "m", messages: MESSAGES }).catch((c) => c);
+    expect(malformed).toBeInstanceOf(ChatError);
+    expect(malformed.message).toMatch(/not JSON/);
+    expect(malformed.kind).toBe("malformed");
+  });
+});

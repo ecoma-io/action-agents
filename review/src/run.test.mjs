@@ -13,6 +13,7 @@ import { reviewPullRequest } from "./run.mjs";
 import { applicabilityArtifactSchemaVersion, serialiseArtifact } from "./artifact.mjs";
 import { contentDigest } from "./digest.mjs";
 import { OwnLoginsError } from "#core/comment.mjs";
+import { ChatError } from "#core/chat.mjs";
 import {
   DOGFOOD_CONFIG,
   DOGFOOD_INTENSITY_CONFIG,
@@ -4538,5 +4539,105 @@ describe("the quoted-evidence span gate (#479)", () => {
     expect(result.canonical?.findings).toHaveLength(1);
     expect(result.canonical?.findings[0]).toMatchObject({ file: "src/a.mjs", line: 2 });
     expect(logged.some((line) => line.includes("absent from its anchor window"))).toBe(false);
+  });
+});
+
+describe("the unusable provider-answer class (#499)", () => {
+  /** The class the chat seam raises for a parseable completion with no content. */
+  const UNUSABLE = new ChatError("the provider's response holds no choices[0].message.content", {
+    kind: "unusable-answer",
+  });
+
+  it("hears a reasoning-only answer as an empty natural stop and recovers on the corrective re-ask", async () => {
+    const forge = forgeStub();
+    let completeCalls = 0;
+    const chat = {
+      async complete() {
+        completeCalls++;
+        if (completeCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+            finishReason: "tool_calls",
+          };
+        }
+        if (completeCalls === 2) {
+          throw UNUSABLE;
+        }
+        return {
+          content: '{"findings":[],"summary":"clean now"}',
+          toolCalls: [],
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge, /** @type {any} */ (chat)),
+    });
+
+    expect(completeCalls).toBe(3);
+    expect(result.outcome).toBe("published");
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("ends the run on the existing twice-failed refusal when the corrective re-ask is unusable too", async () => {
+    const forge = forgeStub();
+    let completeCalls = 0;
+    const chat = {
+      async complete() {
+        completeCalls++;
+        if (completeCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [{ id: "r1", name: "read_file", arguments: '{"path":"src/a.mjs"}' }],
+            finishReason: "tool_calls",
+          };
+        }
+        throw UNUSABLE;
+      },
+    };
+
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: io(forge, /** @type {any} */ (chat)),
+      }),
+    ).rejects.toThrow(/failed the output contract twice/);
+    expect(completeCalls).toBe(3);
+    expect(forge.calls.upserts).toHaveLength(0);
+  });
+
+  it("keeps malformed responses terminal and unretried — one call, the same red", async () => {
+    const forge = forgeStub();
+    let completeCalls = 0;
+    const chat = {
+      async complete() {
+        completeCalls++;
+        throw new ChatError("the provider's response body is not JSON", { excerpt: "<html>" });
+      },
+    };
+
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: io(forge, /** @type {any} */ (chat)),
+      }),
+    ).rejects.toThrow(/not JSON/);
+    expect(completeCalls).toBe(1);
+    expect(forge.calls.upserts).toHaveLength(0);
   });
 });

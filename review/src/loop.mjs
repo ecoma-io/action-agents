@@ -36,6 +36,7 @@
  * not a turn to hand back.
  */
 
+import { ChatError } from "#core/chat.mjs";
 import { coverageReport, normaliseReadPath } from "./coverage.mjs";
 import { FIRST_PHASE, nextPhase, phaseTools } from "./phases.mjs";
 
@@ -202,11 +203,30 @@ export async function runLoop({
         `compacted the transcript to ${String(estimateTokens(transcript))} estimated tokens`,
       );
     }
-    const response = await chat.complete({
-      model,
-      messages: [...transcript, ...pending],
-      ...(offeredTools === undefined ? {} : { tools: offeredTools }),
-    });
+    let response;
+    try {
+      response = await chat.complete({
+        model,
+        messages: [...transcript, ...pending],
+        ...(offeredTools === undefined ? {} : { tools: offeredTools }),
+      });
+    } catch (cause) {
+      if (cause instanceof ChatError && cause.kind === "unusable-answer") {
+        // A parseable completion whose message carries no content — the
+        // reasoning-only or empty-answer class (#499). It is not a malformed
+        // body: the ask was answered, just not with content. Heard as an
+        // empty natural stop, it takes the one path a corrective re-ask may
+        // ever follow, and the run's window judges it exactly like a
+        // structurally invalid answer — no second retry mechanism here. A
+        // truncated response with content stays terminal below.
+        log.push(
+          "the provider answered with no content — heard as an empty natural stop for the corrective re-ask",
+        );
+        response = { content: "", toolCalls: [], finishReason: undefined };
+      } else {
+        throw cause;
+      }
+    }
     // Provider-declared truncation is model/provider failure, not review
     // capacity or applicability. A truncated response cannot become a
     // natural-stop candidate, a bound-finalisation candidate, or anything
@@ -444,18 +464,30 @@ async function conclude({
  * @returns {Promise<string>}
  */
 export async function reaskFinalAnswer({ chat, model, transcript }) {
-  const response = await chat.complete({
-    model,
-    messages: [
-      ...transcript,
-      {
-        role: "user",
-        content:
-          "That answer does not satisfy the output contract. Answer again: only the JSON object " +
-          "the contract specifies — findings and summary — with no prose around it.",
-      },
-    ],
-  });
+  let response;
+  try {
+    response = await chat.complete({
+      model,
+      messages: [
+        ...transcript,
+        {
+          role: "user",
+          content:
+            "That answer does not satisfy the output contract. Answer again: only the JSON object " +
+            "the contract specifies — findings and summary — with no prose around it.",
+        },
+      ],
+    });
+  } catch (cause) {
+    if (cause instanceof ChatError && cause.kind === "unusable-answer") {
+      // The corrective re-ask came back contentless too — the budget's
+      // second strike. Returned empty, it fails the parse like any other
+      // invalid answer and the conclusion gate refuses the run.
+      response = { content: "", toolCalls: [], finishReason: undefined };
+    } else {
+      throw cause;
+    }
+  }
   // Provider-declared truncation on the corrective re-ask is the same
   // failure as truncation on any other response: the model produced an
   // incomplete answer and it cannot be judged as a review.
