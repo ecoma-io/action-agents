@@ -74,7 +74,7 @@ jobs:
 
 ### Pinning strategy
 
-Every `uses:` reference takes a ref that controls what code runs. Three shapes, in order of safety:
+Mỗi tham chiếu `uses:` nhận một ref quyết định mã nào được chạy. Ba dạng, theo thứ tự an toàn:
 
 | Ref                  | Example                                 | What it resolves to                                                     |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |

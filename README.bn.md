@@ -75,8 +75,7 @@ jobs:
 
 ### Pinning strategy
 
-Every `uses:` reference takes a ref that controls what code runs. Three shapes,
-in order of safety:
+প্রতিটি `uses:` রেফারেন্স একটি ref নেয় যা নিয়ন্ত্রণ করে কোন কোড চলবে। নিরাপত্তার ক্রম অনুসারে তিনটি রূপ:
 
 | Ref                  | Example                                 | What it resolves to                                                     |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |

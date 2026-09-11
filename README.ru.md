@@ -75,8 +75,7 @@ jobs:
 
 ### Pinning strategy
 
-Every `uses:` reference takes a ref that controls what code runs. Three shapes,
-in order of safety:
+Каждая ссылка `uses:` принимает ref, определяющий, какой код выполняется. Три формы, в порядке возрастания безопасности:
 
 | Ref                  | Example                                 | What it resolves to                                                     |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |

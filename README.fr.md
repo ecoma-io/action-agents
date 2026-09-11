@@ -75,8 +75,7 @@ jobs:
 
 ### Pinning strategy
 
-Every `uses:` reference takes a ref that controls what code runs. Three shapes,
-in order of safety:
+Chaque référence `uses:` prend un ref qui contrôle le code exécuté. Trois formes, par ordre de sécurité :
 
 | Ref                  | Example                                 | What it resolves to                                                     |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
