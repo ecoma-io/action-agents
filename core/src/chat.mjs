@@ -30,7 +30,11 @@
  *   - a body that is not JSON (HTML, most often) — an error naming the body;
  *   - a body that is JSON but holds no usable `choices[0].message` — the
  *     model stopped partway, and an empty answer must not be handed on as
- *     though it were a decided one.
+ *     though it were a decided one;
+ *   - a parseable completion whose `choices[0].message` carries no content —
+ *     the reasoning-only or empty-answer class (#499): refused like the
+ *     shapes above, but classed `unusable-answer` so a caller's corrective
+ *     re-ask can tell it from a malformed body.
  *
  * The keyless configuration is a supported path, not a degraded one: with no
  * `api-key` the request carries no `Authorization` header at all.
@@ -91,13 +95,25 @@ import { oneLine } from "./one-line.mjs";
  * @property {number} [retryDelayMs]
  */
 
+/**
+ * The class of a refused provider answer. `"unusable-answer"` is a parseable
+ * completion whose message carries no content — the reasoning-only or
+ * empty-answer shape (#499) — which a corrective re-ask may still recover;
+ * `"malformed"` is a broken wire answer — not JSON, an embedded error
+ * object, no message, a protocol violation — that ends the run red.
+ *
+ * @typedef {"unusable-answer" | "malformed"} ChatErrorKind
+ */
+
 /** The provider answered, but the answer is not a usable chat completion. */
 export class ChatError extends Error {
-  /** @param {string} message @param {{ excerpt?: string }} [details] */
+  /** @param {string} message @param {{ excerpt?: string, kind?: ChatErrorKind }} [details] */
   constructor(message, details = {}) {
     super(details.excerpt === undefined ? message : `${message}: ${details.excerpt}`);
     this.name = "ChatError";
     this.excerpt = details.excerpt ?? "";
+    /** @type {ChatErrorKind} */
+    this.kind = details.kind ?? "malformed";
   }
 }
 
@@ -190,6 +206,7 @@ export function createChat(config) {
         if (typeof answer.content !== "string") {
           throw new ChatError("the provider's response holds no choices[0].message.content", {
             excerpt: excerpt(response.text),
+            kind: "unusable-answer",
           });
         }
         return { content: answer.content, toolCalls: [], finishReason: answer.finishReason };
@@ -198,7 +215,7 @@ export function createChat(config) {
       if (typeof answer.content !== "string" && answer.toolCalls.length === 0) {
         throw new ChatError(
           "the provider's response carries neither content nor well-formed tool calls",
-          { excerpt: excerpt(response.text) },
+          { excerpt: excerpt(response.text), kind: "unusable-answer" },
         );
       }
       return {
