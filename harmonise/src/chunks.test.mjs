@@ -23,6 +23,10 @@ import { describe, expect, it } from "vitest";
 import { chunkDocument, MAX_CHUNK_BYTES, MAX_CHUNKS_PER_PAIR } from "./chunks.mjs";
 
 const bytes = (/** @type {string} */ slice) => Buffer.byteLength(slice);
+// Every multi-chunk fixture sizes sections from the ceiling itself: two
+// half-ceiling sections never share a chunk (their joined units exceed the
+// bound by construction), so the split counts below hold at any retune.
+const sectionBytes = MAX_CHUNK_BYTES / 2;
 
 describe("chunkDocument", () => {
   it("passes a small document through as a single chunk", () => {
@@ -38,7 +42,8 @@ describe("chunkDocument", () => {
   });
 
   it("keeps the frontmatter head atomic in the first chunk", () => {
-    const text = "---\ntitle: T\n---\n\n" + "a".repeat(20480) + "\n\n" + "b".repeat(20480);
+    const text =
+      "---\ntitle: T\n---\n\n" + "a".repeat(sectionBytes) + "\n\n" + "b".repeat(sectionBytes);
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks.length).toBe(2);
@@ -48,7 +53,7 @@ describe("chunkDocument", () => {
   });
 
   it("keeps a fence with interior blank lines one atomic unit", () => {
-    const text = "a".repeat(24000) + "\n\n```\n\nx\n\n```\n\n" + "b".repeat(24000);
+    const text = "a".repeat(sectionBytes) + "\n\n```\n\nx\n\n```\n\n" + "b".repeat(sectionBytes);
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks).toHaveLength(2);
@@ -63,7 +68,7 @@ describe("chunkDocument", () => {
     // by a large following block lands at the blank line after the region,
     // never inside it.
     const region = "<!-- harmonise:skip-start -->\n\n\n<!-- harmonise:skip-end -->\n";
-    const tail = "t".repeat(24570);
+    const tail = "t".repeat(MAX_CHUNK_BYTES);
     const text = region + "\n" + tail;
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
@@ -89,17 +94,17 @@ describe("chunkDocument", () => {
   });
 
   it("keeps an unclosed fence one atomic unit through EOF", () => {
-    const text = "a".repeat(24000) + "\n\n```\n" + "y".repeat(20000);
+    const text = "a".repeat(sectionBytes) + "\n\n```\n" + "y".repeat(sectionBytes);
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks).toHaveLength(2);
     expect(result.chunks[0]).not.toContain("```");
-    expect(result.chunks[1]).toBe("```\n" + "y".repeat(20000));
+    expect(result.chunks[1]).toBe("```\n" + "y".repeat(sectionBytes));
     expect(result.chunks.join("")).toBe(text);
   });
 
   it("reassembles a multibyte multi-chunk document byte-for-byte, deterministically", () => {
-    const text = "é".repeat(12000) + "\n\n" + "é".repeat(12000);
+    const text = "é".repeat(sectionBytes / 2) + "\n\n" + "é".repeat(sectionBytes / 2);
     const first = chunkDocument(text);
     const second = chunkDocument(text);
     expect(first.refusal).toBeNull();
@@ -112,7 +117,12 @@ describe("chunkDocument", () => {
   });
 
   it("partitions an ASCII document into three chunks under the byte ceiling", () => {
-    const text = "y".repeat(20480) + "\n\n" + "y".repeat(20480) + "\n\n" + "y".repeat(20480);
+    const text =
+      "y".repeat(sectionBytes) +
+      "\n\n" +
+      "y".repeat(sectionBytes) +
+      "\n\n" +
+      "y".repeat(sectionBytes);
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks.length).toBeGreaterThanOrEqual(3);
@@ -123,7 +133,7 @@ describe("chunkDocument", () => {
   });
 
   it("refuses an oversize unsplittable fence, naming the block's byte count", () => {
-    const text = "```\n" + "x".repeat(30 * 1024) + "\n```\n";
+    const text = "```\n" + "x".repeat(MAX_CHUNK_BYTES) + "\n```\n";
     const result = chunkDocument(text);
     expect(result.refusal).toBe(
       `an unsplittable block of ${String(bytes(text))} bytes does not fit one chunk — ` +
@@ -133,7 +143,7 @@ describe("chunkDocument", () => {
   });
 
   it("refuses an oversize unsplittable paragraph, naming the block's byte count", () => {
-    const text = "z".repeat(30 * 1024);
+    const text = "z".repeat(MAX_CHUNK_BYTES + 1);
     const result = chunkDocument(text);
     expect(result.refusal).toBe(
       `an unsplittable block of ${String(bytes(text))} bytes does not fit one chunk — ` +
@@ -151,7 +161,7 @@ describe("chunkDocument", () => {
   });
 
   it("splits a document one full chunk plus a second block into two chunks", () => {
-    const text = "q".repeat(24570) + "\n\n" + "z".repeat(100);
+    const text = "q".repeat(MAX_CHUNK_BYTES - 2) + "\n\n" + "z".repeat(100);
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks).toHaveLength(2);
@@ -162,7 +172,7 @@ describe("chunkDocument", () => {
   });
 
   it("honors the per-chunk byte ceiling on every chunk it returns", () => {
-    const text = Array.from({ length: 5 }, () => "w".repeat(12280)).join("\n\n");
+    const text = Array.from({ length: 5 }, () => "w".repeat(sectionBytes)).join("\n\n");
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks.length).toBeGreaterThan(1);
@@ -174,7 +184,7 @@ describe("chunkDocument", () => {
 
   it("refuses a document past the per-pair chunk budget, naming the count", () => {
     const text = Array.from({ length: MAX_CHUNKS_PER_PAIR + 1 }, (_, i) =>
-      String(i % 10).repeat(20480),
+      String(i % 10).repeat(sectionBytes),
     ).join("\n\n");
     const result = chunkDocument(text);
     expect(result.refusal).toBe(

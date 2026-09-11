@@ -12,7 +12,7 @@
 //      (32) chunks skips at preparation — resource exhaustion is an explicit
 //      refusal, zero model calls, zero writes;
 //   -> the per-chunk payload bound: a single unsplittable block (one fenced
-//      block, one paragraph) past `MAX_CHUNK_BYTES` (24 KiB) refuses the same
+//      block, one paragraph) past `MAX_CHUNK_BYTES` (8 KiB) refuses the same
 //      way — the chunker never truncates or splits what it cannot carry;
 //   -> a large-but-valid source is translated end to end: N chunks, N
 //      provider calls, one proposal carrying the whole reassembled document;
@@ -311,16 +311,17 @@ function bigSource(sections, sectionBytes) {
 
 describe("harmonise — document size budgets hold", () => {
   it("pins the chunk ceilings the run enforces", () => {
+    // The fixture's ceilings mirror the module's constants. The tuned byte
+    // value itself is asserted nowhere: every construction below derives
+    // its sizes from the constant, so the fixture holds at any retune.
     assert.equal(CEILINGS.chunkBytes, MAX_CHUNK_BYTES);
     assert.equal(CEILINGS.chunksPerPair, MAX_CHUNKS_PER_PAIR);
-    assert.equal(CEILINGS.chunkBytes, 24 * 2 ** 10);
-    assert.equal(CEILINGS.chunksPerPair, 32);
   });
 
-  it("accepts a source past 32 KiB and translates it chunk by chunk", async () => {
-    // ~48 KiB of ordinary Markdown: past the old whole-document ceiling,
-    // two to three chunks under the new per-chunk bound.
-    const source = bigSource(3, 16 * 2 ** 10);
+  it("accepts a multi-chunk source and translates it chunk by chunk", async () => {
+    // Three half-chunk sections (~1.5 chunk-frames of ordinary Markdown):
+    // past the single-chunk bound, three chunks under the per-chunk bound.
+    const source = bigSource(3, MAX_CHUNK_BYTES / 2);
     const planned = chunkDocument(source);
     assert.ok(planned.chunks.length >= 2, "expected the large source to split");
 
@@ -344,8 +345,8 @@ describe("harmonise — document size budgets hold", () => {
   });
 
   it("refuses a document past the chunk execution budget before any model call", async () => {
-    // 200 small sections ≈ 800 KiB ≈ 34+ chunks — past the 32-chunk budget.
-    const source = bigSource(200, 4 * 2 ** 10);
+    // 200 half-chunk sections — one chunk each, far past the 32-chunk budget.
+    const source = bigSource(200, MAX_CHUNK_BYTES / 2);
     assert.ok(chunkDocument(source).refusal !== null, "expected the chunker to refuse");
 
     const forgeDouble = forge(makeRepo(source));
@@ -365,8 +366,8 @@ describe("harmonise — document size budgets hold", () => {
   });
 
   it("refuses an unsplittable block past the per-chunk bound before any model call", async () => {
-    // One fenced block of 40 KiB: no structural boundary to split on.
-    const source = "# Dev\n\n```text\n" + "x".repeat(40 * 2 ** 10) + "\n```\n";
+    // One fenced block a chunk-frame wide: no structural boundary inside.
+    const source = "# Dev\n\n```text\n" + "x".repeat(MAX_CHUNK_BYTES) + "\n```\n";
     assert.ok(chunkDocument(source).refusal !== null, "expected the chunker to refuse");
 
     const forgeDouble = forge(makeRepo(source));

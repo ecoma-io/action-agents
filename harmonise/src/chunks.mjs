@@ -51,8 +51,14 @@
 
 import { fenceMask, splitLines } from "./markdown.mjs";
 
-/** Per-chunk source payload bound (UTF-8 bytes). */
-export const MAX_CHUNK_BYTES = 24 * 2 ** 10;
+/**
+ * Per-chunk source payload bound (UTF-8 bytes). Sized for provider
+ * reliability: a chunk's expected answer must come back complete (empty
+ * answers and dropped placeholder tokens were observed at 24 KiB chunks on
+ * the first real dogfood run), and the answer must fit a provider output
+ * cap with room to spare.
+ */
+export const MAX_CHUNK_BYTES = 8 * 2 ** 10;
 
 /** Maximum chunks per pair — documents needing more are refused. */
 export const MAX_CHUNKS_PER_PAIR = 32;
