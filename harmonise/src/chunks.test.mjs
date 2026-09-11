@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 
 import { chunkDocument, MAX_CHUNK_BYTES, MAX_CHUNKS_PER_PAIR } from "./chunks.mjs";
 
-const bytes = (slice) => Buffer.byteLength(slice);
+const bytes = (/** @type {string} */ slice) => Buffer.byteLength(slice);
 
 describe("chunkDocument", () => {
   it("passes a small document through as a single chunk", () => {
@@ -42,7 +42,7 @@ describe("chunkDocument", () => {
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks.length).toBe(2);
-    expect(result.chunks[0].startsWith("---\ntitle: T\n---\n")).toBe(true);
+    expect(result.chunks[0]?.startsWith("---\ntitle: T\n---\n")).toBe(true);
     expect(result.chunks.join("")).toBe(text);
     for (const chunk of result.chunks) expect(bytes(chunk)).toBeLessThanOrEqual(MAX_CHUNK_BYTES);
   });
@@ -147,7 +147,7 @@ describe("chunkDocument", () => {
     const result = chunkDocument(text);
     expect(result.refusal).toBeNull();
     expect(result.chunks).toEqual([text]);
-    expect(bytes(result.chunks[0])).toBe(MAX_CHUNK_BYTES);
+    expect(bytes(result.chunks[0] ?? "")).toBe(MAX_CHUNK_BYTES);
   });
 
   it("splits a document one full chunk plus a second block into two chunks", () => {

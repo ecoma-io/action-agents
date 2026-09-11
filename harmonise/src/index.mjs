@@ -641,6 +641,9 @@ async function harmoniseRun(inputs, context, world, red) {
     // language's pair classifies against the same digest.
     const sourceFingerprint = contentFingerprint(file.content);
 
+    const [firstChunk] = planned.chunks;
+    if (firstChunk === undefined) throw new Error("chunk planning produced no chunks");
+
     for (const target of pair.targets) {
       try {
         const chunks = planned.chunks.map((sourceChunk, chunkIndex) =>
@@ -683,8 +686,7 @@ async function harmoniseRun(inputs, context, world, red) {
         // path exactly as before. Nothing model-shaped can reach this
         // decision: both sides are digests of repository bytes.
         const recorded =
-          recordedRecords.find((record) => record.destinationPath === chunks[0].destinationPath) ??
-          null;
+          recordedRecords.find((record) => record.destinationPath === target.path) ?? null;
         const blocks = pairBlockShape(recorded, null);
         const current = {
           sourceFingerprint,
@@ -696,8 +698,8 @@ async function harmoniseRun(inputs, context, world, red) {
           slots.push({
             lang: target.lang,
             sourcePath: pair.sourcePath,
-            destinationPath: chunks[0].destinationPath,
-            state: chunks[0].state,
+            destinationPath: target.path,
+            state: target.state,
             outcome: "unchanged-skipped",
             stats: {
               glossaryHits: chunks.reduce((n, c) => n + c.protection.glossaryHits, 0),
@@ -883,8 +885,8 @@ async function harmoniseRun(inputs, context, world, red) {
       outcome: {
         lang: job.lang,
         sourcePath: job.sourcePath,
-        destinationPath: job.chunks[0].destinationPath,
-        state: job.chunks[0].state,
+        destinationPath: /** @type {string} */ (job.chunks[0]?.destinationPath),
+        state: /** @type {"missing" | "existing"} */ (job.chunks[0]?.state),
         outcome: translated.noop ? "unchanged" : "proposed",
         stats: {
           glossaryHits: job.chunks.reduce((n, c) => n + c.protection.glossaryHits, 0),

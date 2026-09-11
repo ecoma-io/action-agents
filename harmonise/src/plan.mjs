@@ -94,13 +94,14 @@ export function planPair(sourceText, frontmatter) {
  * @property {string} sourcePath
  * @property {string} destinationPath
  * @property {"existing" | "missing"} state
- * @property {string} sourceText the untouched original, for identity checks and structure comparison
  * @property {string} protectedText the source as the model will receive it
  * @property {ReturnType<typeof protectDocument>} protection
- * @property {FrontmatterGuard | undefined} frontmatter the pair's frontmatter protection, undefined without frontmatter
  * @property {number} linksRewritten destinations that moved during preparation
  * @property {(absPath: string) => string | null} resolveDocument a linked document's localized target, or null when absent and unplanned
  * @property {(absPath: string) => string | null} resolveImage an image's localized variant, or null when the file does not exist
+ * @property {string} sourceChunk this chunk's already-masked source text
+ * @property {number} chunkIndex the chunk's zero-based position in the pair
+ * @property {number} chunkCount the pair's total chunk count
  */
 
 /**
@@ -386,6 +387,8 @@ function judgeChunk(content, prepared, input, chunked) {
  * @returns {{ outcome: "noop", summary: string } | { outcome: "proposal", text: string, summary: string }}
  */
 function judgeWhole(reassembled, summaries, input) {
+  const first = input.chunks[0];
+  if (first === undefined) throw new Error("chunk translation produced no chunks");
   // The protected frontmatter values go back only after per-chunk
   // sanitising: until this point the placeholders shielded them from the
   // HTML stripper, exactly as the glossary tokens shield their terms.
@@ -430,9 +433,9 @@ function judgeWhole(reassembled, summaries, input) {
     ),
     candidateLinks: collectLinks(unmasked),
     context: {
-      translatedDocPath: input.chunks[0].destinationPath,
-      resolveDocument: input.chunks[0].resolveDocument,
-      resolveImage: input.chunks[0].resolveImage,
+      translatedDocPath: first.destinationPath,
+      resolveDocument: first.resolveDocument,
+      resolveImage: first.resolveImage,
     },
   });
   if (linkVerdict.violations.length > 0) {

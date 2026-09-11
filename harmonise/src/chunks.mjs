@@ -84,6 +84,7 @@ function buildLineStarts(text) {
 }
 
 /** The UTF-8 byte length of one slice — the budget's measure. */
+/** @param {string} slice @returns {number} */
 const byteLength = (slice) => new TextEncoder().encode(slice).byteLength;
 
 /* ------------------------------------------------------------------ */
@@ -124,7 +125,7 @@ function collectUnits(lines, fences) {
   let contentStart = -1;
 
   /** Closes an open content run through `through`, inclusive. */
-  const flushContent = (through) => {
+  const flushContent = (/** @type {number} */ through) => {
     if (contentStart >= 0 && through >= contentStart) {
       units.push({ start: contentStart, end: through });
       contentStart = -1;
@@ -132,7 +133,7 @@ function collectUnits(lines, fences) {
   };
 
   /** Settles every pending lone skip with `through` as its target. */
-  const settlePending = (through) => {
+  const settlePending = (/** @type {number} */ through) => {
     for (const directive of pending.splice(0)) {
       units.push({ start: directive, end: Math.max(directive, through) });
     }
@@ -256,7 +257,8 @@ export function chunkDocument(text, { maxChunkBytes = MAX_CHUNK_BYTES } = {}) {
   const lastOffset = lineStarts[lineStarts.length - 1];
 
   /** Char offset just past `endLine`, inclusive. */
-  const endOffset = (endLine) => lineStarts[Math.min(endLine + 1, lineStarts.length - 1)];
+  const endOffset = (/** @type {number} */ endLine) =>
+    lineStarts[endLine + 1] ?? lineStarts[lineStarts.length - 1] ?? 0;
 
   /* -- Atomic units, in document order -------------------------------- */
   /** @type {LineRange[]} */
@@ -264,16 +266,18 @@ export function chunkDocument(text, { maxChunkBytes = MAX_CHUNK_BYTES } = {}) {
 
   // Frontmatter head: `---\n` … `---` is the first atomic unit when the
   // document opens with one.
-  if (lines.length > 0 && lines[0].trim() === "---") {
+  const firstLine = lines[0] ?? "";
+  if (firstLine.trim() === "---") {
     for (let i = 1; i < lines.length; i += 1) {
-      if (lines[i].trim() === "---") {
+      const line = lines[i] ?? "";
+      if (line.trim() === "---") {
         units.push({ start: 0, end: i });
         break;
       }
     }
   }
 
-  const bodyFrom = units.length > 0 ? units[0].end + 1 : 0;
+  const bodyFrom = units.length > 0 ? (units[0]?.end ?? 0) + 1 : 0;
   if (bodyFrom < lines.length) {
     for (const unit of collectUnits(lines.slice(bodyFrom), fences.slice(bodyFrom))) {
       units.push({ start: unit.start + bodyFrom, end: unit.end + bodyFrom });
@@ -294,16 +298,19 @@ export function chunkDocument(text, { maxChunkBytes = MAX_CHUNK_BYTES } = {}) {
   // A chunk runs from its first unit's first char to the char where the
   // next unit starts — blank separator lines ride with the chunk before
   // them — and the final chunk runs to the end of the text.
-  const flushThrough = (unitIdx) => {
-    const from = lineStarts[units[packFrom].start];
-    const to = unitIdx + 1 < units.length ? lineStarts[units[unitIdx + 1].start] : lastOffset;
+  const flushThrough = (/** @type {number} */ unitIdx) => {
+    const from = lineStarts[units[packFrom]?.start ?? 0] ?? 0;
+    const to =
+      unitIdx + 1 < units.length
+        ? (lineStarts[units[unitIdx + 1]?.start ?? 0] ?? lastOffset)
+        : lastOffset;
     chunks.push(text.slice(from, to));
     packFrom = unitIdx + 1;
     chunkBytes = 0;
   };
 
   for (let i = 0; i < units.length; i += 1) {
-    const unit = text.slice(lineStarts[units[i].start], endOffset(units[i].end));
+    const unit = text.slice(lineStarts[units[i]?.start ?? 0], endOffset(units[i]?.end ?? 0));
     const bytes = byteLength(unit);
 
     // Flush before this unit when adding it would cross the ceiling.

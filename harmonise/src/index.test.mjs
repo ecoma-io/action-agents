@@ -13,6 +13,7 @@
 //      under the declared policy, an unknown failure once, and an auth
 //      failure never.
 
+import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1292,6 +1293,8 @@ describe("run", () => {
       // whole pair — chunk one again, the answer repeats cleanly — before
       // both chunks answer and the reassembly passes the whole-document
       // gates.
+      assert.ok(first !== undefined, "chunk one answer expected");
+      assert.ok(second !== undefined, "chunk two answer expected");
       const chatDouble = chat([proposes(first), overloaded(), proposes(first), proposes(second)]);
       const { ioDouble, sleeps } = sleeping(
         makeRepo({ documents: { "manual/dev.md": source } }),

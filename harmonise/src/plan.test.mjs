@@ -300,6 +300,7 @@ describe("translatePair", () => {
     return translatePair({
       chunks: [prepared],
       sourceText,
+      existingText: undefined,
       frontmatter: undefined,
       sourceLanguage: "en",
       model: "gpt-x",
@@ -454,7 +455,7 @@ describe("translatePair", () => {
   it("translates a chunked pair chunk by chunk, reassembling in order", async () => {
     // One chat request per chunk; the parts come back joined in chunk
     // order and every chunk's summary rides along.
-    const chunk = (sourceChunk, chunkIndex) =>
+    const chunk = (/** @type {string} */ sourceChunk, /** @type {number} */ chunkIndex) =>
       preparePair({
         slug: "dev",
         lang: "vi",
@@ -485,6 +486,7 @@ describe("translatePair", () => {
     });
     expect(chat.calls()).toBe(2);
     expect(result.outcome).toBe("proposal");
+    if (result.outcome !== "proposal") throw new Error("expected a proposal");
     expect(result.text).toBe("Alpha prose translated A.\nBeta prose translated B.\n");
     expect(result.summary).toBe("kept in step kept in step");
   });
@@ -499,6 +501,7 @@ describe("translatePair", () => {
     expect(new TextEncoder().encode(big).byteLength).toBeGreaterThan(32 * 1024);
     const result = await translate(prepared, proposes(big));
     expect(result.outcome).toBe("proposal");
+    if (result.outcome !== "proposal") throw new Error("expected a proposal");
     expect(result.text).toBe(big);
   });
   it("records a noop when the sanitised proposal is byte-identical to what it replaces", async () => {
