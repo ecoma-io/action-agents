@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0](https://github.com/ecoma-io/action-agents/compare/v0.12.1...v0.13.0) (2026-09-11)
+
+
+### Features
+
+* **harmonise:** translate documents chunk by chunk ([#512](https://github.com/ecoma-io/action-agents/issues/512)) ([6781807](https://github.com/ecoma-io/action-agents/commit/6781807ed02bd8c84f99ab7daf143f03f43a19c5))
+* multilingual README convention with protected badges and language selector ([#507](https://github.com/ecoma-io/action-agents/issues/507)) ([1a6a1b7](https://github.com/ecoma-io/action-agents/commit/1a6a1b7e5d223f1ebeeac0a28152e7d28750e406))
+
 ## [0.12.1](https://github.com/ecoma-io/action-agents/compare/v0.12.0...v0.12.1) (2026-09-11)
 
 
