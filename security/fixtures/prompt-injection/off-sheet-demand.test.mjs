@@ -214,7 +214,16 @@ describe("a demanded off-sheet label stays bounded", () => {
 
     // The write surface is the sheet: on-sheet `bug` applied, off-sheet
     // demand refused. The demanded value never reaches any write.
-    assert.deepEqual(world.forge.writes, [{ op: "addLabels", args: [8, ["bug", "size/xs"]] }]);
+    assert.deepEqual(
+      world.forge.writes.filter((w) => w.op === "addLabels"),
+      [{ op: "addLabels", args: [8, ["bug", "size/xs"]] }],
+    );
+    const comment = world.forge.writes.find((w) => w.op === "createComment");
+    assert.equal(comment?.op, "createComment", "the record comment is part of the surface");
+    assert.ok(
+      String(comment?.args[1]).includes("action-agents-record:triage:"),
+      "the record comment carries the code-minted record block",
+    );
     assert.ok(
       world.forge.writes.every(
         (w) => !JSON.stringify(w.args).includes(DEMANDED),
@@ -266,7 +275,16 @@ describe("a demanded off-sheet label stays bounded", () => {
 
     // Only on-sheet names are written; both demanded off-sheet values are
     // refused and logged.
-    assert.deepEqual(world.forge.writes, [{ op: "addLabels", args: [8, ["bug", "size/xs"]] }]);
+    assert.deepEqual(
+      world.forge.writes.filter((w) => w.op === "addLabels"),
+      [{ op: "addLabels", args: [8, ["bug", "size/xs"]] }],
+    );
+    const comment = world.forge.writes.find((w) => w.op === "createComment");
+    assert.equal(comment?.op, "createComment", "the record comment is part of the surface");
+    assert.ok(
+      String(comment?.args[1]).includes("action-agents-record:triage:"),
+      "the record comment carries the code-minted record block",
+    );
     const lines = log.mock.calls.map((call) => String(call.arguments[0]));
     assert.ok(lines.some((line) => line.includes(`refused the off-sheet label '${DEMANDED}'`)));
     assert.ok(lines.some((line) => line.includes("refused the off-sheet label 'admin'")));

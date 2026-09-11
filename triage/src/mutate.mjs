@@ -23,7 +23,13 @@ import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { oneLine } from "#core/one-line.mjs";
 import { info, warning } from "#core/runtime.mjs";
 
-import { commentBody, decisionWriteOps, renderDryRun, signalBody } from "./decision.mjs";
+import {
+  classificationRecordBody,
+  commentBody,
+  decisionWriteOps,
+  renderDryRun,
+  signalBody,
+} from "./decision.mjs";
 
 /** @typedef {import("./decision.mjs").Decision} Decision */
 /** @typedef {import("./decision.mjs").DecisionWriteOp} DecisionWriteOp */
@@ -255,9 +261,22 @@ export async function mutate({
         },
       });
     } else if (entry.opId === "comment") {
-      const answer = /** @type {{ classification: string, rationale: string }} */ (
-        decision.comment
-      );
+      // One comment surface, two bodies: the no-sheet classification
+      // (`kind === "comment"`) and the sheet-mode record comment whose
+      // embedded block names the classification labels this run applied
+      // (issue #498). The signal is the action's own words plus sanitised
+      // untrusted fragments; the record is entirely code-minted. Both
+      // upsert under the same code-minted id.
+      /** @type {(marker: string) => string} */
+      const buildBody =
+        decision.kind === "comment"
+          ? (marker) => {
+              const answer = /** @type {{ classification: string, rationale: string }} */ (
+                decision.comment
+              );
+              return commentBody(answer, marker);
+            }
+          : (marker) => classificationRecordBody({ labels: decision.record ?? [] }, marker);
       ops.push({
         op: "upsertComment",
         target: entry.target,
@@ -268,7 +287,7 @@ export async function mutate({
             store: forge,
             action,
             issueNumber,
-            buildBody: (marker) => commentBody(answer, marker),
+            buildBody,
             ownLogins,
             head,
             startedAt: now(),
@@ -295,18 +314,20 @@ export async function mutate({
         opIds: [entry.opId],
         apply: async () => {
           // A sheet-mode issue run may carry a code-composed signal:
-          // needs-more-info or a best relationship. It is a comment in the
-          // same marker namespace as the no-sheet classification, so the
-          // upsert keeps exactly one of the action's comments on the thread
-          // whichever mode the last run used. The signal is composed entirely
-          // by code — model text never reaches it.
-          const ownLogins = await resolveOwnLogins(forge);
+          // needs-more-info or a best relationship. It upserts under its
+          // OWN marker namespace ("triage-signal"), so the signal and the
+          // classification record coexist as two independent comments —
+          // the signal's upsert can never overwrite the record's, and
+          // provenance reads (which match only action "triage") are
+          // unaffected. The signal is composed entirely by code — model
+          // text never reaches it.
+          const signalOwnLogins = await resolveOwnLogins(forge);
           const outcome = await upsertComment({
             store: forge,
-            action,
+            action: "triage-signal",
             issueNumber,
             buildBody: (marker) => signalBody(signal, marker),
-            ownLogins,
+            ownLogins: signalOwnLogins,
             head,
             startedAt: now(),
             log: info,

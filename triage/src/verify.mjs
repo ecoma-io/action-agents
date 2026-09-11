@@ -361,13 +361,21 @@ export function applyVerification(decision, plan, judged) {
   // `signal` is dropped outright — its write is gone. A `comment` decision
   // whose comment op did not stand is reduced to a no-write `labels` plan:
   // the comment's write is gone, and the shape the executor consumes —
-  // `decisionWriteOps` — names nothing for it.
-  const commentStands = decision.kind !== "comment" || confirmed("comment");
+  // `decisionWriteOps` — names nothing for it. The record (issue #498)
+  // follows the same op: it describes the comment's block, so the record
+  // survives only when the comment op stands.
+  const commentOp = plan.ops.find((op) => op.opId === "comment");
+  const commentStands = commentOp === undefined || confirmed("comment");
   /** @type {Decision} */
   const acted = {
     ...decision,
     kind: commentStands ? decision.kind : "labels",
     comment: commentStands ? decision.comment : undefined,
+    record: commentStands
+      ? (decision.record?.filter(
+          (label) => !decision.add.includes(label) || confirmed(`add:${label}`),
+        ) ?? null)
+      : null,
     add: decision.add.filter((label) => confirmed(`add:${label}`)),
     remove: decision.remove.filter((removal) => confirmed(`remove:${removal.name}`)),
     refusals,

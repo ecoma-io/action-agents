@@ -585,6 +585,7 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
     "harmonise.upsertPullRequest": 2,
     "review.createComment": 5,
     "triage.addLabels": 3,
+    "triage.createComment": 2,
   });
   assert.equal(result.ok, true);
 });

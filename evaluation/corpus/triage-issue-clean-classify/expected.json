@@ -3,6 +3,6 @@
   "adds": ["bug"],
   "removes": [],
   "refusals": [],
-  "commentExpected": false,
+  "commentExpected": true,
   "signalExpected": false
 }

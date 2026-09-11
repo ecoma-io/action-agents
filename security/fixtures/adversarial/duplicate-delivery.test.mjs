@@ -274,10 +274,19 @@ describe("triage — the same event redelivered", () => {
     await deliver(worldForge, ANSWER, []);
     assert.equal(worldForge.modelCalls.count, 3);
     assert.deepEqual(worldForge.liveLabels(), ["bug"]);
-    assert.deepEqual(worldForge.writes, [
+    assert.deepEqual(worldForge.writes.slice(0, 2), [
       { op: "removeLabel", args: ["needs triage"] },
       { op: "addLabels", args: [["bug"]] },
     ]);
+    // The repair also upserts the classification record comment: the run
+    // applied `bug`, and the record block is the proof a later run reads.
+    assert.equal(worldForge.writes[2]?.op, "createComment");
+    const comments = await worldForge.listComments();
+    assert.equal(comments.length, 1);
+    assert.ok(
+      comments[0]?.body.includes("action-agents-record:triage:"),
+      "the repair's comment carries the code-minted record block",
+    );
   });
 });
 

@@ -273,7 +273,15 @@ describe("evidence-delimiter forgery stays bounded", () => {
 
     // The run itself stays bounded: sheet mode writes labels only, and only
     // the on-sheet one the honest answer chose.
-    assert.deepEqual(world.forge.writes, [{ op: "addLabels", args: [7, ["bug"]] }]);
+    assert.deepEqual(
+      world.forge.writes.filter((w) => w.op === "addLabels"),
+      [{ op: "addLabels", args: [7, ["bug"]] }],
+    );
+    const comment = world.forge.writes.find((w) => w.op === "createComment");
+    assert.ok(
+      String(comment?.args[1]).includes("action-agents-record:triage:"),
+      "the record comment carries the code-minted record block",
+    );
   });
 
   it("text smuggled after a forged close stays inside the frame", async () => {
@@ -303,7 +311,15 @@ describe("evidence-delimiter forgery stays bounded", () => {
       bodyBlock.indexOf("Smuggled") < bodyBlock.indexOf(END),
       "the smuggled text sits before the legit close, inside the frame",
     );
-    assert.deepEqual(world.forge.writes, [{ op: "addLabels", args: [7, ["bug"]] }]);
+    assert.deepEqual(
+      world.forge.writes.filter((w) => w.op === "addLabels"),
+      [{ op: "addLabels", args: [7, ["bug"]] }],
+    );
+    const comment = world.forge.writes.find((w) => w.op === "createComment");
+    assert.ok(
+      String(comment?.args[1]).includes("action-agents-record:triage:"),
+      "the record comment carries the code-minted record block",
+    );
   });
 
   it("a guessed delimiter id is inert inside the block", async () => {
