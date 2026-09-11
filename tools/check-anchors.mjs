@@ -35,6 +35,8 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { oneLine } from "../core/src/one-line.mjs";
+
 import GithubSlugger from "github-slugger";
 
 export const LINK = /\]\((\S*?)#([^)\s]+)\)/g;
@@ -149,7 +151,11 @@ function main() {
   const { failures, checked } = evaluate({ files: readDocFiles(), textOf: readTarget });
 
   if (failures.length > 0) {
-    for (const failure of failures) console.error(`✗ ${failure}`);
+    // Failure lines quote link targets carried by the repository's own
+    // documents; flattened and control-stripped at the one place they meet
+    // a log, so no file's bytes can forge a line of this gate's output.
+    for (const failure of failures)
+      console.error(`✗ ${oneLine(failure, { stripControlChars: true })}`);
     console.error(`\n${String(failures.length)} broken documentation link(s).`);
     process.exit(1);
   }
