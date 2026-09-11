@@ -262,6 +262,17 @@ jobs:
       - name: Check documentation anchors
         run: pnpm check-anchors
 
+      # Judges the multilingual README set as a whole — the four facts the
+      # harmonise run can never see together: the configured languages, the
+      # documents on disk, the selector line inside every document's
+      # protected region, and the regions' byte-identity across translations.
+      # A language configured without its document, a twin nobody configured,
+      # or a "translation" that re-rendered the badges or the selector fails
+      # here rather than as a reader's dead link or a run that preserves the
+      # corruption.
+      - name: Check README language set
+        run: pnpm check-readme-langs
+
       # Resolves every docs reference the list above does not cover: markdown
       # link targets must exist and, for pages INSIDE docs/, land only within
       # docs/; prose `docs/…` citations must resolve; and a bare `#anchor` must

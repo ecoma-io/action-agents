@@ -35,6 +35,8 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { oneLine } from "../core/src/one-line.mjs";
+
 import GithubSlugger from "github-slugger";
 
 export const LINK = /\]\((\S*?)#([^)\s]+)\)/g;
@@ -110,14 +112,20 @@ export function evaluate({ files, textOf }) {
 }
 
 /**
- * README.md plus every markdown page under `docs/`, which may not exist.
+ * Every README document at the root — the canonical one and its language
+ * twins (`README.vi.md`, `README.ja.md`, …) — plus every markdown page under
+ * `docs/`, which may not exist. The twins carry the same anchors the
+ * canonical document does, so a translation whose quick-links row points at
+ * a heading no longer there fails here exactly as the original would.
  *
  * @returns {DocFile[]}
  */
 function readDocFiles() {
   /** @type {string[]} */
   const paths = [];
-  if (existsSync("README.md")) paths.push("README.md");
+  for (const entry of readdirSync(".")) {
+    if (/^README(\.[A-Za-z0-9]+)*\.md$/.test(entry)) paths.push(entry);
+  }
   if (existsSync("docs")) {
     for (const entry of readdirSync("docs", { recursive: true })) {
       const rel = String(entry);
@@ -143,7 +151,11 @@ function main() {
   const { failures, checked } = evaluate({ files: readDocFiles(), textOf: readTarget });
 
   if (failures.length > 0) {
-    for (const failure of failures) console.error(`✗ ${failure}`);
+    // Failure lines quote link targets carried by the repository's own
+    // documents; flattened and control-stripped at the one place they meet
+    // a log, so no file's bytes can forge a line of this gate's output.
+    for (const failure of failures)
+      console.error(`✗ ${oneLine(failure, { stripControlChars: true })}`);
     console.error(`\n${String(failures.length)} broken documentation link(s).`);
     process.exit(1);
   }

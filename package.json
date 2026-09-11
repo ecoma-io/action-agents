@@ -60,6 +60,7 @@
     "check-docs-links": "node scripts/check-docs-links.mjs",
     "check-action-pins": "node tools/check-action-pins.mjs",
     "check-anchors": "node tools/check-anchors.mjs",
+    "check-readme-langs": "node tools/check-readme-langs.mjs",
     "check-uses-refs": "node tools/check-uses-refs.mjs",
     "check-action-inputs": "node tools/check-action-inputs.mjs",
     "check-workflow-inputs": "node tools/check-workflow-inputs.mjs",

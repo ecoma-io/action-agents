@@ -47,6 +47,13 @@ pre-commit:
       # exist; the same gate also runs at edit time through the editor hooks.
       run: pnpm check-docs-links
 
+    - name: readme-langs
+      # Same reasoning as doc-links: the failure is the tree, not a staged
+      # path — a translation saved with its selector row edited, a language
+      # configured without its document, a twin nobody configured. Reads the
+      # harmonise configuration and eleven small documents in milliseconds.
+      run: pnpm check-readme-langs
+
     - name: skills
       # Same reasoning as doc-links: the failure is the tree, not a staged
       # path. An `@ecoma-io/archkeep` bump in package.json goes stale against
