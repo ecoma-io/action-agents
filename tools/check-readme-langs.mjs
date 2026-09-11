@@ -24,22 +24,26 @@
 //
 // The directive grammar mirrored below is `harmonise/src/protect.mjs`'s, on
 // purpose: a line this gate accepts but a run would refuse (or the reverse)
-// is a gate lying about the mechanism it watches. The fence handling follows
-// the same rule the other document gates state for themselves
-// (scripts/check-docs-links.mjs): a self-contained approximation is honest
-// here, and importing an action's domain modules into a repository gate is
-// not. The JSON5 configuration, by contrast, is parsed with the very parser
-// the action loads it with — core/src/json5-parse.mjs — so a configuration
-// this gate reads is byte-for-byte the configuration a run reads.
+// is a gate lying about the mechanism it watches. The fence handling makes
+// the same argument in the opposite direction — this gate once carried its
+// own fence approximation, and the approximation diverged from the run's
+// `fenceMask` in exactly the place a lie creeps in (an indented delimiter).
+// It now imports the run's real fence mask, so the two can never drift. The
+// JSON5 configuration is parsed with the very parser the action loads it
+// with — core/src/json5-parse.mjs — and held to the same 64 KiB bound the
+// action's config loader enforces, so a configuration this gate reads is
+// byte-for-byte the configuration a run reads.
 //
 // The facts are read from the filesystem by `readFacts`; the judgment is the
 // pure function `evaluate`, which takes those facts as arguments and returns
 // verdicts, so the tests need no filesystem and no mocking library.
 
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { oneLine } from "../core/src/one-line.mjs";
 import { json5Parse } from "../core/src/json5-parse.mjs";
+import { fenceMask, splitLines } from "../harmonise/src/markdown.mjs";
 
 /** Where this repository's harmonise configuration lives. */
 const DEFAULT_CONFIG_PATH = ".github/action-agents/harmonise/harmonise.json5";
@@ -50,13 +54,19 @@ const DOCUMENT_NAME = "README";
 /** The canonical twin's exact path; the convention has the source at root. */
 const SOURCE_DOCUMENT_PATH = "README.md";
 
+/** The configuration byte bound the action's own config loader enforces. */
+const MAX_CONFIG_BYTES = 65536;
+
+/** The number of protected regions the convention defines: badges, selector. */
+const EXPECTED_REGIONS = 2;
+
+/** The zero-based position of the selector in that pair. */
+const SELECTOR_POSITION = 1;
+
 /** Any whole-line comment addressing this action, valid or not. */
 const HARMONISE_COMMENT_LINE = /^<!--\s*harmonise:.*-->$/;
 /** The three directives a run accepts — mirrored from protect.mjs. */
 const DIRECTIVE_LINE = /^<!--\s*harmonise:(skip|skip-start|skip-end)\s*-->$/;
-
-/** A fence opener — the same shapes protect.mjs's fence mask honors. */
-const FENCE_LINE = /^\s*(```|~~~)/;
 /** Selector links: an HTML `href` or a markdown link destination, in order. */
 const SELECTOR_LINK = /(?:\bhref="([^"]+)"|\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\))/g;
 /** Targets outside this tree — not judged, the way check-docs-links treats them. */
@@ -73,85 +83,94 @@ const EXTERNAL_TARGET = /^(https?:|mailto:|#)/;
  */
 
 /**
- * @param {string} text
- * @returns {string}
- */
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Reads one document's protected structure. Mirrors protect.mjs's semantics:
- * a region runs from `skip-start` through its `skip-end`, markers included;
- * a lone `skip` protects the next non-blank line; comment-like text inside a
- * fence is content, never a directive; malformed or unclosed directives are
- * errors, never silently ignored.
+ * Reads one document's protected structure. Mirrors protect.mjs's
+ * `collectSkipRanges` line for line — the same fence mask, the same
+ * pending-directive settling, the same refusals with the same messages —
+ * because this gate's whole premise is that what it accepts is what a run
+ * accepts: a region runs from `skip-start` through its `skip-end`, markers
+ * included; a lone `skip` protects the next non-blank content line; a
+ * directive whose target is fenced is refused, not silently widened;
+ * malformed or unclosed directives are errors, never silently ignored.
  *
  * @param {string} text the document's exact bytes
  * @param {string} sourcePath the selector is the region linking this path
  * @returns {{ regions: Region[], selectorIndex: number, errors: string[] }}
  */
 export function inspectDocument(text, sourcePath) {
-  const lines = text.split("\n");
+  const lines = splitLines(text);
+  const fences = fenceMask(lines);
   /** @type {Region[]} */
   const regions = [];
   /** @type {string[]} */
   const errors = [];
-  let inFence = false;
-  let openStart = -1;
+  /** @type {number | undefined} */
+  let openStart;
+  /** @type {number[]} */ // lone-skip directive lines awaiting their target
+  const pending = [];
+  /** @type {[number, number][]} */ // raw, possibly intersecting, pre-merge
+  const rawRanges = [];
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (FENCE_LINE.test(line)) inFence = !inFence;
-    if (inFence) continue;
-    if (!HARMONISE_COMMENT_LINE.test(line)) continue;
-    if (!DIRECTIVE_LINE.test(line)) {
-      errors.push(`line ${i + 1}: a harmonise comment that is not a directive this action accepts`);
+  for (const [index, rawLine] of lines.entries()) {
+    if (fences[index] === true) {
+      // A fenced line may never be a skip target — the same refusal the run
+      // raises, because a gate that accepted it would bless a document the
+      // run deterministically refuses.
+      if (pending.length > 0) {
+        errors.push(
+          `harmonise:skip on line ${pending[0] + 1} would target a fenced code block — ` +
+            `wrap the block in harmonise:skip-start / harmonise:skip-end instead`,
+        );
+      }
       continue;
     }
-    if (line.includes("skip-start")) {
-      if (openStart >= 0) {
+    const line = rawLine.trim();
+    if (!HARMONISE_COMMENT_LINE.test(line)) {
+      // A content line settles every pending lone skip — the next non-blank
+      // line after each is this one.
+      if (line !== "" && pending.length > 0) {
+        for (const directive of pending.splice(0)) {
+          rawRanges.push([directive, index]);
+        }
+      }
+      continue;
+    }
+    const kind = DIRECTIVE_LINE.exec(line)?.[1];
+    if (kind === undefined) {
+      errors.push(
+        `line ${index + 1}: a harmonise comment that is not a directive this action accepts`,
+      );
+      continue;
+    }
+    if (kind === "skip") {
+      pending.push(index);
+    } else if (kind === "skip-start") {
+      if (openStart !== undefined) {
         errors.push(
-          `line ${i + 1}: a region opened at line ${openStart + 1} is still open — regions do not nest`,
+          `line ${index + 1}: a region opened at line ${openStart + 1} is still open — regions do not nest`,
         );
       } else {
-        openStart = i;
+        openStart = index;
       }
-      continue;
-    }
-    if (line.includes("skip-end")) {
-      if (openStart < 0) {
-        errors.push(`line ${i + 1}: skip-end with no open region`);
-      } else {
-        regions.push({
-          start: openStart,
-          end: i,
-          content: lines.slice(openStart, i + 1).join("\n"),
-        });
-        openStart = -1;
-      }
-      continue;
-    }
-    // A lone `skip`: it protects the next non-blank line, so the region is
-    // the directive line plus that line — the bytes a run would carry whole.
-    // Resolved immediately: a second skip's own region must not erase this
-    // one, and two overlapping protections coalesce into their union anyway.
-    let next = i + 1;
-    while (next < lines.length && lines[next].trim() === "") next += 1;
-    if (next >= lines.length) {
-      errors.push(
-        `line ${i + 1}: skip protects the next non-blank line, and the document ends first`,
-      );
+    } else if (openStart !== undefined) {
+      rawRanges.push([openStart, index]);
+      openStart = undefined;
     } else {
-      regions.push({
-        start: i,
-        end: next,
-        content: lines.slice(i, next + 1).join("\n"),
-      });
+      errors.push(`line ${index + 1}: skip-end with no open region`);
     }
   }
-  if (openStart >= 0) {
+  if (openStart !== undefined) {
     errors.push(`line ${openStart + 1}: a region opened here is never closed`);
+  }
+  if (pending.length > 0) {
+    errors.push(`harmonise:skip on line ${pending[0] + 1} has no following line to preserve`);
+  }
+
+  // Ranges that share any line are one span, exactly as the run's
+  // mergeRanges unions them: two lone skips settling on one line protect one
+  // merged region, and byte-identity must judge the merged bytes or it
+  // would judge regions no run ever holds.
+  for (const [start, end] of mergeRanges(rawRanges)) {
+    regions.push({ start, end, content: lines.slice(start, end + 1).join("\n") });
   }
 
   const sourceLink = new RegExp(
@@ -162,8 +181,38 @@ export function inspectDocument(text, sourcePath) {
 }
 
 /**
- * The language links a selector region carries, in document order: an HTML
- * `href` or a markdown destination per match; external targets dropped.
+ * Unions ranges that share any line, as protect.mjs's mergeRanges does, so
+ * the gate judges the same spans a run protects.
+ *
+ * @param {[number, number][]} ranges inclusive line indices, any order
+ * @returns {[number, number][]} unioned ranges, in document order
+ */
+function mergeRanges(ranges) {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  /** @type {[number, number][]} */
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && range[0] <= last[1]) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push([range[0], range[1]]);
+    }
+  }
+  return merged;
+}
+
+/**
+ * @param {string} text
+ * @returns {string}
+ */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The language links a region carries, in document order: an HTML `href` or a
+ * markdown link destination per match; external targets dropped.
  *
  * @param {string} content
  * @returns {string[]}
@@ -254,42 +303,55 @@ export function evaluate({ configPath, languages, sourceLanguage, documents }) {
   }
   if (inspected.length === 0) return { failures, checked: 0 };
 
-  const selectorIndexes = new Set(inspected.map(({ selectorIndex }) => selectorIndex));
-  if (selectorIndexes.size !== 1) {
-    failures.push(
-      `${configPath}: exactly one selector region is expected in every document; documents report ${[...selectorIndexes].map(String).join(", ") || "none"}`,
-    );
-  } else if ([...selectorIndexes][0] < 0) {
-    failures.push(
-      `${configPath}: no document's protected regions link ${SOURCE_DOCUMENT_PATH} — no selector exists`,
-    );
+  // The convention's shape: exactly two protected regions, badges first and
+  // selector second. A document wearing fewer has machinery a run would
+  // translate; a document wearing more protects something no run expects —
+  // and a second selector-shaped region is precisely how a dead link hides
+  // from the selector's own contract.
+  const misshapen = inspected.filter(({ regions }) => regions.length !== EXPECTED_REGIONS);
+  if (misshapen.length > 0) {
+    for (const { doc, regions } of misshapen) {
+      failures.push(
+        `${doc.path}: the convention protects exactly ${String(EXPECTED_REGIONS)} regions (badges, selector); this document has ${String(regions.length)}`,
+      );
+    }
+    return { failures, checked: documents.length };
+  }
+  const displaced = inspected.filter(({ selectorIndex }) => selectorIndex !== SELECTOR_POSITION);
+  if (displaced.length > 0) {
+    for (const { doc, selectorIndex } of displaced) {
+      failures.push(
+        selectorIndex < 0
+          ? `${doc.path}: no document's protected regions link ${SOURCE_DOCUMENT_PATH} — no selector exists`
+          : `${doc.path}: the selector region is region ${String(selectorIndex + 1)}, but the convention puts it second`,
+      );
+    }
+    return { failures, checked: documents.length };
+  }
+  const unbadged = inspected.filter(({ regions }) => !regions[0].content.includes("<img"));
+  if (unbadged.length > 0) {
+    for (const { doc } of unbadged) {
+      failures.push(`${doc.path}: the first protected region carries no badge image`);
+    }
+    return { failures, checked: documents.length };
   }
 
-  const regionCounts = new Set(inspected.map(({ regions }) => regions.length));
-  if (regionCounts.size !== 1) {
-    failures.push(
-      `${configPath}: documents disagree on the protected region count: ${inspected
-        .map(({ doc, regions }) => `${doc.path} has ${String(regions.length)}`)
-        .join(", ")}`,
-    );
-  } else {
-    const first = inspected[0];
-    for (const other of inspected.slice(1)) {
-      for (let i = 0; i < first.regions.length; i += 1) {
-        if (first.regions[i].content !== other.regions[i].content) {
-          failures.push(
-            `${other.doc.path}: protected region ${String(i + 1)} differs from ${first.doc.path}'s — regions are byte-identical across translations, or they are not protected`,
-          );
-        }
+  // Byte-identity across the set, region by region.
+  const first = inspected[0];
+  for (const other of inspected.slice(1)) {
+    for (let i = 0; i < first.regions.length; i += 1) {
+      if (first.regions[i].content !== other.regions[i].content) {
+        failures.push(
+          `${other.doc.path}: protected region ${String(i + 1)} differs from ${first.doc.path}'s — regions are byte-identical across translations, or they are not protected`,
+        );
       }
     }
   }
 
   // The selector's links, per document: every configured language in the
   // configuration's own order, and nothing else.
-  for (const { doc, regions, selectorIndex } of inspected) {
-    const selector = regions[selectorIndex];
-    if (selector === undefined) continue;
+  for (const { doc, regions } of inspected) {
+    const selector = regions[SELECTOR_POSITION];
     const links = selectorLinks(selector.content);
     const seen = new Set();
     for (const link of links) {
@@ -314,6 +376,19 @@ export function evaluate({ configPath, languages, sourceLanguage, documents }) {
     }
   }
 
+  // The badges region is not a place a document link can hide in: any .md
+  // target it carries must be a configured document, so a second region's
+  // dead reference cannot ride along byte-identical across the whole set.
+  for (const { doc, regions } of inspected) {
+    for (const link of selectorLinks(regions[0].content)) {
+      if (/\.md$/.test(link) && !tagByPath.has(link)) {
+        failures.push(
+          `${doc.path}: the badges region links '${link}', which no configured language resolves to`,
+        );
+      }
+    }
+  }
+
   return { failures, checked: documents.length };
 }
 
@@ -325,6 +400,9 @@ export function evaluate({ configPath, languages, sourceLanguage, documents }) {
  * @returns {Facts}
  */
 export function readFacts(configPath) {
+  if (statSync(configPath).size > MAX_CONFIG_BYTES) {
+    throw new Error(`${configPath}: config file exceeds 64 KiB`);
+  }
   const raw = /** @type {any} */ (json5Parse(readFileSync(configPath, "utf8")));
   const languages = raw?.languages;
   const sourceLanguage = raw?.sourceLanguage;
@@ -347,18 +425,26 @@ function main() {
   try {
     facts = readFacts(configPath);
   } catch (cause) {
-    console.error(`✗ ${cause instanceof Error ? cause.message : String(cause)}`);
+    console.error(
+      `✗ ${oneLine(cause instanceof Error ? cause.message : String(cause), { stripControlChars: true })}`,
+    );
     process.exit(1);
   }
   const { failures, checked } = evaluate(facts);
   if (failures.length > 0) {
-    for (const failure of failures) console.error(`✗ ${failure}`);
+    // Failure lines quote paths, selectors and configuration keys — bytes a
+    // repository's documents carry. Flattened and control-stripped at the
+    // one place they meet a log, so nothing a file contains can forge a
+    // line of this gate's output.
+    for (const failure of failures) {
+      console.error(`✗ ${oneLine(failure, { stripControlChars: true })}`);
+    }
     console.error(
       `\n${String(failures.length)} README language failure(s) across ${String(checked)} document(s).`,
     );
     process.exit(1);
   }
-  console.log(`✔ ${String(checked)} README document(s) agree with ${facts.configPath}`);
+  console.log(`✔ ${String(checked)} README document(s) agree with ${oneLine(facts.configPath)}`);
 }
 
 /**

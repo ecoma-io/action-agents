@@ -219,3 +219,70 @@ test("two languages resolving to one path are named", () => {
 
   assert.ok(result.failures.some((f) => f.includes("both resolve to README.md")));
 });
+
+test("two lone skips settling on one line are one merged region", () => {
+  const { regions, errors } = inspectDocument(
+    "<!-- harmonise:skip -->\n<!-- harmonise:skip -->\ntarget\n",
+    "README.md",
+  );
+
+  assert.deepEqual(errors, []);
+  assert.equal(regions.length, 1);
+  assert.equal(regions[0].content, "<!-- harmonise:skip -->\n<!-- harmonise:skip -->\ntarget");
+});
+
+test("a lone skip whose target is fenced is refused like the run refuses it", () => {
+  const { errors } = inspectDocument("<!-- harmonise:skip -->\n\n```\nblock\n```\n", "README.md");
+
+  assert.ok(errors.some((e) => e.includes("would target a fenced code block")));
+});
+
+test("an indented fence no longer hides a diverging badges region", () => {
+  const indent = "    ```\nindented, not fenced\n";
+  const edited = BADGES.replace("badge.svg", "renamed.svg");
+  const result = evaluate(
+    facts([
+      { path: "README.md", text: readme(`${indent}\n${BADGES}\n\n${EN_SELECTOR}`) },
+      { path: "README.vi.md", text: readme(`${indent}\n${edited}\n\n${VI_SELECTOR}`) },
+    ]),
+  );
+
+  assert.ok(result.failures.some((f) => f.includes("protected region 1 differs")));
+});
+
+test("a third protected region cannot ride along byte-identical", () => {
+  const extra =
+    '<!-- harmonise:skip-start -->\n<a href="docs/README.ko.md">Fake</a>\n<!-- harmonise:skip-end -->';
+  const result = evaluate(
+    facts([
+      { path: "README.md", text: readme(`${BADGES}\n\n${EN_SELECTOR}\n\n${extra}`) },
+      { path: "README.vi.md", text: readme(`${BADGES}\n\n${VI_SELECTOR}\n\n${extra}`) },
+    ]),
+  );
+
+  assert.ok(result.failures.some((f) => f.includes("exactly 2 regions")));
+});
+
+test("a lone-skip header leaves the badges outside the convention's shape", () => {
+  const loneBadges = '<!-- harmonise:skip -->\n<p align="center">badges</p>';
+  const result = evaluate(
+    facts([
+      { path: "README.md", text: readme(`${loneBadges}\n\n${EN_SELECTOR}`) },
+      { path: "README.vi.md", text: readme(`${loneBadges}\n\n${VI_SELECTOR}`) },
+    ]),
+  );
+
+  assert.ok(result.failures.some((f) => f.includes("carries no badge image")));
+});
+
+test("a dead document link cannot hide inside the badges region", () => {
+  const carrying = BADGES.replace("</p>", '  <a href="docs/README.ko.md">Extra</a>\n</p>');
+  const result = evaluate(
+    facts([
+      { path: "README.md", text: readme(`${carrying}\n\n${EN_SELECTOR}`) },
+      { path: "README.vi.md", text: readme(`${carrying}\n\n${VI_SELECTOR}`) },
+    ]),
+  );
+
+  assert.ok(result.failures.some((f) => f.includes("the badges region links 'docs/README.ko.md'")));
+});
