@@ -3,19 +3,31 @@
   // documentation is written in English first.
   sourceLanguage: "en",
 
-  // Dogfood phase one: the README only, mirrored GitHub-style as a suffixed
-  // twin (README.vi.md). The suffix shape is the more specific claim, so
-  // README.vi.md classifies as vi even though both patterns can name it.
-  // Widening to docs/** happens after this phase has been reviewed.
+  // The multilingual README program: one document, eleven language twins,
+  // GitHub-style suffixed twins (README.vi.md, README.ja.md, …). A suffixed
+  // pattern is the more specific claim, so README.ja.md classifies as ja even
+  // though the bare `{document}.md` pattern can also name it. The language
+  // set must agree with the selector line every README carries —
+  // `pnpm check-readme-langs` fails the tree when they drift apart.
   languages: {
     en: "{document}.md",
     vi: "{document}.vi.md",
+    zh: "{document}.zh.md",
+    ja: "{document}.ja.md",
+    es: "{document}.es.md",
+    hi: "{document}.hi.md",
+    ar: "{document}.ar.md",
+    pt: "{document}.pt.md",
+    bn: "{document}.bn.md",
+    ru: "{document}.ru.md",
+    fr: "{document}.fr.md",
   },
 
-  // Deliberately untranslated for now: the first dry run showed a bare
-  // `{document}.md` pattern claims every markdown file in the repository —
-  // skills, templates, the whole docs tree — so the ignore list narrows the
-  // program to exactly one document until each joins deliberately.
+  // Deliberately untranslated for now: the bare `{document}.md` source
+  // pattern claims every markdown file in the repository — skills,
+  // templates, the whole docs tree — so the ignore list narrows the program
+  // to exactly one document until each joins deliberately. Widening to
+  // docs/** happens after this phase has been reviewed.
   ignore: ["**", "!README.md"],
 
   // Product and protocol names that stay in English in every translation.
