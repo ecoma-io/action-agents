@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1](https://github.com/ecoma-io/action-agents/compare/v0.12.0...v0.12.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **review:** re-ask on a reasoning-only provider answer instead of failing the run ([#499](https://github.com/ecoma-io/action-agents/issues/499)) ([#502](https://github.com/ecoma-io/action-agents/issues/502)) ([967af67](https://github.com/ecoma-io/action-agents/commit/967af67a224edfd95298db58ec85f2553dd85adc))
+* **triage:** reconcile thread classification as an explicit state machine ([#496](https://github.com/ecoma-io/action-agents/issues/496) [#497](https://github.com/ecoma-io/action-agents/issues/497) [#498](https://github.com/ecoma-io/action-agents/issues/498)) ([#501](https://github.com/ecoma-io/action-agents/issues/501)) ([8bf073f](https://github.com/ecoma-io/action-agents/commit/8bf073fd4092b64f58569f74f78a8ffe76cca67d))
+
 ## [0.12.0](https://github.com/ecoma-io/action-agents/compare/v0.11.4...v0.12.0) (2026-09-09)
 
 
