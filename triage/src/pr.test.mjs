@@ -41,6 +41,7 @@ function evidence(over = {}) {
       creator: "tester",
       state: "open",
     },
+    provenance: null,
     repository: { name: "repo", description: "d" },
     policy: null,
     sheet: null,

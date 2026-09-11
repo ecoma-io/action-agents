@@ -73,6 +73,7 @@ function input(overrides = {}) {
       measuredSize: null,
       quality: null,
       forgeSearch: null,
+      provenance: null,
       eventAction: "opened",
       ...(overrides.evidence ?? {}),
       // Evidence requires `pr` even on an issue thread — absent reads as null.
@@ -200,22 +201,28 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
     expect(decision.add).toEqual(["bug"]);
   });
 
-  it("refuses two members of one exclusive role — fail closed, no mutation", () => {
-    expect(() =>
-      decide(
-        input({
-          evidence: {
-            policy: {
-              ...CONFIG,
-              labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
-            },
+  it("resolves two members of one exclusive role to the use-declared precedence", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          policy: {
+            ...CONFIG,
+            labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
           },
-          assessment: { intent: "labels", labels: ["bug", "docs"], rationale: "r" },
-        }),
+        },
+        assessment: { intent: "labels", labels: ["bug", "docs"], rationale: "r" },
+      }),
+    );
+    // `bug` precedes `docs` in labels.use — the sheet's declared order is
+    // the precedence, so the same input resolves the same way every run.
+    expect(decision.add).toEqual(["bug"]);
+    expect(
+      decision.logs.some(
+        (log) => log.level === "warning" && log.text.includes("'docs' resolves away, 'bug' kept"),
       ),
-    ).toThrow("single-valued 'semantic-classification' role");
+    ).toBe(true);
+    expect(decision.remove).toEqual([]);
   });
-
   it("allows one label per exclusive role — different roles do not conflict", () => {
     const decision = decide(
       input({
@@ -282,35 +289,40 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
     expect(decision.add).toEqual([]);
   });
 
-  it("refuses two priority-role labels — ordering metadata is single-valued", () => {
-    expect(() =>
-      decide(
-        input({
-          evidence: {
-            sheet: new Map([
-              ["bug", "a bug"],
-              ["docs", "a doc"],
-              ["prio/a", "priority a"],
-              ["prio/b", "priority b"],
-            ]),
-            policy: {
-              ...CONFIG,
-              labels: {
-                ...CONFIG.labels,
-                use: new Set(["bug", "docs", "prio/a", "prio/b"]),
-                roles: new Map([
-                  ["bug", "semantic-classification"],
-                  ["prio/a", "priority"],
-                  ["prio/b", "priority"],
-                ]),
-                priority: new Map(),
-              },
+  it("resolves two priority-role labels to the use-declared precedence", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          sheet: new Map([
+            ["bug", "a bug"],
+            ["docs", "a doc"],
+            ["prio/a", "priority a"],
+            ["prio/b", "priority b"],
+          ]),
+          policy: {
+            ...CONFIG,
+            labels: {
+              ...CONFIG.labels,
+              use: new Set(["bug", "docs", "prio/a", "prio/b"]),
+              roles: new Map([
+                ["bug", "semantic-classification"],
+                ["prio/a", "priority"],
+                ["prio/b", "priority"],
+              ]),
+              priority: new Map(),
             },
           },
-          assessment: { intent: "labels", labels: ["prio/a", "prio/b"], rationale: "r" },
-        }),
+        },
+        assessment: { intent: "labels", labels: ["prio/a", "prio/b"], rationale: "r" },
+      }),
+    );
+    expect(decision.add).toEqual(["prio/a"]);
+    expect(
+      decision.logs.some(
+        (log) =>
+          log.level === "warning" && log.text.includes("'prio/b' resolves away, 'prio/a' kept"),
       ),
-    ).toThrow("single-valued 'priority' role");
+    ).toBe(true);
   });
   it("applies a lone priority-role label", () => {
     const decision = decide(
@@ -337,6 +349,101 @@ describe("decide — exclusive and priority are single-valued role rules", () =>
       }),
     );
     expect(decision.add).toEqual(["prio/a"]);
+  });
+});
+
+describe("decide — single-valued reconciliation (issues #497, #498)", () => {
+  /** @param {string[]} labels @returns {Partial<import("./evidence.mjs").Evidence>} */
+  const threadWith = (labels) => ({
+    thread: {
+      type: "issue",
+      number: 7,
+      title: "t",
+      body: "b",
+      labels,
+      createdAt: "2026-01-01T00:00:00Z",
+      creator: "author",
+      state: "open",
+    },
+  });
+  const exclusivePolicy = {
+    ...CONFIG,
+    labels: { ...CONFIG.labels, exclusive: ["semantic-classification"] },
+  };
+
+  it("resolves a mixed single-valued proposal to the member declared earliest in labels.use — deterministically, run over run (issue #497)", () => {
+    const make = () =>
+      input({
+        evidence: { ...threadWith([]), policy: exclusivePolicy },
+        assessment: { intent: "labels", labels: ["docs", "bug"], rationale: "r" },
+      });
+    // The resolution is a total order (labels.use declaration order), not
+    // model luck: the same input decides the same way every run, so a rerun
+    // never flips which member survives.
+    const first = decide(make());
+    expect(decide(make())).toEqual(first);
+    expect(first.add).toEqual(["bug"]);
+    expect(first.remove).toEqual([]);
+    expect(first.refusals).toEqual([]);
+    expect(first.logs).toContainEqual({
+      level: "warning",
+      text: "the 'semantic-classification' role is single-valued — 'docs' resolves away, 'bug' kept (labels.use order is the declared precedence)",
+    });
+  });
+
+  it("resolves a mixed proposal against a thread that already carries one member — the final state is the evaluation surface (issue #497)", () => {
+    // A maintainer pre-applying one of the two members by hand changes the
+    // resolution deterministically — the pre-applied member survives when it
+    // is declared earlier, and the run converges instead of failing red.
+    const decision = decide(
+      input({
+        evidence: { ...threadWith(["bug"]), policy: exclusivePolicy },
+        assessment: { intent: "labels", labels: ["docs", "bug"], rationale: "r" },
+      }),
+    );
+    expect(decision.add).toEqual([]);
+    expect(decision.remove).toEqual([]);
+  });
+
+  it("supersedes a classification the action's own record proves it applied (issue #498)", () => {
+    const decision = decide(
+      input({
+        evidence: {
+          ...threadWith(["bug"]),
+          policy: exclusivePolicy,
+          provenance: new Set(["bug"]),
+        },
+        assessment: { intent: "labels", labels: ["docs"], rationale: "r" },
+      }),
+    );
+    expect(decision.remove).toEqual([{ name: "bug", reason: "supersede" }]);
+    expect(decision.add).toEqual(["docs"]);
+    expect(decision.logs).toContainEqual({
+      level: "info",
+      text: "the earlier classification 'bug' is recorded in this action's own classification comment — replaced by 'docs'",
+    });
+  });
+
+  it("refuses a conflicting member the action cannot prove it applied, naming the exact remediation (issue #498)", () => {
+    expect(() =>
+      decide(
+        input({
+          evidence: { ...threadWith(["bug"]), policy: exclusivePolicy },
+          assessment: { intent: "labels", labels: ["docs"], rationale: "r" },
+        }),
+      ),
+    ).toThrow("remove 'bug' from the thread to let a later run classify");
+  });
+
+  it("keeps a violation fail-closed when the thread already carries two members and the run proposes neither", () => {
+    expect(() =>
+      decide(
+        input({
+          evidence: { ...threadWith(["bug", "docs"]), policy: exclusivePolicy },
+          assessment: { intent: "labels", labels: [], rationale: "r" },
+        }),
+      ),
+    ).toThrow("single-valued 'semantic-classification' role");
   });
 });
 

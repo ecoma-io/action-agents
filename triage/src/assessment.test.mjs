@@ -56,6 +56,7 @@ function input(overrides = {}) {
       repository: { name: "repo", description: "d" },
       policy: null,
       sheet: null,
+      provenance: null,
       labelMetadata: new Map(),
       files: [],
       measuredSize: null,
