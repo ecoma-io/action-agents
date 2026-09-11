@@ -370,12 +370,26 @@ export function decide({ evidence, assessment }) {
   const derivedAdds = issueAdds.filter((name) => !thread.labels.includes(name));
   const toAdd = [...new Set([...add, ...sizeAdd, ...derivedAdds])];
 
-  // The record (issue #498): the classification-role labels this run adds —
+  // The record (issue #498): the classification this run leaves in force —
   // exactly what the upserted classification comment's block will name, so
-  // the next run can prove this action applied them. Routing areas, size
-  // rungs and derived priorities are not classifications; they record
+  // the next run can prove this action applied them. Two sources: the labels
+  // this run adds in a classification role, and — the supersede-in-place
+  // case — the single-valued target this run resolves the thread to even
+  // when it was already carried (the standing record still names the old
+  // member, so only a fresh block refreshes the evidence). Routing areas,
+  // size rungs and derived priorities are not classifications; they record
   // nothing and mint no comment.
-  const record = toAdd.filter((name) => roleOf.get(name) === "semantic-classification");
+  const resolved = [];
+  for (const role of singleValuedRoles) {
+    const target = accepted.find((name) => roleOf.get(name) === role) ?? null;
+    if (target !== null) resolved.push(target);
+  }
+  const record = [
+    ...new Set([
+      ...resolved,
+      ...toAdd.filter((name) => roleOf.get(name) === "semantic-classification"),
+    ]),
+  ];
 
   return {
     kind: "labels",

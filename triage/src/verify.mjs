@@ -371,7 +371,11 @@ export function applyVerification(decision, plan, judged) {
     ...decision,
     kind: commentStands ? decision.kind : "labels",
     comment: commentStands ? decision.comment : undefined,
-    record: commentStands ? (decision.record ?? null) : null,
+    record: commentStands
+      ? (decision.record?.filter(
+          (label) => !decision.add.includes(label) || confirmed(`add:${label}`),
+        ) ?? null)
+      : null,
     add: decision.add.filter((label) => confirmed(`add:${label}`)),
     remove: decision.remove.filter((removal) => confirmed(`remove:${removal.name}`)),
     refusals,

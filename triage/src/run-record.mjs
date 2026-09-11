@@ -256,8 +256,8 @@ export function validateVerificationBlock(value) {
 
 /**
  * One removal as the record carries it — the decision's own removal, whose
- * reason is the code-owned vocabulary (`size`, `marker`, `owned`) that says
- * which deterministic rule removed the label.
+ * reason is the code-owned vocabulary (`size`, `marker`, `owned`, `supersede`)
+ * that says which deterministic rule removed the label.
  *
  * @typedef {object} RecordRemoval
  * @property {string} name

@@ -192,9 +192,15 @@ comment authored by the token's own login counts, a malformed block is
 ignored, and an identity or listing read that cannot be resolved leaves the
 provenance empty — the run then refuses a conflicting single-valued member
 with the remediation to remove it by hand, never removes what it cannot
-prove it applied. A sheet-mode classification that applies at least one
-classification-role label upserts this comment, so the next run's proof
-exists before the next drift can.
+prove it applied. A sheet-mode classification that applies or resolves at
+least one classification-role label upserts this comment — resolving a
+single-valued member it does not add (superseding in place) refreshes the
+block too, so the proof never names a member the thread no longer carries —
+and the record names only the labels that landed: a verification pass that
+refutes an add removes it from the block. The code-composed signal comment
+upserts under its own marker namespace (`action-agents:triage-signal:`), so
+the signal and the classification record coexist as two independent
+comments and neither's upsert can overwrite the other's.
 
 Harmonise's record fields, version 3: `schemaVersion`, `repository`,
 `eventName`, `sourceLanguage`, `dryRun`, `outcome`, a sanitised and capped

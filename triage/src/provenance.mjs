@@ -13,12 +13,13 @@
  */
 
 import { parseMarker, resolveOwnLogins } from "#core/comment.mjs";
+import { warning } from "#core/runtime.mjs";
 
 /** The record block's prefix. The action name keeps triage's blocks from being read as another action's evidence. */
 export const RECORD_PREFIX = "action-agents-record:triage:";
 
 /** The block is one line: the prefix, then the base64 of the version-1 JSON. The token alphabet is exactly base64's. */
-const RECORD_BLOCK = /action-agents-record:triage:([A-Za-z0-9+/=]+)/;
+const RECORD_BLOCK = /^action-agents-record:triage:([A-Za-z0-9+/=]+)$/m;
 
 /**
  * The version-1 record block for the labels a run applied: a single line the
@@ -85,13 +86,21 @@ export async function readClassificationProvenance(forge, issueNumber) {
   let ownLogins;
   try {
     ownLogins = await resolveOwnLogins(forge);
-  } catch {
+  } catch (error) {
+    warning(
+      `provenance read: the token identity could not be resolved — provenance is "proves nothing" ` +
+        `(${error instanceof Error ? error.message : String(error)})`,
+    );
     return null;
   }
   let comments;
   try {
     comments = await forge.listComments(issueNumber);
-  } catch {
+  } catch (error) {
+    warning(
+      `provenance read: the thread's comments could not be listed — provenance is "proves nothing" ` +
+        `(${error instanceof Error ? error.message : String(error)})`,
+    );
     return null;
   }
   const applied = new Set();

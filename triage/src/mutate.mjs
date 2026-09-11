@@ -314,18 +314,20 @@ export async function mutate({
         opIds: [entry.opId],
         apply: async () => {
           // A sheet-mode issue run may carry a code-composed signal:
-          // needs-more-info or a best relationship. It is a comment in the
-          // same marker namespace as the no-sheet classification, so the
-          // upsert keeps exactly one of the action's comments on the thread
-          // whichever mode the last run used. The signal is composed entirely
-          // by code — model text never reaches it.
-          const ownLogins = await resolveOwnLogins(forge);
+          // needs-more-info or a best relationship. It upserts under its
+          // OWN marker namespace ("triage-signal"), so the signal and the
+          // classification record coexist as two independent comments —
+          // the signal's upsert can never overwrite the record's, and
+          // provenance reads (which match only action "triage") are
+          // unaffected. The signal is composed entirely by code — model
+          // text never reaches it.
+          const signalOwnLogins = await resolveOwnLogins(forge);
           const outcome = await upsertComment({
             store: forge,
-            action,
+            action: "triage-signal",
             issueNumber,
             buildBody: (marker) => signalBody(signal, marker),
-            ownLogins,
+            ownLogins: signalOwnLogins,
             head,
             startedAt: now(),
             log: info,

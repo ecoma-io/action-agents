@@ -14,7 +14,7 @@ import { oneLine } from "#core/one-line.mjs";
 import { warning } from "#core/runtime.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
-import { recordBlock } from "./provenance.mjs";
+import { RECORD_PREFIX, recordBlock } from "./provenance.mjs";
 
 /** The rationale's cap in the marker comment and the run log, in characters. */
 export const RATIONALE_CHARS = 300;
@@ -164,11 +164,11 @@ export function decisionWriteOps(decision) {
 export function commentBody(answer, marker) {
   const classification = sanitiseCommentText(oneLine(answer.classification), {
     maxChars: RATIONALE_CHARS,
-    forbidden: [marker],
+    forbidden: [marker, RECORD_PREFIX],
   });
   const rationale = sanitiseCommentText(oneLine(answer.rationale), {
     maxChars: RATIONALE_CHARS,
-    forbidden: [marker],
+    forbidden: [marker, RECORD_PREFIX],
   });
   for (const note of [...classification.notes, ...rationale.notes]) {
     warning(`sanitiser: ${note}`);
@@ -233,7 +233,7 @@ export function signalBody(signal, marker) {
     signal.needsMoreInfo.length > 0
       ? sanitiseCommentText(oneLine(signal.needsMoreInfo.join(", ")), {
           maxChars: 80,
-          forbidden: [marker],
+          forbidden: [marker, RECORD_PREFIX],
         }).text
       : "";
   if (signal.needsMoreInfo.length > 0 || signal.modelJudgedQuality) {
@@ -251,7 +251,7 @@ export function signalBody(signal, marker) {
   if (signal.related !== null) {
     const title = sanitiseCommentText(oneLine(signal.related.title), {
       maxChars: 80,
-      forbidden: [marker],
+      forbidden: [marker, RECORD_PREFIX],
     }).text;
     lines.push(
       "",
@@ -311,7 +311,7 @@ export function renderDryRun(decision) {
   }
   if (decision.signal != null) {
     parts.push(
-      ` and post a signal comment: ${signalBody(decision.signal, "<!-- action-agents:triage:dry-run -->").replace(/\n/g, " ")}`,
+      ` and post a signal comment: ${signalBody(decision.signal, "<!-- action-agents:triage-signal:dry-run -->").replace(/\n/g, " ")}`,
     );
   }
   return [parts.join("")];
