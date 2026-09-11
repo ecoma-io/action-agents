@@ -22,7 +22,7 @@ action's own history.
 Add a workflow file under `.github/workflows/`. The minimal form:
 
 ```yaml
-- uses: ecoma-io/action-agents/harmonise@v0.11
+- uses: ecoma-io/action-agents/harmonise@v0.12
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     api-url: ${{ vars.LLM_API_URL }}
@@ -31,7 +31,7 @@ Add a workflow file under `.github/workflows/`. The minimal form:
     source-language: en
 ```
 
-Pin to a floating minor (`@v0.11`), an exact version (`@v0.11.1`) or a commit SHA.
+Pin to a floating minor (`@v0.12`), an exact version (`@v0.12.0`) or a commit SHA.
 See [Getting started](getting-started.md#pinning) for the tradeoffs.
 
 The action is referenced as the directory `harmonise` in the repository.
@@ -545,7 +545,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_KEY }}
 
-      - uses: ecoma-io/action-agents/harmonise@v0.11
+      - uses: ecoma-io/action-agents/harmonise@v0.12
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -559,7 +559,7 @@ jobs:
 Verify what a run would change without touching anything.
 
 ```yaml
-- uses: ecoma-io/action-agents/harmonise@v0.11
+- uses: ecoma-io/action-agents/harmonise@v0.12
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     api-url: ${{ vars.LLM_API_URL }}

@@ -22,7 +22,7 @@ off-sheet applies its on-sheet half and logs the rest.
 Add a workflow file under `.github/workflows/`. The minimal form:
 
 ```yaml
-- uses: ecoma-io/action-agents/triage@v0.11
+- uses: ecoma-io/action-agents/triage@v0.12
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     api-url: ${{ vars.LLM_API_URL }}
@@ -30,7 +30,7 @@ Add a workflow file under `.github/workflows/`. The minimal form:
     model: ${{ vars.LLM_MODEL }}
 ```
 
-Pin to a floating minor (`@v0.11`), an exact version (`@v0.11.1`) or a commit SHA.
+Pin to a floating minor (`@v0.12`), an exact version (`@v0.12.0`) or a commit SHA.
 See [Getting started](getting-started.md#pinning) for the tradeoffs.
 
 The action is referenced as the directory `triage` in the repository. The
@@ -525,7 +525,7 @@ Use the `labels:` workflow input to limit one workflow to bugs and enhancements
 only, while another workflow covers the full sheet.
 
 ```yaml
-- uses: ecoma-io/action-agents/triage@v0.11
+- uses: ecoma-io/action-agents/triage@v0.12
   with:
     labels: "bug,enhancement"
 ```
