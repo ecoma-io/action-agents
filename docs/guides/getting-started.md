@@ -34,8 +34,8 @@ in order of safety:
 
 | Ref                  | Example                                 | What it resolves to                                                     |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
-| `v0.11` (floating)   | `ecoma-io/action-agents/review@v0.11`   | The latest patch release in the `v0.11` line. Gets fixes automatically. |
-| `v0.11.1` (exact)    | `ecoma-io/action-agents/review@v0.11.1` | Exactly that release. Never moves.                                      |
+| `v0.12` (floating)   | `ecoma-io/action-agents/review@v0.12`   | The latest patch release in the `v0.12` line. Gets fixes automatically. |
+| `v0.12.0` (exact)    | `ecoma-io/action-agents/review@v0.12.0` | Exactly that release. Never moves.                                      |
 | `<sha>` (SHA-pinned) | `ecoma-io/action-agents/review@abc123…` | Exactly those bytes. Immutable.                                         |
 
 Floating tags deliver patches without a workflow edit — that is usually what you
@@ -115,7 +115,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: ecoma-io/action-agents/triage@v0.11
+      - uses: ecoma-io/action-agents/triage@v0.12
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -161,7 +161,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: ecoma-io/action-agents/review@v0.11
+      - uses: ecoma-io/action-agents/review@v0.12
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -216,7 +216,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: ecoma-io/action-agents/harmonise@v0.11
+      - uses: ecoma-io/action-agents/harmonise@v0.12
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}

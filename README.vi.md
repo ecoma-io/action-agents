@@ -37,7 +37,7 @@ Bảo trì kho lưu trữ là công việc mà không ai lên lịch: gán nhãn
 - **Agentic khi nó xứng đáng** — `review` quyết định đọc gì, xác minh trước khi yêu cầu, và nén bản ghi của mình thay vì cắt ngắn diff của bạn.
 - **Giới hạn bởi workflow của bạn, không phải bởi prompt của chúng tôi** — cấu hình mô tả hành vi; khối `permissions:` là ranh giới bảo mật.
 
-> **Trạng thái: đã phát hành.** Mọi thẻ đều có thể ghim — các thẻ nổi (`v0.11`) theo dõi bản vá mới nhất của nhánh phụ, các thẻ chính xác không bao giờ di chuyển — và ví dụ bên dưới phân giải được. Xem [Pinning strategy](#pinning-strategy) để biết nên dùng thẻ nào; [CHANGELOG.md](CHANGELOG.md) ghi lại những gì đã phát hành, vào lúc nào.
+> **Trạng thái: đã phát hành.** Mọi thẻ đều có thể ghim — các thẻ nổi (`v0.12`) theo dõi bản vá mới nhất của nhánh phụ, các thẻ chính xác không bao giờ di chuyển — và ví dụ bên dưới phân giải được. Xem [Pinning strategy](#pinning-strategy) để biết nên dùng thẻ nào; [CHANGELOG.md](CHANGELOG.md) ghi lại những gì đã phát hành, vào lúc nào.
 
 ## Get started
 
@@ -56,7 +56,7 @@ jobs:
       # review reads the working tree, so it needs a checkout
       - uses: actions/checkout@v5
 
-      - uses: ecoma-io/action-agents/review@v0.11
+      - uses: ecoma-io/action-agents/review@v0.12
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ vars.LLM_API_URL }}
@@ -70,11 +70,11 @@ Every `uses:` reference takes a ref that controls what code runs. Three shapes, 
 
 | Ref                  | Example                                 | What it resolves to                                                     |
 | -------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
-| `v0.11` (floating)   | `ecoma-io/action-agents/review@v0.11`   | The latest patch release in the `v0.11` line. Gets fixes automatically. |
-| `v0.11.1` (exact)    | `ecoma-io/action-agents/review@v0.11.1` | Exactly that release. Never moves.                                      |
+| `v0.12` (floating)   | `ecoma-io/action-agents/review@v0.12`   | The latest patch release in the `v0.12` line. Gets fixes automatically. |
+| `v0.12.0` (exact)    | `ecoma-io/action-agents/review@v0.12.0` | Exactly that release. Never moves.                                      |
 | `<sha>` (SHA-pinned) | `ecoma-io/action-agents/review@abc123…` | Exactly those bytes. Immutable.                                         |
 
-Floating tags (`v0.10`, `v0.11`) cung cấp các bản vá mà không cần sửa workflow — thường đây là những gì bạn muốn. Các thẻ chính xác cung cấp khả năng tái tạo — đó là những gì bạn muốn khi cần. Một SHA của commit cung cấp đường truy vết kiểm toán — là điểm ghim mạnh nhất, và là gì các engine chính sách bảo mật thực thi.
+Floating tags (`v0.10`, `v0.11`, `v0.12`) cung cấp các bản vá mà không cần sửa workflow — thường đây là những gì bạn muốn. Các thẻ chính xác cung cấp khả năng tái tạo — đó là những gì bạn muốn khi cần. Một SHA của commit cung cấp đường truy vết kiểm toán — là điểm ghim mạnh nhất, và là gì các engine chính sách bảo mật thực thi.
 
 **Không sử dụng `@main`.** Một push tới `main` có thể thay đổi hành động bất kỳ lúc nào, bao gồm cả những cách chưa được phát hành. Mỗi ref đã công bố là bất biến hoặc nổi trong một dòng tương thích đã khai báo.
 
@@ -92,7 +92,7 @@ Hành vi thuộc về kho lưu trữ hơn là một workflow nằm trong `.githu
 
 ### The root action
 
-Gốc của repository chứa một `action.yml`, nhưng **không phải là một action có thể chạy**. Nó tồn tại để `uses: ecoma-io/action-agents@v0.11.1` phân giải tới một thẻ thay vì thất bại với lỗi thiếu manifest. Khi được gọi, nó ngay lập tức thất bại với lỗi liệt kê ba action thực tế và yêu cầu bạn chọn một. Điều này theo mẫu được thiết lập bởi [github/codeql-action](https://github.com/github/codeql-action), nơi stub gốc ngăn việc sử dụng nhầm repository như một action duy nhất.
+Gốc của repository chứa một `action.yml`, nhưng **không phải là một action có thể chạy**. Nó tồn tại để `uses: ecoma-io/action-agents@v0.12.0` phân giải tới một thẻ thay vì thất bại với lỗi thiếu manifest. Khi được gọi, nó ngay lập tức thất bại với lỗi liệt kê ba action thực tế và yêu cầu bạn chọn một. Điều này theo mẫu được thiết lập bởi [github/codeql-action](https://github.com/github/codeql-action), nơi stub gốc ngăn việc sử dụng nhầm repository như một action duy nhất.
 
 **Luôn tham chiếu đến một thư mục action cụ thể** (`triage`, `review`, hoặc `harmonise`) trong dòng `uses:` của bạn.
 
