@@ -110,14 +110,20 @@ export function evaluate({ files, textOf }) {
 }
 
 /**
- * README.md plus every markdown page under `docs/`, which may not exist.
+ * Every README document at the root — the canonical one and its language
+ * twins (`README.vi.md`, `README.ja.md`, …) — plus every markdown page under
+ * `docs/`, which may not exist. The twins carry the same anchors the
+ * canonical document does, so a translation whose quick-links row points at
+ * a heading no longer there fails here exactly as the original would.
  *
  * @returns {DocFile[]}
  */
 function readDocFiles() {
   /** @type {string[]} */
   const paths = [];
-  if (existsSync("README.md")) paths.push("README.md");
+  for (const entry of readdirSync(".")) {
+    if (/^README(\.[A-Za-z0-9]+)*\.md$/.test(entry)) paths.push(entry);
+  }
   if (existsSync("docs")) {
     for (const entry of readdirSync("docs", { recursive: true })) {
       const rel = String(entry);

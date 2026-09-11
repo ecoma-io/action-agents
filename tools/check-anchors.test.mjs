@@ -69,6 +69,18 @@ test("a same-file fragment is resolved against the carrying document", () => {
   assert.equal(result.checked, 1);
 });
 
+test("a language twin's fragments resolve exactly like the canonical document's", () => {
+  const result = evaluate({
+    files: [
+      { path: "README.vi.md", text: "## Get started\n\njump to [get started](#get-started)\n" },
+    ],
+    textOf: () => assert.fail("a same-file fragment in a twin must not read another file"),
+  });
+
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.checked, 1);
+});
+
 test("a missing target file is left to check-docs-links, not reported twice", () => {
   const result = evaluate({
     files: [{ path: "README.md", text: "[x](NOPE.md#anything)\n" }],
