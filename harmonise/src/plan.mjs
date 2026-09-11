@@ -15,6 +15,7 @@ import { rewriteLinks } from "./links.mjs";
 import { collectLinks, validateLinkGraph } from "./link-graph.mjs";
 import { protectDocument } from "./protect.mjs";
 import { restoreDocument } from "./protect.mjs";
+import { MAX_CHUNKS_PER_PAIR, chunkDocument } from "./chunks.mjs";
 import { judgeScript } from "./script-gate.mjs";
 import { planBlocks, summarizePlan } from "./blocks.mjs";
 import {
@@ -40,29 +41,36 @@ import {
 /** @typedef {import("#core/untrusted.mjs").Evidence} Evidence */
 
 /**
- * The most source text one pair may carry. Both documents must fit inside the
- * evidence wrapper's 64 KiB frame, so the source alone is capped at half that;
- * a pair past the cap skips with that reason rather than translating a
- * silently truncated document.
- */
-export const MAX_SOURCE_BYTES = 32 * 2 ** 10;
-
-/**
- * Why a pair cannot be prepared, or null when it can.
+ * Plans one source document's translation chunks: the frontmatter guard
+ * masks the document's protected values first, then the structural
+ * chunker (`chunks.mjs`) partitions the masked text. A refusal here
+ * skips the pair before any model call — an empty source, an
+ * unsplittable block, or a document past the chunk execution budget.
+ * There is no whole-document size ceiling: a source larger than one
+ * chunk is accepted and translated chunk by chunk.
  *
- * @param {string} sourceText
- * @returns {string | null}
+ * @param {string} sourceText the source document's exact bytes
+ * @param {FrontmatterGuard | undefined} frontmatter the planned frontmatter protection
+ * @returns {{ maskedSource: string, chunks: string[], refusal: string | null }}
  */
-export function preparationRefusal(sourceText) {
-  if (sourceText === "") return "the source document is empty";
-  const bytes = new TextEncoder().encode(sourceText).byteLength;
-  if (bytes > MAX_SOURCE_BYTES) {
-    return (
-      `${String(bytes)} bytes, past the ${String(MAX_SOURCE_BYTES)}-byte cap — split the ` +
-      `document so both versions fit the evidence frame`
-    );
+export function planPair(sourceText, frontmatter) {
+  if (sourceText === "") {
+    return { maskedSource: "", chunks: [], refusal: "the source document is empty" };
   }
-  return null;
+  const maskedSource =
+    frontmatter === undefined ? sourceText : maskFrontmatter(sourceText, frontmatter);
+  const { chunks, refusal } = chunkDocument(maskedSource);
+  if (refusal !== null) return { maskedSource, chunks: [], refusal };
+  if (chunks.length > MAX_CHUNKS_PER_PAIR) {
+    return {
+      maskedSource,
+      chunks: [],
+      refusal:
+        `the document needs ${String(chunks.length)} chunks, past the ` +
+        `${String(MAX_CHUNKS_PER_PAIR)}-chunk execution budget — split the document`,
+    };
+  }
+  return { maskedSource, chunks, refusal: null };
 }
 
 /**
@@ -170,8 +178,9 @@ function maskFrontmatter(sourceText, guard) {
  * @param {string} input.lang
  * @param {string} input.sourcePath
  * @param {{ path: string, state: "existing" | "missing" }} input.target
- * @param {string} input.sourceText
- * @param {FrontmatterGuard} [input.frontmatter] the source's planned frontmatter protection, undefined without frontmatter
+ * @param {string} input.sourceChunk this chunk's already-masked source text
+ * @param {number} input.chunkIndex the chunk's zero-based position in the pair
+ * @param {number} input.chunkCount the pair's total chunk count
  * @param {Inventory} input.inventory
  * @param {import("./config.mjs").HarmoniseConfig} input.config
  * @returns {PreparedPair}
@@ -181,24 +190,23 @@ export function preparePair({
   lang,
   sourcePath,
   target,
-  sourceText,
+  sourceChunk,
+  chunkIndex,
+  chunkCount,
   inventory,
   config,
-  frontmatter,
 }) {
-  // Frontmatter protection runs first: protected values are tokens before
-  // the glossary, the skip directives or the link rewriter can see them, so
-  // no machinery ever rewrites what the policy holds fixed.
-  const working = frontmatter === undefined ? sourceText : maskFrontmatter(sourceText, frontmatter);
-  const protection = protectDocument(working, { glossary: config.glossary });
-
-  // The rewrite resolves references from the source document's directory;
-  // validation (the resolvers exposed below) judges the rewritten references
-  // from the translation's directory, where both sides of a pair anchor at
+  // Protection runs per chunk: the chunk carries already-masked text (the
+  // frontmatter guard ran upstream, before chunking), so the glossary and
+  // skip directives become this chunk's tokens, and the link rewriter
+  // resolves references from the source document's directory. Validation
+  // (the resolvers exposed below) judges the rewritten references from the
+  // translation's directory, where both sides of a pair anchor at
   // validation time. `resolveDocument` is slug-based and
   // directory-independent; `resolveImage`'s configured layouts are relative
   // to the document's own directory, so each binding anchors where its
   // references do.
+  const protection = protectDocument(sourceChunk, { glossary: config.glossary });
 
   /** @type {import("./links.mjs").LinkContext} */
   const context = {
@@ -216,10 +224,11 @@ export function preparePair({
     sourcePath,
     destinationPath: target.path,
     state: target.state,
-    sourceText,
+    sourceChunk,
+    chunkIndex,
+    chunkCount,
     protectedText: rewritten.text,
     protection,
-    frontmatter,
     linksRewritten: rewritten.count,
     resolveDocument: context.resolveDocument,
     resolveImage: (absPath) => inventory.resolveImage(absPath, lang, target.path),
@@ -227,16 +236,27 @@ export function preparePair({
 }
 
 /**
- * Translates one prepared pair: prompt, one chat request, contract parsing,
- * placeholder restoration, structural comparison. The model's degrees of
- * freedom end at prose and the three contract fields — everything else was
- * already decided when the text was prepared. A provider-declared truncated
- * response (`finish_reason: length`) never reaches parsing: it fails the
- * pair naming truncation, unretried (#449), the same law review's loop
- * holds (#445).
+ * Translates one prepared pair: one chat request per chunk, contract
+ * parsing, placeholder restoration and sanitisation per chunk; then the
+ * whole-document gates over the reassembled candidate — frontmatter,
+ * byte-identity, structural profile, links. The model's degrees of
+ * freedom end at prose and the three contract fields — everything else
+ * was already decided when the chunks were prepared. A provider-declared
+ * truncated response (`finish_reason: length`) never reaches parsing: it
+ * fails the pair naming truncation, unretried (#449), the same law
+ * review's loop holds (#445).
+ *
+ * A pair whose source fits one chunk behaves exactly as the pipeline
+ * always has, existing and prior context included. A larger source is
+ * translated chunk by chunk — each chunk its own request, no
+ * existing/prior context (the answer is a full retranslation of the
+ * chunk) — and the chunks are reassembled in order before the
+ * whole-document gates run.
  *
  * @param {object} input
- * @param {PreparedPair} input.prepared
+ * @param {PreparedPair[]} input.chunks one prepared pair per source chunk, in order
+ * @param {string} input.sourceText the whole original source document
+ * @param {FrontmatterGuard | undefined} input.frontmatter the pair's planned frontmatter protection
  * @param {string} input.sourceLanguage the config's resolved source language
  * @param {string | undefined} input.existingText the translation on the branch, when one exists
  * @param {string} input.model
@@ -248,125 +268,148 @@ export function preparePair({
  * @returns {Promise<{ outcome: "noop", summary: string } | { outcome: "proposal", text: string, summary: string }>}
  */
 export async function translatePair(input) {
-  const { messages } = buildTranslationPrompt({
-    repository: input.repository,
-    sourceLanguage: input.sourceLanguage,
-    language: input.prepared.lang,
-    protectedSource: input.prepared.protectedText,
-    existingTranslation: input.existingText,
-    priorTranslation: input.priorTranslation,
-    documents: input.documents,
-    evidence: input.evidence,
-  });
+  /** @type {string[]} */
+  const parts = [];
+  /** @type {string[]} */
+  const summaries = [];
+  const chunked = input.chunks.length > 1;
 
-  const { content, finishReason } = await input.chat.complete({ model: input.model, messages });
+  for (const prepared of input.chunks) {
+    const { messages } = buildTranslationPrompt({
+      repository: input.repository,
+      sourceLanguage: input.sourceLanguage,
+      language: prepared.lang,
+      protectedSource: prepared.protectedText,
+      // A chunked pair carries no existing/prior context: the answer is
+      // a full retranslation of the chunk, and the parser's drift
+      // discipline (a missing translation is always drift) holds.
+      existingTranslation: chunked ? undefined : input.existingText,
+      priorTranslation: chunked ? undefined : input.priorTranslation,
+      documents: input.documents,
+      evidence: input.evidence,
+    });
 
-  // Provider-declared truncation (#449): a response the provider cut short
-  // (finish_reason: length) is an incomplete answer — it is never parsed and
-  // never judged against the contract, and it is never retried, because the
-  // same prompt would cut the same answer again. It fails the pair naming
-  // the cause, the same law review's loop holds (#445), in the recovery
-  // policy's refusal class — the never-retried class — while the run's
-  // record keeps it a defect line: the provider cut the answer, which is no
-  // ceiling of this action's declining to act.
-  if (finishReason === "length") {
-    throw new RefusalError(
-      "the provider truncated its response (finish_reason: length) — " +
-        "the model's output is incomplete and cannot be judged as a translation",
-    );
+    // The request stays outside the answer's contract frame: a transport
+    // fault keeps its own class, and the recovery policy spends exactly
+    // its declared retries on it.
+    const { content, finishReason } = await input.chat.complete({ model: input.model, messages });
+
+    // Provider-declared truncation (#449): a response the provider cut
+    // short is an incomplete answer — never parsed, never retried.
+    if (finishReason === "length") {
+      throw new RefusalError(
+        "the provider truncated its response (finish_reason: length) — " +
+          "the model's output is incomplete and cannot be judged as a translation",
+      );
+    }
+
+    // Everything from the answer's arrival to its verdict is the answer's
+    // contract surface: parse, the script gate, restoration. A failure
+    // inside any of them is a deterministic refusal of this answer — the
+    // same answer refuses again — so it raises tagged `refusal` and the
+    // recovery policy never spends a model call re-asking it.
+    try {
+      const judged = judgeChunk(content, prepared, input, chunked);
+      if (judged.noop) return { outcome: "noop", summary: judged.summary };
+      parts.push(judged.content);
+      summaries.push(judged.summary);
+    } catch (cause) {
+      // A typed refusal keeps its class: the boundary records it `refused`,
+      // and classification must name it a refusal — re-asking never helps.
+      if (cause instanceof DeterministicRefusalError) throw cause;
+      throw new RefusalError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
-  // Everything from the answer's arrival to the verdict is the answer's
-  // contract surface: parse, the script gate, restoration, the byte cap,
-  // frontmatter, structure, links. A failure inside any of them is a
-  // deterministic refusal of this answer — the same answer refuses again —
-  // so it raises tagged `refusal` and the recovery policy never spends a
-  // model call re-asking it. The request above stays outside the frame: a
-  // transport fault keeps its own class.
   try {
-    return judgeAnswer(content, input);
+    return judgeWhole(parts.join(""), summaries, input);
   } catch (cause) {
-    // A typed refusal keeps its class: the boundary records it `refused`, and
-    // classification must name it a refusal — re-asking never helps.
     if (cause instanceof DeterministicRefusalError) throw cause;
     throw new RefusalError(cause instanceof Error ? cause.message : String(cause));
   }
 }
 
 /**
- * Judges one arrived answer against the contract the pair's preparation
- * fixed, and returns the verdict: a proposal to carry onward, or a noop
- * when the answer legitimately changed nothing. Throws on any contract
- * failure — parse, the script gate, restoration, the byte cap, frontmatter,
- * structure, links; `translatePair` retags what this raises as a
- * `RefusalError` on the way out — a typed refusal keeps its class.
+ * Judges one arrived chunk answer against its chunk's preparation: parse,
+ * the script gate (on the tokenised candidate — placeholders never vote),
+ * placeholder restoration, sanitisation. Whole-document gates live in
+ * `judgeWhole`.
  *
- * @param {string} content The model's answer content.
- * @param {Parameters<typeof translatePair>[0]} input
- * @returns {{ outcome: "noop", summary: string } | { outcome: "proposal", text: string, summary: string }}
+ * @param {string} content the model's answer content for this chunk
+ * @param {PreparedPair} prepared the chunk's prepared pair
+ * @param {Parameters<typeof translatePair>[0]} input the pair's input
+ * @param {boolean} chunked whether the pair is translated in multiple chunks
+ * @returns {{ content: string, summary: string, noop: boolean }}
  */
-function judgeAnswer(content, input) {
+function judgeChunk(content, prepared, input, chunked) {
   const answer = parseTranslationAnswer(content, {
-    existingTranslation: input.existingText,
+    existingTranslation: chunked ? undefined : input.existingText,
   });
 
-  // The cheapest identity check runs first, on what the model actually said:
-  // an answer carrying the published translation verbatim needs no
-  // restoration — the published text holds no placeholders to validate.
-  // Without this early exit, an honest no-op could never pass restoration,
-  // because the published text legitimately contains none of this run's
-  // tokens.
-  if (input.existingText !== undefined && answer.content === input.existingText) {
-    return { outcome: "noop", summary: answer.summary };
+  // The cheapest identity check runs first, on what the model actually
+  // said (single-chunk pairs only): an answer carrying the published
+  // translation verbatim needs no restoration — the published text holds
+  // none of this run's tokens, so restoration could not judge it.
+  if (!chunked && input.existingText !== undefined && answer.content === input.existingText) {
+    return { content: answer.content, summary: answer.summary, noop: true };
   }
 
-  // The script gate (run-contract I17) judges the tokenised candidate — the
-  // bytes the model actually returned — counting only its translatable
-  // prose: frontmatter, code and link machinery never vote. A violation is
-  // the typed deterministic refusal, so the run's boundary records an
-  // all-pairs wrong-script set as `refused`, never as a defect.
-  const scriptRefusal = judgeScript(answer.content, input.prepared.lang);
+  // The script gate (run-contract I17) judges the tokenised candidate —
+  // the bytes the model actually returned — counting only its
+  // translatable prose: frontmatter, code and link machinery never vote.
+  // A violation is the typed deterministic refusal.
+  const scriptRefusal = judgeScript(answer.content, prepared.lang);
   if (scriptRefusal !== null) throw new DeterministicRefusalError(scriptRefusal);
 
   // Restoration is validation: counts must match and no unknown token may
   // wear this run's namespace, or this throws and the pair fails.
-  const restored = restoreDocument(answer.content, input.prepared.protection);
+  const restored = restoreDocument(answer.content, prepared.protection);
 
   // Strip dangerous HTML from model output before it reaches the commit.
-  // Code blocks and code spans are preserved unchanged; only prose is sanitised.
+  // Code blocks and code spans are preserved unchanged; only prose is
+  // sanitised.
   const sanitised = sanitizeTranslationHtml(restored);
+  return { content: sanitised, summary: answer.summary, noop: false };
+}
 
-  // The protected frontmatter values go back only after sanitising: until
-  // this point the placeholders shielded them from every rewrite and from
-  // the HTML stripper, exactly as the glossary tokens shield their terms.
-  const unmasked = restoreFrontmatter(sanitised, input.prepared.frontmatter);
-
-  // A proposal past the same cap the preparation enforces would be a
-  // document we could never frame as evidence on a later pass.
-  const bytes = new TextEncoder().encode(unmasked).byteLength;
-  if (bytes > MAX_SOURCE_BYTES) {
-    throw new Error(
-      `the translated document is ${String(bytes)} bytes, past the ` +
-        `${String(MAX_SOURCE_BYTES)}-byte cap`,
-    );
-  }
+/**
+ * Judges the reassembled whole against the pair's whole-document gates:
+ * frontmatter restoration and validation, byte-identity, the structural
+ * profile of the full source against the full candidate, and the link
+ * graph. The answer's per-chunk byte cap is gone — a reassembled
+ * document's size is bounded by the chunk budget, and its correctness is
+ * bounded by these gates.
+ *
+ * @param {string} reassembled the sanitised chunk texts, in order
+ * @param {string[]} summaries each chunk's answer summary, in order
+ * @param {Parameters<typeof translatePair>[0]} input the pair's input
+ * @returns {{ outcome: "noop", summary: string } | { outcome: "proposal", text: string, summary: string }}
+ */
+function judgeWhole(reassembled, summaries, input) {
+  // The protected frontmatter values go back only after per-chunk
+  // sanitising: until this point the placeholders shielded them from the
+  // HTML stripper, exactly as the glossary tokens shield their terms.
+  const unmasked =
+    input.frontmatter === undefined
+      ? reassembled
+      : restoreFrontmatter(reassembled, input.frontmatter);
 
   // Byte-identity semantics, per the specification: identical to what it
   // replaces is no drift whatever the flag claimed.
   if (input.existingText !== undefined && unmasked === input.existingText) {
-    return { outcome: "noop", summary: answer.summary };
+    return { outcome: "noop", summary: summaries.join(" ") };
   }
 
-  // The frontmatter gate: protected values byte-identical, the key sequence
-  // exact, translatable scalars still single-line, no placeholder alive. Any
-  // violation refuses the pair — reported, never coerced back into a pass.
-  if (input.prepared.frontmatter !== undefined) {
-    const refusal = validateRestoredFrontmatter(unmasked, input.prepared.frontmatter);
+  // The frontmatter gate: protected values byte-identical, the key
+  // sequence exact, translatable scalars still single-line, no
+  // placeholder alive. Any violation refuses the pair.
+  if (input.frontmatter !== undefined) {
+    const refusal = validateRestoredFrontmatter(unmasked, input.frontmatter);
     if (refusal !== null) throw new Error(`frontmatter validation failed: ${refusal}`);
   }
 
   const violations = compareStructuralProfiles(
-    structuralProfile(input.prepared.sourceText),
+    structuralProfile(input.sourceText),
     structuralProfile(unmasked),
   );
   if (violations.length > 0) {
@@ -374,28 +417,29 @@ function judgeAnswer(content, input) {
   }
 
   // Link identity: the rewriter decided where every internal reference
-  // points before the model saw the document, and the answer must come back
-  // pointing there still. Both sides are collected from text the candidate
-  // is actually judged against — the rewritten source with placeholders
-  // restored, because skip regions return byte-for-byte inside the
-  // candidate — and validated with the same inventory resolvers the rewrite
-  // localized with.
+  // points before the model saw the document, and the answer must come
+  // back pointing there still. Both sides are collected from text the
+  // candidate is actually judged against — the rewritten source with
+  // placeholders restored, because skip regions return byte-for-byte
+  // inside the candidate.
   const linkVerdict = validateLinkGraph({
     sourceLinks: collectLinks(
-      restoreDocument(input.prepared.protectedText, input.prepared.protection),
+      input.chunks
+        .map((prepared) => restoreDocument(prepared.protectedText, prepared.protection))
+        .join(""),
     ),
     candidateLinks: collectLinks(unmasked),
     context: {
-      translatedDocPath: input.prepared.destinationPath,
-      resolveDocument: input.prepared.resolveDocument,
-      resolveImage: input.prepared.resolveImage,
+      translatedDocPath: input.chunks[0].destinationPath,
+      resolveDocument: input.chunks[0].resolveDocument,
+      resolveImage: input.chunks[0].resolveImage,
     },
   });
   if (linkVerdict.violations.length > 0) {
     throw new Error(`link validation failed: ${linkVerdict.violations.join("; ")}`);
   }
 
-  return { outcome: "proposal", text: unmasked, summary: answer.summary };
+  return { outcome: "proposal", text: unmasked, summary: summaries.join(" ") };
 }
 
 /** The shape of every frontmatter placeholder this pipeline can mint. Case-insensitive on purpose: a token the model re-cased is a forgery, never prose. */

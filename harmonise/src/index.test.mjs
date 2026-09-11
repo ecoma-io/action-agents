@@ -42,7 +42,7 @@ import {
 } from "./tm.mjs";
 import { DEFAULT_POLICY, DELAY_CLASSES } from "./recovery.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
-import { MAX_SOURCE_BYTES } from "./plan.mjs";
+import { chunkDocument, MAX_CHUNK_BYTES, MAX_CHUNKS_PER_PAIR } from "./chunks.mjs";
 import { harmoniseRecordSchemaVersion, serialiseHarmoniseRecord } from "./run-record.mjs";
 
 /**
@@ -909,21 +909,88 @@ describe("run", () => {
     expect(ioDouble.chat.calls()).toBe(1);
   });
 
-  it("skips a pair whose existing translation is past the cap", async () => {
+  it("translates a source past the old whole-document cap chunk by chunk", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // Two ~20 KiB paragraphs: past the old 32 KiB whole-document ceiling,
+    // two chunks under the chunker — one model call per chunk, the answers
+    // reassembled in order.
+    const source = `${"y".repeat(20 * 1024)}\n\n${"y".repeat(20 * 1024)}`;
+    const chunks = chunkDocument(source).chunks;
+    expect(chunks.length).toBe(2);
+    const chatDouble = chat(chunks.map((chunk) => proposes(chunk)));
+    const ioDouble = /** @type {any} */ ({
+      forge: forge(makeRepo({ documents: { "manual/dev.md": source } })),
+      chat: chatDouble,
+      evidence,
+    });
+
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    expect(chatDouble.calls()).toBe(2);
+    expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
+  });
+
+  it("skips a source past the per-pair chunk budget, naming the count", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const paragraphs = Array.from({ length: MAX_CHUNKS_PER_PAIR + 1 }, () => "y".repeat(20 * 1024));
     const ioDouble = io(
       forge(
         makeRepo({
           documents: {
             "manual/dev.md": "# Dev\n\nFine.\n",
-            "manual/vi/dev.md": "x".repeat(33 * 1024),
+            "manual/big.md": paragraphs.join("\n\n"),
           },
         }),
+        makeInventory(["manual/dev.md", "manual/big.md"]),
       ),
     );
 
-    const error = await run(readInputs(runner), context(), ioDouble).catch((cause) => cause);
-    expect(error.message).toMatch(/every pair skipped/);
-    expect(error.message).toMatch(/existing translation is 33792 bytes, past the 32768-byte cap/);
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    const out = logged(log);
+    expect(out).toMatch(
+      new RegExp(
+        `skipped vi manual\\/big\\.md: the document needs ${String(MAX_CHUNKS_PER_PAIR + 1)} chunks, ` +
+          `past the ${String(MAX_CHUNKS_PER_PAIR)}-chunk execution budget — split the document`,
+      ),
+    );
+    expect(out).toMatch(/translated vi manual\/dev\.md/);
+  });
+
+  it("runs the model path when the existing translation is past the old whole-document cap", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // The old cap refused a 33 KiB published translation outright; the
+    // chunked pipeline has no such ceiling — the pair retranslates, and
+    // whether the old bytes ride along as prompt context is the evidence
+    // frame's business, not a pair-skipping cap.
+    const published = "x".repeat(33 * 1024);
+    const chatDouble = chat([proposes("# Dev\n\nNouvelle prose.\n")]);
+    const ioDouble = /** @type {any} */ ({
+      forge: forge(
+        makeRepo({
+          documents: {
+            "manual/dev.md": "# Dev\n\nFine.\n",
+            "manual/vi/dev.md": published,
+          },
+          state: renderState([
+            {
+              schemaVersion: STATE_SCHEMA_VERSION,
+              sourcePath: "manual/dev.md",
+              destinationPath: "manual/vi/dev.md",
+              language: "vi",
+              sourceFingerprint: contentFingerprint("# Dev\n\nOld prose.\n"),
+              translationFingerprint: contentFingerprint(published),
+              policyFingerprint: POLICY,
+              transformationVersion: TRANSFORMATION_VERSION,
+            },
+          ]),
+        }),
+      ),
+      chat: chatDouble,
+      evidence,
+    });
+
+    await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    expect(chatDouble.calls()).toBe(1);
+    expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
   });
 
   it("refuses a malformed answer without spending a retry", async () => {
@@ -1216,6 +1283,27 @@ describe("run", () => {
       expect(DEFAULT_MAX_ATTEMPTS).toBe(3);
       expect((DEFAULT_POLICY.transport.retries + 1) * DEFAULT_MAX_ATTEMPTS).toBe(9);
     });
+
+    it("spends the pair's retry budget across a multi-chunk pair, restarting from the first chunk", async () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const source = `${"y".repeat(20 * 1024)}\n\n${"y".repeat(20 * 1024)}`;
+      const [first, second] = chunkDocument(source).chunks;
+      // Chunk one translates, chunk two meets a 503: the retry re-runs the
+      // whole pair — chunk one again, the answer repeats cleanly — before
+      // both chunks answer and the reassembly passes the whole-document
+      // gates.
+      const chatDouble = chat([proposes(first), overloaded(), proposes(first), proposes(second)]);
+      const { ioDouble, sleeps } = sleeping(
+        makeRepo({ documents: { "manual/dev.md": source } }),
+        chatDouble,
+      );
+
+      await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+
+      expect(chatDouble.calls()).toBe(4);
+      expect(sleeps).toEqual([DELAY_MS.short]);
+      expect(logged(log)).toMatch(/translated vi manual\/dev\.md/);
+    });
   });
 
   describe("DELAY_MS — the caller's delay mapping", () => {
@@ -1311,7 +1399,7 @@ describe("run", () => {
         makeRepo({
           documents: {
             // An unclosed region is malformed: preparation must refuse it.
-            "manual/dev.md": "<!-- harmonise:skip-start -->\nnever closed\n",
+            "manual/dev.md": "<!-- harmonise:skip-start -->\n",
           },
         }),
       ),
@@ -1322,14 +1410,14 @@ describe("run", () => {
     expect(error.message).toMatch(/never closed/);
   });
 
-  it("skips an oversized source with its reason while healthy pairs prepare", async () => {
+  it("skips an unsplittable oversize source with its reason while healthy pairs prepare", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const ioDouble = io(
       forge(
         makeRepo({
           documents: {
             "manual/dev.md": "# Dev\n\nFine.\n",
-            // 33 KiB: past the deterministic cap.
+            // 33 KiB in one paragraph: an unsplittable block past one chunk.
             "manual/big.md": "x".repeat(33 * 1024),
           },
         }),
@@ -1339,46 +1427,51 @@ describe("run", () => {
 
     await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
     const out = logged(log);
-    expect(out).toMatch(/skipped vi manual\/big\.md: 33792 bytes, past the 32768-byte cap/);
+    expect(out).toMatch(
+      /skipped vi manual\/big\.md: an unsplittable block of 33792 bytes does not fit one chunk — shrink or split it/,
+    );
     expect(out).toMatch(/translated vi manual\/dev\.md/);
   });
 
-  it("accepts a source document of exactly the 32 KiB cap — the boundary is inclusive", async () => {
-    expect(MAX_SOURCE_BYTES).toBe(32768);
+  it("keeps a source of exactly the chunk ceiling one chunk — the boundary is inclusive", async () => {
+    expect(MAX_CHUNK_BYTES).toBe(24576);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const source = "x".repeat(MAX_SOURCE_BYTES);
-    expect(new TextEncoder().encode(source).byteLength).toBe(MAX_SOURCE_BYTES);
-    const ioDouble = io(
-      forge(makeRepo({ documents: { "manual/big.md": source } }), makeInventory(["manual/big.md"])),
-    );
+    const source = "q".repeat(MAX_CHUNK_BYTES);
+    const chatDouble = chat([proposes(source)]);
+    const ioDouble = /** @type {any} */ ({
+      forge: forge(
+        makeRepo({ documents: { "manual/big.md": source } }),
+        makeInventory(["manual/big.md"]),
+      ),
+      chat: chatDouble,
+      evidence,
+    });
 
     await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
+    expect(chatDouble.calls()).toBe(1);
     expect(logged(log)).toMatch(/translated vi manual\/big\.md/);
   });
 
-  it("skips a source document of exactly one byte past the cap, naming the limit", async () => {
-    expect(MAX_SOURCE_BYTES).toBe(32768);
+  it("splits a source one blank-separated block past the chunk ceiling into two chunks", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const source = "x".repeat(MAX_SOURCE_BYTES + 1);
-    expect(new TextEncoder().encode(source).byteLength).toBe(MAX_SOURCE_BYTES + 1);
-    const ioDouble = io(
-      forge(
-        makeRepo({
-          documents: { "manual/dev.md": "# Dev\n\nFine.\n", "manual/big.md": source },
-        }),
-        makeInventory(["manual/dev.md", "manual/big.md"]),
+    // 24570 q's leaves one byte of ceiling pressure for the separator and
+    // the tail: a split point at the blank line, two chunks, two calls.
+    const source = `${"q".repeat(24570)}\n\n${"z".repeat(100)}`;
+    const chunks = chunkDocument(source).chunks;
+    expect(chunks.length).toBe(2);
+    const chatDouble = chat(chunks.map((chunk) => proposes(chunk)));
+    const ioDouble = /** @type {any} */ ({
+      forge: forge(
+        makeRepo({ documents: { "manual/big.md": source } }),
+        makeInventory(["manual/big.md"]),
       ),
-    );
+      chat: chatDouble,
+      evidence,
+    });
 
     await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
-    const out = logged(log);
-    expect(out).toMatch(
-      new RegExp(
-        `skipped vi manual/big\\.md: ${String(MAX_SOURCE_BYTES + 1)} bytes, past the ` +
-          `${String(MAX_SOURCE_BYTES)}-byte cap`,
-      ),
-    );
-    expect(out).toMatch(/translated vi manual\/dev\.md/);
+    expect(chatDouble.calls()).toBe(2);
+    expect(logged(log)).toMatch(/translated vi manual\/big\.md/);
   });
 
   it("goes red when every pair skips — work existed and none was attempted", async () => {

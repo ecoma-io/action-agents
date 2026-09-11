@@ -21,8 +21,8 @@ function policy() {
 }
 
 describe("TRANSFORMATION_VERSION", () => {
-  it("is 1 — the first pipeline version", () => {
-    expect(TRANSFORMATION_VERSION).toBe(1);
+  it("is 2 — the chunked-translation pipeline", () => {
+    expect(TRANSFORMATION_VERSION).toBe(2);
   });
 });
 
@@ -81,7 +81,7 @@ describe("policyFingerprint", () => {
 
   it("moves when the transformation version changes", () => {
     expect(policyFingerprint(policy())).not.toBe(
-      policyFingerprint({ ...policy(), transformationVersion: 2 }),
+      policyFingerprint({ ...policy(), transformationVersion: 3 }),
     );
   });
 

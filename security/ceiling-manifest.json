@@ -91,7 +91,7 @@
         "github-mutation/signal-comment-scope.test.mjs",
         "provider-boundary/body-cap.test.mjs",
         "path-traversal/collect-files-bounds.test.mjs",
-        "harmonise-adversarial/answer-byte-cap.test.mjs"
+        "harmonise-adversarial/document-size-budget.test.mjs"
       ]
     },
     {
