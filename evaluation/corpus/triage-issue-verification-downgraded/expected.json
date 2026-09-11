@@ -2,11 +2,11 @@
   "outcome": "published",
   "adds": ["bug"],
   "removes": [],
-  "refusals": ["docs"],
+  "refusals": ["comment", "docs"],
   "commentExpected": false,
   "signalExpected": false,
   "verification": {
     "requested": true,
-    "downgraded": ["add:docs"]
+    "downgraded": ["add:docs", "comment"]
   }
 }

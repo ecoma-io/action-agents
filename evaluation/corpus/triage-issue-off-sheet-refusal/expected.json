@@ -3,6 +3,6 @@
   "adds": ["docs"],
   "removes": [],
   "refusals": ["made-up"],
-  "commentExpected": false,
+  "commentExpected": true,
   "signalExpected": false
 }
