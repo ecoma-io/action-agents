@@ -2706,6 +2706,31 @@ describe("run — provider truncation (finish_reason: length, #448)", () => {
   });
 });
 
+describe("run — the record and the signal are two independent comments", () => {
+  it("a decision with both a record and a signal writes both, neither clobbering the other", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    // labels ["bug"] plus a model-judged incompleteness signal: the plan
+    // carries the record comment AND the signal.
+    const world = io({
+      answer:
+        '{"labels":["bug"],"rationale":"Fails on import.","dimensions":{"quality":{"completeness":"missing-evidence"}}}',
+    });
+
+    await run(inputs(), readContext(runner), world);
+
+    const comments = world.forge.writes.filter((write) => write.op === "createComment");
+    expect(comments).toHaveLength(2);
+    const bodies = comments.map((write) => String(write.args[1]));
+    const recordBody = bodies.find((body) => body.includes("action-agents-record:triage:"));
+    const signalBodyText = bodies.find((body) => body.includes("This issue looks incomplete"));
+    // The record block and the signal text live in two separate comments —
+    // the signal's upsert must never overwrite the record's.
+    expect(recordBody).toBeDefined();
+    expect(signalBodyText).toBeDefined();
+    expect(recordBody).not.toBe(signalBodyText);
+  });
+});
+
 /**
  * The opt-in verification pass (issue #274), wired into the pipeline: the
  * decide call answers `LABELS_ANSWER` on the default fixture, so the minted
@@ -2981,6 +3006,34 @@ describe("run — opt-in verification (issue #274)", () => {
     // Plan order: the label op mints before the signal.
     const answers = /** @type {{ opId: string }[]} */ (record.verification.answers);
     expect(answers.map((answer) => answer.opId)).toEqual(["add:bug", "comment", "signal"]);
+  });
+
+  it("verify:true, one add refuted — the standing record names only the labels that landed", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({
+      answer: SIGNAL_MARKER_ANSWER.replace(
+        '"completeness":"missing-evidence"',
+        '"completeness":"complete"',
+      ),
+      verifyAnswer: JSON.stringify([
+        { opId: "add:bug", verdict: "refuted", reason: "The report is a documentation request." },
+        { opId: "add:docs", verdict: "confirmed", reason: "The report asks for docs." },
+        { opId: "comment", verdict: "confirmed", reason: "The record names the landed labels." },
+      ]),
+    });
+
+    await run(inputs({ verify: true }), readContext(runner), world);
+
+    /** @param {string[]} applied */
+    const block = (applied) =>
+      `action-agents-record:triage:${Buffer.from(JSON.stringify({ schemaVersion: 1, applied }), "utf8").toString("base64")}`;
+    const comment = world.forge.writes.find((write) => write.op === "createComment");
+    expect(comment).toBeDefined();
+    const body = String(comment?.args[1]);
+    // The record is the proof of what the run APPLIED: the refuted 'bug'
+    // never landed, so the block must name 'docs' alone.
+    expect(body).toContain(block(["docs"]));
+    expect(body).not.toContain(block(["bug", "docs"]));
   });
 
   it("verify:true on a labels+signal decision, verifier silent on the signal — dropped as uncertain", async () => {

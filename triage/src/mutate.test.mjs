@@ -313,7 +313,7 @@ describe("mutate — signal comment on a labels decision", () => {
     const commentWrite = /** @type {{ op: string, args: unknown[] }} */ (fake.writes[2]);
     expect(commentWrite.op).toBe("createComment");
     const body = String(commentWrite.args[1]);
-    expect(body).toContain("<!-- action-agents:triage:");
+    expect(body).toContain("<!-- action-agents:triage-signal:");
     expect(body).toContain("This issue looks incomplete. This is a note, not a closing");
     expect(body).toContain("The following required field is empty: Steps to reproduce.");
     expect(body).toContain("_Posted by the `triage` action._");
@@ -351,7 +351,7 @@ describe("mutate — signal comment on a labels decision", () => {
     expect(
       log.mock.calls.some((call) =>
         String(call[0]).includes(
-          "dry run — would add [bug] and post a signal comment: <!-- action-agents:triage:dry-run --> Possibly duplicate of #12 — the same crash.",
+          "dry run — would add [bug] and post a signal comment: <!-- action-agents:triage-signal:dry-run --> Possibly duplicate of #12 — the same crash.",
         ),
       ),
     ).toBe(true);
@@ -758,6 +758,15 @@ describe("mutate — an abandoned comment write is not an applied op", () => {
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T12:00:00Z",
   };
+  // The signal races in its own namespace: a standing signal comment from
+  // another run whose head differs abandons this run's signal upsert.
+  const SIGNAL_RACED = {
+    id: 56,
+    body: `<!-- action-agents:triage-signal:d0d00002:head=${"b".repeat(40)} -->older signal`,
+    user: { login: "github-actions[bot]" },
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T12:00:00Z",
+  };
 
   it("the classification abandonment ends the run abandoned — nothing written, no owned id logged", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -806,7 +815,7 @@ describe("mutate — an abandoned comment write is not an applied op", () => {
   it("the signal abandonment ends the run abandoned the same way", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const fake = createFakeForge({ prSnapshot: {} });
-    fake.forge.listComments = async () => [RACED];
+    fake.forge.listComments = async () => [SIGNAL_RACED];
     const run = mutate({
       decision: {
         kind: "labels",

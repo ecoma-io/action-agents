@@ -124,6 +124,16 @@ async function driveRun({ sheet, answer }) {
     async whoami() {
       return { login: "action-agents[bot]" };
     },
+    async listComments() {
+      return [];
+    },
+    /** @param {number} number @param {string} body */
+    async createComment(number, body) {
+      writes.push({ op: "createComment", args: [number, body] });
+      return { id: 101 };
+    },
+    async updateComment() {},
+    async deleteComment() {},
   });
   const context = readContext({
     ...process.env,

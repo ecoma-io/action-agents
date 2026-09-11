@@ -253,18 +253,36 @@ describe("triage — hostile issue and candidate prose cannot reach the signal c
     const runWorld = { ...io(), forge: world };
     await run(inputs(), readContext(runner), runWorld);
 
-    // The mutation surface holds exactly two writes — the label apply and one
-    // comment create. No close, assign or mention operation exists or fires.
-    assert.equal(world.writes.length, 2, "labels plus the one signal comment, nothing else");
-    assert.deepEqual(world.writes[0], { op: "addLabels", args: [7, ["bug"]] });
-    assert.equal(world.writes[1]?.op, "createComment");
-    const body = String(world.writes[1]?.args?.[1] ?? "");
-
-    // The action's own marker, and no other HTML-comment token anywhere.
-    assert.ok(
-      body.startsWith("<!-- action-agents:triage:"),
-      `the signal comment opens with the action's marker, got: ${body.slice(0, 60)}`,
+    // The mutation surface holds exactly three writes — the label apply, the
+    // classification record comment, and one fully code-composed signal
+    // comment in its own namespace. No close, assign or mention operation
+    // exists or fires.
+    assert.equal(
+      world.writes.length,
+      3,
+      "labels plus the record comment plus the signal, nothing else",
     );
+    assert.deepEqual(world.writes[0], { op: "addLabels", args: [7, ["bug"]] });
+    assert.equal(world.writes[1]?.op, "createComment", "the record comment is its own comment");
+    const recordBody = String(world.writes[1]?.args?.[1] ?? "");
+    assert.ok(
+      recordBody.startsWith("<!-- action-agents:triage:"),
+      "the record comment opens with the classification marker",
+    );
+    assert.ok(
+      recordBody.includes("action-agents-record:triage:"),
+      "the record comment carries the code-minted record block",
+    );
+    assert.equal(world.writes[2]?.op, "createComment", "the signal comment is its own comment");
+    const body = String(world.writes[2]?.args?.[1] ?? "");
+
+    // The signal upserts under its OWN marker namespace — the signal's
+    // upsert can never overwrite the classification record's comment.
+    assert.ok(
+      body.startsWith("<!-- action-agents:triage-signal:"),
+      `the signal comment opens with the signal marker, got: ${body.slice(0, 60)}`,
+    );
+
     assert.equal(body.split("<!--").length - 1, 1, "no forged open marker survives");
     assert.equal(body.split("-->").length - 1, 1, "no forged close marker survives");
 
@@ -307,11 +325,19 @@ describe("triage — hostile issue and candidate prose cannot reach the signal c
     }
   });
 
-  it("writes no comment at all when nothing is judged incomplete or related", async () => {
+  it("writes only the record comment when nothing is judged incomplete or related", async () => {
     const world = fakeForge();
     const runWorld = { ...io({ answer: PLAIN_ANSWER }), forge: world };
     await run(inputs(), readContext(runner), runWorld);
 
-    assert.deepEqual(world.writes, [{ op: "addLabels", args: [7, ["bug"]] }]);
+    assert.deepEqual(
+      world.writes.filter((w) => w.op === "addLabels"),
+      [{ op: "addLabels", args: [7, ["bug"]] }],
+    );
+    const comment = world.writes.find((w) => w.op === "createComment");
+    assert.ok(
+      String(comment?.args?.[1]).includes("action-agents-record:triage:"),
+      "the record comment carries the code-minted record block even without a signal",
+    );
   });
 });

@@ -424,6 +424,26 @@ describe("decide — single-valued reconciliation (issues #497, #498)", () => {
     });
   });
 
+  it("names the resolved classification in the record even when it adds nothing — superseding in place refreshes the stale record (issue #498)", () => {
+    // The thread already carries 'docs'; the run only supersedes 'bug'. The
+    // standing record comment still names 'bug', so the record must name
+    // the classification this run resolved the thread to — 'docs' — or the
+    // upsert would mint no comment and the stale evidence would survive.
+    const decision = decide(
+      input({
+        evidence: {
+          ...threadWith(["bug", "docs"]),
+          policy: exclusivePolicy,
+          provenance: new Set(["bug"]),
+        },
+        assessment: { intent: "labels", labels: ["docs"], rationale: "r" },
+      }),
+    );
+    expect(decision.add).toEqual([]);
+    expect(decision.remove).toEqual([{ name: "bug", reason: "supersede" }]);
+    expect(decision.record).toEqual(["docs"]);
+  });
+
   it("refuses a conflicting member the action cannot prove it applied, naming the exact remediation (issue #498)", () => {
     expect(() =>
       decide(
