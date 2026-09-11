@@ -489,3 +489,83 @@ describe("placeholder order", () => {
     expect([...protection.spans.keys()]).toEqual([s(2), s(1)]);
   });
 });
+
+describe("a multilingual README's protected header", () => {
+  // The convention this repository dogfoods (#506): title, then badges, then
+  // a language selector, then canonical content — badges and selector each
+  // inside their own skip region. These tests pin the shapes every README and
+  // translation now carries.
+
+  /** @param {number} n @returns {string} */
+  const g = (n) => `[[harmonise:0123456789abcdef:g${String(n)}]]`;
+  /** @param {number} n @returns {string} */
+  const s = (n) => `[[harmonise:0123456789abcdef:s${String(n)}]]`;
+
+  /** A minimal README shaped exactly like the convention's header. @type {string} */
+  const readme = [
+    "<!-- harmonise:skip-start -->",
+    '<p align="center">',
+    '  <a href="https://github.com/ecoma-io/action-agents/actions"><img src="badge.svg" alt="CI" /></a>',
+    "</p>",
+    "<!-- harmonise:skip-end -->",
+    "",
+    "<!-- harmonise:skip-start -->",
+    '<a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a>',
+    "<!-- harmonise:skip-end -->",
+    "",
+    "# Action Agents",
+    "",
+    "Keep repositories in step with harmonise.",
+    "",
+  ].join("\n");
+
+  it("protects the badges and selector regions whole, in document order", () => {
+    const { protection } = protect(readme, { glossary: ["harmonise"] });
+
+    expect(protection.skippedSpans).toBe(2);
+    expect(protection.text).not.toContain("badge.svg");
+    expect(protection.text).not.toContain("Tiếng Việt");
+    expect(protection.text.indexOf(s(1))).toBeLessThan(protection.text.indexOf(s(2)));
+    // Glossary replacement reaches prose but never the regions' interior.
+    expect(protection.text).toContain(`Keep repositories in step with ${g(1)}.`);
+  });
+
+  it("restores the header byte-for-byte", () => {
+    const { protection } = protect(readme, { glossary: ["harmonise"] });
+
+    expect(restoreDocument(protection.text, protection)).toBe(readme);
+  });
+
+  it("treats back-to-back regions as two spans, not one merged region", () => {
+    const adjacent =
+      "<!-- harmonise:skip-start -->\nbadges\n<!-- harmonise:skip-end -->\n<!-- harmonise:skip-start -->\nselector\n<!-- harmonise:skip-end -->\n";
+    const { protection } = protect(adjacent);
+
+    expect(protection.skippedSpans).toBe(2);
+    expect(restoreDocument(protection.text, protection)).toBe(adjacent);
+  });
+
+  it("passes a README without regions through untouched", () => {
+    const plain = "# Action Agents\n\nNo header machinery at all.\n";
+    const { protection } = protect(plain, { glossary: ["harmonise"] });
+
+    expect(protection.skippedSpans).toBe(0);
+    expect(protection.glossaryHits).toBe(0);
+    expect(restoreDocument(protection.text, protection)).toBe(plain);
+  });
+
+  it("is idempotent: a second protect–restore pass on the restored bytes is identical", () => {
+    const first = protect(readme, { glossary: ["harmonise"] }).protection;
+    const once = restoreDocument(first.text, first);
+    const second = protect(once, { glossary: ["harmonise"] }).protection;
+    const twice = restoreDocument(second.text, second);
+
+    expect(twice).toBe(readme);
+    expect(second.text).toBe(first.text);
+  });
+
+  it("refuses a header whose region is never closed", () => {
+    const unclosed = "<!-- harmonise:skip-start -->\nbadges\n\n# Action Agents\n";
+    expect(() => protect(unclosed)).toThrow(DeterministicRefusalError);
+  });
+});
