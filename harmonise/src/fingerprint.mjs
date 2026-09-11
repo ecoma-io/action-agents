@@ -44,7 +44,7 @@ import { createHash } from "node:crypto";
  * folded into `policyFingerprint` so a bump invalidates every prior
  * translation in one move.
  */
-export const TRANSFORMATION_VERSION = 1;
+export const TRANSFORMATION_VERSION = 2;
 
 /**
  * The inputs whose combination is the translation policy for one destination.

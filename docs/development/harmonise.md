@@ -221,9 +221,15 @@ One pair is one unit of work, and a run's report is built from what happens to e
   by the LLM. If generation fails, the run fails according to the failure policy;
 - **an orphan translation** — its slug has no source — is recorded in the report
   and **never deleted, modified, or recreated**. Orphans are reported only;
-- **an empty source, or a document past the cap (32 KiB — ensures both documents
-  fit within the evidence wrapper's 64 KiB cap)**, skips that pair with a reason,
-  and the run continues;
+- **an empty source skips that pair** with a reason, and the run continues;
+- **a document larger than one chunk is translated chunk by chunk** —
+  partitioned deterministically at structural Markdown boundaries, one
+  provider request per chunk, reassembled whole before the whole-document
+  gates run. Two bounds refuse a pair deterministically instead: an
+  unsplittable block past `MAX_CHUNK_BYTES` (24 KiB — one chunk plus its
+  prompt scaffolding must fit the evidence wrapper's 64 KiB frame), or a
+  document past `MAX_CHUNKS_PER_PAIR` (32 chunks — the pair's execution
+  budget);
 - **every pair skipping** is a red run: work existed and none of it was
   attempted successfully.
 

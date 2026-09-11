@@ -27,7 +27,7 @@ import {
 } from "#core/transport-errors.mjs";
 import { readSharedInputs } from "#core/inputs.mjs";
 import { policyReader, policySourceAuditLine, resolvePolicySource } from "#core/policy.mjs";
-import { createEvidence } from "#core/untrusted.mjs";
+import { createEvidence, MAX_EVIDENCE_BYTES } from "#core/untrusted.mjs";
 import { oneLine as oneLineCore } from "#core/one-line.mjs";
 import {
   getBooleanInput,
@@ -54,10 +54,9 @@ import { readState, renderState, statePath, STATE_SCHEMA_VERSION } from "./state
 import { classifyPair } from "./stale.mjs";
 import { matchGlob } from "#core/glob.mjs";
 import {
-  MAX_SOURCE_BYTES,
   pairBlockShape,
   planFrontmatterGuard,
-  preparationRefusal,
+  planPair,
   preparePair,
   translatePair,
 } from "./plan.mjs";
@@ -252,7 +251,9 @@ function realIo(inputs, context, overrides = {}) {
  *
  * @typedef {object} PairJob
  * @property {number} slot position in the stable pair order this pair fills
- * @property {import("./plan.mjs").PreparedPair} prepared
+ * @property {import("./plan.mjs").PreparedPair[]} chunks one prepared chunk per request, in order
+ * @property {string} sourceText the whole original source document
+ * @property {import("./plan.mjs").FrontmatterGuard | undefined} frontmatter the pair's planned frontmatter protection
  * @property {string | undefined} existing the destination's current bytes, when it has any
  * @property {import("./plan.mjs").PairBlockShape} blocks the pair's change shape
  * @property {string} sourceFingerprint
@@ -606,18 +607,6 @@ async function harmoniseRun(inputs, context, world, red) {
       }
       continue;
     }
-    // Eligibility is a property of the source, judged once: every language's
-    // pair skips together, with the same reason in the report.
-    const refusal = preparationRefusal(file.content);
-    if (refusal !== null) {
-      for (const target of pair.targets) {
-        skippedLines.push({
-          text: `${target.lang} ${pair.sourcePath}: ${refusal}`,
-          refusal: true,
-        });
-      }
-      continue;
-    }
     // Frontmatter protection is a property of the source, planned once for
     // every language's pair: protected values must be tokens before any
     // machinery sees the text. A plan that refuses is a pair that never
@@ -633,44 +622,61 @@ async function harmoniseRun(inputs, context, world, red) {
       continue;
     }
     const fmGuard = frontmatter.kind === "planned" ? frontmatter.guard : undefined;
+    // Chunk planning is also a property of the source, judged once: the
+    // masked document is partitioned deterministically, and a refusal —
+    // an unsplittable block or a document past the chunk execution
+    // budget — skips every language's pair before any model call. There
+    // is no whole-document size ceiling.
+    const planned = planPair(file.content, fmGuard);
+    if (planned.refusal !== null) {
+      for (const target of pair.targets) {
+        skippedLines.push({
+          text: `${target.lang} ${pair.sourcePath}: ${planned.refusal}`,
+          refusal: true,
+        });
+      }
+      continue;
+    }
     // The source's content identity, hashed once per source document: every
     // language's pair classifies against the same digest.
     const sourceFingerprint = contentFingerprint(file.content);
 
+    const [firstChunk] = planned.chunks;
+    if (firstChunk === undefined) throw new Error("chunk planning produced no chunks");
+
     for (const target of pair.targets) {
       try {
-        const prepared = preparePair({
-          slug: pair.slug,
-          lang: target.lang,
-          sourcePath: pair.sourcePath,
-          target,
-          sourceText: file.content,
-          inventory,
-          config,
-          frontmatter: fmGuard,
-        });
+        const chunks = planned.chunks.map((sourceChunk, chunkIndex) =>
+          preparePair({
+            slug: pair.slug,
+            lang: target.lang,
+            sourcePath: pair.sourcePath,
+            target,
+            sourceChunk,
+            chunkIndex,
+            chunkCount: planned.chunks.length,
+            inventory,
+            config,
+          }),
+        );
 
         const existing =
           target.state === "existing"
             ? await readAtBase(target.path).then((found) => found?.content ?? undefined)
             : undefined;
-        if (existing !== undefined) {
-          // Both documents must fit the evidence frame together; a published
-          // translation past the cap cannot be judged whole, so its pair
-          // skips with that reason rather than comparing against a truncated
-          // view.
-          const existingBytes = new TextEncoder().encode(existing).byteLength;
-          if (existingBytes > MAX_SOURCE_BYTES) {
-            skippedLines.push({
-              text:
-                `${target.lang} ${pair.sourcePath}: the existing translation is ` +
-                `${String(existingBytes)} bytes, past the ${String(MAX_SOURCE_BYTES)}-byte cap — ` +
-                `shrink or split it first`,
-              refusal: true,
-            });
-            continue;
-          }
-        }
+        // Context policy: a single-chunk pair carries the published
+        // translation into its prompt — but a context block past the
+        // evidence frame's 64 KiB would be frame-cut before the model saw
+        // it, so an oversized context is omitted and the pair
+        // (re)translates whole. Drift detection above still saw the real
+        // bytes, and the reassembled byte-identity check still compares
+        // against them.
+        const existingContext =
+          existing !== undefined &&
+          planned.chunks.length === 1 &&
+          new TextEncoder().encode(existing).byteLength <= MAX_EVIDENCE_BYTES
+            ? existing
+            : undefined;
 
         // The deterministic gate. Only the exact conjunction — the recorded
         // state proves source, policy and version all unchanged AND the
@@ -680,8 +686,7 @@ async function harmoniseRun(inputs, context, world, red) {
         // path exactly as before. Nothing model-shaped can reach this
         // decision: both sides are digests of repository bytes.
         const recorded =
-          recordedRecords.find((record) => record.destinationPath === prepared.destinationPath) ??
-          null;
+          recordedRecords.find((record) => record.destinationPath === target.path) ?? null;
         const blocks = pairBlockShape(recorded, null);
         const current = {
           sourceFingerprint,
@@ -693,13 +698,13 @@ async function harmoniseRun(inputs, context, world, red) {
           slots.push({
             lang: target.lang,
             sourcePath: pair.sourcePath,
-            destinationPath: prepared.destinationPath,
-            state: prepared.state,
+            destinationPath: target.path,
+            state: target.state,
             outcome: "unchanged-skipped",
             stats: {
-              glossaryHits: prepared.protection.glossaryHits,
-              skippedSpans: prepared.protection.skippedSpans,
-              linksRewritten: prepared.linksRewritten,
+              glossaryHits: chunks.reduce((n, c) => n + c.protection.glossaryHits, 0),
+              skippedSpans: chunks.reduce((n, c) => n + c.protection.skippedSpans, 0),
+              linksRewritten: chunks.reduce((n, c) => n + c.linksRewritten, 0),
             },
             blocks,
             content: undefined,
@@ -738,8 +743,10 @@ async function harmoniseRun(inputs, context, world, red) {
         // so a slow pair ahead never reshuffles the ones behind it.
         jobs.push({
           slot: slots.length,
-          prepared,
-          existing,
+          chunks,
+          sourceText: file.content,
+          frontmatter: fmGuard,
+          existing: existingContext,
           blocks,
           sourceFingerprint,
           lang: target.lang,
@@ -788,12 +795,19 @@ async function harmoniseRun(inputs, context, world, red) {
     for (let attempt = 0; ; attempt += 1) {
       try {
         const result = await translatePair({
-          prepared: job.prepared,
+          chunks: job.chunks,
+          sourceText: job.sourceText,
+          frontmatter: job.frontmatter,
           sourceLanguage: config.sourceLanguage,
           existingText: job.existing,
-          priorTranslation: prior,
           model: inputs.model,
           chat: world.chat,
+          priorTranslation:
+            job.chunks.length === 1 &&
+            prior !== undefined &&
+            new TextEncoder().encode(prior).byteLength <= MAX_EVIDENCE_BYTES
+              ? prior
+              : undefined,
           evidence: world.evidence,
           repository: { name: repository.name, description: repository.description },
           documents,
@@ -871,13 +885,13 @@ async function harmoniseRun(inputs, context, world, red) {
       outcome: {
         lang: job.lang,
         sourcePath: job.sourcePath,
-        destinationPath: job.prepared.destinationPath,
-        state: job.prepared.state,
+        destinationPath: /** @type {string} */ (job.chunks[0]?.destinationPath),
+        state: /** @type {"missing" | "existing"} */ (job.chunks[0]?.state),
         outcome: translated.noop ? "unchanged" : "proposed",
         stats: {
-          glossaryHits: job.prepared.protection.glossaryHits,
-          skippedSpans: job.prepared.protection.skippedSpans,
-          linksRewritten: job.prepared.linksRewritten,
+          glossaryHits: job.chunks.reduce((n, c) => n + c.protection.glossaryHits, 0),
+          skippedSpans: job.chunks.reduce((n, c) => n + c.protection.skippedSpans, 0),
+          linksRewritten: job.chunks.reduce((n, c) => n + c.linksRewritten, 0),
         },
         blocks: job.blocks,
         content,

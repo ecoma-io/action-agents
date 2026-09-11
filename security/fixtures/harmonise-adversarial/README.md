@@ -23,12 +23,16 @@ chat and a recording forge, then asserts the capability stays bounded:
   `sanitiseCommentText` (`core/src/sanitise.mjs`): tag-shaped `<` is escaped,
   `@handles` are broken, and each line is capped — hostile summary text cannot
   render as script or mention.
-- **Answers are capped, never hung.** A translated document past
-  `MAX_SOURCE_BYTES` (32 KiB, `harmonise/src/plan.mjs`) is refused
-  fail-closed; the transport's 1 MiB body cap (`core/transport/http.mjs`,
-  `DEFAULT_MAX_BODY_BYTES`) refuses a multi-MB chat body before it is buffered.
-  Refusals are never retried (`harmonise/src/recovery.mjs`), so a hostile
-  answer does not multiply model calls or forge writes.
+- **Documents are chunked; every payload stays bounded, never hung.** A
+  source larger than one chunk is partitioned deterministically
+  (`harmonise/src/chunks.mjs`): a document past the 32-chunk execution
+  budget, or carrying an unsplittable block past `MAX_CHUNK_BYTES`
+  (24 KiB), is refused fail-closed at preparation; the transport's 1 MiB
+  body cap (`core/transport/http.mjs`, `DEFAULT_MAX_BODY_BYTES`) refuses a
+  multi-MB chat body before it is buffered, and a hostile answer that does
+  not mirror the source's structure fails the structural gate. Refusals
+  are never retried (`harmonise/src/recovery.mjs`), so a hostile answer
+  does not multiply model calls or forge writes.
 
 Cross-checked against the per-module unit tests so the corpus adds to them —
 see `security/README.md` for the corpus contract.

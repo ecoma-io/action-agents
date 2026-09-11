@@ -1,24 +1,31 @@
-// Answer byte caps — a hostile model's answer sized to defeat resource
-// ceilings, attacked at the two independent bounds a run must hold.
+// Document size budgets — a hostile or oversized document, and a hostile or
+// oversized model answer, attacked at the bounds a run must hold under the
+// chunked-translation contract.
 //
-// Attack: the model answers a translation request with a huge document (here
-// 2 MiB), hoping the action either buffers it whole or truncates it silently;
-// at the transport, a chat-completions response body over the byte cap tests
-// whether the seam buffers a giant body before judging it.
-//   -> capability must remain bounded: `judgeAnswer`
-//      (`harmonise/src/plan.mjs`) refuses an answer past
-//      `MAX_SOURCE_BYTES` (32 KiB) fail-closed — the pair exits red, the
-//      answer is never written to the forge, and a refusal is never retried
-//      (`harmonise/src/recovery.mjs`). Below that, the transport refuses a
-//      response past `DEFAULT_MAX_BODY_BYTES` (1 MiB,
-//      `core/transport/http.mjs`) while the body streams — before it is ever
-//      assembled — with the typed `BodyTooLargeError`, and the run's own
-//      recovery policy spends exactly its declared retries on it.
+// Under the chunked contract there is no whole-document 32 KiB ceiling: a
+// source larger than one chunk is accepted, partitioned deterministically by
+// `chunkDocument` (`harmonise/src/chunks.mjs`), and every chunk is translated
+// — one provider request per chunk — with the reassembled whole judged by the
+// same whole-document gates. What stays bounded, and what this fixture pins:
 //
-// Pinned at both depths: the harmonise answer cap through one real `run()`
-// on a scripted chat, and the transport cap both directly (real `createChat`
-// over a scripted fetch) and end-to-end through a real `run()` whose chat
-// client is built over the scripted fetch. Deterministic and offline.
+//   -> the chunk budget: a document needing more than `MAX_CHUNKS_PER_PAIR`
+//      (32) chunks skips at preparation — resource exhaustion is an explicit
+//      refusal, zero model calls, zero writes;
+//   -> the per-chunk payload bound: a single unsplittable block (one fenced
+//      block, one paragraph) past `MAX_CHUNK_BYTES` (24 KiB) refuses the same
+//      way — the chunker never truncates or splits what it cannot carry;
+//   -> a large-but-valid source is translated end to end: N chunks, N
+//      provider calls, one proposal carrying the whole reassembled document;
+//   -> a hostile model answer is still refused fail-closed: an answer that
+//      does not mirror the source's structure fails the structural gate
+//      before anything is written (and past the transport's 1 MiB body cap,
+//      the typed `BodyTooLargeError` refuses it while the body streams —
+//      before it is ever assembled), and a refusal is never retried
+//      (`harmonise/src/recovery.mjs`).
+//
+// Pinned through real `run()`s on scripted chats and forge doubles, plus the
+// transport cap both directly (real `createChat` over a scripted fetch) and
+// end-to-end. Deterministic and offline.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -31,7 +38,11 @@ import { BranchMovedError, isRefAbsentError } from "#core/forge.mjs";
 import { BodyTooLargeError } from "#core/transport-errors.mjs";
 
 import { readInputs, run } from "../../../harmonise/src/index.mjs";
-import { MAX_SOURCE_BYTES } from "../../../harmonise/src/plan.mjs";
+import {
+  MAX_CHUNK_BYTES,
+  MAX_CHUNKS_PER_PAIR,
+  chunkDocument,
+} from "../../../harmonise/src/chunks.mjs";
 import { DEFAULT_POLICY } from "../../../harmonise/src/recovery.mjs";
 
 /**
@@ -44,6 +55,12 @@ const EVENT_PATH = (() => {
   writeFileSync(path, JSON.stringify({ ref: "refs/heads/main" }));
   return path;
 })();
+
+/**
+ * The pinned ceilings themselves — asserted once so the refusals below are
+ * the documented bounds, not guesses.
+ */
+const CEILINGS = { chunkBytes: MAX_CHUNK_BYTES, chunksPerPair: MAX_CHUNKS_PER_PAIR };
 
 /** The runner environment the fixtures execute under: en, one target (vi). */
 const runner = {
@@ -81,12 +98,13 @@ function makeConfig() {
  * The repository content a forge double serves: the config at its one real
  * path plus the source document.
  *
+ * @param {string} [source] the source document's bytes
  * @returns {Record<string, string>} path -> bytes
  */
-function makeRepo() {
+function makeRepo(source = "# Dev\n\nProse.\n") {
   return {
     [CONFIG_PATH]: makeConfig(),
-    "manual/dev.md": "# Dev\n\nProse.\n",
+    "manual/dev.md": source,
   };
 }
 
@@ -273,12 +291,103 @@ function streamOf(text) {
   });
 }
 
-describe("harmonise — answer byte caps hold", () => {
-  it("refuses a model answer past the 32 KiB translation cap: one call, no writes", async () => {
-    // The ceiling the harness pins: exactly the constant `judgeAnswer`
-    // enforces, so the refusal below is the documented bound, not a guess.
-    assert.equal(MAX_SOURCE_BYTES, 32 * 2 ** 10);
+/**
+ * A multi-section source document of roughly `sections` × `sectionBytes`
+ * bytes: one heading and one paragraph per section, blank-line separated —
+ * the chunker's ordinary diet.
+ *
+ * @param {number} sections
+ * @param {number} sectionBytes
+ * @returns {string}
+ */
+function bigSource(sections, sectionBytes) {
+  const filler = "content ".repeat(Math.max(1, Math.ceil(sectionBytes / 8)));
+  let out = "";
+  for (let i = 0; i < sections; i += 1) {
+    out += `## Section ${String(i)}\n\n${filler.slice(0, sectionBytes)}\n\n`;
+  }
+  return out;
+}
 
+describe("harmonise — document size budgets hold", () => {
+  it("pins the chunk ceilings the run enforces", () => {
+    assert.equal(CEILINGS.chunkBytes, MAX_CHUNK_BYTES);
+    assert.equal(CEILINGS.chunksPerPair, MAX_CHUNKS_PER_PAIR);
+    assert.equal(CEILINGS.chunkBytes, 24 * 2 ** 10);
+    assert.equal(CEILINGS.chunksPerPair, 32);
+  });
+
+  it("accepts a source past 32 KiB and translates it chunk by chunk", async () => {
+    // ~48 KiB of ordinary Markdown: past the old whole-document ceiling,
+    // two to three chunks under the new per-chunk bound.
+    const source = bigSource(3, 16 * 2 ** 10);
+    const planned = chunkDocument(source);
+    assert.ok(planned.chunks.length >= 2, "expected the large source to split");
+
+    const forgeDouble = forge(makeRepo(source));
+    // One honest answer per chunk: the chunk comes back structurally
+    // unchanged (an in-place translation keeps every heading and block).
+    const chatDouble = chat(planned.chunks.map((chunk) => proposes(chunk)));
+    const ioDouble = { forge: forgeDouble, chat: chatDouble, evidence };
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+
+    // The run goes green: one provider call per chunk — and no more — and
+    // the proposal carries the whole reassembled document.
+    assert.equal(error === undefined ? "green" : String(error), "green");
+    assert.equal(chatDouble.calls(), planned.chunks.length);
+    const blob = forgeDouble.writes.find((w) => w.op === "createBlob");
+    assert.ok(blob, "expected the proposal's blob write");
+    assert.equal(blob.args[0], source);
+  });
+
+  it("refuses a document past the chunk execution budget before any model call", async () => {
+    // 200 small sections ≈ 800 KiB ≈ 34+ chunks — past the 32-chunk budget.
+    const source = bigSource(200, 4 * 2 ** 10);
+    assert.ok(chunkDocument(source).refusal !== null, "expected the chunker to refuse");
+
+    const forgeDouble = forge(makeRepo(source));
+    const chatDouble = chat([proposes("x")]);
+    const ioDouble = { forge: forgeDouble, chat: chatDouble, evidence };
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+
+    // Fail-closed at preparation: every pair skips naming the budget,
+    // zero model calls, zero writes.
+    assert.match(String(error), /past the 32-chunk execution budget/);
+    assert.match(String(error), /every pair skipped/);
+    assert.equal(chatDouble.calls(), 0);
+    assert.equal(forgeDouble.writes.length, 0);
+  });
+
+  it("refuses an unsplittable block past the per-chunk bound before any model call", async () => {
+    // One fenced block of 40 KiB: no structural boundary to split on.
+    const source = "# Dev\n\n```text\n" + "x".repeat(40 * 2 ** 10) + "\n```\n";
+    assert.ok(chunkDocument(source).refusal !== null, "expected the chunker to refuse");
+
+    const forgeDouble = forge(makeRepo(source));
+    const chatDouble = chat([proposes("x")]);
+    const ioDouble = { forge: forgeDouble, chat: chatDouble, evidence };
+
+    const error = await run({ ...readInputs(runner), dryRun: false }, context(), ioDouble).catch(
+      (cause) => cause,
+    );
+
+    assert.match(String(error), /an unsplittable block of \d+ bytes does not fit one chunk/);
+    assert.match(String(error), /every pair skipped/);
+    assert.equal(chatDouble.calls(), 0);
+    assert.equal(forgeDouble.writes.length, 0);
+  });
+
+  it("refuses a hostile oversized answer fail-closed: one call, no writes", async () => {
+    // A 2 MiB answer for a small document cannot mirror the source's
+    // structure: the structural gate refuses it before anything is
+    // written — and past the transport's own 1 MiB body cap, the typed
+    // BodyTooLargeError refuses it while the body streams.
     const forgeDouble = forge(makeRepo());
     const chatDouble = chat([proposes("a".repeat(2 * 2 ** 20))]);
     const ioDouble = { forge: forgeDouble, chat: chatDouble, evidence };
@@ -287,10 +396,6 @@ describe("harmonise — answer byte caps hold", () => {
       (cause) => cause,
     );
 
-    // Fail-closed, never truncated, never retried: the pair exits red naming
-    // the cap, exactly one model call was spent, and zero forge writes ever
-    // happened — a huge answer cannot flush a blob.
-    assert.match(String(error), /past the 32768-byte cap/);
     assert.match(String(error), /every pair failed/);
     assert.equal(chatDouble.calls(), 1);
     assert.equal(forgeDouble.writes.length, 0);
