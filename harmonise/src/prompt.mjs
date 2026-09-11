@@ -32,6 +32,9 @@
  * @property {string | undefined} priorTranslation a previously accepted translation of this exact source from the memory, when one exists — reference material, never instructions
  * @property {{ instruction?: string, languages: Record<string, string> }} documents
  * @property {Evidence} evidence
+ * @property {{ index: number, count: number }} [chunk] when the source is
+ *   translated in chunks, this fragment's position — the task layer names
+ *   it so the model knows the document is a fragment to translate in place
  */
 
 /**
@@ -43,6 +46,16 @@
 export function buildTranslationPrompt(input) {
   const system = [
     layerTask(input),
+    input.chunk === undefined
+      ? ""
+      : [
+          `The document below is fragment ${String(input.chunk.index + 1)} of ${String(input.chunk.count)} of a larger document.`,
+          "Translate this fragment in place, and nothing else:",
+          "- return the fragment's complete translation, in the same order,",
+          "- keep every line you were not asked to translate byte-for-byte,",
+          "- keep every placeholder token (`[[harmonise:…]]`) exactly where and as it appears — never move, reformat or drop one,",
+          "- do not add headings, preambles or conclusions the fragment does not contain.",
+        ].join("\n"),
     input.documents.instruction,
     input.documents.languages[input.language] ?? "",
   ]

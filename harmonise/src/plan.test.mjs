@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { HttpError } from "#core/transport-errors.mjs";
 
+import { MAX_CHUNK_BYTES, MAX_CHUNKS_PER_PAIR } from "./chunks.mjs";
 import { buildInventory } from "./inventory.mjs";
 import { parseAssetLayout, parseLanguagePattern } from "./patterns.mjs";
 import {
@@ -599,16 +600,20 @@ describe("translatePair", () => {
 
 describe("planPair", () => {
   it("refuses a document past the per-pair chunk budget, naming the count", () => {
-    const paragraphs = Array.from({ length: 33 }, () => "y".repeat(20480));
+    const sectionBytes = MAX_CHUNK_BYTES / 2;
+    const paragraphs = Array.from({ length: MAX_CHUNKS_PER_PAIR + 1 }, () =>
+      "y".repeat(sectionBytes),
+    );
     const result = planPair(paragraphs.join("\n\n"), undefined);
     expect(result.refusal).toBe(
-      "the document needs 33 chunks, past the 32-chunk execution budget — split the document",
+      `the document needs ${String(MAX_CHUNKS_PER_PAIR + 1)} chunks, past the ` +
+        `${String(MAX_CHUNKS_PER_PAIR)}-chunk execution budget — split the document`,
     );
     expect(result.chunks).toEqual([]);
   });
 
   it("refuses an unsplittable block past one chunk, naming its byte count", () => {
-    const text = "```\n" + "x".repeat(30 * 1024) + "\n```\n";
+    const text = "```\n" + "x".repeat(MAX_CHUNK_BYTES) + "\n```\n";
     const result = planPair(text, undefined);
     expect(result.refusal).toBe(
       `an unsplittable block of ${String(new TextEncoder().encode(text).byteLength)} bytes ` +

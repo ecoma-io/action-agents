@@ -44,7 +44,11 @@ import {
 import { DEFAULT_POLICY, DELAY_CLASSES } from "./recovery.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
 import { chunkDocument, MAX_CHUNK_BYTES, MAX_CHUNKS_PER_PAIR } from "./chunks.mjs";
+
 import { harmoniseRecordSchemaVersion, serialiseHarmoniseRecord } from "./run-record.mjs";
+// Multi-chunk fixtures size sections at half the ceiling: two half-ceiling
+// sections never share a chunk, so split counts hold at any retune.
+const sectionBytes = MAX_CHUNK_BYTES / 2;
 
 /**
  * A real event payload file on disk: the default `readEvent` in the entry
@@ -912,10 +916,9 @@ describe("run", () => {
 
   it("translates a source past the old whole-document cap chunk by chunk", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // Two ~20 KiB paragraphs: past the old 32 KiB whole-document ceiling,
-    // two chunks under the chunker — one model call per chunk, the answers
-    // reassembled in order.
-    const source = `${"y".repeat(20 * 1024)}\n\n${"y".repeat(20 * 1024)}`;
+    // Two half-chunk paragraphs span more than one chunk under the chunker
+    // — one model call per chunk, the answers reassembled in order.
+    const source = `${"y".repeat(sectionBytes)}\n\n${"y".repeat(sectionBytes)}`;
     const chunks = chunkDocument(source).chunks;
     expect(chunks.length).toBe(2);
     const chatDouble = chat(chunks.map((chunk) => proposes(chunk)));
@@ -932,7 +935,9 @@ describe("run", () => {
 
   it("skips a source past the per-pair chunk budget, naming the count", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const paragraphs = Array.from({ length: MAX_CHUNKS_PER_PAIR + 1 }, () => "y".repeat(20 * 1024));
+    const paragraphs = Array.from({ length: MAX_CHUNKS_PER_PAIR + 1 }, () =>
+      "y".repeat(sectionBytes),
+    );
     const ioDouble = io(
       forge(
         makeRepo({
@@ -958,11 +963,12 @@ describe("run", () => {
 
   it("runs the model path when the existing translation is past the old whole-document cap", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // The old cap refused a 33 KiB published translation outright; the
-    // chunked pipeline has no such ceiling — the pair retranslates, and
-    // whether the old bytes ride along as prompt context is the evidence
-    // frame's business, not a pair-skipping cap.
-    const published = "x".repeat(33 * 1024);
+    // The old cap refused a published translation past 32 KiB outright; the
+    // chunked pipeline has no such ceiling — a translation several
+    // chunk-frames large retranslates whole, and whether the old bytes ride
+    // along as prompt context is the evidence frame's business, not a
+    // pair-skipping cap.
+    const published = "x".repeat(MAX_CHUNK_BYTES * 4);
     const chatDouble = chat([proposes("# Dev\n\nNouvelle prose.\n")]);
     const ioDouble = /** @type {any} */ ({
       forge: forge(
@@ -1287,7 +1293,7 @@ describe("run", () => {
 
     it("spends the pair's retry budget across a multi-chunk pair, restarting from the first chunk", async () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      const source = `${"y".repeat(20 * 1024)}\n\n${"y".repeat(20 * 1024)}`;
+      const source = `${"y".repeat(sectionBytes)}\n\n${"y".repeat(sectionBytes)}`;
       const [first, second] = chunkDocument(source).chunks;
       // Chunk one translates, chunk two meets a 503: the retry re-runs the
       // whole pair — chunk one again, the answer repeats cleanly — before
@@ -1420,8 +1426,8 @@ describe("run", () => {
         makeRepo({
           documents: {
             "manual/dev.md": "# Dev\n\nFine.\n",
-            // 33 KiB in one paragraph: an unsplittable block past one chunk.
-            "manual/big.md": "x".repeat(33 * 1024),
+            // Several chunk-frames in one paragraph: unsplittable.
+            "manual/big.md": "x".repeat(MAX_CHUNK_BYTES * 4),
           },
         }),
         makeInventory(["manual/dev.md", "manual/big.md"]),
@@ -1431,15 +1437,18 @@ describe("run", () => {
     await expect(run(readInputs(runner), context(), ioDouble)).resolves.toBeUndefined();
     const out = logged(log);
     expect(out).toMatch(
-      /skipped vi manual\/big\.md: an unsplittable block of 33792 bytes does not fit one chunk — shrink or split it/,
+      new RegExp(
+        `skipped vi manual\\/big\\.md: an unsplittable block of ` +
+          `${String(MAX_CHUNK_BYTES * 4)} bytes does not fit one chunk — shrink or split it`,
+      ),
     );
     expect(out).toMatch(/translated vi manual\/dev\.md/);
   });
 
   it("keeps a source of exactly the chunk ceiling one chunk — the boundary is inclusive", async () => {
-    expect(MAX_CHUNK_BYTES).toBe(24576);
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const source = "q".repeat(MAX_CHUNK_BYTES);
+    expect(Buffer.byteLength(source)).toBe(MAX_CHUNK_BYTES);
     const chatDouble = chat([proposes(source)]);
     const ioDouble = /** @type {any} */ ({
       forge: forge(
@@ -1457,9 +1466,10 @@ describe("run", () => {
 
   it("splits a source one blank-separated block past the chunk ceiling into two chunks", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    // 24570 q's leaves one byte of ceiling pressure for the separator and
-    // the tail: a split point at the blank line, two chunks, two calls.
-    const source = `${"q".repeat(24570)}\n\n${"z".repeat(100)}`;
+    // MAX − 2 q's leaves exactly the ceiling for the first chunk once the
+    // separator rides along: a split point at the blank line, two chunks,
+    // two calls.
+    const source = `${"q".repeat(MAX_CHUNK_BYTES - 2)}\n\n${"z".repeat(100)}`;
     const chunks = chunkDocument(source).chunks;
     expect(chunks.length).toBe(2);
     const chatDouble = chat(chunks.map((chunk) => proposes(chunk)));
