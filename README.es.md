@@ -1,15 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — Acciones de GitHub confiables, acotadas y auditables para el mantenimiento de repositorios: triage, review y harmonise, cada una una acción autocontenida frente a cualquier modelo compatible con OpenAI" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>Acciones de GitHub confiables, acotadas y auditables para el mantenimiento de repositorios.</strong><br />
-  Tres acciones, cada una con una única responsabilidad — triage, review, harmonise — que se ejecutan dentro de GitHub Actions frente a cualquier modelo compatible con OpenAI, incluido uno que alojes tú mismo. Nada que confiar a ciegas, ninguna dependencia que auditar, ninguna instalación antes de que empiecen.<br />
-  <em>Lo que ejecuta el runner es el código fuente que puedes leer en la etiqueta que fijaste.</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -19,23 +7,32 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — Acciones de GitHub confiables, acotadas y auditables para el mantenimiento de repositorios: triage, review y harmonise, cada una una acción autocontenida frente a cualquier modelo compatible con OpenAI" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>Acciones de GitHub confiables, acotadas y auditables para el mantenimiento de repositorios.</strong><br />
+  Tres acciones, cada una con una única responsabilidad — triage, review, harmonise — que se ejecutan dentro de GitHub Actions frente a cualquier modelo compatible con OpenAI, incluido uno que alojes tú mismo. Nada que confiar a ciegas, ninguna dependencia que auditar, ninguna instalación antes de que empiecen.<br />
+  <em>Lo que ejecuta el runner es el código fuente que puedes leer en la etiqueta que fijaste.</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">Documentación</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">Reportar un error</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">Solicitar una función</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — Acciones de GitHub confiables, acotadas y auditables para el mantenimiento de repositorios: triage, review y harmonise, cada una una acción autocontenida frente a cualquier modelo compatible con OpenAI" width="100%" />
+</p>
 
 El mantenimiento del repositorio es el trabajo que nadie agenda: etiquetar lo que llega, leer un diff como es debido, evitar que las traducciones de la documentación se separen. Un modelo puede hacer casi todo — pero darle a un modelo un token de escritura solo es seguro si lo que puede hacer está limitado por algo más que el prompt. Estas tres acciones trazan ese límite en código: **un modelo nunca compone una llamada a la API — elige de una lista que tú escribiste, y nada que sea irreversible, o que envíe un correo a un humano, puede estar en esa lista** — y todo lo que se lee de un hilo o de un diff es evidencia, nunca una instrucción.
 
@@ -122,13 +119,3 @@ La contribución más valiosa es **una acción que actúa fuera de lo que se le 
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) y los contribuyentes de Action Agents. Apache-2.0 por su concesión explícita de patentes.
-
----
-
-<p align="center">
-  <sub>
-    Mantenido por <a href="https://ecoma.io">Ecoma</a> ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

@@ -1,17 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — trusted, bounded, auditable GitHub Actions for repository maintenance: triage, review and harmonise, each one a self-contained action against any OpenAI-compatible model" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>Trusted, bounded, auditable GitHub Actions for repository maintenance.</strong><br />
-  Three actions, one responsibility each — triage, review, harmonise — running
-  inside GitHub Actions against any OpenAI-compatible model, including one you host
-  yourself. No bundle to trust, no dependency to audit, no install before they start.<br />
-  <em>What the runner executes is the source you can read at the tag you pinned.</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -21,23 +7,34 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — trusted, bounded, auditable GitHub Actions for repository maintenance: triage, review and harmonise, each one a self-contained action against any OpenAI-compatible model" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>Trusted, bounded, auditable GitHub Actions for repository maintenance.</strong><br />
+  Three actions, one responsibility each — triage, review, harmonise — running
+  inside GitHub Actions against any OpenAI-compatible model, including one you host
+  yourself. No bundle to trust, no dependency to audit, no install before they start.<br />
+  <em>What the runner executes is the source you can read at the tag you pinned.</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">Docs</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">Report Bug</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">Feature Request</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — trusted, bounded, auditable GitHub Actions for repository maintenance: triage, review and harmonise, each one a self-contained action against any OpenAI-compatible model" width="100%" />
+</p>
 
 Repository upkeep is the work nobody schedules: labelling what arrived, reading
 a diff properly, keeping the translated docs from drifting apart. A model can do
@@ -175,13 +172,3 @@ an issue: [SECURITY.md](SECURITY.md). Everything else —
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) and the Action
 Agents contributors. Apache-2.0 for its explicit patent grant.
-
----
-
-<p align="center">
-  <sub>
-    Maintained by <a href="https://ecoma.io">Ecoma</a> ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

@@ -1,17 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — إجراءات GitHub موثوقة ومحدودة وقابلة للتدقيق لصيانة المستودعات: triage و review و harmonise، كل واحد إجراء مستقل بذاته مع أي نموذج OpenAI-compatible" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>إجراءات GitHub موثوقة ومحدودة وقابلة للتدقيق لصيانة المستودعات.</strong><br />
-  ثلاثة إجراءات، لكل واحد مسؤولية واحدة — triage و review و harmonise — تعمل
-  داخل GitHub Actions مع أي نموذج OpenAI-compatible، بما في ذلك نموذج تستضيفه
-  بنفسك. لا حزمة تثق بها، ولا تبعية تدققها، ولا تثبيت قبل أن تبدأ.<br />
-  <em>ما ينفذه الرنر هو المصدر الذي يمكنك قراءته عند الوسم الذي ثبّتّه.</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -21,23 +7,34 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — إجراءات GitHub موثوقة ومحدودة وقابلة للتدقيق لصيانة المستودعات: triage و review و harmonise، كل واحد إجراء مستقل بذاته مع أي نموذج OpenAI-compatible" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>إجراءات GitHub موثوقة ومحدودة وقابلة للتدقيق لصيانة المستودعات.</strong><br />
+  ثلاثة إجراءات، لكل واحد مسؤولية واحدة — triage و review و harmonise — تعمل
+  داخل GitHub Actions مع أي نموذج OpenAI-compatible، بما في ذلك نموذج تستضيفه
+  بنفسك. لا حزمة تثق بها، ولا تبعية تدققها، ولا تثبيت قبل أن تبدأ.<br />
+  <em>ما ينفذه الرنر هو المصدر الذي يمكنك قراءته عند الوسم الذي ثبّتّه.</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">الوثائق</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">الإبلاغ عن خطأ</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">طلب ميزة</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — إجراءات GitHub موثوقة ومحدودة وقابلة للتدقيق لصيانة المستودعات: triage و review و harmonise، كل واحد إجراء مستقل بذاته مع أي نموذج OpenAI-compatible" width="100%" />
+</p>
 
 صيانة المستودع هي العمل الذي لا يجدوله أحد: وسم ما وصل، وقراءة diff على نحو صحيح، وإبقاء الوثائق المترجمة متلاقية بدل أن تتباعد. يمكن لنموذج أن ينجز معظم ذلك — لكن منح نموذج رمز كتابة (write token) لا يكون آمنًا إلا إذا كان ما قد يفعله محصورًا بشيء غير الـ prompt. هذه الإجراءات الثلاثة ترسم ذلك الحد في الكود: **النموذج لا يؤلف أبدًا استدعاء API — بل يختار من قائمة كتبتَها أنت، ولا يُسمح في تلك القائمة بأي شيء لا يمكن التراجع عنه أو يرسل بريدًا إلى إنسان**، وكل ما يُقرأ من سلسلة محادثة أو diff هو دليل، لا تعليمات.
 
@@ -124,13 +121,3 @@ jobs:
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) ومساهمو Action Agents. Apache-2.0 لمنح براءات الاختراع الصريح.
-
----
-
-<p align="center">
-  <sub>
-    تُصان بواسطة <a href="https://ecoma.io">Ecoma</a> ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

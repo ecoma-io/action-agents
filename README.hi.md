@@ -1,8 +1,22 @@
+<!-- harmonise:skip-start -->
 <p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — विश्वसनीय, सीमित, ऑडिट योग्य GitHub Actions रिपॉज़िटरी अनुरक्षण के लिए: triage, review और harmonise, हर एक किसी भी OpenAI-compatible मॉडल के विरुद्ध एक स्व-निहित एक्शन" width="100%" />
+  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml/badge.svg" alt="Analysis" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0" /></a>
+  <a href="https://github.com/ecoma-io/action-agents/releases"><img src="https://img.shields.io/github/v/release/ecoma-io/action-agents.svg" alt="Latest release" /></a>
 </p>
+<!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — विश्वसनीय, सीमित, ऑडिट योग्य GitHub Actions रिपॉज़िटरी अनुरक्षण के लिए: triage, review और harmonise, हर एक किसी भी OpenAI-compatible मॉडल के विरुद्ध एक स्व-निहित एक्शन" width="64px" />
+</p>
 <h1 align="center">Action Agents</h1>
+
+<!-- harmonise:skip-start -->
+<p align="center">
+<a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
+</p>
+<!-- harmonise:skip-end -->
 
 <p align="center">
   <strong>विश्वसनीय, सीमित, ऑडिट योग्य GitHub Actions, रिपॉज़िटरी अनुरक्षण के लिए।</strong><br />
@@ -13,32 +27,15 @@
   <em>रनर जो निष्पादित करता है, वही स्रोत है जिसे आप उस टैग पर पढ़ सकते हैं जिसे आपने पिन किया था।</em>
 </p>
 
-<!-- harmonise:skip-start -->
 <p align="center">
-  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/analysis.yml/badge.svg" alt="Analysis" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <a href="https://github.com/ecoma-io/action-agents/releases"><img src="https://img.shields.io/github/v/release/ecoma-io/action-agents.svg" alt="Latest release" /></a>
-</p>
-<!-- harmonise:skip-end -->
-
-<!-- harmonise:skip-start -->
-
-<a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
-<!-- harmonise:skip-end -->
-
-<p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <a href="docs/README.md">दस्तावेज़</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">बग रिपोर्ट</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">सुविधा अनुरोध</a>
 </p>
 
----
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — विश्वसनीय, सीमित, ऑडिट योग्य GitHub Actions रिपॉज़िटरी अनुरक्षण के लिए: triage, review और harmonise, हर एक किसी भी OpenAI-compatible मॉडल के विरुद्ध एक स्व-निहित एक्शन" width="100%" />
+</p>
 
 रिपॉज़िटरी का रख-रखाव वह काम है जिसे कोई निर्धारित नहीं करता: आए हुए इश्यू को
 लेबल करना, diff को सही ढंग से पढ़ना, अनूदित दस्तावेज़ों को एक-दूसरे से भटकने से
@@ -181,13 +178,3 @@ harmonised किया जाता है — वे मार्कडाउ�
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) और Action
 Agents योगदानकर्ता। Apache-2.0 स्पष्ट पेटेंट अनुदान के लिए।
-
----
-
-<p align="center">
-  <sub>
-    <a href="https://ecoma.io">Ecoma</a> द्वारा अनुरक्षित ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

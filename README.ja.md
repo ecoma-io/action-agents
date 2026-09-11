@@ -1,15 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — 信頼でき、境界が定められ、監査可能な GitHub Actions によるリポジトリ保守: triage、review、harmonise。それぞれが OpenAI 互換モデルに対して動作する自己完結型のアクションです" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>信頼でき、境界が定められ、監査可能な GitHub Actions によるリポジトリ保守。</strong><br />
-  三つのアクション、それぞれが一つの責務を持ちます——triage、review、harmonise——GitHub Actions の中で OpenAI 互換モデルを相手に動作し、自分でホストしたモデルも対象です。信頼すべきバンドルも、監査すべき依存も、起動前のインストールもありません。<br />
-  <em>ランナーが実行するのは、あなたが固定したタグで読めるソースそのものです。</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -19,23 +7,32 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — 信頼でき、境界が定められ、監査可能な GitHub Actions によるリポジトリ保守: triage、review、harmonise。それぞれが OpenAI 互換モデルに対して動作する自己完結型のアクションです" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>信頼でき、境界が定められ、監査可能な GitHub Actions によるリポジトリ保守。</strong><br />
+  三つのアクション、それぞれが一つの責務を持ちます——triage、review、harmonise——GitHub Actions の中で OpenAI 互換モデルを相手に動作し、自分でホストしたモデルも対象です。信頼すべきバンドルも、監査すべき依存も、起動前のインストールもありません。<br />
+  <em>ランナーが実行するのは、あなたが固定したタグで読めるソースそのものです。</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">ドキュメント</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">バグを報告</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">機能リクエスト</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — 信頼でき、境界が定められ、監査可能な GitHub Actions によるリポジトリ保守: triage、review、harmonise。それぞれが OpenAI 互換モデルに対して動作する自己完結型のアクションです" width="100%" />
+</p>
 
 リポジトリの保守は、誰も予定に組み込まない仕事です。届いたものをラベル付けし、diff をきちんと読み、翻訳ドキュメント同士がずれないように保つ。モデルはそのほとんどをこなせます——しかし、モデルに書き込みトークンを渡すのが安全なのは、モデルに許された行動がプロンプト以外の何かによって制限されている場合だけです。この三つのアクションは、その境界をコードで描きます。**モデルが API 呼び出しを組み立てることは決してありません——あなたが書いたリストから選ぶだけで、取り消せない操作や人間にメールを送る操作は、そのリストに載せることができません**。そして、スレッドや diff から読み取るものはすべて証拠であって、指示ではありません。
 
@@ -122,13 +119,3 @@ jobs:
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) と Action Agents のコントリビューター。明示的な特許許諾のための Apache-2.0。
-
----
-
-<p align="center">
-  <sub>
-    <a href="https://ecoma.io">Ecoma</a> がメンテナンスしています ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>

@@ -1,16 +1,3 @@
-<p align="center">
-  <img src=".github/assets/banner.png" alt="Action Agents — বিশ্বস্ত, সীমাবদ্ধ, নিরীক্ষাযোগ্য GitHub Actions রিপোজিটরি রক্ষণাবেক্ষণের জন্য: triage, review এবং harmonise — প্রতিটি একটি স্বয়ংসম্পূর্ণ অ্যাকশন, যেকোনো OpenAI-compatible মডেলের বিরুদ্ধে কাজ করে" width="100%" />
-</p>
-
-<h1 align="center">Action Agents</h1>
-
-<p align="center">
-  <strong>রিপোজিটরি রক্ষণাবেক্ষণের জন্য বিশ্বস্ত, সীমাবদ্ধ, নিরীক্ষাযোগ্য GitHub Actions।</strong><br />
-  তিনটি অ্যাকশন, প্রতিটির একটি করে দায়িত্ব — triage, review, harmonise — GitHub Actions-এর ভেতরে চলে যেকোনো OpenAI-compatible মডেলের বিরুদ্ধে, যার মধ্যে আপনার নিজের হোস্ট করা মডেলও রয়েছে।
-  বিশ্বাস করার মতো কোনো বান্ডল নেই, নিরীক্ষা করার মতো কোনো নির্ভরতা নেই, শুরু করার আগে কোনো ইনস্টল নেই।<br />
-  <em>রানার যা নির্বাহ করে তা হলো সেই সোর্স, যা আপনি যে ট্যাগে পিন করেছেন সেখানে পড়তে পারেন।</em>
-</p>
-
 <!-- harmonise:skip-start -->
 <p align="center">
   <a href="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml"><img src="https://github.com/ecoma-io/action-agents/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -20,23 +7,33 @@
 </p>
 <!-- harmonise:skip-end -->
 
+<p align="center">
+  <img src=".github/assets/logo.png" alt="Action Agents — বিশ্বস্ত, সীমাবদ্ধ, নিরীক্ষাযোগ্য GitHub Actions রিপোজিটরি রক্ষণাবেক্ষণের জন্য: triage, review এবং harmonise — প্রতিটি একটি স্বয়ংসম্পূর্ণ অ্যাকশন, যেকোনো OpenAI-compatible মডেলের বিরুদ্ধে কাজ করে" width="64px" />
+</p>
+<h1 align="center">Action Agents</h1>
+
 <!-- harmonise:skip-start -->
-
+<p align="center">
 <a href="README.md">English</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.es.md">Español</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.ar.md">العربية</a> | <a href="README.pt.md">Português</a> | <a href="README.bn.md">বাংলা</a> | <a href="README.ru.md">Русский</a> | <a href="README.fr.md">Français</a>
-
+</p>
 <!-- harmonise:skip-end -->
 
 <p align="center">
-  <a href="#get-started"><strong>Quick&nbsp;start&nbsp;→</strong></a> ·
-  <a href="#the-actions">The&nbsp;actions</a> ·
-  <a href="SECURITY.md">Security</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="AGENTS.md">For&nbsp;agents</a> ·
-  <a href="docs/README.md">Docs</a> ·
-  <a href="https://ecoma.io">About&nbsp;Ecoma</a>
+  <strong>রিপোজিটরি রক্ষণাবেক্ষণের জন্য বিশ্বস্ত, সীমাবদ্ধ, নিরীক্ষাযোগ্য GitHub Actions।</strong><br />
+  তিনটি অ্যাকশন, প্রতিটির একটি করে দায়িত্ব — triage, review, harmonise — GitHub Actions-এর ভেতরে চলে যেকোনো OpenAI-compatible মডেলের বিরুদ্ধে, যার মধ্যে আপনার নিজের হোস্ট করা মডেলও রয়েছে।
+  বিশ্বাস করার মতো কোনো বান্ডল নেই, নিরীক্ষা করার মতো কোনো নির্ভরতা নেই, শুরু করার আগে কোনো ইনস্টল নেই।<br />
+  <em>রানার যা নির্বাহ করে তা হলো সেই সোর্স, যা আপনি যে ট্যাগে পিন করেছেন সেখানে পড়তে পারেন।</em>
 </p>
 
----
+<p align="center">
+  <a href="docs/README.md">ডকুমেন্টেশন</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=bug_report.yml">বাগ রিপোর্ট</a> ·
+  <a href="https://github.com/ecoma-io/action-agents/issues/new?template=feature_request.yml">ফিচার অনুরোধ</a>
+</p>
+
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Action Agents — বিশ্বস্ত, সীমাবদ্ধ, নিরীক্ষাযোগ্য GitHub Actions রিপোজিটরি রক্ষণাবেক্ষণের জন্য: triage, review এবং harmonise — প্রতিটি একটি স্বয়ংসম্পূর্ণ অ্যাকশন, যেকোনো OpenAI-compatible মডেলের বিরুদ্ধে কাজ করে" width="100%" />
+</p>
 
 রিপোজিটরি রক্ষণাবেক্ষণ সেই কাজ যা কেউ সময়সূচি করে না: আসা জিনিসগুলিতে লেবেল দেওয়া, একটি diff সঠিকভাবে পড়া, অনূদিত ডকুমেন্টগুলো পরস্পর থেকে বিচ্ছিন্ন হতে না দেওয়া। একটি মডেল এগুলোর অধিকাংশই করতে পারে — কিন্তু একটি মডেলকে write টোকেন দেওয়া তখনই নিরাপদ, যখন এটি কী করতে পারে তা প্রম্পট ছাড়া অন্য কিছু দ্বারা সীমাবদ্ধ। এই তিনটি অ্যাকশন সেই সীমানা কোডে আঁকে: **একটি মডেল কখনো API কল রচনা করে না — এটি আপনার লেখা একটি তালিকা থেকে বেছে নেয়, এবং যা কিছু অপরিবর্তনীয়, বা যা কোনো মানুষকে মেইল পাঠায়, তা সেই তালিকায় অনুমোদিত নয়**, আর থ্রেড বা diff থেকে পড়া প্রতিটি জিনিস প্রমাণ, কখনোই নির্দেশনা নয়।
 
@@ -123,13 +120,3 @@ jobs:
 ## License
 
 [Apache License 2.0](LICENSE) — © Mai Ngọc Hóa (John Martin) এবং Action Agents অবদানকারীরা। Apache-2.0 এর সুস্পষ্ট পেটেন্ট অনুদানের জন্য।
-
----
-
-<p align="center">
-  <sub>
-    রক্ষণাবেক্ষণ করেন <a href="https://ecoma.io">Ecoma</a> ·
-    <a href="https://ecoma.io">Website</a> ·
-    <a href="https://github.com/ecoma-io">Github</a>
-  </sub>
-</p>
