@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/ecoma-io/action-agents/compare/v0.13.0...v0.13.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **harmonise:** size chunks for provider output reliability ([#514](https://github.com/ecoma-io/action-agents/issues/514)) ([26b9f04](https://github.com/ecoma-io/action-agents/commit/26b9f045644b6d6457eb524b2ff56f3880f78ea0))
+
 ## [0.13.0](https://github.com/ecoma-io/action-agents/compare/v0.12.1...v0.13.0) (2026-09-11)
 
 
