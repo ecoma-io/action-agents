@@ -110,7 +110,7 @@ jobs:
 |                                       |                                                            |
 | ------------------------------------- | ---------------------------------------------------------- |
 | [**Security**](SECURITY.md)           | Модель угроз, ограничения и как сообщить об уязвимости     |
-| [**Contributing**](CONTRIBUTING.md)   | Всё, по чему судят pull request                            |
+| [**Contributing**](CONTRIBUTING.md)   | Всё, по чему оценивается pull request                      |
 | [For agents](AGENTS.md)               | Та же тема, для AI-агента, работающего с этим репозиторием |
 | [Code of Conduct](CODE_OF_CONDUCT.md) | Что требуется от участников                                |
 
