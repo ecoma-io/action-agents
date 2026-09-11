@@ -54,16 +54,17 @@ export function extractRecordBlock(body) {
   } catch {
     return null;
   }
+  const shape = /** @type {{ schemaVersion?: unknown, applied?: unknown }} */ (
+    typeof parsed === "object" && parsed !== null ? parsed : {}
+  );
   if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    parsed.schemaVersion !== 1 ||
-    !Array.isArray(parsed.applied) ||
-    !parsed.applied.every((name) => typeof name === "string")
+    shape.schemaVersion !== 1 ||
+    !(shape.applied instanceof Array) ||
+    !shape.applied.every((name) => typeof name === "string")
   ) {
     return null;
   }
-  return { schemaVersion: 1, applied: parsed.applied };
+  return { schemaVersion: 1, applied: shape.applied };
 }
 
 /**
@@ -75,7 +76,7 @@ export function extractRecordBlock(body) {
  *
  * @param {{
  *   whoami: () => Promise<{ login: string }>,
- *   listComments: (issueNumber: number) => Promise<{ id: number, user?: { login?: string }, body: string }[]>,
+ *   listComments: (issueNumber: number) => Promise<{ id: number, user?: { login: string } | null, body: string }[]>,
  * }} forge
  * @param {number} issueNumber
  * @returns {Promise<Set<string> | null>}

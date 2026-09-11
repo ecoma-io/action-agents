@@ -14,6 +14,8 @@ import { oneLine } from "#core/one-line.mjs";
 import { warning } from "#core/runtime.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
+import { recordBlock } from "./provenance.mjs";
+
 /** The rationale's cap in the marker comment and the run log, in characters. */
 export const RATIONALE_CHARS = 300;
 
@@ -29,7 +31,7 @@ export const RATIONALE_CHARS = 300;
  */
 
 /** The vocabulary a removal's `reason` may carry, frozen; the run record's validator holds its copy from here so the two cannot drift. */
-export const REMOVAL_REASONS = /** @type {const} */ (["size", "marker", "owned"]);
+export const REMOVAL_REASONS = /** @type {const} */ (["size", "marker", "owned", "supersede"]);
 
 /**
  * A code-derived signal a sheet-mode issue run posts as a comment: the
@@ -69,6 +71,7 @@ export const REMOVAL_REASONS = /** @type {const} */ (["size", "marker", "owned"]
  * @property {DecisionLog[]} logs lines the executor emits verbatim
  * @property {string} rationale the model's one-line rationale, for the run log
  * @property {{ classification: string, rationale: string } | undefined} comment present only when `kind === "comment"`
+ * @property {string[] | null} [record] the classification-role labels this run applies, when it applies any — carried as the version-1 record block inside the upserted classification comment so a later run can prove what THIS action applied (issue #498); `null` when nothing qualifies
  * @property {Signal | null} [signal] a code-composed signal comment a sheet-mode issue run may post; absent for runs that post none
  */
 
@@ -125,7 +128,12 @@ export function decisionWriteOps(decision) {
       description: `apply the label '${label}'`,
     });
   }
-  if (decision.kind === "comment") {
+  // The classification comment a decision may carry is twofold: the no-sheet
+  // classification (`kind === "comment"`) and, on a sheet-mode run, the
+  // record comment whose embedded block names the classification labels this
+  // run applied (issue #498) — the proof a later run supersedes against.
+  // Both upsert the same one comment surface under the same code-minted id.
+  if (decision.kind === "comment" || (decision.record?.length ?? 0) > 0) {
     ops.push({
       write: "upsertComment",
       opId: "comment",
@@ -176,6 +184,30 @@ export function commentBody(answer, marker) {
   ]
     .filter((line, index, all) => !(line === "" && all[index - 1] === ""))
     .join("\n");
+}
+
+/**
+ * The classification comment a sheet-mode run upserts: the labels it applied
+ * as the human-readable line, and — the reason the comment exists at all —
+ * the version-1 record block naming those labels, which a later run reads as
+ * the proof that THIS action applied them (issue #498). Every fragment is
+ * code-minted: the model's rationale has no route into the record, because
+ * the record is evidence about the action, never model prose.
+ *
+ * @param {{ labels: string[] }} parts
+ * @param {string} marker
+ * @returns {string}
+ */
+export function classificationRecordBody({ labels }, marker) {
+  return [
+    marker,
+    "",
+    `**${labels.join(" + ")}**`,
+    "",
+    recordBlock(labels),
+    "",
+    "_Classified by the `triage` action — the record line above is the action's own account of the labels it applied; a later run may replace a classification this record proves, never a label it cannot._",
+  ].join("\n");
 }
 
 /**
@@ -250,6 +282,7 @@ export function renderDryRun(decision) {
   const replace = decision.remove.filter((removal) => removal.reason === "size");
   const clearMarker = decision.remove.filter((removal) => removal.reason === "marker");
   const owned = decision.remove.filter((removal) => removal.reason === "owned");
+  const superseded = decision.remove.filter((removal) => removal.reason === "supersede");
   const parts = [`dry run — would add [${decision.add.join(", ")}]`];
   if (replace.length > 0) {
     parts.push(
@@ -264,6 +297,16 @@ export function renderDryRun(decision) {
   if (owned.length > 0) {
     parts.push(
       ` and remove [${owned.map((removal) => removal.name).join(", ")}] (triage-owned label replaced by the derived priority)`,
+    );
+  }
+  if (superseded.length > 0) {
+    parts.push(
+      ` and remove [${superseded.map((removal) => removal.name).join(", ")}] (a classification this action's own record shows it applied is replaced)`,
+    );
+  }
+  if ((decision.record?.length ?? 0) > 0) {
+    parts.push(
+      " and upsert the classification comment (the action's record of the labels it applied)",
     );
   }
   if (decision.signal != null) {

@@ -72,13 +72,16 @@ export function decide({ evidence, assessment }) {
         classification: assessment.classification,
         rationale: assessment.rationale,
       },
+      record: null,
       signal: null,
     };
   }
 
   const sheetNonNull = /** @type {Map<string, string>} */ (sheet);
-  const { accepted, refused } = matchLabels(assessment.labels, sheetNonNull);
-
+  const { accepted: proposed, refused } = matchLabels(assessment.labels, sheetNonNull);
+  // The single-valued resolution below can only remove members; `accepted`
+  // stays the name the rest of the decision reads.
+  let accepted = proposed;
   // A size rung is a measurement, never a model choice: the ladder is never
   // offered, so a model naming a rung cannot be "on sheet" — but on a PR the
   // rung's only legitimate role is to echo the measurement the diff already
@@ -103,30 +106,87 @@ export function decide({ evidence, assessment }) {
   }
 
   // Exclusive groups and priority are one-per-thread role rules: a config
-  // that lists `labels.exclusive` names roles of which only one label may sit
-  // on a thread, and the `priority` role is ordering metadata that is by
-  // definition single-valued. An assessment that proposes two labels under
-  // the same such role is off-policy — not a judgement the policy can act on
-  // deterministically — so it is refused as a red run: logged, no mutation.
-  // The dogfood policy declares no exclusive group and no priority role, so
-  // this is a no-op for the shipped config while still closing the loophole
-  // for a policy that does declare one. Priority-role labels are never
-  // offered to the model, so this branch is only reachable via a config that
-  // places a priority label on the sheet; the rule still holds if one does.
+  // that lists `labels.exclusive` names roles of which only one label may
+  // sit on a thread, and the `priority` role is ordering metadata that is by
+  // definition single-valued. A proposal naming two members of one such role
+  // is not refused wholesale (issue #497): it resolves to the member
+  // declared earliest in `labels.use` — the sheet's own declaration order is
+  // the precedence, so the same input decides the same way every run — and
+  // the rest resolve away with a logged warning. The resolution runs before
+  // the thread-side reconciliation, so a member a maintainer pre-applied by
+  // hand participates in the same total order instead of facing the raw
+  // proposal. Priority-role labels are never offered to the model, so for
+  // them this is only reachable via a config that places one on the sheet;
+  // the rule still holds if one does.
   const roleOf = new Map([...(policy?.labels.roles ?? [])]);
   const singleValuedRoles = new Set([...(policy?.labels.exclusive ?? []), "priority"]);
-  // The final state, not just the assessment: the thread's current labels and
-  // the assessment together must never leave two members of a single-valued
-  // role on the thread. A thread already carrying one exclusive member while
-  // the assessment proposes another of the same role is off-policy too.
-  const onThread = new Set([...thread.labels, ...accepted]);
+  const useOrder = policy === null ? [] : [...policy.labels.use];
+  /**
+   * @param {string} name
+   * @returns {number}
+   */
+  const declaredIndex = (name) => {
+    const at = useOrder.indexOf(name);
+    return at === -1 ? Number.MAX_SAFE_INTEGER : at;
+  };
   for (const role of singleValuedRoles) {
-    const members = [...onThread].filter((name) => roleOf.get(name) === role);
-    if (members.length > 1) {
+    const candidates = accepted.filter((name) => roleOf.get(name) === role);
+    if (candidates.length < 2) continue;
+    const kept = [...candidates].sort((a, b) => declaredIndex(a) - declaredIndex(b))[0];
+    if (kept === undefined) continue;
+    for (const name of candidates) {
+      if (name === kept) continue;
+      accepted = accepted.filter((member) => member !== name);
+      logs.push({
+        level: "warning",
+        text:
+          `the '${role}' role is single-valued — '${name}' resolves away, '${kept}' kept ` +
+          "(labels.use order is the declared precedence)",
+      });
+    }
+  }
+
+  // The thread's existing members are judged by provenance, not by presence
+  // (issue #498): a member the action's own classification comment proves it
+  // applied — the version-1 record block in the comment it upserts — is
+  // superseded by this run's resolution; a member the action cannot prove it
+  // applied is never removed, so a conflict there refuses and names the
+  // exact remediation. A thread already carrying two members with nothing
+  // proposed stays a red run: refusing is the only deterministic choice
+  // available, and a refusal removes nothing.
+  const proven = evidence.provenance ?? new Set();
+  /** @type {import("./decision.mjs").Removal[]} */
+  const supersedes = [];
+  for (const role of singleValuedRoles) {
+    const target = accepted.find((name) => roleOf.get(name) === role) ?? null;
+    const onThread = thread.labels.filter((name) => roleOf.get(name) === role);
+    if (target === null && onThread.length > 1) {
+      const members = [...onThread].sort((a, b) => declaredIndex(a) - declaredIndex(b));
       throw new Error(
         `the thread may carry only one member of the single-valued '${role}' role — ` +
-          `'${members.join("', '")}' cannot sit together; refusing rather than applying both`,
+          `'${members.join("', '")}' are on the thread and this run proposes none of the ` +
+          "role; refusing rather than choosing unrecorded — remove all but one from the " +
+          "thread to let a later run classify",
       );
+    }
+    for (const name of onThread) {
+      if (target === null || name === target) continue;
+      if (proven.has(name)) {
+        supersedes.push({ name, reason: "supersede" });
+        logs.push({
+          level: "info",
+          text:
+            `the earlier classification '${name}' is recorded in this action's own ` +
+            `classification comment — replaced by '${target}'`,
+        });
+      } else {
+        throw new Error(
+          `the thread may carry only one member of the single-valued '${role}' role — ` +
+            `'${target}' cannot sit beside '${name}', which this action has no verifiable ` +
+            "record of applying; removing it would touch a label the action cannot prove " +
+            `it owns — remove '${name}' from the thread to let a later run classify`,
+        );
+      }
     }
   }
 
@@ -310,14 +370,22 @@ export function decide({ evidence, assessment }) {
   const derivedAdds = issueAdds.filter((name) => !thread.labels.includes(name));
   const toAdd = [...new Set([...add, ...sizeAdd, ...derivedAdds])];
 
+  // The record (issue #498): the classification-role labels this run adds —
+  // exactly what the upserted classification comment's block will name, so
+  // the next run can prove this action applied them. Routing areas, size
+  // rungs and derived priorities are not classifications; they record
+  // nothing and mint no comment.
+  const record = toAdd.filter((name) => roleOf.get(name) === "semantic-classification");
+
   return {
     kind: "labels",
     add: toAdd,
-    remove: [...replace, ...clearMarker, ...issueRemoves],
+    remove: [...replace, ...clearMarker, ...issueRemoves, ...supersedes],
     refusals: offSheet,
     logs: [...logs, ...rationaleLog(assessment.rationale)],
     rationale: assessment.rationale,
     comment: undefined,
+    record: record.length > 0 ? record : null,
     signal,
   };
 }

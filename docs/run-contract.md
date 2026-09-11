@@ -180,6 +180,22 @@ sanitised related title and its capped, sanitised missing-required names),
 issue #274 froze — present, typed, validated; filled by the opt-in
 verification pass when it ran, the empty block otherwise).
 
+Triage's removal reasons are a closed code-owned vocabulary: `size` (a
+measured rung replaced), `marker` (the queue marker cleared on
+classification), `owned` (a triage-owned priority label the severity ladder
+re-derives), and `supersede` — a prior classification this run replaces on
+the proof of the action's own classification comment, the marker comment
+whose body carries a version-1 record block (`action-agents-record:triage:`
+plus base64 `{schemaVersion, applied}`) naming the labels the action applied
+when it classified. The record block is evidence, never instruction: only a
+comment authored by the token's own login counts, a malformed block is
+ignored, and an identity or listing read that cannot be resolved leaves the
+provenance empty — the run then refuses a conflicting single-valued member
+with the remediation to remove it by hand, never removes what it cannot
+prove it applied. A sheet-mode classification that applies at least one
+classification-role label upserts this comment, so the next run's proof
+exists before the next drift can.
+
 Harmonise's record fields, version 3: `schemaVersion`, `repository`,
 `eventName`, `sourceLanguage`, `dryRun`, `outcome`, a sanitised and capped
 `reason`, `pairs`
@@ -247,6 +263,11 @@ windows that remain are named, not implied away:
    premised on the payload's label claim is arbitrated against the live
    thread before it is written, so a marker applied in the delivery window
    re-derives a re-triage instead of stranding the thread.
+   A sheet that declares no queue marker cannot see the queue through the
+   payload at all, so the same arbitration covers it: a surviving `labeled`
+   event whose live thread carries no classification is re-triaged — the
+   label change is the queue's only visible evidence — while a classified
+   thread's label event stays a skip (#496).
 
 Records carry the subject head so a stale record is detectable instead of
 authoritative, and every shape that carries a policy section — review's full

@@ -79,6 +79,7 @@ import {
 } from "./config.mjs";
 import { assessIssueForm, loadIssueForms } from "./issue-forms.mjs";
 import { gatherEvidence } from "./evidence.mjs";
+import { readClassificationProvenance } from "./provenance.mjs";
 import { assess } from "./assessment.mjs";
 import { decide } from "./policy.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
@@ -298,22 +299,27 @@ export async function run(inputs, context, io) {
       eventAuditLine({ eventName: context.eventName, action: eventAction, decision: eventCall }),
     );
     // The payload's label list is a claim, not a read. A `labeled` skip that
-    // rests on it can be wrong in exactly one direction that matters — the
-    // triage race (#480): the marker the cancelled `opened` run applied lands
-    // after the surviving event was delivered, so the payload shows an
-    // unqueued thread while the queue still holds it, and the skip would
-    // strand the thread. When the changed label is the classification case
-    // the skip matrix reasons about, the claim is arbitrated against the
-    // live thread with one read; `events.mjs` itself stays pure, and a live
-    // read showing no marker leaves the skip byte-identical — a landed
-    // decision is the only code path that removes a marker.
+    // rests on it can be wrong in one direction that matters — the triage
+    // race (#480): the marker the cancelled `opened` run applied lands after
+    // the surviving event was delivered, so the payload shows an unqueued
+    // thread while the queue still holds it, and the skip would strand the
+    // thread. The claim is arbitrated against the live thread with one read
+    // before any skip is written; `events.mjs` itself stays pure, and a live
+    // read that confirms the payload's claim leaves the skip standing — a
+    // landed decision is the only code path that removes a marker.
+    //
+    // A sheet that declares no queue marker cannot see the queue through the
+    // payload at all (issue #496): the form's `needs triage` is on no sheet
+    // and in no `workflowMarkers` list, so the skip matrix has no word for
+    // the change that happened. There the same live read arbitrates on the
+    // one fact a label event can add — whether the thread still awaits a
+    // classification. A live thread carrying none is re-triaged; a
+    // classified thread's label event stays a skip.
     if (
       eventCall.mode === "skip" &&
       eventAction === "labeled" &&
       changedLabel !== null &&
-      config !== null &&
-      config.labels.workflowMarkers.length > 0 &&
-      config.labels.roles.get(changedLabel) === "semantic-classification"
+      config !== null
     ) {
       const live = await world.forge.getIssue(thread.number);
       if (config.labels.workflowMarkers.some((marker) => live.labels.includes(marker))) {
@@ -330,6 +336,36 @@ export async function run(inputs, context, io) {
         });
         info(
           "triage: the event's label list was stale — the live thread still carries a queue marker; re-triaged",
+        );
+        // The arbitrated decision is the run's true event story: the first
+        // audit line announced the payload-premised skip; this one records
+        // what the live read actually decided.
+        info(
+          eventAuditLine({
+            eventName: context.eventName,
+            action: eventAction,
+            decision: eventCall,
+          }),
+        );
+      } else if (
+        config.labels.workflowMarkers.length === 0 &&
+        !live.labels.some((name) => config.labels.roles.get(name) === "semantic-classification")
+      ) {
+        thread.labels = live.labels;
+        eventCall = {
+          mode: "retriage",
+          reason:
+            "the sheet declares no queue marker and the live thread carries no classification — a label event on an unclassified thread is queue evidence, not a skip",
+        };
+        info(
+          "triage: the sheet declares no queue marker and the live thread still awaits a classification — re-triaged",
+        );
+        info(
+          eventAuditLine({
+            eventName: context.eventName,
+            action: eventAction,
+            decision: eventCall,
+          }),
         );
       }
     }
@@ -460,6 +496,20 @@ export async function run(inputs, context, io) {
       );
     }
 
+    // The classification provenance read (issue #498): when the thread
+    // already carries a label the sheet classifies, the run reads its own
+    // marker comments for the record blocks proving which labels THIS action
+    // applied. A thread with nothing to reconcile pays nothing — no
+    // provenance read, no comment listing.
+    let provenance = null;
+    if (
+      sheet !== null &&
+      config !== null &&
+      thread.labels.some((name) => config.labels.roles.get(name) === "semantic-classification")
+    ) {
+      provenance = await readClassificationProvenance(world.forge, thread.number);
+    }
+
     // Evidence → Assessment → Policy → Decision → Controlled Mutation.
     // The model answers only the one bounded question (assessment); every
     const evidence = gatherEvidence({
@@ -474,6 +524,7 @@ export async function run(inputs, context, io) {
       forgeSearch,
       eventAction,
       pr,
+      provenance,
     });
 
     const assessment = await assess({

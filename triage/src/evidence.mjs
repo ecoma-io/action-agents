@@ -120,6 +120,7 @@
  * @property {ForgeSearchFacts | null} forgeSearch the bounded duplicate/relationship search, when it ran
  * @property {string} eventAction the event's `action` field
  * @property {PrEvidence | null} pr the PR-side deterministic facts — present only for a `pr` thread, null for an issue
+ * @property {Set<string> | null} provenance the labels this action's own classification comments prove it applied (issue #498); `null` when nothing was gathered — unprovable is the default, and `null` refuses a conflicting member rather than superseding it
  */
 
 /**
@@ -135,6 +136,7 @@
  * @property {ForgeSearchFacts | null} [forgeSearch] the bounded candidate search, when a sheet-mode issue run ran it
  * @property {string} eventAction
  * @property {PrEvidence | null} [pr] the PR-side deterministic facts — omitted (→ null) for an issue or when the reads are unavailable
+ * @property {Set<string> | null} [provenance] the action's own applied-classification record (issue #498) — omitted (→ null) when the thread carries no classification to reconcile
  */
 
 /**
@@ -157,6 +159,7 @@ export function gatherEvidence({
   forgeSearch,
   eventAction,
   pr,
+  provenance,
 }) {
   return {
     thread: {
@@ -178,6 +181,7 @@ export function gatherEvidence({
     quality: quality ?? null,
     forgeSearch: forgeSearch ?? null,
     eventAction,
+    provenance: provenance ?? null,
     pr: pr ?? null,
   };
 }

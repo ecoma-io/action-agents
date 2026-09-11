@@ -23,7 +23,13 @@ import { resolveOwnLogins, upsertComment } from "#core/comment.mjs";
 import { oneLine } from "#core/one-line.mjs";
 import { info, warning } from "#core/runtime.mjs";
 
-import { commentBody, decisionWriteOps, renderDryRun, signalBody } from "./decision.mjs";
+import {
+  classificationRecordBody,
+  commentBody,
+  decisionWriteOps,
+  renderDryRun,
+  signalBody,
+} from "./decision.mjs";
 
 /** @typedef {import("./decision.mjs").Decision} Decision */
 /** @typedef {import("./decision.mjs").DecisionWriteOp} DecisionWriteOp */
@@ -255,9 +261,22 @@ export async function mutate({
         },
       });
     } else if (entry.opId === "comment") {
-      const answer = /** @type {{ classification: string, rationale: string }} */ (
-        decision.comment
-      );
+      // One comment surface, two bodies: the no-sheet classification
+      // (`kind === "comment"`) and the sheet-mode record comment whose
+      // embedded block names the classification labels this run applied
+      // (issue #498). The signal is the action's own words plus sanitised
+      // untrusted fragments; the record is entirely code-minted. Both
+      // upsert under the same code-minted id.
+      /** @type {(marker: string) => string} */
+      const buildBody =
+        decision.kind === "comment"
+          ? (marker) => {
+              const answer = /** @type {{ classification: string, rationale: string }} */ (
+                decision.comment
+              );
+              return commentBody(answer, marker);
+            }
+          : (marker) => classificationRecordBody({ labels: decision.record ?? [] }, marker);
       ops.push({
         op: "upsertComment",
         target: entry.target,
@@ -268,7 +287,7 @@ export async function mutate({
             store: forge,
             action,
             issueNumber,
-            buildBody: (marker) => commentBody(answer, marker),
+            buildBody,
             ownLogins,
             head,
             startedAt: now(),
