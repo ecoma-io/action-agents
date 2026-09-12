@@ -60,6 +60,7 @@ const UNCERTAIN_VERDICT =
 const REFUSED_ANSWERS = /** @type {const} */ ([
   "this is not the JSON object the contract specifies",
   "still not the JSON object the contract specifies",
+  "and the bounded retry also held no JSON object",
 ]);
 const BLANK_ANCHOR_ANSWER =
   '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,' +
@@ -117,13 +118,14 @@ const demotedScenario = () =>
     ],
   });
 
-/** E: the refused run — the output contract declines, twice, before any write. */
+/** E: the refused run — the output contract declines, three times, before any write. */
 const refusedScenario = () =>
   scenario({
     script: [
       readTurn("src/a.mjs"),
       { content: REFUSED_ANSWERS[0] },
       { content: REFUSED_ANSWERS[1] },
+      { content: REFUSED_ANSWERS[2] },
     ],
   });
 
@@ -443,6 +445,9 @@ describe("cross-surface cases A–K: one run outcome, one view on every surface 
     expect(p.artifacts[0]?.json.outcome).toMatchObject({ classification: "refused" });
     expect(p.artifacts[0]?.json.outcome.reason).toMatch(/failed the output contract/);
     expect(p.outputs).toContain("artifact-file=");
+    // The one class the caller re-runs mechanically (#516) — and it is
+    // this refusal's output, present here.
+    expect(p.outputs).toContain("refusal-class=model-output-unusable");
   });
 
   it("F: the failure lands a red artifact naming no comment", async () => {
@@ -460,6 +465,9 @@ describe("cross-surface cases A–K: one run outcome, one view on every surface 
     expect(p.artifacts[0]?.json.outcome.reason).toMatch(/forge transport broke/);
     expect(p.artifacts[0]?.json.provenance?.commentId).toBeUndefined();
     expect(p.outputs).toContain("artifact-file=");
+    // A `failed` terminal is not a refusal — the cue stays unset, so an
+    // empty output never reads as a lost record.
+    expect(p.outputs).not.toContain("refusal-class=");
   });
 
   it("G: the abandoned race leaves the comment standing, its record readable", async () => {

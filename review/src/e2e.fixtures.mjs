@@ -229,7 +229,18 @@ export function forgeStub(options = {}) {
 export function replayIo(forge, chat) {
   /** @type {string[]} */
   const log = [];
-  return { io: { forge, chat, now: () => 0, info: (line) => void log.push(line) }, log };
+  return {
+    io: {
+      forge,
+      chat,
+      now: () => 0,
+      // The e2e law: no sleeps. The backoff's fact (it fired, once, with the
+      // constant) is a run-level test's assertion, not a replay's waiting.
+      sleep: async () => {},
+      info: (line) => void log.push(line),
+    },
+    log,
+  };
 }
 
 /** The context a replay runs against — owner, repo, and the fresh workspace. */
@@ -385,6 +396,8 @@ export async function driveEntrypoint(setup) {
     const settled = await run(readInputs(env), readContext(env), {
       forge: setup.forge,
       chat: setup.chat,
+      // The e2e law: no sleeps — the backoff is a recorded no-op here.
+      sleep: async () => {},
       now: () => 0,
       info: () => undefined,
     }).then(

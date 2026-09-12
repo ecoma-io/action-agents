@@ -47,7 +47,7 @@ import {
 import { reviewPullRequest } from "./run.mjs";
 import { buildRedArtifact, RED_REASON_CHARS, serialiseArtifact } from "./artifact.mjs";
 import { toSarif } from "./sarif.mjs";
-import { DeterministicRefusalError } from "./refusal.mjs";
+import { DeterministicRefusalError, UnusableAnswerRefusalError } from "./refusal.mjs";
 
 /** @typedef {import("#core/runtime.mjs").Env} Env */
 /** @typedef {import("#core/inputs.mjs").SharedInputs} SharedInputs */
@@ -207,6 +207,9 @@ export async function run(inputs, context, io = {}) {
             ...(io.fetchImpl !== undefined ? { fetchImpl: io.fetchImpl } : {}),
           }),
         now: io.now ?? (() => Date.now()),
+        sleep:
+          io.sleep ??
+          ((/** @type {number} */ ms) => new Promise((resolve) => setTimeout(() => resolve(), ms))),
         info: io.info ?? ((message) => info(message)),
       },
       red,
@@ -225,6 +228,13 @@ export async function run(inputs, context, io = {}) {
     // death before the run holds the facts an artifact is built from
     // stays unrecorded.
     const classification = cause instanceof DeterministicRefusalError ? "refused" : "failed";
+    // #516's mechanical cue: the transient no-JSON class, published as an
+    // output exactly when the run's refusal is the one a caller re-runs —
+    // every other terminal leaves it unset, so an empty value reads as
+    // "not that class", never as a lost record.
+    if (cause instanceof UnusableAnswerRefusalError) {
+      setOutput("refusal-class", "model-output-unusable");
+    }
     const reason = redReason(cause, log);
     try {
       const artifact = buildRedArtifact({

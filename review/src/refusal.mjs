@@ -31,3 +31,24 @@ export class DeterministicRefusalError extends Error {
     this.name = "DeterministicRefusalError";
   }
 }
+
+/**
+ * The unusable-answer refusal (#516): the provider's final answer held no
+ * JSON object at all — not a JSON object the run then judged, but no object
+ * to judge — and empirically the flake a job re-run recovers. Still a
+ * `DeterministicRefusalError` in every way that gates the record (`refused`,
+ * red, nothing written); the subclass exists so the red boundary can tell
+ * this class from the run's own ceilings and publish the `refusal-class`
+ * output, the cue a caller branches on to re-run mechanically instead of
+ * reading run logs.
+ */
+export class UnusableAnswerRefusalError extends DeterministicRefusalError {
+  /**
+   * @param {string} message Why the run declined to act, in the refusal site's own words.
+   * @param {ErrorOptions} [options] the wrapped cause, for a refusal retyped at a boundary
+   */
+  constructor(message, options) {
+    super(message, options);
+    this.name = "UnusableAnswerRefusalError";
+  }
+}
