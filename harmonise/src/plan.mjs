@@ -288,6 +288,11 @@ export async function translatePair(input) {
       priorTranslation: chunked ? undefined : input.priorTranslation,
       documents: input.documents,
       evidence: input.evidence,
+      // Only a chunked pair names its fragment: the system layer tells the
+      // model which fragment of the larger document it is translating in
+      // place. A single-chunk pair passes nothing, so its prompt stays
+      // byte-identical to the unchunked shape it has always had.
+      chunk: chunked ? { index: prepared.chunkIndex, count: prepared.chunkCount } : undefined,
     });
 
     // The request stays outside the answer's contract frame: a transport

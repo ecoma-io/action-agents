@@ -32,9 +32,11 @@
  * @property {string | undefined} priorTranslation a previously accepted translation of this exact source from the memory, when one exists — reference material, never instructions
  * @property {{ instruction?: string, languages: Record<string, string> }} documents
  * @property {Evidence} evidence
- * @property {{ index: number, count: number }} [chunk] when the source is
- *   translated in chunks, this fragment's position — the task layer names
- *   it so the model knows the document is a fragment to translate in place
+ * @property {{ index: number, count: number } | undefined} [chunk] when the
+ *   source is translated in chunks, this fragment's position — `index` is
+ *   the fragment's zero-based position, which the task layer renders
+ *   one-based ("fragment i of N") so the model knows the document is a
+ *   fragment to translate in place
  */
 
 /**

@@ -453,6 +453,88 @@ describe("translatePair", () => {
     const result = await translate(prepared, proposes(prepared.protectedText));
     expect(result.outcome).toBe("proposal");
   });
+  it("passes each chunk's real fragment position into the chunked call's system prompt", async () => {
+    // The chunked path carries the fragment-position layer into every
+    // request: the first chunk is named fragment 1, the last is named
+    // fragment N. Build a chat double that captures the request messages
+    // instead of judging the answer, so the wiring itself is pinned.
+    const chunk = (/** @type {string} */ sourceChunk, /** @type {number} */ chunkIndex) =>
+      preparePair({
+        slug: "dev",
+        lang: "vi",
+        sourcePath: "manual/dev.md",
+        target: { path: "manual/vi/dev.md", state: "missing" },
+        sourceChunk,
+        chunkIndex,
+        chunkCount: 2,
+        inventory: inventoryFor(["manual/dev.md"]),
+        config,
+      });
+    const chunks = [chunk("Alpha prose A.\n", 0), chunk("Beta prose B.\n", 1)];
+    const answers = chunks.map((prepared) => proposes(prepared.protectedText));
+    /** @type {import("#core/chat.mjs").ChatMessage[][]} */
+    const requested = [];
+    const capturing = /** @type {import("#core/chat.mjs").Chat} */ ({
+      async complete(request) {
+        requested.push(request.messages);
+        return {
+          content: answers[requested.length - 1],
+          toolCalls: [],
+          finishReason: "stop",
+        };
+      },
+    });
+    const result = await translatePair({
+      chunks,
+      sourceText: "Alpha prose A.\n\nBeta prose B.\n",
+      frontmatter: undefined,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat: capturing,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    expect(result.outcome).toBe("proposal");
+    expect(requested).toHaveLength(2);
+    const [first, second] = requested;
+    const firstSystem = /** @type {string} */ (first?.[0]?.content);
+    const secondSystem = /** @type {string} */ (second?.[0]?.content);
+    expect(firstSystem).toContain("The document below is fragment 1 of 2 of a larger document.");
+    expect(secondSystem).toContain("The document below is fragment 2 of 2 of a larger document.");
+  });
+
+  it("leaves the single-chunk prompt without any fragment layer", async () => {
+    // A pair that fits one chunk behaves exactly as the pipeline always
+    // has: no fragment layer in the system prompt it sends.
+    const prepared = prepare();
+    /** @type {import("#core/chat.mjs").ChatMessage[][]} */
+    const requested = [];
+    const capturing = /** @type {import("#core/chat.mjs").Chat} */ ({
+      async complete(request) {
+        requested.push(request.messages);
+        return { content: proposes(prepared.protectedText), toolCalls: [], finishReason: "stop" };
+      },
+    });
+    const result = await translatePair({
+      chunks: [prepared],
+      sourceText,
+      frontmatter: undefined,
+      sourceLanguage: "en",
+      existingText: undefined,
+      model: "gpt-x",
+      chat: capturing,
+      evidence,
+      repository: { name: "acme/docs", description: "Documentation" },
+      documents: { languages: {} },
+    });
+    expect(result.outcome).toBe("proposal");
+    expect(requested).toHaveLength(1);
+    const system = /** @type {string} */ (requested[0]?.[0]?.content);
+    expect(system).not.toContain("fragment");
+  });
+
   it("translates a chunked pair chunk by chunk, reassembling in order", async () => {
     // One chat request per chunk; the parts come back joined in chunk
     // order and every chunk's summary rides along.

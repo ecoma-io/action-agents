@@ -224,12 +224,15 @@ One pair is one unit of work, and a run's report is built from what happens to e
 - **an empty source skips that pair** with a reason, and the run continues;
 - **a document larger than one chunk is translated chunk by chunk** —
   partitioned deterministically at structural Markdown boundaries, one
-  provider request per chunk, reassembled whole before the whole-document
-  gates run. Two bounds refuse a pair deterministically instead: an
-  unsplittable block past `MAX_CHUNK_BYTES` (24 KiB — one chunk plus its
-  prompt scaffolding must fit the evidence wrapper's 64 KiB frame), or a
-  document past `MAX_CHUNKS_PER_PAIR` (32 chunks — the pair's execution
-  budget);
+  provider request per chunk whose system layer names the fragment's
+  position ("fragment i of N") so the model translates the fragment in
+  place, reassembled whole before the whole-document gates run. Two
+  bounds refuse a pair deterministically instead: an unsplittable block
+  past `MAX_CHUNK_BYTES` (8 KiB — sized so a chunk's complete answer
+  comes back inside a provider's output cap; 24 KiB chunks produced
+  empty answers and dropped placeholder tokens on the first real
+  dogfood run), or a document past `MAX_CHUNKS_PER_PAIR` (32 chunks —
+  the pair's execution budget);
 - **every pair skipping** is a red run: work existed and none of it was
   attempted successfully.
 
