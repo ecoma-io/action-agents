@@ -517,8 +517,8 @@ write-back API is used or proposed (§9).
 2. **A fourth composite action that runs Archkeep** — sustained for P1–P3
    on single-job workspace locality (a reusable-workflow middle option
    removes copy-paste without a new action surface, but its cross-job
-   artifact handoff breaks that locality). The decision is filed as its
-   own issue with a concrete trigger — the second consumer-visible
+   artifact handoff breaks that locality). The decision is recorded as
+   issue #520 with a concrete trigger — the second consumer-visible
    mis-wiring in a dogfood copy (the first copy-paste mistakes manifest
    as a security posture hole and a dead recipe, not noise) — and the
    four org-repository dogfood copies act as the drift canary until it
@@ -656,13 +656,13 @@ anchoring, trusted-infra capture) instead of promising a false green.
    nothing binding the report to the baseline bytes it was computed
    against — probe-verified. Proposal: `result.baseline.digest` (sha256
    of the snapshot file bytes). Additive; turns chain-verification into
-   envelope-borne fact. Filed with this campaign.
+   envelope-borne fact. Filed as archkeep#923.
 2. **Commit pinning for `delta`, both sides primary** (class B/C —
    semantically incomplete for consumers). `change` pins its base
    (`base.commit` → `unproven`); `delta` has no staleness guard, so every
    consumer reimplements pinning, each slightly differently. Proposal:
    `--expect-head-sha` / `--expect-base-sha` producing the existing
-   unproven-style refusal on mismatch. Filed with this campaign.
+   unproven-style refusal on mismatch. Filed as archkeep#924.
 3. **Observation ingestion store — deliberately not filed.** The absence
    is incidental, but no dogfooded need exists; ADR 0007's sanctioned
    channel covers this campaign's loop. Filing now would propose surface
