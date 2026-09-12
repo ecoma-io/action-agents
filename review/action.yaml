@@ -54,6 +54,21 @@ inputs:
       record write failed, leaves no file and logs the loss.
     required: false
     default: ".review-artifact"
+  architecture-report:
+    description: >-
+      Path inside the workspace to the `archkeep delta` report the consumer's
+      pinned architecture step left behind, with the recipe's manifest read
+      from the `run.json` beside it — the convention the integration recipe
+      pins. Empty — the default — keeps the run architecture-blind:
+      byte-identical to a run that never heard of Archkeep. When set, both
+      files are read under workspace confinement with a 2 MiB cap, judged
+      against the runtime-evidence protocol, and the frozen evidence is
+      recorded on the run. A report that is absent beside a zero exit, or
+      past the cap, ends the run red as a failed read; bytes that parse but
+      disagree with the protocol end it red as a refusal. The verdict itself
+      never gates the review — recording it is this input's whole effect.
+    required: false
+    default: ""
 
 outputs:
   sarif-path:

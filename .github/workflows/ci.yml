@@ -150,6 +150,22 @@ jobs:
           pnpm arch:canary
           pnpm arch:canary-extended
 
+      # The canaries above prove the gate still bites on synthetic trees
+      # judged by `archkeep check`. The contract gate proves something one
+      # layer out: `core/src/architecture.mjs` reads `archkeep delta`
+      # envelopes at runtime, against a protocol this repository froze in
+      # its design record — and that protocol is only as good as its
+      # agreement with the pinned tool. `tools/check-arch-contract.mjs`
+      # grows real git trees, runs the pinned devDependency's delta step
+      # against them (pass, findings, resolved, no-verdict, no-envelope,
+      # family-refused baseline), normalizes the answers over goldens in
+      # `tools/fixtures/arch-reports/`, and feeds the same bytes through the
+      # reader. A divergence means the tool and the frozen protocol drifted
+      # apart — re-measure and review, never absorb; re-pin only with
+      # `pnpm arch:contract:bless` beside the change that moved it.
+      - name: Check the runtime-evidence contract holds
+        run: pnpm arch:contract
+
       # The boundary canary above proves the gate still bites on a relative
       # cross-action import. The transport seam — an action never imports the
       # transport project; transport failures reach actions as typed facts

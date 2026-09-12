@@ -36,6 +36,7 @@ export const INPUTS = {
   contextWindow: 128_000,
   dryRun: false,
   configPath: "",
+  architectureReport: "",
 };
 
 /** The parsed pull_request payload every replay resolves its policy from. */

@@ -35,6 +35,7 @@ const INPUTS = {
   contextWindow: 128_000,
   dryRun: false,
   configPath: "",
+  architectureReport: "",
 };
 
 const CONTEXT = { owner: "acme", repo: "widgets", workspace: "" }; // set per world

@@ -280,7 +280,9 @@ corpus evaluator can double it; never an ambient import.
    reader's byte cap is 2 MiB with those sizes recorded. Baseline
    snapshots are not read by the action.
 2. **Validate the envelope**: parses; `schemaVersion === 2`;
-   `tool.name === "archkeep"`; `command === "delta"`; the frozen
+   `tool.name === "@ecoma-io/archkeep"` (the npm name the pinned tool writes
+   into its envelopes — one-word correction of this line against the
+   measured output, landed with the reader it specifies); `command === "delta"`; the frozen
    status↔exit↔coverage coherence table (a disagreement is a typed
    refusal, mirroring archkeep's own shape-gate latch); bucket shapes;
    family marker (an evidence snapshot, a graph report, or a history file

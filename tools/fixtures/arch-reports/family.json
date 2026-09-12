@@ -1,0 +1,16 @@
+{
+  "captureExit": 0,
+  "exitCode": 3,
+  "stdoutBytes": 0,
+  "stderrDigest": "7b125f459050934e3807a0ccd5acba5e0f930c31a009a0a855f09d112b918490",
+  "repeatable": true,
+  "envelope": null,
+  "reader": {
+    "verdict": "unknown",
+    "stale": false,
+    "incompleteness": {
+      "reason": "incomplete",
+      "note": "the report does not parse; the recorded step exit is 3"
+    }
+  }
+}

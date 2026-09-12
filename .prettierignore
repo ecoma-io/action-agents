@@ -32,3 +32,11 @@ CHANGELOG.md
 README.vi.md
 .github/action-agents/harmonise/tm.en.json
 .github/action-agents/harmonise/state.en.json
+
+# Runtime-evidence goldens, written by `pnpm arch:contract:bless` as the
+# normalized JSON the gate compares — never hand-edited, and re-pinned by
+# the same command. Formatting them here would turn `pnpm format:check` red
+# the day a re-bless writes bytes Prettier disagrees with, and the fix
+# would be a formatting commit the next bless overwrites: two gates that
+# cannot both stay green over files no human authors.
+tools/fixtures/arch-reports/

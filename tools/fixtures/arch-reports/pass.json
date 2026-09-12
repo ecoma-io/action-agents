@@ -1,0 +1,107 @@
+{
+  "captureExit": 0,
+  "exitCode": 0,
+  "stdoutBytes": 2091,
+  "stderrDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "repeatable": true,
+  "envelope": {
+    "schemaVersion": 2,
+    "tool": {
+      "name": "@ecoma-io/archkeep",
+      "version": "@version@"
+    },
+    "command": "delta",
+    "workspace": {
+      "root": "@tree@",
+      "provider": "native",
+      "marker": "archkeep.json",
+      "provenance": {
+        "commit": "@head-commit@",
+        "remote": null,
+        "dirty": false
+      }
+    },
+    "status": "ok",
+    "exitCode": 0,
+    "coverage": {
+      "complete": true,
+      "projects": 2,
+      "analyzedFiles": 2,
+      "imports": 0,
+      "notAnalyzed": [],
+      "blindSpots": [],
+      "notes": []
+    },
+    "result": {
+      "baseline": {
+        "path": "@tree@/base.json",
+        "tool": {
+          "name": "@ecoma-io/archkeep",
+          "version": "@version@"
+        },
+        "provider": "native",
+        "provenance": {
+          "commit": "@base-commit@",
+          "dirty": false,
+          "remote": null
+        },
+        "policyFingerprint": "ac76c47705c0bb2624f93292a34f2d23275dd7acf6e5038a70cbc8878dd73671",
+        "records": 0,
+        "projects": 2
+      },
+      "head": {
+        "provenance": {
+          "commit": "@head-commit@",
+          "remote": null,
+          "dirty": false
+        },
+        "policyFingerprint": "ac76c47705c0bb2624f93292a34f2d23275dd7acf6e5038a70cbc8878dd73671",
+        "records": 0,
+        "projects": 2
+      },
+      "policyChanged": false,
+      "summary": {
+        "introduced": 0,
+        "introducedWaived": 0,
+        "resolved": 0,
+        "unchanged": 0,
+        "unknown": 0,
+        "unresolvable": {
+          "introduced": 0,
+          "resolved": 0,
+          "unchanged": 0,
+          "unknown": 0
+        }
+      },
+      "violations": {
+        "introduced": [],
+        "resolved": [],
+        "unchanged": [],
+        "unknown": []
+      },
+      "unresolvable": {
+        "introduced": [],
+        "resolved": [],
+        "unchanged": [],
+        "unknown": []
+      },
+      "classifications": [
+        "DRIFT"
+      ],
+      "affected": {
+        "projects": [],
+        "boundaries": [],
+        "constraints": [],
+        "decisions": []
+      }
+    },
+    "decision": {
+      "verdict": "pass"
+    }
+  },
+  "reader": {
+    "verdict": "pass",
+    "stale": false,
+    "incompleteness": null
+  }
+}

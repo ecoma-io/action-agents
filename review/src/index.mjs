@@ -66,7 +66,7 @@ export const ACTION = "review";
 export const ACCEPTED_EVENTS = Object.freeze(["pull_request"]);
 
 /**
- * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string }} Inputs
+ * @typedef {SharedInputs & { configPath: string, maxTurns: number, contextWindow: number, requestTimeoutMs: number, dryRun: boolean, artifactPath: string, architectureReport: string }} Inputs
  */
 
 /**
@@ -84,6 +84,13 @@ export function readInputs(env = process.env) {
     // Where inside the workspace the run artifact lands. The default agrees
     // with the manifest; the write is confined below either way.
     artifactPath: getInput("artifact-path", { default: ".review-artifact" }, env),
+    // Where the consumer's pinned architecture step left its delta report.
+    // The empty default is the architecture-blind run this action has always
+    // been: nothing downstream changes until a consumer points at a file.
+    // A non-empty path routes through the reader seam in the run, and both
+    // files the runtime-evidence protocol names are read under workspace
+    // confinement with a 2 MiB cap.
+    architectureReport: getInput("architecture-report", { default: "" }, env),
   };
 }
 
@@ -191,6 +198,7 @@ export async function run(inputs, context, io = {}) {
         contextWindow: inputs.contextWindow,
         dryRun: inputs.dryRun,
         configPath: inputs.configPath,
+        architectureReport: inputs.architectureReport,
       },
       context: { owner: context.owner, repo: context.repo, workspace: context.workspace },
       pullRequestNumber: event.pullRequestNumber,
@@ -211,6 +219,9 @@ export async function run(inputs, context, io = {}) {
           io.sleep ??
           ((/** @type {number} */ ms) => new Promise((resolve) => setTimeout(() => resolve(), ms))),
         info: io.info ?? ((message) => info(message)),
+        ...(io.readArchitectureReport !== undefined
+          ? { readArchitectureReport: io.readArchitectureReport }
+          : {}),
       },
       red,
     });

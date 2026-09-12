@@ -11,7 +11,10 @@
  * findings); PARTIAL says so prominently; dry-run writes nothing anywhere.
  */
 
+import { dirname, join } from "node:path";
+
 import { createWorkspace } from "#core/workspace.mjs";
+import { ArchitectureReaderError, readArchitectureReport } from "#core/architecture.mjs";
 import { oneLine } from "#core/one-line.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 import { createEvidence } from "#core/untrusted.mjs";
@@ -104,6 +107,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {number} contextWindow
  * @property {boolean} dryRun
  * @property {string} configPath
+ * @property {string} architectureReport workspace-relative path to the Archkeep delta report — empty keeps the run architecture-blind
  */
 
 /**
@@ -113,6 +117,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {() => number} now epoch milliseconds
  * @property {(ms: number) => Promise<void>} sleep the bounded backoff between corrective re-asks — a real timer in production, injected in tests (the e2e law: no sleeps)
  * @property {(message: string) => void} info
+ * @property {(input: import("#core/architecture.mjs").ReadArchitectureInput) => import("#core/architecture.mjs").ArchitectureEvidence} [readArchitectureReport] the evidence reader, injectable for tests — the module's own boundary when a caller supplies none
  */
 
 /**
@@ -134,6 +139,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {number} [commentId]
  * @property {import("./artifact.mjs").RunArtifact | import("./artifact.mjs").SkippedRunArtifact | import("./artifact.mjs").SkipRecord | import("./artifact.mjs").AbandonedRunArtifact | import("./artifact.mjs").DryRunRunArtifact} [artifact] the machine-readable run record — present when the run published, when a policy recorded a skipped run (the record is the skip's whole outcome), when a skip path with no applicability fact left its durable record, or when an abandonment or dry-run wrote its reduced artifact; absent when the artifact file write failed after the comment was published (outcome `published-without-artifact`)
  * @property {import("./artifact.mjs").ApplicabilitySection} [applicability] the applicability fact, present when the review policy is active
+ * @property {import("#core/architecture.mjs").ArchitectureEvidence} [architecture] the frozen Archkeep evidence, present when the `architecture-report` input named a report and the reader boundary admitted it — held, never acted on, until its consumer lands
  * @property {import("./canonical.mjs").CanonicalResult} [canonical] the canonical record the projections project from — present when the run published
  */
 /**
@@ -372,6 +378,49 @@ export async function reviewPullRequest({
     }
   }
 
+  // ── Architecture evidence: read once, held frozen ────────────────────────
+  // The `architecture-report` input names the `archkeep delta` report the
+  // consumer's pinned architecture step left in the workspace, with the
+  // recipe's `run.json` manifest beside it — the sibling convention the
+  // integration recipe pins. Unset — the default — the run never hears of
+  // Archkeep: every byte of behavior is identical to a run that predates
+  // the input. Set, the reader boundary in core decides everything about
+  // those bytes — the protocol, the caps, the exit precedence, staleness —
+  // and this run's whole duty is to hold what it froze. The verdict itself
+  // gates nothing here; recording it is the read's entire effect this
+  // phase. The read sits before the documents load and long before any
+  // model call, so the evidence is in hand whatever the loop later does.
+  /** The frozen evidence the reader produced, once it read — held for its consumer, never acted on here. */
+  let architecture;
+  if (inputs.architectureReport !== "") {
+    const reader = io.readArchitectureReport ?? readArchitectureReport;
+    try {
+      architecture = reader({
+        workspace: createWorkspace({ root: context.workspace }),
+        reportPath: inputs.architectureReport,
+        manifestPath: join(dirname(inputs.architectureReport), "run.json"),
+        expect: { headSha },
+      });
+    } catch (error) {
+      if (error instanceof ArchitectureReaderError && error.arm === "validation") {
+        // Bytes that parse but disagree with the frozen protocol: the run
+        // declines to review against evidence it cannot trust — the typed
+        // class, so the red boundary records it `refused`.
+        throw new DeterministicRefusalError(error.message, { cause: error });
+      }
+      // The reader arm — absent beside a zero exit, past the cap, unreadable
+      // — is an honest infrastructure failure and stays a plain error: the
+      // run ends red as `failed`, never a refusal that claims the input was
+      // judged.
+      throw error;
+    }
+    io.info(
+      `review: architecture evidence ${architecture.verdict}` +
+        `${architecture.stale ? " — stale, verdict withheld as unknown" : ""}` +
+        `${architecture.incompleteness !== null ? ` (${architecture.incompleteness.reason})` : ""}`,
+    );
+  }
+
   // ── The intensity axis: a matched rule's strictness override becomes the
   // run's effective dial. Every downstream reader of strictness — the
   // prompt's mode paragraph, the lanes floor, the nit-drop, the gates, the
@@ -412,18 +461,21 @@ export async function reviewPullRequest({
   }
 
   if (inventory.reviewed.length === 0) {
-    return nothingToReview({
-      repository: `${context.owner}/${context.repo}`,
-      pullRequestNumber,
-      headSha,
-      io,
-      dryRun: inputs.dryRun,
-      startedAt,
-      source,
-      strictness: config.strictness,
-      strategy: config.strategy,
-      ...(applicabilityFact !== undefined ? { applicabilityFact } : {}),
-    });
+    return {
+      ...(await nothingToReview({
+        repository: `${context.owner}/${context.repo}`,
+        pullRequestNumber,
+        headSha,
+        io,
+        dryRun: inputs.dryRun,
+        startedAt,
+        source,
+        strictness: config.strictness,
+        strategy: config.strategy,
+        ...(applicabilityFact !== undefined ? { applicabilityFact } : {}),
+      })),
+      ...(architecture !== undefined ? { architecture } : {}),
+    };
   }
 
   // ── Coverage: the expected set, derived in code from the diff ───────────
@@ -880,6 +932,7 @@ export async function reviewPullRequest({
         reason: `#${String(pullRequestNumber)} moved while it was being reviewed (now ${fresh.state}) — nothing written`,
         ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
       }),
+      ...(architecture !== undefined ? { architecture } : {}),
     };
   }
 
@@ -895,6 +948,7 @@ export async function reviewPullRequest({
         reason: "dry run: nothing written",
         ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
       }),
+      ...(architecture !== undefined ? { architecture } : {}),
     };
   }
 
@@ -954,6 +1008,7 @@ export async function reviewPullRequest({
         reason: `#${String(pullRequestNumber)} moved while it was being reviewed — nothing written`,
         ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
       }),
+      ...(architecture !== undefined ? { architecture } : {}),
     };
   }
 
@@ -983,6 +1038,7 @@ export async function reviewPullRequest({
         reason: `#${String(pullRequestNumber)}'s review comment is owned by a concurrent run — nothing written`,
         ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
       }),
+      ...(architecture !== undefined ? { architecture } : {}),
     };
   }
   // The red-run stash follows the comment: a run that dies past here — the
@@ -1016,6 +1072,7 @@ export async function reviewPullRequest({
         commentId: upsert.id,
         ...(applicabilityFact !== undefined ? { applicability: applicabilityFact.context } : {}),
       }),
+      ...(architecture !== undefined ? { architecture } : {}),
     };
   }
   return {
@@ -1027,6 +1084,7 @@ export async function reviewPullRequest({
     // it was built — the write had not happened yet. Attach the real
     // outcome: what this run's upsert actually did to the thread.
     canonical: withRunPublication(canonical, upsert.outcome),
+    ...(architecture !== undefined ? { architecture } : {}),
   };
 }
 

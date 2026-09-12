@@ -1075,6 +1075,9 @@ export async function replayReview(entry) {
           contextWindow: inputs["contextWindow"],
           dryRun: inputs["dryRun"],
           configPath: inputs["configPath"],
+          // The corpus replays real runs; a real run always carries the
+          // architecture knob, off by default like every recorded run is.
+          architectureReport: "",
           artifactPath: p.join("workspace", ".review-artifact"),
         },
         {
