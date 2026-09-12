@@ -519,7 +519,10 @@ Where it is written, per terminal path:
   error is rethrown; the record's own write failure is logged, never allowed
   to mask the original. A run that dies before the payload parses names no
   thread and no policy pin — the record carries `null`s and the filename
-  falls back to the event name.
+  falls back to the event name. A run that dies in the model call still says
+  what each ask saw: `modelAttempts` is filled as the asks happen, so the
+  failure's record carries the per-attempt facts (#521), not just the
+  reason.
 - a **config refusal** — the policy file is present but does not validate: the
   run ends in `run`'s catch like a failure, but the record says
   `outcome: "refused"` — the deterministic startup refusal the run contract's
@@ -536,9 +539,15 @@ Where it is written, per terminal path:
   write is a red run, exactly like the event-gate skip — the record is the
   run's whole outcome.
 
-The fields, in schema version 1: `schemaVersion`, `repository`, `event`
+The fields, in schema version 2: `schemaVersion`, `repository`, `event`
 (`eventName`, `action`), `thread` (`type`, `number`; `null` when the run died
-before the payload parsed), `dryRun`, `model`, `policy` (`basis`, `branch`,
+before the payload parsed), `dryRun`, `model`, `modelAttempts` (version 2's
+addition, #521 — the facts of each model ask, at most the retry contract's
+two: per attempt the code-owned `outcome` word, the HTTP `status` the
+transport saw or `null`, the request body's `bytes` as the chat seam measured
+them or `null` when the seam reported none, and the provider-declared,
+capped `finishReason`; the empty list when the run never asked the model),
+`policy` (`basis`, `branch`,
 `sha`; `null` before the source resolved), `decision` (present iff the run
 reached one: `kind`, `add`, `remove` with their code-owned reasons,
 `refusals`, the sanitised capped `rationale`, and the `signal` with its

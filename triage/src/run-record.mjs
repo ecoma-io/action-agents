@@ -20,13 +20,19 @@ import { oneLine } from "#core/one-line.mjs";
 import { warning } from "#core/runtime.mjs";
 import { sanitiseCommentText } from "#core/sanitise.mjs";
 
+import { ATTEMPT_OUTCOMES } from "./assessment.mjs";
 import { RATIONALE_CHARS, REMOVAL_REASONS } from "./decision.mjs";
 
 /** @typedef {import("#core/policy.mjs").PolicySource} PolicySource */
 /** @typedef {import("./decision.mjs").Decision} Decision */
 
-/** The triage run record's schema version. Additive changes bump it; filling `verification` (issue #274) does not. */
-export const triageRecordSchemaVersion = 1;
+/**
+ * The triage run record's schema version. Additive changes bump it; filling
+ * `verification` (issue #274) does not. Version 2 adds `modelAttempts`
+ * (#521): the per-attempt facts of the assessment's model calls, so a failed
+ * run says what each ask saw instead of only that they failed.
+ */
+export const triageRecordSchemaVersion = 2;
 
 /** The terminal reason's cap, in characters — the same width as the rationale's. */
 export const REASON_CHARS = 300;
@@ -45,6 +51,21 @@ export const NEEDS_MORE_INFO_CHARS = 80;
 
 /** The most missing-required names a record carries, bounding a repository-controlled issue-template list. */
 export const NEEDS_MORE_INFO_MAX_ENTRIES = 10;
+
+/**
+ * The cap `modelAttempts` sanitises each provider-declared finish reason
+ * under — provider text entering a record, bounded like every other
+ * untrusted field.
+ */
+export const FINISH_REASON_CHARS = 40;
+
+/**
+ * The most attempts a record carries: the retry contract's own ceiling — one
+ * ask and the one re-ask a fumbled answer earns (#261) — so a change that
+ * asks a third time fails validation here instead of quietly widening the
+ * contract's numbers.
+ */
+export const MODEL_ATTEMPTS_MAX_ENTRIES = 2;
 
 /**
  * The vocabulary a record's `outcome` may carry: the run contract's terminal
@@ -276,6 +297,22 @@ export function validateVerificationBlock(value) {
  */
 
 /**
+ * The record's copy of one model ask (#521): the outcome word from the
+ * assessment's own vocabulary, the HTTP status the transport saw (null when
+ * the request never produced a response), the request body's byte length as
+ * the seam measured it (null when the seam reported none), and the
+ * provider's declared finish reason — provider text, sanitised and capped at
+ * the build site. What the record never adds is an interpretation: a status
+ * beside an empty outcome is a maintainer's evidence, not a diagnosis.
+ *
+ * @typedef {object} RecordModelAttempt
+ * @property {import("./assessment.mjs").AttemptOutcome} outcome
+ * @property {number | null} status
+ * @property {number | null} bytes
+ * @property {string} finishReason
+ */
+
+/**
  * The decision a run reached, reduced to its facts: the plan's kind, its
  * label adds and reasoned removals, the off-sheet refusals, the sanitised
  * capped rationale, and the signal when one was composed. The executor's log
@@ -315,6 +352,7 @@ export function validateVerificationBlock(value) {
  * @param {Decision | null} input.decision the pipeline's decision; null when the run ended before `decide()`
  * @param {TriageOutcome} input.outcome the terminal state, in the run contract's vocabulary
  * @param {string} input.reason the terminal path's own sentence
+ * @param {import("./assessment.mjs").ModelAttempt[]} [input.modelAttempts] the assessment's ask facts (#521); the empty list when omitted — a run that never asked says so with the empty list, the same way the verification block says it did not run
  * @param {VerificationBlock} [input.verification] the verification block; the empty block when omitted
  * @returns {TriageRecord}
  */
@@ -330,6 +368,7 @@ export function buildTriageRecord({
   decision,
   outcome,
   reason,
+  modelAttempts = [],
   verification = buildVerificationBlock(),
 }) {
   /** @type {Record<string, unknown>} */
@@ -342,6 +381,7 @@ export function buildTriageRecord({
     thread: threadType === null ? null : { type: threadType, number: threadNumber },
     dryRun,
     model,
+    modelAttempts: modelAttempts.map(attemptSection),
     policy:
       policy === null ? null : { basis: policy.basis, branch: policy.branch, sha: policy.sha },
     outcome,
@@ -388,6 +428,24 @@ function decisionSection(decision) {
                     title: cappedLine(signal.related.title, RELATED_TITLE_CHARS),
                   },
           },
+  };
+}
+
+/**
+ * The record's copy of one model ask: the numbers pass through as the facts
+ * they are — recorded, never recomputed (I15) — and the provider's finish
+ * reason passes the boundary every other untrusted field passes: one line,
+ * sanitiser, declared cap.
+ *
+ * @param {import("./assessment.mjs").ModelAttempt} attempt
+ * @returns {RecordModelAttempt}
+ */
+function attemptSection(attempt) {
+  return {
+    outcome: attempt.outcome,
+    status: attempt.status,
+    bytes: attempt.bytes,
+    finishReason: cappedLine(attempt.finishReason ?? "", FINISH_REASON_CHARS),
   };
 }
 
@@ -478,6 +536,7 @@ const RECORD_KEYS = new Set([
   "thread",
   "dryRun",
   "model",
+  "modelAttempts",
   "policy",
   "decision",
   "outcome",
@@ -487,6 +546,7 @@ const RECORD_KEYS = new Set([
 const RECORD_MANDATORY_KEYS = new Set([...RECORD_KEYS].filter((key) => key !== "decision"));
 const EVENT_KEYS = new Set(["eventName", "action"]);
 const THREAD_KEYS = new Set(["type", "number"]);
+const MODEL_ATTEMPT_KEYS = new Set(["outcome", "status", "bytes", "finishReason"]);
 const POLICY_KEYS = new Set(["basis", "branch", "sha"]);
 const DECISION_KEYS = new Set(["kind", "add", "remove", "refusals", "rationale", "signal"]);
 const SIGNAL_KEYS = new Set(["needsMoreInfo", "modelJudgedQuality", "related"]);
@@ -523,6 +583,7 @@ export function validateTriageRecord(value) {
     throw new TypeError("the triage record's 'dryRun' is not a boolean");
   }
   asNonEmptyString(record["model"], "the triage record's 'model'");
+  asModelAttempts(record["modelAttempts"]);
   asPolicy(record["policy"]);
   if (record["decision"] !== undefined) {
     asDecision(record["decision"]);
@@ -571,6 +632,68 @@ function asThread(value) {
     thread["number"] <= 0
   ) {
     throw new TypeError("the triage record's 'thread.number' is not a positive integer");
+  }
+}
+
+/**
+ * The assessment's ask facts (#521): the empty list when the run never
+ * asked, and otherwise at most the retry contract's two — one ask, one
+ * re-ask. The status and the byte count are facts or the honest null (no
+ * response existed; the seam reported none); the outcome is the
+ * assessment's own closed vocabulary; the finish reason is bounded provider
+ * text. A shape outside any of that is a code bug, refused here rather than
+ * recorded.
+ *
+ * @param {unknown} value
+ * @returns {void}
+ */
+function asModelAttempts(value) {
+  const attempts = asArray(value, "the triage record's 'modelAttempts'");
+  if (attempts.length > MODEL_ATTEMPTS_MAX_ENTRIES) {
+    throw new TypeError(
+      `the triage record's 'modelAttempts' carries ${String(attempts.length)} entries, past the ` +
+        `retry contract's ${String(MODEL_ATTEMPTS_MAX_ENTRIES)}-attempt ceiling`,
+    );
+  }
+  for (const entry of attempts) {
+    const attempt = asRecord(entry, "a model attempt");
+    assertExactKeys(attempt, "a model attempt", MODEL_ATTEMPT_KEYS);
+    if (!ATTEMPT_OUTCOMES.some((word) => word === attempt["outcome"])) {
+      throw new TypeError(
+        `a model attempt's 'outcome' is '${String(attempt["outcome"])}' — outside the ` +
+          `frozen vocabulary ${ATTEMPT_OUTCOMES.map((word) => `'${word}'`).join(" | ")}`,
+      );
+    }
+    if (attempt["status"] !== null) {
+      if (
+        typeof attempt["status"] !== "number" ||
+        !Number.isInteger(attempt["status"]) ||
+        attempt["status"] < 100 ||
+        attempt["status"] > 599
+      ) {
+        throw new TypeError(
+          "a model attempt's 'status' is neither an HTTP status nor the null of a request " +
+            "that never produced a response",
+        );
+      }
+    }
+    if (attempt["bytes"] !== null) {
+      if (
+        typeof attempt["bytes"] !== "number" ||
+        !Number.isInteger(attempt["bytes"]) ||
+        attempt["bytes"] <= 0
+      ) {
+        throw new TypeError(
+          "a model attempt's 'bytes' is neither a positive byte count nor the null of a seam " +
+            "that reported none",
+        );
+      }
+    }
+    asBoundedString(
+      attempt["finishReason"],
+      "a model attempt's 'finishReason'",
+      FINISH_REASON_CHARS,
+    );
   }
 }
 
@@ -892,9 +1015,9 @@ function assertExactKeys(obj, label, allowed, mandatory = allowed) {
 /**
  * The record one run leaves behind — the exact key set this module builds,
  * validates and serialises, in the documented field order: `schemaVersion`,
- * `repository`, `event`, `thread`, `dryRun`, `model`, `policy`, `decision`,
- * `outcome`, `reason`, `verification`. `decision` is the one key a record
- * may omit.
+ * `repository`, `event`, `thread`, `dryRun`, `model`, `modelAttempts`,
+ * `policy`, `decision`, `outcome`, `reason`, `verification`. `decision` is
+ * the one key a record may omit.
  *
  * @typedef {object} TriageRecord
  * @property {typeof triageRecordSchemaVersion} schemaVersion
@@ -903,6 +1026,7 @@ function assertExactKeys(obj, label, allowed, mandatory = allowed) {
  * @property {{ type: "issue" | "pr", number: number } | null} thread null when the run ended before the payload was parsed
  * @property {boolean} dryRun
  * @property {string} model
+ * @property {RecordModelAttempt[]} modelAttempts the assessment's ask facts (#521); the empty list when the run never asked the model
  * @property {RecordPolicy | null} policy null when the run ended before the policy source resolved
  * @property {RecordDecision} [decision] present iff the run reached a decision
  * @property {TriageOutcome} outcome a terminal state, as the run contract spells it

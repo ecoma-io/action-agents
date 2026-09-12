@@ -16,6 +16,12 @@
  * parser), matching tolerates none of it — and matching is the policy
  * engine's job, not the model's and not this module's. This module turns
  * bytes into a typed judgement; it never decides what gets mutated.
+ *
+ * Each ask leaves its facts in a caller-owned collector (#521): what the
+ * ask ended as, the HTTP status the transport saw, the request body's byte
+ * length, the provider's declared finish reason — so the run record can say
+ * what each of the (at most two) attempts actually saw, not just that they
+ * failed.
  */
 
 import { AnswerShapeError, parseJsonish } from "#core/answer-json.mjs";
@@ -91,7 +97,51 @@ export const ASSESSMENT_VERSION = 1;
  * @property {ReturnType<typeof import("#core/chat.mjs").createChat>} chat
  * @property {string} model
  * @property {EvidenceWrapper} evidenceWrapper
+ * @property {ModelAttempt[]} [attempts] the caller-owned collector the ask
+ *   facts are pushed into as they are observed (#521); omitted means none
+ *   are kept — the ask behaves exactly as it did before
  */
+
+/**
+ * The outcome vocabulary one assessment ask may record (#521): what the ask
+ * ended as, as a code-minted word. `answered` is a content that presented
+ * the JSON object; `empty`, `no-object` and `unparseable` are the shape
+ * classes a fumbled answer refused with (#261); `truncated` is a provider
+ * that declared its own answer cut short (#448); `unanswered` is an ask the
+ * seam could not hand a completion back from — a transport break, an HTTP
+ * refusal, a body that is not a chat completion — where the status beside
+ * it says which layer gave up.
+ *
+ * @typedef {"answered" | "empty" | "no-object" | "unparseable" | "truncated" | "unanswered"} AttemptOutcome
+ */
+
+/** The outcomes an assessment ask may end in, as the record's validator holds them. */
+export const ATTEMPT_OUTCOMES = Object.freeze([
+  "answered",
+  "empty",
+  "no-object",
+  "unparseable",
+  "truncated",
+  "unanswered",
+]);
+
+/**
+ * One model ask as the run record carries it (#521) — the facts a maintainer
+ * needs to tell a provider that answered empty on a large payload from an
+ * outage, without re-running the job. `status` is the HTTP status the
+ * transport saw, null when the request never produced a response; `bytes` is
+ * the request body's byte length as the seam measured it, null when the seam
+ * reported none; `finishReason` is the provider's own declaration, raw here
+ * and sanitised where it enters the record. Facts of the attempt — recorded
+ * once, when observed, never recomputed (I15).
+ *
+ * @typedef {object} ModelAttempt
+ * @property {AttemptOutcome} outcome
+ * @property {number | null} status
+ * @property {number | null} bytes
+ * @property {string} finishReason "" when the ask never produced a completion to declare one
+ */
+
 /**
  * The failure a provider-declared truncated answer is (#448), in review's
  * wording (#445) so all three actions speak one language about truncation.
@@ -109,6 +159,76 @@ function truncationError(which) {
 }
 
 /**
+ * The seam's report of one call, when it made one — a shape it did not make
+ * reads as "reported nothing" rather than as a fact, so a test double or a
+ * seam that predates the field records the honest nulls instead of invented
+ * numbers.
+ *
+ * @param {unknown} diagnostics
+ * @returns {{ status: number | null, requestBytes: number | null }}
+ */
+function diagnosticsOf(diagnostics) {
+  if (typeof diagnostics !== "object" || diagnostics === null) {
+    return { status: null, requestBytes: null };
+  }
+  const report = /** @type {Record<string, unknown>} */ (diagnostics);
+  const status = report["status"];
+  const requestBytes = report["requestBytes"];
+  return {
+    status: typeof status === "number" && Number.isInteger(status) ? status : null,
+    requestBytes:
+      typeof requestBytes === "number" && Number.isInteger(requestBytes) ? requestBytes : null,
+  };
+}
+
+/**
+ * One ask of the model, with its facts pushed into the caller's collector as
+ * they are observed (#521). The attempt enters the collector marked
+ * `answered` or `unanswered`; the caller re-classifies its own entry when it
+ * judges the content — a truncation or a shape refusal is the caller's
+ * verdict on a completion this ask did hand back. Errors pass through
+ * untouched: class, message and identity are the run's failure vocabulary.
+ *
+ * @param {object} input
+ * @param {AssessmentInput["chat"]} input.chat
+ * @param {string} input.model
+ * @param {import("#core/chat.mjs").ChatMessage[]} input.messages
+ * @param {ModelAttempt[]} input.attempts
+ * @returns {Promise<{ content: string, finishReason: string | undefined, attempt: ModelAttempt }>}
+ */
+async function askModel({ chat, model, messages, attempts }) {
+  try {
+    const { content, finishReason, diagnostics } = await chat.complete({ model, messages });
+    const seen = diagnosticsOf(diagnostics);
+    /** @type {ModelAttempt} */
+    const attempt = {
+      outcome: "answered",
+      status: seen.status,
+      bytes: seen.requestBytes,
+      finishReason: finishReason ?? "",
+    };
+    attempts.push(attempt);
+    return { content, finishReason, attempt };
+  } catch (cause) {
+    // The seam attaches its report to the errors it raises or passes
+    // through; a plain throw from elsewhere reports nothing, and nothing is
+    // what gets recorded for it.
+    const reported =
+      cause instanceof Error
+        ? /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (cause))["diagnostics"]
+        : undefined;
+    const seen = diagnosticsOf(reported);
+    attempts.push({
+      outcome: "unanswered",
+      status: seen.status,
+      bytes: seen.requestBytes,
+      finishReason: "",
+    });
+    throw cause;
+  }
+}
+
+/**
  * Makes the run's single chat call and parses the answer into an
  * `Assessment`. The prompt's shape (sheet present or not) selects which
  * answer contract the model is asked for, and the matching parser.
@@ -116,7 +236,7 @@ function truncationError(which) {
  * @param {AssessmentInput} input
  * @returns {Promise<Assessment>}
  */
-export async function assess({ evidence, documents, chat, model, evidenceWrapper }) {
+export async function assess({ evidence, documents, chat, model, evidenceWrapper, attempts = [] }) {
   const sheet = evidence.sheet;
   const { messages } = buildPrompt({
     thread: evidence.thread,
@@ -142,20 +262,34 @@ export async function assess({ evidence, documents, chat, model, evidenceWrapper
   // the shape-failure re-ask cannot help it, because the same ask would cut
   // the same answer again. The wording is review's (#445), so all three
   // actions speak one language about truncation.
-  let { content, finishReason } = await chat.complete({ model, messages });
-  if (finishReason === "length") throw truncationError("its");
+  //
+  // Every ask's facts land in the collector as they are observed (#521), so
+  // a run that fails here — or one that recovers on the re-ask — leaves the
+  // record able to say what each attempt saw, not just that they failed.
+  const first = await askModel({ chat, model, messages, attempts });
+  let { content, finishReason } = first;
+  if (finishReason === "length") {
+    first.attempt.outcome = "truncated";
+    throw truncationError("its");
+  }
   try {
     parseJsonish(content);
   } catch (cause) {
     if (!(cause instanceof AnswerShapeError)) throw cause;
+    first.attempt.outcome = cause.shape;
     info(`triage: the model's answer was unusable (${cause.message}) — asking once more`);
-    ({ content, finishReason } = await chat.complete({ model, messages }));
-    if (finishReason === "length") throw truncationError("the re-asked");
+    const second = await askModel({ chat, model, messages, attempts });
+    ({ content, finishReason } = second);
+    if (finishReason === "length") {
+      second.attempt.outcome = "truncated";
+      throw truncationError("the re-asked");
+    }
     try {
       parseJsonish(content);
     } catch (retryCause) {
       if (!(retryCause instanceof AnswerShapeError)) throw retryCause;
-      throw new AnswerShapeError(`${retryCause.message} (after 2 attempts)`);
+      second.attempt.outcome = retryCause.shape;
+      throw new AnswerShapeError(`${retryCause.message} (after 2 attempts)`, retryCause.shape);
     }
   }
   const descriptor = {

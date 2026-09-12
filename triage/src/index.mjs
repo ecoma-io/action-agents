@@ -204,13 +204,17 @@ export async function run(inputs, context, io) {
   // run discovers them. It exists before the first read, so a run that dies
   // anywhere still ends in a record — a run that died before the payload was
   // parsed names no thread and no policy pin, and the record says so by the
-  // nulls rather than going unwritten.
-  /** @type {{ eventAction: string, thread: { type: "issue" | "pr", number: number } | null, policy: import("#core/policy.mjs").PolicySource | null, decision: import("./decision.mjs").Decision | null, verification: import("./run-record.mjs").VerificationBlock }} */
+  // nulls rather than going unwritten. `modelAttempts` is the assessment's
+  // ask collector (#521): the array `assess` pushes each ask's facts into,
+  // so a run that dies in the model call — the empty-answer failure this
+  // exists for — still records what each attempt saw.
+  /** @type {{ eventAction: string, thread: { type: "issue" | "pr", number: number } | null, policy: import("#core/policy.mjs").PolicySource | null, decision: import("./decision.mjs").Decision | null, modelAttempts: import("./assessment.mjs").ModelAttempt[], verification: import("./run-record.mjs").VerificationBlock }} */
   const draft = {
     eventAction: "",
     thread: null,
     policy: null,
     decision: null,
+    modelAttempts: [],
     verification: buildVerificationBlock(),
   };
   /** @param {import("./run-record.mjs").TriageOutcome} outcome @param {string} reason */
@@ -225,6 +229,7 @@ export async function run(inputs, context, io) {
       model: inputs.model,
       policy: draft.policy,
       decision: draft.decision,
+      modelAttempts: draft.modelAttempts,
       outcome,
       reason,
       verification: draft.verification,
@@ -533,6 +538,7 @@ export async function run(inputs, context, io) {
       chat: world.chat,
       model: inputs.model,
       evidenceWrapper: world.evidence,
+      attempts: draft.modelAttempts,
     });
 
     const decision = decide({ evidence, assessment });

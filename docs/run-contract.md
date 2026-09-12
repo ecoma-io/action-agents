@@ -8,9 +8,11 @@ the architecture is judged on.
 
 Recorded 2026-09-03; amended 2026-09-13 (#529 — architecture evidence at
 runtime: the recipe laws, the architecture gate and family, the reason
-taxonomy, the waiver-time sentence); owned by the repository maintainers;
-revisit when an action's outcome vocabulary, gate set, or write surface
-changes.
+taxonomy, the waiver-time sentence; #521 — each model ask's facts in triage's
+record: the `modelAttempts` field, its per-attempt outcome vocabulary, and
+the status-and-bytes facts that ride it); owned by the repository
+maintainers; revisit when an action's outcome vocabulary, gate set, or write
+surface changes.
 
 ## Terminal states and verdicts
 
@@ -169,12 +171,22 @@ Three families exist today:
 | Family             | Module                         | `schemaVersion`             | Delivery glob             | Written at                                                                                                                                                                                                      |
 | ------------------ | ------------------------------ | --------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | review's artifact  | `review/src/artifact.mjs`      | 5; 6 (applicability family) | `review-artifact-*.json`  | a published comment writes the full artifact; abandonment and a dry run write their reduced artifacts; a draft run writes its skip                                                                              |
-| triage's record    | `triage/src/run-record.mjs`    | 1                           | `triage-record-*.json`    | every terminal point                                                                                                                                                                                            |
+| triage's record    | `triage/src/run-record.mjs`    | 2                           | `triage-record-*.json`    | every terminal point                                                                                                                                                                                            |
 | harmonise's record | `harmonise/src/run-record.mjs` | 3                           | `harmonise-record-*.json` | every terminal point: publication, partial exit, all-in-step skip, dry run — and the red terminals, where the boundary writer records `refused` for a typed deterministic refusal and `failed` otherwise (#347) |
 
-Triage's record fields, version 1: `schemaVersion`, `repository`, `event`
+Triage's record fields, version 2: `schemaVersion`, `repository`, `event`
 (`eventName`, `action`), `thread` (`type`, `number`, or `null` for a run that
-died before the payload parsed), `dryRun`, `model`, `policy` (`basis`,
+died before the payload parsed), `dryRun`, `model`, `modelAttempts` (the
+facts of each model ask, version 2's addition (#521): at most the retry
+contract's two entries — one ask, one re-ask — each carrying the code-owned
+`outcome` word (`answered`, `empty`, `no-object`, `unparseable`,
+`truncated`, `unanswered`), the HTTP `status` the transport saw or the null
+of a request that never produced a response, the request body's `bytes` as
+the seam measured them or the null of a seam that reported none, and the
+provider-declared, capped `finishReason`; the empty list when the run never
+asked the model. Sizes and statuses are facts of the attempt — recorded when
+observed, never recomputed — so a run that fails on an empty answer says
+what each attempt saw, not just that it failed), `policy` (`basis`,
 `branch`, `sha`, or `null` before the source resolved), `decision` (present
 iff the run reached one: `kind`, `add`, `remove` with their code-owned
 reasons, `refusals`, sanitised capped `rationale`, `signal` with its

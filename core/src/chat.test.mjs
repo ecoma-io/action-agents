@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { HttpError } from "./transport-errors.mjs";
+import { HttpError, TransportError } from "./transport-errors.mjs";
 import { ChatError, createChat } from "./chat.mjs";
 
 /** @typedef {import("./chat.mjs").ChatMessage} ChatMessage */
@@ -79,9 +79,10 @@ describe("the request", () => {
 describe("the answer", () => {
   it("returns the content of the first choice", async () => {
     const { chat } = withFetch(() => new Response('{"choices":[{"message":{"content":"hello"}}]}'));
-    await expect(chat.complete({ model: "m", messages: MESSAGES })).resolves.toEqual({
+    await expect(chat.complete({ model: "m", messages: MESSAGES })).resolves.toMatchObject({
       content: "hello",
       toolCalls: [],
+      diagnostics: { status: 200 },
     });
   });
 
@@ -220,10 +221,13 @@ describe("tool calls", () => {
         ),
     );
 
-    await expect(chat.complete({ model: "m", messages: MESSAGES, tools: TOOLS })).resolves.toEqual({
+    await expect(
+      chat.complete({ model: "m", messages: MESSAGES, tools: TOOLS }),
+    ).resolves.toMatchObject({
       content: "",
       finishReason: "tool_calls",
       toolCalls: [{ id: "call_9", name: "search", arguments: '{"query":"TODO"}' }],
+      diagnostics: { status: 200 },
     });
   });
 
@@ -280,14 +284,17 @@ describe("tool calls", () => {
     );
     await expect(
       withTools.chat.complete({ model: "m", messages: MESSAGES, tools: TOOLS }),
-    ).resolves.toEqual({ content: "done", toolCalls: [], finishReason: "stop" });
+    ).resolves.toMatchObject({ content: "done", toolCalls: [], finishReason: "stop" });
 
     const withoutTools = withFetch(
       () => new Response('{"choices":[{"message":{"content":"plain","tool_calls":null}}]}'),
     );
-    await expect(withoutTools.chat.complete({ model: "m", messages: MESSAGES })).resolves.toEqual({
+    await expect(
+      withoutTools.chat.complete({ model: "m", messages: MESSAGES }),
+    ).resolves.toMatchObject({
       content: "plain",
       toolCalls: [],
+      diagnostics: { status: 200 },
     });
   });
 
@@ -380,5 +387,74 @@ describe("the unusable-answer class (#499)", () => {
     expect(malformed).toBeInstanceOf(ChatError);
     expect(malformed.message).toMatch(/not JSON/);
     expect(malformed.kind).toBe("malformed");
+  });
+});
+
+describe("the call's diagnostics (#521)", () => {
+  it("reports the exact byte length of the body the wire carried, and the status seen", async () => {
+    /** @type {string | undefined} */
+    let sent;
+    /** @type {typeof globalThis.fetch} */
+    const fetchImpl = async (_url, init) => {
+      sent = String(init?.body ?? "");
+      return new Response('{"choices":[{"message":{"content":"{}"}}]}');
+    };
+    const chat = createChat({ apiUrl: "https://api.example/v1", apiKey: "sk-x", fetchImpl });
+
+    const result = await chat.complete({ model: "gpt-x", messages: MESSAGES });
+
+    // The count is of the string the fetch carried — pinned against the same
+    // literal, measured through an independent UTF-8 encoder.
+    const expectedBody = JSON.stringify({ model: "gpt-x", messages: MESSAGES });
+    expect(sent).toBe(expectedBody);
+    expect(result.diagnostics).toEqual({
+      status: 200,
+      requestBytes: new TextEncoder().encode(expectedBody).length,
+    });
+  });
+
+  it("attaches the diagnostics to a ChatError the answer earns", async () => {
+    const { chat } = withFetch(() => new Response("<html>gateway</html>"));
+
+    const error = await chat.complete({ model: "m", messages: MESSAGES }).catch((c) => c);
+
+    expect(error).toBeInstanceOf(ChatError);
+    expect(error.diagnostics?.status).toBe(200);
+    expect(error.diagnostics?.requestBytes).toBe(
+      Buffer.byteLength(JSON.stringify({ model: "m", messages: MESSAGES })),
+    );
+  });
+
+  it("attaches the status an HTTP refusal carried, and passes the error through unchanged", async () => {
+    const { chat } = withFetch(() => new Response("denied", { status: 401 }));
+
+    const error = await chat.complete({ model: "m", messages: MESSAGES }).catch((c) => c);
+
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error.status).toBe(401);
+    expect(error.name).toBe("HttpError");
+    expect(error.diagnostics).toEqual({
+      status: 401,
+      requestBytes: Buffer.byteLength(JSON.stringify({ model: "m", messages: MESSAGES })),
+    });
+  });
+
+  it("attaches a null status when the request never produced a response", async () => {
+    /** @type {typeof globalThis.fetch} */
+    const fetchImpl = () => Promise.reject(new TypeError("fetch failed"));
+    const chat = createChat({
+      apiUrl: "https://api.example/v1",
+      apiKey: "sk-x",
+      fetchImpl,
+      maxAttempts: 1,
+    });
+
+    const error = await chat.complete({ model: "m", messages: MESSAGES }).catch((c) => c);
+
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error.diagnostics).toEqual({
+      status: null,
+      requestBytes: Buffer.byteLength(JSON.stringify({ model: "m", messages: MESSAGES })),
+    });
   });
 });

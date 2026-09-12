@@ -879,17 +879,23 @@ export function makeForge(world, policyFiles, writes, entryName, options = {}) {
 /**
  * Builds the chat double for one entry: the recorded answers, in ask order.
  * Both actions ask one completion at a time, so `complete` is the only
- * surface; `asks` reports how many the run made.
+ * surface; `asks` reports how many the run made. Each served answer carries
+ * the call's diagnostics the way the real seam does (#521) — a recorded 200
+ * and the byte length of the request body the replay assembled — so the
+ * records a replay writes carry the per-attempt facts a live run's would.
  *
  * @param {string} entryName
  * @param {Array<Record<string, unknown>>} answers
- * @returns {{asks: () => number, complete: () => Promise<Record<string, unknown>>}}
+ * @returns {{asks: () => number, complete: (request: { model: string, messages: unknown[] }) => Promise<Record<string, unknown>>}}
  */
 export function makeChat(entryName, answers) {
   let cursor = 0;
   return {
     asks: () => cursor,
-    async complete() {
+    /**
+     * @param {{ model: string, messages: unknown[] }} request
+     */
+    async complete(request) {
       if (cursor >= answers.length) {
         throw new CorpusDefect(
           `${entryName}: the run asked for provider answer ${cursor + 1}, but the recording holds ${answers.length}`,
@@ -901,6 +907,12 @@ export function makeChat(entryName, answers) {
         content: /** @type {string} */ (answer["content"]),
         toolCalls: /** @type {Array<unknown>} */ (answer["toolCalls"]),
         finishReason: /** @type {string} */ (answer["finishReason"]),
+        diagnostics: {
+          status: 200,
+          requestBytes: Buffer.byteLength(
+            JSON.stringify({ model: request.model, messages: request.messages }),
+          ),
+        },
       };
     },
   };

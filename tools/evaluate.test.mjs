@@ -356,15 +356,28 @@ test("makeChat serves the recording in order and refuses to serve past it", asyn
     { content: "first", finishReason: "stop", toolCalls: [] },
     { content: "second", finishReason: "stop", toolCalls: [] },
   ]);
+  const ask = { model: "m", messages: [{ role: "user", content: "evidence" }] };
   assert.equal(chat.asks(), 0);
-  const first = await chat.complete();
+  const first = await chat.complete(ask);
   assert.equal(first["content"], "first");
-  await chat.complete();
+  await chat.complete(ask);
   assert.equal(chat.asks(), 2);
   assert.match(
-    await defectMessageAsync(() => chat.complete()),
+    await defectMessageAsync(() => chat.complete(ask)),
     /asked for provider answer 3, but the recording holds 2/,
   );
+});
+
+test("makeChat reports the call's diagnostics the way the seam does (#521)", async () => {
+  const chat = makeChat("entry", [{ content: "first", finishReason: "stop", toolCalls: [] }]);
+  const ask = { model: "m", messages: [{ role: "user", content: "evidence" }] };
+
+  const served = await chat.complete(ask);
+
+  assert.deepEqual(served["diagnostics"], {
+    status: 200,
+    requestBytes: Buffer.byteLength(JSON.stringify(ask)),
+  });
 });
 
 test("makeForge serves the recorded world and defects on an unrecorded read", async () => {

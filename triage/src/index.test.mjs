@@ -2295,6 +2295,115 @@ describe("run — the run record", () => {
     expect("decision" in record).toBe(false);
   });
 
+  /**
+   * A decide seam that answers with the given contents in order, carrying the
+   * call's diagnostics the way the real client does (#521) — the world `io()`
+   * builds cannot express them, and these tests are about what the record
+   * does with them.
+   *
+   * @param {string[]} contents
+   * @param {import("#core/chat.mjs").ChatDiagnostics} diagnostics
+   */
+  function reportingChat(contents, diagnostics) {
+    let cursor = 0;
+    return {
+      /**
+       * @param {{ model: string, messages: import("#core/chat.mjs").ChatMessage[] }} _ask
+       */
+      async complete(_ask) {
+        const content = contents[Math.min(cursor, contents.length - 1)] ?? "";
+        cursor += 1;
+        return {
+          content,
+          toolCalls: [],
+          finishReason: "stop",
+          diagnostics,
+        };
+      },
+    };
+  }
+
+  it("records both empty attempts with their facts — the #521 failure, in the record", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = {
+      ...io({ event: issueEvent({ labels: ["triage"] }) }),
+      chat: reportingChat(["", ""], { status: 200, requestBytes: 6401 }),
+    };
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toThrow(
+      "the model's answer was empty (after 2 attempts)",
+    );
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toBe("the model's answer was empty (after 2 attempts)");
+    expect("decision" in record).toBe(false);
+    expect(record.modelAttempts).toEqual([
+      { bytes: 6401, finishReason: "stop", outcome: "empty", status: 200 },
+      { bytes: 6401, finishReason: "stop", outcome: "empty", status: 200 },
+    ]);
+  });
+
+  it("records an unanswered ask with the error's own facts when the seam could not answer", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const refusal = new HttpError("the provider refused", {
+      status: 503,
+      url: "https://api.example/v1/chat/completions",
+    });
+    // The seam attaches its report to the errors it passes through; the
+    // double attaches the same shape the same way.
+    /** @type {{ diagnostics?: unknown }} */ (refusal).diagnostics = {
+      status: 503,
+      requestBytes: 2400,
+    };
+    const world = io({ chatFailure: refusal });
+
+    await expect(run(inputs(), readContext(runner), world)).rejects.toBe(refusal);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("failed");
+    expect(record.modelAttempts).toEqual([
+      { bytes: 2400, finishReason: "", outcome: "unanswered", status: 503 },
+    ]);
+  });
+
+  it("records the ask a green run judged, and honest nulls for a double without diagnostics", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const reporting = {
+      ...io({ event: issueEvent({ labels: ["triage"] }) }),
+      chat: reportingChat([LABELS_ANSWER], { status: 200, requestBytes: 1851 }),
+    };
+
+    await run(inputs(), readContext(runner), reporting);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("published");
+    expect(record.modelAttempts).toEqual([
+      { bytes: 1851, finishReason: "stop", outcome: "answered", status: 200 },
+    ]);
+
+    // The plain `io()` double predates the field: a run it answers records
+    // the honest nulls, never a zero or a guessed status.
+    const plain = io({ event: issueEvent({ labels: ["triage"] }) });
+    await run(inputs(), readContext(runner), plain);
+    const plainRecord = readRecord("triage-record-issue-7.json");
+    expect(plainRecord.outcome).toBe("published");
+    expect(plainRecord.modelAttempts).toEqual([
+      { bytes: null, finishReason: "", outcome: "answered", status: null },
+    ]);
+  });
+
+  it("records the empty list for a run that never asked — the event gate's skip", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const world = io({ event: { action: "closed", ...issueEvent() } });
+
+    await run(inputs(), readContext(runner), world);
+
+    const record = readRecord("triage-record-issue-7.json");
+    expect(record.outcome).toBe("skip");
+    expect(record.modelAttempts).toEqual([]);
+  });
+
   it("writes a thread-less record when the run dies before the payload parses", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const world = io({ event: {} });
@@ -3292,7 +3401,7 @@ describe("writeRunRecord — the write ceiling", () => {
     expect(file).toBe(p.join(root, ".triage-record", "triage-record-issue-41.json"));
     const bytes = readFileSync(file, "utf8");
     expect(bytes).toBe(serialiseTriageRecord(recordFixture()));
-    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 1, outcome: "skip" });
+    expect(JSON.parse(bytes)).toMatchObject({ schemaVersion: 2, outcome: "skip" });
   });
 
   it("creates a nested custom directory", () => {

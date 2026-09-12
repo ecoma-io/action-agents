@@ -7,6 +7,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  FINISH_REASON_CHARS,
+  MODEL_ATTEMPTS_MAX_ENTRIES,
   NEEDS_MORE_INFO_CHARS,
   NEEDS_MORE_INFO_MAX_ENTRIES,
   REASON_CHARS,
@@ -128,12 +130,13 @@ describe("buildTriageRecord", () => {
   it("builds the expected record from valid run facts", () => {
     const record = recordFixture();
     expect(record).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       repository: "octocat/example",
       event: { eventName: "issues", action: "labeled" },
       thread: { type: "issue", number: 41 },
       dryRun: false,
       model: "triage",
+      modelAttempts: [],
       policy: { basis: "base", branch: "main", sha: SHA },
       decision: {
         kind: "labels",
@@ -233,7 +236,7 @@ describe("buildTriageRecord", () => {
         downgraded: ["add:priority: high", "remove:needs triage"],
       },
     });
-    expect(triageRecordSchemaVersion).toBe(1);
+    expect(triageRecordSchemaVersion).toBe(2);
     expect(record.schemaVersion).toBe(triageRecordSchemaVersion);
     for (const answer of record.verification.answers) {
       expect(isReasonDigest(answer.reasonDigest)).toBe(true);
@@ -291,6 +294,66 @@ describe("buildTriageRecord", () => {
     const record = recordFixture({ reason: "r".repeat(REASON_CHARS + 200) });
     expect(record.reason.length).toBe(REASON_CHARS);
     expect(record.reason.endsWith(TRUNCATION_MARK)).toBe(true);
+  });
+
+  it("carries the model attempts the assessment collected, capping only the finish reason (#521)", () => {
+    /** @type {import("./assessment.mjs").ModelAttempt[]} */
+    const attempts = [
+      { outcome: "empty", status: 200, bytes: 6401, finishReason: "stop" },
+      { outcome: "empty", status: 200, bytes: 6401, finishReason: "stop" },
+    ];
+    const record = recordFixture({
+      decision: null,
+      outcome: "failed",
+      reason: "the model's answer was empty (after 2 attempts)",
+      modelAttempts: attempts,
+    });
+    expect(record.modelAttempts).toEqual(attempts);
+
+    // The honest nulls are facts too — an ask that never produced a response
+    // records nulls, never zeros or guesses.
+    const nulls = recordFixture({
+      modelAttempts: [{ outcome: "unanswered", status: null, bytes: null, finishReason: "" }],
+    });
+    expect(nulls.modelAttempts).toEqual([
+      { outcome: "unanswered", status: null, bytes: null, finishReason: "" },
+    ]);
+
+    // The finish reason is provider-declared text: bounded at the build site,
+    // visibly, like every other model string the record carries.
+    const capped = recordFixture({
+      modelAttempts: [
+        { outcome: "answered", status: 200, bytes: 10, finishReason: "l".repeat(200) },
+      ],
+    });
+    const first = capped.modelAttempts[0];
+    expect(first?.finishReason.length).toBe(FINISH_REASON_CHARS);
+    expect(first?.finishReason.endsWith(TRUNCATION_MARK)).toBe(true);
+
+    expect(() => validateTriageRecord(JSON.parse(serialiseTriageRecord(record)))).not.toThrow();
+  });
+
+  it("serialises the failed run's attempts inside the frozen byte order — byte-exact (#521)", () => {
+    /** @type {Parameters<typeof recordFixture>[0]} */
+    const facts = {
+      decision: null,
+      outcome: "failed",
+      reason: "the model's answer was empty (after 2 attempts)",
+      modelAttempts: [
+        { outcome: "empty", status: 200, bytes: 6401, finishReason: "stop" },
+        { outcome: "empty", status: 200, bytes: 6401, finishReason: "stop" },
+      ],
+    };
+    const bytes = serialiseTriageRecord(recordFixture(facts));
+    // The same run facts build the same bytes, and the attempts ride inside
+    // the sorted-key compact JSON the record laws hold (I15).
+    expect(bytes).toBe(serialiseTriageRecord(recordFixture(facts)));
+    expect(bytes).toContain(
+      '"modelAttempts":[{"bytes":6401,"finishReason":"stop","outcome":"empty","status":200},' +
+        '{"bytes":6401,"finishReason":"stop","outcome":"empty","status":200}]',
+    );
+    expect(bytes).not.toContain("\n");
+    expect(validateTriageRecord(JSON.parse(bytes))).toBeTruthy();
   });
 });
 
@@ -459,9 +522,99 @@ describe("validateTriageRecord refusals", () => {
   });
 
   it("refuses a wrong schemaVersion", () => {
-    expect(() => validateTriageRecord(malformed((r) => (r["schemaVersion"] = 2)))).toThrow(
+    expect(() => validateTriageRecord(malformed((r) => (r["schemaVersion"] = 1)))).toThrow(
       /schemaVersion/u,
     );
+    expect(() => validateTriageRecord(malformed((r) => (r["schemaVersion"] = 3)))).toThrow(
+      /schemaVersion/u,
+    );
+  });
+
+  it("refuses a model attempt outside the frozen shapes (#521)", () => {
+    // An outcome word the assessment never mints.
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = [{ outcome: "fumbled", status: 200, bytes: 10, finishReason: "" }];
+        }),
+      ),
+    ).toThrow(/outside the frozen vocabulary/u);
+    // Extra and missing keys.
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = [
+            { outcome: "empty", status: 200, bytes: 10, finishReason: "", latency: 5 },
+          ];
+        }),
+      ),
+    ).toThrow(/unknown key 'latency'/u);
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = [{ outcome: "empty", status: 200, bytes: 10 }];
+        }),
+      ),
+    ).toThrow(/missing 'finishReason'/u);
+    // A status that is neither an HTTP status nor the honest null.
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = [{ outcome: "empty", status: 24, bytes: 10, finishReason: "" }];
+        }),
+      ),
+    ).toThrow(/'status' is neither an HTTP status/u);
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = [{ outcome: "empty", status: "200", bytes: 10, finishReason: "" }];
+        }),
+      ),
+    ).toThrow(/'status' is neither an HTTP status/u);
+    // A byte count that is neither positive nor the honest null.
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = [{ outcome: "empty", status: 200, bytes: 0, finishReason: "" }];
+        }),
+      ),
+    ).toThrow(/'bytes' is neither a positive byte count/u);
+    // A finish reason past its cap.
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = [
+            {
+              outcome: "empty",
+              status: 200,
+              bytes: 10,
+              finishReason: "x".repeat(FINISH_REASON_CHARS + 1),
+            },
+          ];
+        }),
+      ),
+    ).toThrow(/exceeds its 40-character cap/u);
+    // Past the retry contract's ceiling.
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = Array.from({ length: MODEL_ATTEMPTS_MAX_ENTRIES + 1 }, () => ({
+            outcome: "empty",
+            status: 200,
+            bytes: 10,
+            finishReason: "",
+          }));
+        }),
+      ),
+    ).toThrow(/past the retry contract's 2-attempt ceiling/u);
+    // Not an array at all.
+    expect(() =>
+      validateTriageRecord(
+        malformed((r) => {
+          r["modelAttempts"] = { outcome: "empty" };
+        }),
+      ),
+    ).toThrow(/'modelAttempts'/u);
   });
 
   it("refuses an event that is not the two-key shape", () => {
@@ -834,7 +987,7 @@ describe("the record's vocabulary is the run contract's", () => {
   });
 
   it("pins the schema version the docs state", () => {
-    expect(triageRecordSchemaVersion).toBe(1);
+    expect(triageRecordSchemaVersion).toBe(2);
   });
 
   it("keeps the verification verdicts the frozen list issue #274 froze", () => {

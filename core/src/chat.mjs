@@ -36,6 +36,17 @@
  *     shapes above, but classed `unusable-answer` so a caller's corrective
  *     re-ask can tell it from a malformed body.
  *
+ * Every call also reports its own facts (#521): the completion's result and
+ * every error this module raises or passes through carry a `diagnostics`
+ * object — the HTTP status the transport saw (null when the request never
+ * produced a response) and the byte length of the exact request body sent.
+ * A caller that records what an attempt looked like reads them as facts of
+ * the attempt; nothing here interprets them, and a caller that ignores them
+ * behaves exactly as before. The client built here always carries the field;
+ * the seam's declared type holds it optional, because a double implementing
+ * the seam may omit it — and an absent report reads as unreported, never as
+ * a zero or a guessed status.
+ *
  * The keyless configuration is a supported path, not a degraded one: with no
  * `api-key` the request carries no `Authorization` header at all.
  */
@@ -96,6 +107,18 @@ import { oneLine } from "./one-line.mjs";
  */
 
 /**
+ * The facts of one call, as the seam observed them (#521): `status` is the
+ * HTTP status the transport saw — null when the request never produced a
+ * response, a connection-level failure — and `requestBytes` is the byte
+ * length of the exact request body sent, measured on the string the wire
+ * carries. Facts, not judgements: nothing here reads a limit into either.
+ *
+ * @typedef {object} ChatDiagnostics
+ * @property {number | null} status
+ * @property {number} requestBytes
+ */
+
+/**
  * The class of a refused provider answer. `"unusable-answer"` is a parseable
  * completion whose message carries no content — the reasoning-only or
  * empty-answer shape (#499) — which a corrective re-ask may still recover;
@@ -107,6 +130,15 @@ import { oneLine } from "./one-line.mjs";
 
 /** The provider answered, but the answer is not a usable chat completion. */
 export class ChatError extends Error {
+  /**
+   * The call's own facts (#521) — attached by `complete` when it raises this
+   * error: the HTTP status the transport saw (null when the request never
+   * produced a response) and the request body's byte length. Read it as
+   * data; the class and message are the failure vocabulary, unchanged.
+   *
+   * @type {ChatDiagnostics | undefined}
+   */
+  diagnostics;
   /** @param {string} message @param {{ excerpt?: string, kind?: ChatErrorKind }} [details] */
   constructor(message, details = {}) {
     super(details.excerpt === undefined ? message : `${message}: ${details.excerpt}`);
@@ -127,6 +159,7 @@ const EXCERPT_BYTES = 200;
  *     content: string,
  *     toolCalls: ChatToolCall[],
  *     finishReason: string | undefined,
+ *     diagnostics?: ChatDiagnostics,
  *   }>,
  * }}
  */
@@ -145,48 +178,89 @@ export function createChat(config) {
   return {
     /**
      * Makes one chat-completions request and returns the answer's content,
-     * any requested tool calls, and the provider's finish reason.
+     * any requested tool calls, the provider's finish reason, and the call's
+     * own diagnostics — the HTTP status seen and the request body's byte
+     * length (#521). Every error this call raises or passes through carries
+     * the same diagnostics as a property, so a caller recording what an
+     * attempt looked like never has to catch to learn it.
      *
      * Without `tools` the answer is exactly what it always was: a content
      * string, or a refusal to pretend a half-answer was one. With `tools`,
      * a `null` content beside real tool calls is a tool turn, not a failure.
      *
      * @param {{ model: string, messages: ChatMessage[], tools?: ChatTool[] }} request
-     * @returns {Promise<{ content: string, toolCalls: ChatToolCall[], finishReason: string | undefined }>}
+     * @returns {Promise<{ content: string, toolCalls: ChatToolCall[], finishReason: string | undefined, diagnostics?: ChatDiagnostics }>}
      */
     async complete(request) {
       const tools = request.tools;
       const offeringTools = tools !== undefined && tools.length > 0;
-      const response = await http.request("/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: {
-          model: request.model,
-          messages: request.messages.map(toWireMessage),
-          ...(offeringTools ? { tools: tools.map(toWireTool) } : {}),
-        },
+      // Serialized here, once, and sent as the string it is: the wire carries
+      // exactly these bytes either way — `http.mjs` would stringify the same
+      // object to the same string — and the byte length of what was actually
+      // sent is a fact this module now reports (#521). Building it at the
+      // seam that owns the protocol keeps the measurement and the request
+      // from ever drifting apart.
+      const wireBody = JSON.stringify({
+        model: request.model,
+        messages: request.messages.map(toWireMessage),
+        ...(offeringTools ? { tools: tools.map(toWireTool) } : {}),
       });
+      const requestBytes = Buffer.byteLength(wireBody);
+
+      let response;
+      try {
+        response = await http.request("/chat/completions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: wireBody,
+        });
+      } catch (cause) {
+        // Attached, never rewrapped: the transport's error class and message
+        // are the failure vocabulary every action already speaks, and they
+        // pass through unchanged. The facts ride along as data — the status
+        // when the error carries one (an `HttpError` does), null for the
+        // connection-level failures that never saw a response.
+        if (cause instanceof Error) {
+          const reported = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (cause))[
+            "status"
+          ];
+          attachDiagnostics(cause, {
+            status: typeof reported === "number" ? reported : null,
+            requestBytes,
+          });
+        }
+        throw cause;
+      }
+
+      /** The response's facts, carried by every refusal this answer earns. */
+      const seen = { status: response.status, requestBytes };
+      /** @param {string} message @param {{ excerpt?: string, kind?: ChatErrorKind }} [details] @returns {ChatError} */
+      const refuse = (message, details = {}) => {
+        const error = new ChatError(message, details);
+        attachDiagnostics(error, seen);
+        return error;
+      };
 
       /** @type {unknown} */
       let parsed;
       try {
         parsed = JSON.parse(response.text);
       } catch {
-        throw new ChatError("the provider's response body is not JSON", {
+        throw refuse("the provider's response body is not JSON", {
           excerpt: excerpt(response.text),
         });
       }
 
       const embedded = embeddedErrorMessage(parsed);
       if (embedded !== null) {
-        throw new ChatError("the provider returned an error object with HTTP 200", {
+        throw refuse("the provider returned an error object with HTTP 200", {
           excerpt: embedded,
         });
       }
 
       const answer = readAnswer(parsed);
       if (answer === null) {
-        throw new ChatError("the provider's response holds no choices[0].message", {
+        throw refuse("the provider's response holds no choices[0].message", {
           excerpt: excerpt(response.text),
         });
       }
@@ -194,37 +268,53 @@ export function createChat(config) {
         // A violation of the conversation's own wire format — repeated call
         // ids, absent names, non-string arguments — is a broken answer, not
         // one to hand to a loop that would have to guess at repairing it.
-        throw new ChatError(
-          `the provider's tool-call response violates the protocol: ${answer.defect}`,
-          {
-            excerpt: excerpt(response.text),
-          },
-        );
+        throw refuse(`the provider's tool-call response violates the protocol: ${answer.defect}`, {
+          excerpt: excerpt(response.text),
+        });
       }
 
       if (!offeringTools) {
         if (typeof answer.content !== "string") {
-          throw new ChatError("the provider's response holds no choices[0].message.content", {
+          throw refuse("the provider's response holds no choices[0].message.content", {
             excerpt: excerpt(response.text),
             kind: "unusable-answer",
           });
         }
-        return { content: answer.content, toolCalls: [], finishReason: answer.finishReason };
+        return {
+          content: answer.content,
+          toolCalls: [],
+          finishReason: answer.finishReason,
+          diagnostics: seen,
+        };
       }
 
       if (typeof answer.content !== "string" && answer.toolCalls.length === 0) {
-        throw new ChatError(
-          "the provider's response carries neither content nor well-formed tool calls",
-          { excerpt: excerpt(response.text), kind: "unusable-answer" },
-        );
+        throw refuse("the provider's response carries neither content nor well-formed tool calls", {
+          excerpt: excerpt(response.text),
+          kind: "unusable-answer",
+        });
       }
       return {
         content: answer.content ?? "",
         toolCalls: answer.toolCalls,
         finishReason: answer.finishReason,
+        diagnostics: seen,
       };
     },
   };
+}
+
+/**
+ * Attaches the call's diagnostics to an error, leaving its class, message and
+ * identity exactly as they were — a caller that reads the property learns the
+ * facts, and a caller that does not cannot tell the difference.
+ *
+ * @param {Error & { diagnostics?: ChatDiagnostics | undefined }} error
+ * @param {ChatDiagnostics} diagnostics
+ * @returns {void}
+ */
+function attachDiagnostics(error, diagnostics) {
+  error.diagnostics = diagnostics;
 }
 
 /**
