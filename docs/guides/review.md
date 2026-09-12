@@ -413,10 +413,11 @@ directory (never inside the workspace, which the checkout owns) — and
 that declares a record, a red run's refused or failed record included. A
 failed SARIF write is a logged loss that never disguises itself as success;
 a terminal that declares no record leaves `artifact-file` empty and logs
-that it did — and `refusal-class`, set to `model-output-unusable` only when
-refused because the provider's final answer held no JSON object on every
-attempt — the transient class a re-run recovers (#516) — and unset on every
-other terminal, green or red, so an empty value never reads as a lost record.
+that it did. The red boundary sets `refusal-class` to `model-output-unusable`
+only when the run was refused because the provider's final answer held no
+JSON object on every attempt — the transient class a re-run recovers
+(#516) — and leaves it unset on every other terminal, green or red, so an
+empty value never reads as a lost record.
 
 **Merge enforcement**: review declares none
 ([ADR 006](../adr/006-code-scanning-merge-enforcement.md)) — there is no
