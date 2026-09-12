@@ -449,11 +449,15 @@ the bare and the applicability families, every shape, every byte. The gate
 couples to the family, never to the input: a conditional gate row is
 unimplementable against the frozen-table law (I11), and a `passed: true`
 for an unrun gate would be a missing fact reading as a pass. The family's
-schemaVersion stamp is deliberately not frozen by this amendment: the
-design record names it v6, a number the applicability family already
-holds, and two families may not share a stamp — the stamp is decided above
-both of today's numbers, with the design record corrected, before the code
-that emits it.
+schemaVersion stamps are frozen at 7 bare, 8 with an applicability fact,
+decided above both of today's numbers with the design record corrected
+(#533), ahead of the code that emits it. The grounds are the lockstep law
+of `review/src/artifact.mjs`: the bare and applicability constants stamp
+the same artifact in two conditions — one numbering space, so no number
+may mean two shapes — and a 6 for the aware bare family would collide with
+today's blind-plus-applicability 6; the next free number is 7, and the
+lockstep pushes the aware applicability stamp to 8. Architecture-blind
+runs stay byte-identical on today's 5 and 6.
 
 The gate predicate: the `architecture` gate passes iff
 **evidence-established** — verdict ∈ {pass, fail} ∧ head pinned ∧ not

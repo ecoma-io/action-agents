@@ -347,8 +347,8 @@ config-file byte-cap precedent — one lane, not a third).
   strictly additive-when-present: blind runs stay byte-identical, and the
   floor never bypasses the bound gate — deep lanes consume reading budget
   like any lane; a bound-gate interaction test is in P3's exit criteria.
-- **Artifact section** — schemaVersion-family bump, additive: the v6
-  family carries the `architecture` block (basis: report digest over raw
+- **Artifact section** — schemaVersion-family bump, additive: the 7/8
+  aware family carries the `architecture` block (basis: report digest over raw
   bytes, baseline digest, tool version, both commits, both policy
   fingerprints; verdict; stale flag; bounded facts). Retention (new
   [ADR 003](../adr/003-evidence-retention.md) row): **persist** the
@@ -362,11 +362,13 @@ config-file byte-cap precedent — one lane, not a third).
   enforces exact length and order — a conditional row is unimplementable,
   and a `passed: true` for an unrun gate would violate I11's "a missing
   fact is never a pass". The implementable shape follows the v5→v6
-  precedent: architecture-blind runs emit the v5 family byte-identically
-  to today; architecture-aware runs emit a **v6 family** — six-gate table
-  with `architecture` appended after `verification` — carrying the
-  architecture section. Reconciliation accepts v5 and v6 comment-embedded
-  records side by side.
+  precedent's lockstep law (`review/src/artifact.mjs`):
+  architecture-blind runs keep today's stamps byte-identical — 5 bare, 6
+  with an applicability fact; architecture-aware runs stamp **7 bare, 8
+  with an applicability fact** — six-gate table with `architecture`
+  appended after `verification` — carrying the architecture section.
+  Reconciliation accepts the 5/6 and 7/8 comment-embedded records side by
+  side.
 - **Gate predicate (verbatim, lands in the run contract with P0)**: the
   `architecture` gate passes iff **evidence-established** — verdict ∈
   {pass, fail} ∧ head pinned ∧ not stale. Never `verdict === pass`:
@@ -550,8 +552,9 @@ write-back API is used or proposed (§9).
 Each phase is its own issue + branch + draft pull request; contract and
 ADR edits land with the code they govern.
 
-- **P0 — contracts first (docs only).** Run-contract amendment: the v6
-  record family (six-gate table, `architecture` after `verification`),
+- **P0 — contracts first (docs only).** Run-contract amendment: the 7/8
+  aware record family (six-gate table, `architecture` after
+  `verification`),
   the gate predicate verbatim, the reason taxonomy (`stale` /
   `incomplete` / `absent-though-configured`, + architecture-blind), the
   cross-run waiver-time sentence, F-class mappings, and the five recipe
@@ -582,7 +585,7 @@ ADR edits land with the code they govern.
   unresolvable-never-findings. Exit: all eleven states of §7
   distinguishable in records and comment.
 - **P3 — review flagship, and dogfood begins.** Prompt grounding + ADR
-  context via policyReader + risk/lanes grounding + artifact v6 family +
+  context via policyReader + risk/lanes grounding + artifact 7/8 family +
   declared gate + comment rendering + corpus scenarios + the adversarial
   security fixtures. Dogfood starts here, not at P6: the recipe runs on
   this repository's own pull requests first (the merge-preview risk is
@@ -742,7 +745,7 @@ folded into this page:
 2. **Artifact section: bounded normalized facts + raw-byte digests —
    sustained**, with the retention split of §6.3.
 3. **Gate verdict law: evidence-established, never `verdict === pass` —
-   sustained**, mechanics corrected to the v6/v5 family shape (a
+   sustained**, mechanics corrected to the 7/8-over-5/6 family shape (a
    conditional row is unimplementable against the frozen gate-table
    law).
 4. **P4 triage workspace reads: a deliberate posture change, not a plan

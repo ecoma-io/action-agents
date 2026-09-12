@@ -76,11 +76,13 @@ new word before code spells it (#529).
 - The design record's eleven architecture states stay distinct in records
   and comment — none silently merged into pass/fail; the action records,
   the consumer's gate enforces.
-- The architecture family's schemaVersion stamp is deliberately not frozen
-  by P0: the design record names it v6, a number the applicability family
-  already holds, and two families may not share a stamp — the stamp is
-  decided, with the design record corrected, before the code that emits
-  it.
+- The architecture family's schemaVersion stamps are frozen at 7 bare, 8
+  with an applicability fact (#533); architecture-blind runs keep today's
+  5 and 6 byte-identically. Grounds: the lockstep law of
+  `review/src/artifact.mjs` — the bare and applicability constants stamp
+  the same artifact in two conditions, one numbering space, so no number
+  may mean two shapes — with the design record corrected to the same
+  numbers.
 
 ## Landing
 
