@@ -26,6 +26,8 @@
  * default is invented for it.
  */
 
+import { oneLine } from "#core/one-line.mjs";
+
 import { findingIdentity, SEVERITIES } from "./answer.mjs";
 import {
   APPLICABILITY_BASES,
@@ -35,7 +37,7 @@ import {
   POSTURES,
   STRICTNESS_ARMS,
 } from "./applicability.mjs";
-import { GATES } from "./gates.mjs";
+import { ARCHITECTURE_GATES, GATES, architectureEvidenceEstablished } from "./gates.mjs";
 import { PHASES } from "./phases.mjs";
 import { FINDING_KINDS, STRATEGY } from "./vocabulary.mjs";
 import { VERDICTS } from "./verify.mjs";
@@ -64,6 +66,36 @@ export const reviewArtifactSchemaVersion = 5;
  * never be mistaken for one of the new bare-family shapes.
  */
 export const applicabilityArtifactSchemaVersion = 6;
+
+/**
+ * The artifact schema an architecture-aware run emits — one whose frozen evidence the record
+ * carries (#529, frozen at 7/8 ahead of this code by #533). The same lockstep law, one numbering
+ * space: the aware family sits above both of today's numbers so no number ever means two shapes,
+ * and the two conditions — bare, and with an applicability fact — move together, 7 and 8. The
+ * family is defined by what it carries: the architecture section, and (in the full shape) a
+ * six-gate table with `architecture` appended after `verification`. Reduced shapes that carry no
+ * architecture section — skips, abandonments, dry runs, and a red terminal whose run died before
+ * the evidence read — keep their existing stamps exactly; a red terminal whose run held evidence
+ * carries the section and joins this family.
+ */
+export const architectureArtifactSchemaVersion = 7;
+
+/** The architecture family's stamp once the run also records an applicability fact. */
+export const architectureApplicabilityArtifactSchemaVersion = 8;
+
+/**
+ * How many identity items each architecture detail list keeps — the retention row's fingerprint
+ * class: identity and count persist, and the count stays exact, so a truncated list is disclosure
+ * capped, never arithmetic changed. The full detail list rides the workflow artifact the report
+ * digest names.
+ */
+export const MAX_ARCHITECTURE_IDENTITY_ITEMS = 32;
+
+/** The documented cap one architecture identity field carries after flattening — a rule id, a project name. */
+export const ARCHITECTURE_IDENTITY_CHARS = 200;
+
+/** The documented cap one architecture target field carries after flattening — targets are paths, longer than names. */
+export const ARCHITECTURE_TARGET_CHARS = 400;
 
 /** @typedef {import("./risk.mjs").RiskLevel} RiskLevel */
 /** @typedef {import("./lanes.mjs").AttentionLane} AttentionLane */
@@ -133,6 +165,19 @@ const EMPTY_SET = new Set();
 const ARTIFACT_KEYS = new Set(["schemaVersion", ...FACTS_KEYS]);
 const FACTS_KEYS_WITH_APPLICABILITY = new Set([...FACTS_KEYS, "applicability"]);
 const APPLICABILITY_ARTIFACT_KEYS = new Set([...ARTIFACT_KEYS, "applicability"]);
+const FACTS_KEYS_WITH_ARCHITECTURE = new Set([...FACTS_KEYS, "architecture"]);
+const FACTS_KEYS_WITH_ARCHITECTURE_AND_APPLICABILITY = new Set([
+  ...FACTS_KEYS,
+  "architecture",
+  "applicability",
+]);
+/** The exact key set the architecture family's full bare shape serialises with. */
+const ARCHITECTURE_ARTIFACT_KEYS = new Set([...ARTIFACT_KEYS, "architecture"]);
+/** The exact key set the architecture family's full shape with an applicability fact serialises with. */
+const ARCHITECTURE_APPLICABILITY_ARTIFACT_KEYS = new Set([
+  ...APPLICABILITY_ARTIFACT_KEYS,
+  "architecture",
+]);
 const SKIPPED_ARTIFACT_KEYS = new Set([
   "schemaVersion",
   "repository",
@@ -249,6 +294,46 @@ const RED_FULL_KEYS = new Set([
   "provenance",
   "applicability",
 ]);
+/** The exact key set a red-terminal artifact carrying the architecture section the run held when it died — the outage record's shape. */
+const RED_WITH_ARCHITECTURE_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "architecture",
+]);
+/** Red, architecture and a comment that landed before the run died red. */
+const RED_ARCHITECTURE_WITH_PROVENANCE_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "provenance",
+  "architecture",
+]);
+/** Red, architecture and the applicability context a classified run derived before it died. */
+const RED_ARCHITECTURE_WITH_APPLICABILITY_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "applicability",
+  "architecture",
+]);
+/** Red with architecture, provenance and applicability — everything a classified, commenting, evidence-holding run had when it died. */
+const RED_ARCHITECTURE_FULL_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "pullRequest",
+  "headRef",
+  "outcome",
+  "provenance",
+  "applicability",
+  "architecture",
+]);
 const APPLICABILITY_SECTION_KEYS = new Set([
   "context",
   "applicable",
@@ -261,6 +346,56 @@ const APPLICABILITY_SECTION_KEYS = new Set([
 const APPLICABILITY_INPUT_KEYS = new Set(["association", "head", "authorType"]);
 /** The intensity section's one legal delta key. */
 const INTENSITY_KEYS = new Set(["strictness"]);
+/** The architecture section's exact key set — the retention row's shape ([ADR 003](../../docs/adr/003-evidence-retention.md)). */
+const ARCHITECTURE_SECTION_KEYS = new Set([
+  "verdict",
+  "stale",
+  "unknownReason",
+  "coverage",
+  "policyChanged",
+  "toolVersion",
+  "reportDigest",
+  "provenance",
+  "policyFingerprints",
+  "counts",
+  "introduced",
+  "resolved",
+  "renamePairs",
+  "customRules",
+  "occurrencesReduced",
+]);
+const ARCHITECTURE_COVERAGE_KEYS = new Set([
+  "complete",
+  "analyzedFiles",
+  "notAnalyzedCount",
+  "blindSpotCount",
+]);
+const ARCHITECTURE_SIDE_KEYS = new Set(["commit"]);
+const ARCHITECTURE_PROVENANCE_KEYS = new Set(["head", "base"]);
+const ARCHITECTURE_FINGERPRINTS_KEYS = new Set(["head", "base"]);
+const ARCHITECTURE_COUNTS_KEYS = new Set([
+  "introduced",
+  "introducedWaived",
+  "resolved",
+  "unchanged",
+  "unresolvable",
+]);
+const ARCHITECTURE_INTRODUCED_KEYS = new Set([
+  "messageId",
+  "sourceProject",
+  "target",
+  "waived",
+  "headCount",
+  "decisionRef",
+]);
+const ARCHITECTURE_RESOLVED_KEYS = new Set(["messageId", "sourceProject", "target"]);
+const ARCHITECTURE_RENAME_KEYS = new Set(["messageId", "from", "to"]);
+const ARCHITECTURE_CUSTOM_KEYS = new Set(["findings"]);
+const ARCHITECTURE_CUSTOM_BUCKET_KEYS = new Set(["count", "ruleIds"]);
+const ARCHITECTURE_VERDICTS = /** @type {const} */ (["pass", "fail", "unknown"]);
+const ARCHITECTURE_UNKNOWN_REASONS = /** @type {const} */ (["stale", "incomplete"]);
+/** How many rule ids one custom-rule bucket's identity list keeps — the reader already capped it; the section keeps the cap honest. */
+const MAX_ARCHITECTURE_RULE_IDS = 16;
 /** A full-shape artifact describes a run that happened; a state skip never enters it. */
 const FULL_SHAPE_BASES = /** @type {const} */ (["rule", "default"]);
 /** The bases a skipped run can carry — the defaults decided nothing. */
@@ -413,11 +548,12 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * @property {string} headRef the reviewed head commit, full 40 hex chars
  * @property {RunOutcome} outcome
  * @property {ApplicabilitySection} [applicability] the applicability fact when the policy is on
+ * @property {ArchitectureSection} [architecture] the retention-shaped architecture record when the run held evidence — selects the 7/8 family and the six-gate table
  * @property {RunPolicy} policy
  * @property {RiskRow[]} risk the per-file risk table, byte-wise sorted by path
  * @property {ArtifactFinding[]} findings the publication set, every finding anchored
  * @property {RunVerificationFacts} verification the verification gate's outcome — verdicts derive from the findings
- * @property {import("./gates.mjs").GateResult[]} gates every declared gate's result, in the declared order
+ * @property {import("./gates.mjs").GateResult[]} gates every declared gate's result, in the declared order — the architecture family's six, when the section is present
  * @property {CoverageSummary} coverage
  * @property {PhaseLogEntry[]} phases the transitions the loop logged, in order
  * @property {Provenance} provenance where the run's other records live
@@ -489,6 +625,33 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  */
 
 /**
+ * The architecture evidence's retention-shaped record — what [ADR 003](../../docs/adr/003-evidence-retention.md)
+ * says the artifact may keep of the report: the decision basis persists (verdict,
+ * stale flag, digests, commits, fingerprints, counts, `policyChanged`), the
+ * detail lists persist as identity and count (the full site lists ride the
+ * workflow artifact the report digest names), and no model text exists to
+ * keep. Every field is a fact the frozen reader established; producer-derived
+ * strings arrive flattened and capped by the section builder, never raw.
+ *
+ * @typedef {object} ArchitectureSection
+ * @property {"pass" | "fail" | "unknown"} verdict the reader's recorded verdict — stale and incomplete runs record `unknown`
+ * @property {boolean} stale whether the head provenance failed to pin to the reviewed head
+ * @property {"stale" | "incomplete" | null} unknownReason why an `unknown` verdict is not a judgement — null when the verdict was established
+ * @property {{ complete: boolean, analyzedFiles: number, notAnalyzedCount: number, blindSpotCount: number }} coverage counts beside the verdict, so a `fail` is never mistaken for fully read
+ * @property {boolean | null} policyChanged whether the two sides' policy fingerprints differ — null when never assessed
+ * @property {string | null} toolVersion the Archkeep version the envelope names
+ * @property {string | null} reportDigest sha256 over the raw report bytes — the workflow artifact's name
+ * @property {{ head: { commit: string | null }, base: { commit: string | null } }} provenance both sides of the compare
+ * @property {{ head: string | null, base: string | null }} policyFingerprints both sides' policy fingerprints
+ * @property {{ introduced: number, introducedWaived: number, resolved: number, unchanged: number, unresolvable: { introduced: number, resolved: number, unchanged: number, unknown: number } }} counts the exact bucket arithmetic — never netted, never truncated
+ * @property {{ messageId: string | null, sourceProject: string | null, target: string | null, waived: boolean, headCount: number, decisionRef: string | null }[]} introduced identity and count per introduced item, capped at {@link MAX_ARCHITECTURE_IDENTITY_ITEMS} — `decisionRef` is the constraint row's cited record when it carries one, the one field that tells an intentional evolution from a plain violation
+ * @property {{ messageId: string | null, sourceProject: string | null, target: string | null }[]} resolved identity per resolved item, capped the same way
+ * @property {{ messageId: string | null, from: string | null, to: string | null }[]} renamePairs each derived move — one item, both names; the wash this fact exists to prevent
+ * @property {{ findings: { introduced: { count: number, ruleIds: string[] }, resolved: { count: number, ruleIds: string[] }, unchanged: { count: number, ruleIds: string[] }, unknown: { count: number, ruleIds: string[] } } } | null} customRules per-bucket counts and rule ids — null when the envelope declared none
+ * @property {number} occurrencesReduced how many unchanged entries shrank without resolving
+ */
+
+/**
  * The reduced artifact a skipped run writes — the record IS the run's whole
  * outcome, so it names the skip and the applicability fact that decided it,
  * and the policy pin so a stale record is detectable. No risk, findings or
@@ -528,6 +691,12 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
 
 /** The full artifact shape, carrying an applicability fact. */
 /** @typedef {PublishedArtifactBody & { schemaVersion: typeof applicabilityArtifactSchemaVersion, applicability: ApplicabilitySection }} RunArtifactWithApplicability */
+
+/** The architecture family's full bare shape — six-gate table, architecture section, no applicability fact. */
+/** @typedef {PublishedArtifactBody & { schemaVersion: typeof architectureArtifactSchemaVersion, architecture: ArchitectureSection }} ArchitectureRunArtifact */
+
+/** The architecture family's full shape with an applicability fact. */
+/** @typedef {PublishedArtifactBody & { schemaVersion: typeof architectureApplicabilityArtifactSchemaVersion, architecture: ArchitectureSection, applicability: ApplicabilitySection }} ArchitectureRunArtifactWithApplicability */
 
 /** The full-shape artifact, with or without an applicability fact. */
 /** @typedef {RunArtifact | RunArtifactWithApplicability} PublishedRunArtifact */
@@ -573,17 +742,18 @@ const SKIPPED_SHAPE_BASES = /** @type {const} */ (["rule", "state"]);
  * sections serve never reached a terminal point.
  *
  * @typedef {object} RedRunArtifact
- * @property {typeof reviewArtifactSchemaVersion} schemaVersion
+ * @property {typeof reviewArtifactSchemaVersion | typeof architectureArtifactSchemaVersion | typeof architectureApplicabilityArtifactSchemaVersion} schemaVersion — 5 for the blind shapes, 7/8 when the record carries the architecture section the run held when it died
  * @property {string} repository
  * @property {number} pullRequest
  * @property {string | null} headRef the head the run pinned to, or null before the snapshot read
  * @property {{ classification: "refused" | "failed", reason: string }} outcome the classification the throw's class decided; the reason is sanitised and capped at the build site — the one review reason that interpolates a thrown message
  * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability fact's context, when the policy was active
  * @property {{ commentId?: number }} [provenance] the comment identity when one landed before the run died red — a `failed` record's shape only; a `refused` record never names a comment
+ * @property {ArchitectureSection} [architecture] the retention-shaped architecture record, when the evidence read completed before the run died red — the outage rule: evidence lands in the red record too
  */
 
 /** Every serialisable shape this module emits. */
-/** @typedef {PublishedRunArtifact | SkippedRunArtifact | SkipRecord | AbandonedRunArtifact | DryRunRunArtifact | RedRunArtifact} AnyRunArtifact */
+/** @typedef {PublishedRunArtifact | ArchitectureRunArtifact | ArchitectureRunArtifactWithApplicability | SkippedRunArtifact | SkipRecord | AbandonedRunArtifact | DryRunRunArtifact | RedRunArtifact} AnyRunArtifact */
 
 /**
  * The typed refusal. Every refusal this module raises is one of these, so a
@@ -818,10 +988,17 @@ function asGateOutcome(v, label) {
 export function buildArtifact(runFacts) {
   const facts = asRecord(runFacts, "run facts");
   const hasApplicability = "applicability" in facts;
+  const hasArchitecture = "architecture" in facts;
   assertExactKeys(
     facts,
     "run facts",
-    hasApplicability ? FACTS_KEYS_WITH_APPLICABILITY : FACTS_KEYS,
+    hasArchitecture && hasApplicability
+      ? FACTS_KEYS_WITH_ARCHITECTURE_AND_APPLICABILITY
+      : hasArchitecture
+        ? FACTS_KEYS_WITH_ARCHITECTURE
+        : hasApplicability
+          ? FACTS_KEYS_WITH_APPLICABILITY
+          : FACTS_KEYS,
   );
 
   const repository = asNonEmptyString(facts.repository, "run facts.repository");
@@ -1006,11 +1183,15 @@ export function buildArtifact(runFacts) {
 
   // The gate table: every declared gate, in the declared order, no gate
   // silent. A missing gate, an extra one or a reordered one is a code bug,
-  // not a shorter table.
+  // not a shorter table. The declared set is the family's: the architecture
+  // section the facts carry selects the six-gate table — the gate couples to
+  // the family, never to the input, so an architecture-aware run's table
+  // always holds all six and a blind run's always the five.
+  const declared = hasArchitecture ? ARCHITECTURE_GATES : GATES;
   const gatesRaw = asArray(facts.gates, "run facts.gates");
-  if (gatesRaw.length !== GATES.length) {
+  if (gatesRaw.length !== declared.length) {
     throw new ArtifactError(
-      `run facts.gates holds ${String(gatesRaw.length)} entries, the declared set is ${String(GATES.length)} — refused`,
+      `run facts.gates holds ${String(gatesRaw.length)} entries, the declared set is ${String(declared.length)} — refused`,
     );
   }
   /** @type {import("./gates.mjs").GateResult[]} */
@@ -1023,8 +1204,8 @@ export function buildArtifact(runFacts) {
     const label = `run facts.gates[${String(i)}]`;
     const entry = asRecord(raw, label);
     assertExactKeys(entry, label, GATE_RESULT_KEYS, GATE_RESULT_MANDATORY);
-    const gate = asEnum(entry.gate, GATES, `${label}.gate`);
-    const expected = /** @type {GateName} */ (GATES[i]);
+    const gate = asEnum(entry.gate, declared, `${label}.gate`);
+    const expected = /** @type {GateName} */ (declared[i]);
     if (gate !== expected) {
       throw new ArtifactError(
         `run facts.gates[${String(i)}] is '${gate}', the declared order puts '${expected}' there — refused`,
@@ -1059,6 +1240,33 @@ export function buildArtifact(runFacts) {
     throw new ArtifactError(
       "run facts.verification.gate disagrees with the verification entry in the gate table — refused",
     );
+  }
+
+  // The architecture section, validated here so a malformed section refuses
+  // the artifact before anything publishes — and its gate entry must agree
+  // with the facts the section itself records: the predicate is a function
+  // of the recorded basis, never an independent opinion.
+  const architecture = hasArchitecture
+    ? asArchitectureSection(facts.architecture, "run facts.architecture")
+    : undefined;
+  if (architecture !== undefined) {
+    const tableArchitecture = gatesOut.find((result) => result.gate === "architecture");
+    if (tableArchitecture === undefined) {
+      throw new ArtifactError("run facts.gates has no architecture entry — refused");
+    }
+    if (
+      tableArchitecture.passed !==
+      architectureEvidenceEstablished({
+        verdict: architecture.verdict,
+        stale: architecture.stale,
+        pinnedHead: architecture.provenance.head.commit,
+        headSha: headRef,
+      })
+    ) {
+      throw new ArtifactError(
+        "run facts.gates' architecture entry disagrees with the section the artifact records — refused",
+      );
+    }
   }
 
   // Verdicts derive from the findings themselves, so the ledger cannot
@@ -1138,6 +1346,7 @@ export function buildArtifact(runFacts) {
     headRef,
     outcome: { classification, reason },
     policy: { strictness, strategy, basis: policyBasis, branch: policyBranch, sha: policySha },
+    ...(architecture !== undefined ? { architecture } : {}),
     risk: riskRows,
     findings: findingsOut,
     verification: { gate: verificationGate, verdicts: verdictsOut },
@@ -1147,13 +1356,24 @@ export function buildArtifact(runFacts) {
     provenance,
   };
   const artifact =
-    applicability !== undefined
+    architecture === undefined && applicability !== undefined
       ? /** @type {RunArtifactWithApplicability} */ ({
           ...base,
           schemaVersion: applicabilityArtifactSchemaVersion,
           applicability,
         })
-      : base;
+      : architecture !== undefined && applicability === undefined
+        ? /** @type {ArchitectureRunArtifact} */ ({
+            ...base,
+            schemaVersion: architectureArtifactSchemaVersion,
+          })
+        : architecture !== undefined && applicability !== undefined
+          ? /** @type {ArchitectureRunArtifactWithApplicability} */ ({
+              ...base,
+              schemaVersion: architectureApplicabilityArtifactSchemaVersion,
+              applicability,
+            })
+          : base;
   return deepFreeze(/** @type {RunArtifact} */ (artifact));
 }
 
@@ -1188,6 +1408,149 @@ export function applicabilitySection({
     APPLICABILITY_BASES,
     false,
   );
+}
+
+/**
+ * Reduces the frozen evidence into the retention-shaped architecture section
+ * — the one constructor a run's records share, so the artifact, the comment's
+ * embedded record and the run result all name the same facts by construction.
+ * The reduction is total over evidence the reader froze: producer-derived
+ * strings are flattened and capped here (identity fields at their documented
+ * caps, control characters gone, one line), never refused — the evidence
+ * itself is already validated, and a record field that cannot carry a
+ * producer's over-long name truncates deterministically while the counts stay
+ * exact. The detail lists keep at most {@link MAX_ARCHITECTURE_IDENTITY_ITEMS}
+ * identity items; the exact arithmetic rides `counts`, and the full detail
+ * lives in the workflow artifact `reportDigest` names.
+ *
+ * @param {import("#core/architecture.mjs").ArchitectureEvidence} evidence the frozen reader's output
+ * @returns {ArchitectureSection}
+ */
+export function architectureSection(evidence) {
+  return asArchitectureSection(
+    {
+      verdict: evidence.verdict,
+      stale: evidence.stale,
+      unknownReason: evidence.incompleteness === null ? null : evidence.incompleteness.reason,
+      coverage: {
+        complete: evidence.coverage.complete,
+        analyzedFiles: evidence.coverage.analyzedFiles,
+        notAnalyzedCount: evidence.coverage.notAnalyzedCount,
+        blindSpotCount: evidence.coverage.blindSpotCount,
+      },
+      policyChanged: evidence.policyChanged,
+      toolVersion: boundedFact(evidence.toolVersion, ARCHITECTURE_IDENTITY_CHARS),
+      reportDigest: evidence.reportSha256,
+      provenance: {
+        head: { commit: evidence.provenance.head.commit },
+        base: { commit: evidence.provenance.base.commit },
+      },
+      policyFingerprints: {
+        head: boundedFact(evidence.policyFingerprints.head, ARCHITECTURE_TARGET_CHARS),
+        base: boundedFact(evidence.policyFingerprints.base, ARCHITECTURE_TARGET_CHARS),
+      },
+      counts: {
+        introduced: evidence.introduced.length,
+        introducedWaived: evidence.introducedWaived,
+        resolved: evidence.resolved.length,
+        unchanged: evidence.unchangedCount,
+        unresolvable: { ...evidence.unresolvable },
+      },
+      introduced: evidence.introduced.slice(0, MAX_ARCHITECTURE_IDENTITY_ITEMS).map((item) => ({
+        messageId: boundedFact(item.messageId, ARCHITECTURE_IDENTITY_CHARS),
+        sourceProject: boundedFact(item.sourceProject, ARCHITECTURE_IDENTITY_CHARS),
+        target: boundedFact(item.target, ARCHITECTURE_TARGET_CHARS),
+        waived: item.waived,
+        headCount: item.headCount,
+        decisionRef: constraintDecisionRef(item.constraint),
+      })),
+      resolved: evidence.resolved.slice(0, MAX_ARCHITECTURE_IDENTITY_ITEMS).map((item) => ({
+        messageId: boundedFact(item.messageId, ARCHITECTURE_IDENTITY_CHARS),
+        sourceProject: boundedFact(item.sourceProject, ARCHITECTURE_IDENTITY_CHARS),
+        target: boundedFact(item.target, ARCHITECTURE_TARGET_CHARS),
+      })),
+      renamePairs: evidence.renamePairs.map((pair) => ({
+        messageId: boundedFact(pair.introduced.messageId, ARCHITECTURE_IDENTITY_CHARS),
+        from: boundedFact(renameSide(pair, "from"), ARCHITECTURE_IDENTITY_CHARS),
+        to: boundedFact(renameSide(pair, "to"), ARCHITECTURE_IDENTITY_CHARS),
+      })),
+      customRules:
+        evidence.customRules === null
+          ? null
+          : {
+              findings: {
+                introduced: customBucketFacts(evidence.customRules.findings.introduced),
+                resolved: customBucketFacts(evidence.customRules.findings.resolved),
+                unchanged: customBucketFacts(evidence.customRules.findings.unchanged),
+                unknown: customBucketFacts(evidence.customRules.findings.unknown),
+              },
+            },
+      occurrencesReduced: evidence.occurrencesReduced.length,
+    },
+    "architecture section",
+  );
+}
+
+/**
+ * One producer fact flattened to a bounded line — null passes through as the
+ * honest absence the evidence records, and everything else loses its control
+ * characters and its excess length deterministically.
+ *
+ * @param {string | null} value
+ * @param {number} cap
+ * @returns {string | null}
+ */
+function boundedFact(value, cap) {
+  if (value === null) return null;
+  return oneLine(value, { maxChars: cap, stripControlChars: true });
+}
+
+/**
+ * The record a constraint row cites for its exception — the field that tells
+ * an intentional evolution from a plain violation. The row is producer bytes
+ * carried verbatim by the evidence, so only a string-shaped ref persists,
+ * flattened and capped like every identity field; anything else records as
+ * the honest absence rather than a coerced string.
+ *
+ * @param {import("#core/architecture.mjs").ConstraintRow} constraint
+ * @returns {string | null}
+ */
+function constraintDecisionRef(constraint) {
+  if (constraint === null) return null;
+  const ref = constraint["decisionRef"];
+  if (typeof ref !== "string" || ref.length === 0) return null;
+  return oneLine(ref, { maxChars: ARCHITECTURE_IDENTITY_CHARS, stripControlChars: true });
+}
+
+/**
+ * The name a rename pair moved between — the one project-identity field the
+ * two sides differ in, whichever it is. The pairing is the reader's derived
+ * fact; this only reads the differing field back out.
+ *
+ * @param {import("#core/architecture.mjs").RenamePair} pair
+ * @param {"from" | "to"} side
+ * @returns {string | null}
+ */
+function renameSide(pair, side) {
+  if (pair.introduced.sourceProject !== pair.resolved.sourceProject) {
+    return side === "from" ? pair.resolved.sourceProject : pair.introduced.sourceProject;
+  }
+  return side === "from" ? pair.resolved.target : pair.introduced.target;
+}
+
+/**
+ * @param {import("#core/architecture.mjs").CustomRuleBucketFacts} bucket
+ * @returns {{ count: number, ruleIds: string[] }}
+ */
+function customBucketFacts(bucket) {
+  return {
+    count: bucket.count,
+    ruleIds: bucket.ruleIds
+      .slice(0, MAX_ARCHITECTURE_RULE_IDS)
+      .map((rule) =>
+        oneLine(rule, { maxChars: ARCHITECTURE_IDENTITY_CHARS, stripControlChars: true }),
+      ),
+  };
 }
 
 /**
@@ -1430,6 +1793,7 @@ export function buildDryRunArtifact({ repository, pullRequest, headRef, reason, 
  * @param {string} red.reason the thrown error's sentence, sanitised and capped at the build site
  * @param {number} [red.commentId] the comment's id, when one landed before the run died red — refused outright on a `refused` classification
  * @param {import("./applicability.mjs").ExecutionContext} [red.applicability] the applicability context, when the classification ran
+ * @param {ArchitectureSection} [red.architecture] the retention-shaped architecture record, when the evidence read completed before the run died — the outage rule: evidence lands in the red record too, and the record joins the 7/8 family
  * @throws {ArtifactError} on any malformed field
  * @returns {RedRunArtifact}
  */
@@ -1441,6 +1805,7 @@ export function buildRedArtifact({
   reason,
   commentId,
   applicability,
+  architecture,
 }) {
   const repo = asNonEmptyString(repository, "red run.repository");
   const number = asPositiveInt(pullRequest, "red run.pullRequest");
@@ -1469,15 +1834,341 @@ export function buildRedArtifact({
     applicability !== undefined
       ? asEnum(applicability, EXECUTION_CONTEXTS, "red run.applicability")
       : undefined;
+  const section =
+    architecture !== undefined
+      ? asArchitectureSection(architecture, "red run.architecture")
+      : undefined;
   return deepFreeze({
-    schemaVersion: reviewArtifactSchemaVersion,
+    schemaVersion:
+      section === undefined
+        ? reviewArtifactSchemaVersion
+        : context === undefined
+          ? architectureArtifactSchemaVersion
+          : architectureApplicabilityArtifactSchemaVersion,
     repository: repo,
     pullRequest: number,
     headRef,
     outcome: { classification, reason: sentence },
     ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
     ...(context !== undefined ? { applicability: context } : {}),
+    ...(section !== undefined ? { architecture: section } : {}),
   });
+}
+
+/**
+ * Validates one architecture section, fail-closed: exact keys, closed
+ * vocabularies, digests in the one spelling this module knows, counts as
+ * non-negative integers, identity fields inside their documented caps. The
+ * coherence law the section carries: an established verdict (`pass` or
+ * `fail`) never rides beside an unknown reason, and an `unknown` verdict
+ * records which kind of unknown it is — a fact the section states or it
+ * states nothing.
+ *
+ * @param {unknown} v
+ * @param {string} label
+ * @returns {ArchitectureSection}
+ */
+export function asArchitectureSection(v, label) {
+  const section = asRecord(v, label);
+  assertExactKeys(section, label, ARCHITECTURE_SECTION_KEYS);
+  const verdict = asEnum(section.verdict, ARCHITECTURE_VERDICTS, `${label}.verdict`);
+  const stale = asBoolean(section.stale, `${label}.stale`);
+  let unknownReason = null;
+  if (section.unknownReason !== null) {
+    unknownReason = asEnum(
+      section.unknownReason,
+      ARCHITECTURE_UNKNOWN_REASONS,
+      `${label}.unknownReason`,
+    );
+  }
+  if (verdict !== "unknown" && unknownReason !== null) {
+    throw new ArtifactError(
+      `${label} records verdict '${verdict}' beside an unknown reason — an established verdict explains nothing — refused`,
+    );
+  }
+  if (verdict === "unknown" && unknownReason === null) {
+    throw new ArtifactError(
+      `${label} records verdict 'unknown' without saying which kind — stale or incomplete — refused`,
+    );
+  }
+
+  const coverageRec = asRecord(section.coverage, `${label}.coverage`);
+  assertExactKeys(coverageRec, `${label}.coverage`, ARCHITECTURE_COVERAGE_KEYS);
+  const coverage = {
+    complete: asBoolean(coverageRec.complete, `${label}.coverage.complete`),
+    analyzedFiles: asNonNegInt(coverageRec.analyzedFiles, `${label}.coverage.analyzedFiles`),
+    notAnalyzedCount: asNonNegInt(
+      coverageRec.notAnalyzedCount,
+      `${label}.coverage.notAnalyzedCount`,
+    ),
+    blindSpotCount: asNonNegInt(coverageRec.blindSpotCount, `${label}.coverage.blindSpotCount`),
+  };
+
+  if (section.policyChanged !== null && typeof section.policyChanged !== "boolean") {
+    throw new ArtifactError(`${label}.policyChanged must be a boolean or null — refused`);
+  }
+  const policyChanged = /** @type {boolean | null} */ (section.policyChanged);
+
+  let toolVersion = null;
+  if (section.toolVersion !== null) {
+    toolVersion = asProducerString(
+      section.toolVersion,
+      `${label}.toolVersion`,
+      ARCHITECTURE_IDENTITY_CHARS,
+    );
+  }
+
+  let reportDigest = null;
+  if (section.reportDigest !== null) {
+    reportDigest = asNonEmptyString(section.reportDigest, `${label}.reportDigest`);
+    if (!isDigest(reportDigest)) {
+      throw new ArtifactError(
+        `${label}.reportDigest is not a well-formed sha256 hex string — refused`,
+      );
+    }
+  }
+
+  const provenanceRec = asRecord(section.provenance, `${label}.provenance`);
+  assertExactKeys(provenanceRec, `${label}.provenance`, ARCHITECTURE_PROVENANCE_KEYS);
+  const provenance = {
+    head: asArchitectureSide(provenanceRec.head, `${label}.provenance.head`),
+    base: asArchitectureSide(provenanceRec.base, `${label}.provenance.base`),
+  };
+
+  const fingerprintsRec = asRecord(section.policyFingerprints, `${label}.policyFingerprints`);
+  assertExactKeys(fingerprintsRec, `${label}.policyFingerprints`, ARCHITECTURE_FINGERPRINTS_KEYS);
+  /**
+   * @param {"head" | "base"} side
+   * @returns {string | null}
+   */
+  const fingerprint = (side) => {
+    const value = fingerprintsRec[side];
+    if (value === null) return null;
+    return asProducerString(
+      value,
+      `${label}.policyFingerprints.${side}`,
+      ARCHITECTURE_TARGET_CHARS,
+    );
+  };
+  const policyFingerprints = { head: fingerprint("head"), base: fingerprint("base") };
+
+  const countsRec = asRecord(section.counts, `${label}.counts`);
+  assertExactKeys(countsRec, `${label}.counts`, ARCHITECTURE_COUNTS_KEYS);
+  const unresolvableRec = asRecord(countsRec.unresolvable, `${label}.counts.unresolvable`);
+  assertExactKeys(
+    unresolvableRec,
+    `${label}.counts.unresolvable`,
+    new Set(["introduced", "resolved", "unchanged", "unknown"]),
+  );
+  const counts = {
+    introduced: asNonNegInt(countsRec.introduced, `${label}.counts.introduced`),
+    introducedWaived: asNonNegInt(countsRec.introducedWaived, `${label}.counts.introducedWaived`),
+    resolved: asNonNegInt(countsRec.resolved, `${label}.counts.resolved`),
+    unchanged: asNonNegInt(countsRec.unchanged, `${label}.counts.unchanged`),
+    unresolvable: {
+      introduced: asNonNegInt(
+        unresolvableRec.introduced,
+        `${label}.counts.unresolvable.introduced`,
+      ),
+      resolved: asNonNegInt(unresolvableRec.resolved, `${label}.counts.unresolvable.resolved`),
+      unchanged: asNonNegInt(unresolvableRec.unchanged, `${label}.counts.unresolvable.unchanged`),
+      unknown: asNonNegInt(unresolvableRec.unknown, `${label}.counts.unresolvable.unknown`),
+    },
+  };
+  if (counts.introducedWaived > counts.introduced) {
+    throw new ArtifactError(
+      `${label}.counts.introducedWaived exceeds introduced — more waivers than violations — refused`,
+    );
+  }
+  const introducedList = asArray(section.introduced, `${label}.introduced`);
+  if (introducedList.length > MAX_ARCHITECTURE_IDENTITY_ITEMS) {
+    throw new ArtifactError(
+      `${label}.introduced holds ${String(introducedList.length)} items, past the ${String(MAX_ARCHITECTURE_IDENTITY_ITEMS)}-item identity cap — refused`,
+    );
+  }
+  const resolvedList = asArray(section.resolved, `${label}.resolved`);
+  if (resolvedList.length > MAX_ARCHITECTURE_IDENTITY_ITEMS) {
+    throw new ArtifactError(
+      `${label}.resolved holds ${String(resolvedList.length)} items, past the ${String(MAX_ARCHITECTURE_IDENTITY_ITEMS)}-item identity cap — refused`,
+    );
+  }
+  /** @type {{ messageId: string | null, sourceProject: string | null, target: string | null, waived: boolean, headCount: number, decisionRef: string | null }[]} */
+  const introduced = introducedList.map((item, i) => {
+    const record = asRecord(item, `${label}.introduced[${String(i)}]`);
+    assertExactKeys(record, `${label}.introduced[${String(i)}]`, ARCHITECTURE_INTRODUCED_KEYS);
+    return {
+      messageId: identityField(record.messageId, `${label}.introduced[${String(i)}].messageId`),
+      sourceProject: identityField(
+        record.sourceProject,
+        `${label}.introduced[${String(i)}].sourceProject`,
+      ),
+      target: boundedTarget(record.target, `${label}.introduced[${String(i)}].target`),
+      waived: asBoolean(record.waived, `${label}.introduced[${String(i)}].waived`),
+      headCount: asNonNegInt(record.headCount, `${label}.introduced[${String(i)}].headCount`),
+      decisionRef: identityField(
+        record.decisionRef,
+        `${label}.introduced[${String(i)}].decisionRef`,
+      ),
+    };
+  });
+  /** @type {{ messageId: string | null, sourceProject: string | null, target: string | null }[]} */
+  const resolved = resolvedList.map((item, i) => {
+    const record = asRecord(item, `${label}.resolved[${String(i)}]`);
+    assertExactKeys(record, `${label}.resolved[${String(i)}]`, ARCHITECTURE_RESOLVED_KEYS);
+    return {
+      messageId: identityField(record.messageId, `${label}.resolved[${String(i)}].messageId`),
+      sourceProject: identityField(
+        record.sourceProject,
+        `${label}.resolved[${String(i)}].sourceProject`,
+      ),
+      target: boundedTarget(record.target, `${label}.resolved[${String(i)}].target`),
+    };
+  });
+  const waivedCount = introduced.filter((item) => item.waived).length;
+  if (waivedCount > counts.introducedWaived) {
+    throw new ArtifactError(
+      `${label}.introduced lists ${String(waivedCount)} waived items against a count of ${String(counts.introducedWaived)} — refused`,
+    );
+  }
+  if (introduced.length > counts.introduced) {
+    throw new ArtifactError(
+      `${label}.introduced lists more items than counts.introduced admits — refused`,
+    );
+  }
+  if (resolved.length > counts.resolved) {
+    throw new ArtifactError(
+      `${label}.resolved lists more items than counts.resolved admits — refused`,
+    );
+  }
+
+  /** @type {{ messageId: string | null, from: string | null, to: string | null }[]} */
+  const renamePairs = asArray(section.renamePairs, `${label}.renamePairs`).map((item, i) => {
+    const record = asRecord(item, `${label}.renamePairs[${String(i)}]`);
+    assertExactKeys(record, `${label}.renamePairs[${String(i)}]`, ARCHITECTURE_RENAME_KEYS);
+    return {
+      messageId: identityField(record.messageId, `${label}.renamePairs[${String(i)}].messageId`),
+      from: identityField(record.from, `${label}.renamePairs[${String(i)}].from`),
+      to: identityField(record.to, `${label}.renamePairs[${String(i)}].to`),
+    };
+  });
+
+  let customRules = null;
+  if (section.customRules !== null) {
+    const customRec = asRecord(section.customRules, `${label}.customRules`);
+    assertExactKeys(customRec, `${label}.customRules`, ARCHITECTURE_CUSTOM_KEYS);
+    const findingsRec = asRecord(customRec.findings, `${label}.customRules.findings`);
+    /**
+     * @param {"introduced" | "resolved" | "unchanged" | "unknown"} name
+     * @returns {{ count: number, ruleIds: string[] }}
+     */
+    const bucket = (name) => {
+      const record = asRecord(findingsRec[name], `${label}.customRules.findings.${name}`);
+      assertExactKeys(
+        record,
+        `${label}.customRules.findings.${name}`,
+        ARCHITECTURE_CUSTOM_BUCKET_KEYS,
+      );
+      const ruleIds = asStringList(record.ruleIds, `${label}.customRules.findings.${name}.ruleIds`);
+      if (ruleIds.length > MAX_ARCHITECTURE_RULE_IDS) {
+        throw new ArtifactError(
+          `${label}.customRules.findings.${name}.ruleIds holds ${String(ruleIds.length)} ids, past the ${String(MAX_ARCHITECTURE_RULE_IDS)}-id cap — refused`,
+        );
+      }
+      for (const rule of ruleIds) {
+        if (rule.length > ARCHITECTURE_IDENTITY_CHARS) {
+          throw new ArtifactError(
+            `${label}.customRules.findings.${name}.ruleIds holds an id past the ${String(ARCHITECTURE_IDENTITY_CHARS)}-char cap — refused`,
+          );
+        }
+      }
+      return {
+        count: asNonNegInt(record.count, `${label}.customRules.findings.${name}.count`),
+        ruleIds,
+      };
+    };
+    customRules = {
+      findings: {
+        introduced: bucket("introduced"),
+        resolved: bucket("resolved"),
+        unchanged: bucket("unchanged"),
+        unknown: bucket("unknown"),
+      },
+    };
+  }
+
+  return deepFreeze({
+    verdict,
+    stale,
+    unknownReason,
+    coverage,
+    policyChanged,
+    toolVersion,
+    reportDigest,
+    provenance,
+    policyFingerprints,
+    counts,
+    introduced,
+    resolved,
+    renamePairs,
+    customRules,
+    occurrencesReduced: asNonNegInt(section.occurrencesReduced, `${label}.occurrencesReduced`),
+  });
+}
+
+/**
+ * @param {unknown} v
+ * @param {string} label
+ * @returns {{ commit: string | null }}
+ */
+function asArchitectureSide(v, label) {
+  const record = asRecord(v, label);
+  assertExactKeys(record, label, ARCHITECTURE_SIDE_KEYS);
+  if (record.commit === null) return { commit: null };
+  return { commit: asProducerString(record.commit, `${label}.commit`, 40) };
+}
+
+/**
+ * A producer-derived identity string — null passes as the recorded absence,
+ * and an empty string is the degenerate name the producer wrote, carried
+ * verbatim rather than refused: the evidence is already validated upstream,
+ * and the section records what was said, never what would have been nicer.
+ *
+ * @param {unknown} v
+ * @param {string} label
+ * @returns {string | null}
+ */
+function identityField(v, label) {
+  if (v === null) return null;
+  return asProducerString(v, label, ARCHITECTURE_IDENTITY_CHARS);
+}
+
+/**
+ * @param {unknown} v
+ * @param {string} label
+ * @returns {string | null}
+ */
+function boundedTarget(v, label) {
+  if (v === null) return null;
+  return asProducerString(v, label, ARCHITECTURE_TARGET_CHARS);
+}
+
+/**
+ * A producer-derived string under a documented cap — type and cap enforced,
+ * emptiness allowed, sanitisation already applied by the section builder.
+ *
+ * @param {unknown} v
+ * @param {string} label
+ * @param {number} max
+ * @returns {string}
+ */
+function asProducerString(v, label, max) {
+  if (typeof v !== "string") {
+    throw new ArtifactError(`${label} must be a string — refused`);
+  }
+  if (v.length > max) {
+    throw new ArtifactError(`${label} exceeds the ${String(max)}-char documented cap — refused`);
+  }
+  return v;
 }
 
 /**
@@ -1682,6 +2373,27 @@ export function serialiseArtifact(artifact) {
       !hasExactKeys(record, APPLICABILITY_ARTIFACT_KEYS) &&
       !hasExactKeys(record, SKIP_RECORD_KEYS) &&
       !hasExactKeys(record, MERGE_GROUP_SKIP_KEYS)
+    ) {
+      throw new ArtifactError("artifact keys fit no schema of this version — refused");
+    }
+  } else if (record.schemaVersion === architectureArtifactSchemaVersion) {
+    // The architecture family's bare shapes: the full six-gate shape, and
+    // the red terminal an evidence-holding run leaves when it dies (#529).
+    if (
+      !hasExactKeys(record, ARCHITECTURE_ARTIFACT_KEYS) &&
+      !hasExactKeys(record, RED_WITH_ARCHITECTURE_KEYS) &&
+      !hasExactKeys(record, RED_ARCHITECTURE_WITH_PROVENANCE_KEYS)
+    ) {
+      throw new ArtifactError("artifact keys fit no schema of this version — refused");
+    }
+  } else if (record.schemaVersion === architectureApplicabilityArtifactSchemaVersion) {
+    // The architecture family's applicability shapes: the full six-gate
+    // shape with an applicability fact, and the red terminals that carry
+    // both the section and the classification's context.
+    if (
+      !hasExactKeys(record, ARCHITECTURE_APPLICABILITY_ARTIFACT_KEYS) &&
+      !hasExactKeys(record, RED_ARCHITECTURE_WITH_APPLICABILITY_KEYS) &&
+      !hasExactKeys(record, RED_ARCHITECTURE_FULL_KEYS)
     ) {
       throw new ArtifactError("artifact keys fit no schema of this version — refused");
     }

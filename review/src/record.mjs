@@ -79,6 +79,12 @@ export function embedRecordBlock(record) {
           },
         }
       : {}),
+    // Additive: a record without one embeds byte-identically to the payload
+    // this block always wrote, and the aware family's architecture facts ride
+    // the same inert channel — identity and counts persisted, raw report
+    // bytes never (ADR 003: the full site lists live in the digest-referenced
+    // workflow artifact, not the comment).
+    ...(record.architecture !== undefined ? { architecture: record.architecture } : {}),
   };
   const bytes = Buffer.from(JSON.stringify(payload), "utf8");
   return `<!-- action-agents-record:review:${bytes.toString("base64")} -->`;

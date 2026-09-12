@@ -17,6 +17,11 @@
  * `[moved]`), a count line compares the two runs, and a section lists what
  * resolved — prose only, never a consequence (ADR 004 decision 3). Without
  * a recovered record the body renders exactly as a first run always has.
+ *
+ * An architecture-aware run adds one code-owned section, rendered from the
+ * same frozen section the artifact records — never from report bytes, never
+ * from model text. A blind run renders none of it: the body is
+ * byte-identical to a blind run's by the input's absence, not by a flag.
  */
 
 import { sanitiseCommentText } from "#core/sanitise.mjs";
@@ -29,6 +34,8 @@ import { evidenceRef } from "./provenance.mjs";
 
 export const SUMMARY_CHARS = 300;
 export const MESSAGE_CHARS = 1000;
+/** How many identity items the comment's architecture section lists before the exact count takes over — the artifact keeps thirty-two, the workflow artifact keeps everything. */
+export const ARCHITECTURE_LISTED_ITEMS = 5;
 
 /**
  * @typedef {object} RenderInput
@@ -44,6 +51,8 @@ export const MESSAGE_CHARS = 1000;
  * @property {number} [withheldUnmatchedCount] findings withheld because their message's quoted evidence appears nowhere within the anchor window — rendered beside the other withheld counts when nothing published, under the same law
  * @property {import("#core/policy.mjs").PolicySource} [policySource] the resolved policy source — the comment's provenance line, so the verdict names the branch and commit that governed it
  * @property {readonly import("./reconcile.mjs").ReconciledFinding[]} [resolvedFindings] the previous run's findings this run retired — present only when the previous published record was recovered, which turns on the cross-run labels, the count line and the resolved section
+ * @property {import("./artifact.mjs").ArchitectureSection} [architecture] the frozen architecture section — present only on an aware run; the body's architecture section renders from it and from nothing else
+ * @property {string} [architectureNote] the cross-run waiver note, when both records carried architecture facts and one moved — an explicit note, never silent drift
  */
 
 /**
@@ -63,6 +72,8 @@ export function renderComment({
   withheldUnmatchedCount,
   policySource,
   resolvedFindings,
+  architecture,
+  architectureNote,
 }) {
   /** @type {string[]} */
   const lines = [];
@@ -108,6 +119,13 @@ export function renderComment({
     lines.push(
       "",
       `Changed files examined: ${String(coverage.covered.length)}/${String(coverage.total)}.`,
+    );
+  }
+
+  if (architecture !== undefined) {
+    lines.push(
+      "",
+      renderArchitectureCommentSection({ section: architecture, note: architectureNote }),
     );
   }
 
@@ -207,6 +225,196 @@ export function renderNothingToReview(headSha) {
     "Every changed file is outside this review's universe: ignored by config, or gone.",
     "",
   ].join("\n");
+}
+
+/**
+ * The architecture section of the comment body — the frozen reader's facts,
+ * rendered by code from the same `ArchitectureSection` the artifact records,
+ * so the comment, the artifact and the run result name identical facts by
+ * construction. Every displayed string is producer-derived evidence:
+ * sanitised and capped here like any model text would be. The section
+ * distinguishes every state of the design record's eleven-state matrix the
+ * recorded facts can carry — the one pair no single envelope can (a hard
+ * violation and an expired-waiver re-assertion ride the same non-waived
+ * lane) is pinned there, and the comment renders it verbatim rather than
+ * manufacturing a distinction. With an `unknown` verdict the detail lists
+ * are withheld with the verdict — the counts stay, the details do not, and
+ * nothing narrates an unestablished verdict as clean or violated.
+ *
+ * Recorded, never enforced: the closing line says it, no line here reads
+ * like a review finding, and the section is deterministic given the section
+ * object (I15) — the same bytes for the same facts, run after run.
+ *
+ * @param {object} input
+ * @param {import("./artifact.mjs").ArchitectureSection} input.section the frozen section the artifact records
+ * @param {string} [input.note] the cross-run waiver note, when the previous record's architecture facts moved
+ * @returns {string}
+ */
+export function renderArchitectureCommentSection({ section, note }) {
+  const counts = section.counts;
+  /** @type {string[]} */
+  const lines = ["### Architecture"];
+
+  // The one loud signal: a law edit riding in with the pull request. It
+  // leads the section, blockquoted, so no count line can bury it.
+  if (section.policyChanged === true) {
+    lines.push(
+      "",
+      "> ⚠️ The architecture policy changed between the compared sides — this verdict was judged under a moved law, not only a moved codebase.",
+    );
+  }
+
+  lines.push(
+    "",
+    `Verdict \`${section.verdict}\` — ${String(counts.introduced)} introduced (${String(counts.introducedWaived)} waived), ${String(counts.resolved)} resolved, ${String(counts.unchanged)} unchanged.`,
+  );
+
+  if (section.verdict === "unknown") {
+    lines.push(
+      "",
+      section.unknownReason === "stale"
+        ? "The evidence is stale — it pins a head other than the one this review judged, so its verdict is withheld. The counts above describe the report's own head; the details are withheld with the verdict."
+        : "The evidence is incomplete — no architecture verdict was established. The counts above describe a report that never concluded; the details are withheld with the verdict.",
+    );
+  } else {
+    for (const item of section.introduced.slice(0, ARCHITECTURE_LISTED_ITEMS)) {
+      /** @type {string[]} */
+      const tails = [`${String(item.headCount)} ${item.headCount === 1 ? "site" : "sites"}`];
+      if (item.waived) tails.push("waived");
+      if (item.decisionRef !== null)
+        tails.push(`decision ${archFact(item.decisionRef, SUMMARY_CHARS)}`);
+      lines.push(
+        `- ${archFact(item.messageId, MESSAGE_CHARS)}: ${archFact(item.sourceProject, MESSAGE_CHARS)} → ${archFact(item.target, MESSAGE_CHARS)} — ${tails.join(", ")}`,
+      );
+    }
+    const moreIntroduced =
+      counts.introduced - Math.min(section.introduced.length, ARCHITECTURE_LISTED_ITEMS);
+    if (moreIntroduced > 0) lines.push(`- and ${String(moreIntroduced)} more`);
+
+    if (section.resolved.length > 0) {
+      const shown = section.resolved
+        .slice(0, ARCHITECTURE_LISTED_ITEMS)
+        .map(
+          (item) =>
+            `${archFact(item.messageId, MESSAGE_CHARS)}: ${archFact(item.sourceProject, MESSAGE_CHARS)} → ${archFact(item.target, MESSAGE_CHARS)}`,
+        );
+      const moreResolved = counts.resolved - shown.length;
+      lines.push(
+        "",
+        `Resolved: ${shown.join("; ")}${moreResolved > 0 ? `; and ${String(moreResolved)} more` : ""}.`,
+      );
+    }
+
+    if (section.renamePairs.length > 0) {
+      const shown = section.renamePairs
+        .slice(0, ARCHITECTURE_LISTED_ITEMS)
+        .map(
+          (pair) => `${archFact(pair.from, MESSAGE_CHARS)} → ${archFact(pair.to, MESSAGE_CHARS)}`,
+        );
+      const moreRenamed = section.renamePairs.length - shown.length;
+      lines.push(
+        "",
+        `Renamed: ${shown.join("; ")}${moreRenamed > 0 ? `; and ${String(moreRenamed)} more` : ""} — each is one move, never an introduced/resolved wash.`,
+      );
+    }
+
+    if (section.customRules !== null) {
+      const findings = section.customRules.findings;
+      if (
+        findings.introduced.count > 0 ||
+        findings.resolved.count > 0 ||
+        findings.unchanged.count > 0 ||
+        findings.unknown.count > 0
+      ) {
+        lines.push(
+          "",
+          `Custom rules: ${customBucket(findings.introduced)} introduced, ${customBucket(findings.resolved)} resolved, ${customBucket(findings.unchanged)} unchanged, ${customBucket(findings.unknown)} unknown.`,
+        );
+      }
+    }
+
+    if (section.occurrencesReduced > 0) {
+      lines.push(
+        "",
+        `Shrinking: ${String(section.occurrencesReduced)} unchanged ${section.occurrencesReduced === 1 ? "entry" : "entries"} lost occurrences without resolving.`,
+      );
+    }
+
+    /** @type {Array<[string, number]>} */
+    const unresolvableBuckets = [
+      ["introduced", counts.unresolvable.introduced],
+      ["resolved", counts.unresolvable.resolved],
+      ["unchanged", counts.unresolvable.unchanged],
+      ["unknown", counts.unresolvable.unknown],
+    ];
+    const unresolvable = unresolvableBuckets.filter(([, count]) => count > 0);
+    if (unresolvable.length > 0) {
+      const parts = unresolvable
+        .map(([name, count]) => `${String(count)} ${String(name)}`)
+        .join(", ");
+      lines.push("", `Unresolvable: ${parts} — counted, never guessed into a bucket.`);
+    }
+  }
+
+  const coverage = section.coverage;
+  lines.push(
+    "",
+    `Coverage: ${coverage.complete ? "complete" : "incomplete"} — ${String(coverage.analyzedFiles)} analyzed, ${String(coverage.notAnalyzedCount)} not analyzed, ${String(coverage.blindSpotCount)} blind spots.`,
+  );
+
+  lines.push(
+    "",
+    `Basis: report ${shortFact(section.reportDigest)}, head ${shortFact(section.provenance.head.commit)}, base ${shortFact(section.provenance.base.commit)}, policy fingerprints ${shortFact(section.policyFingerprints.head)}/${shortFact(section.policyFingerprints.base)}, Archkeep ${section.toolVersion === null ? "(version unknown)" : archFact(section.toolVersion, SUMMARY_CHARS)}.`,
+  );
+
+  if (note !== undefined) {
+    lines.push("", `> Since the previous review: ${sanitised(note, SUMMARY_CHARS)}.`);
+  }
+
+  lines.push(
+    "",
+    "Architecture facts are recorded, never enforced — they are not review findings; enforcement stays the consumer's gate.",
+  );
+
+  return lines.join("\n");
+}
+
+/**
+ * One producer-derived architecture fact, sanitised and capped for display —
+ * the section already flattened and capped it; this copy only survives the
+ * comment's own channel. A null records as the honest `(unnamed)`.
+ *
+ * @param {string | null} value
+ * @param {number} maxChars
+ * @returns {string}
+ */
+function archFact(value, maxChars) {
+  return sanitised(value ?? "(unnamed)", maxChars);
+}
+
+/**
+ * One digest-shaped fact for display — the first twelve characters stand for
+ * the whole, the ellipsis says so, and an absent value names itself.
+ *
+ * @param {string | null} value
+ * @returns {string}
+ */
+function shortFact(value) {
+  if (value === null) return "(none)";
+  return `${value.slice(0, 12)}…`;
+}
+
+/**
+ * One custom-rule bucket for display — the exact count, with the capped rule
+ * id list beside it only when the bucket holds anything.
+ *
+ * @param {{ count: number, ruleIds: string[] }} bucket
+ * @returns {string}
+ */
+function customBucket(bucket) {
+  if (bucket.count === 0) return "0";
+  const ids = bucket.ruleIds.map((rule) => archFact(rule, SUMMARY_CHARS)).join(", ");
+  return `${String(bucket.count)} (${ids})`;
 }
 
 /**

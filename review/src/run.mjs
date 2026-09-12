@@ -61,6 +61,7 @@ import { reconcile } from "./reconcile.mjs";
 import { MESSAGE_CHARS, renderComment, renderNothingToReview } from "./render.mjs";
 import {
   applicabilitySection,
+  architectureSection,
   assertFreshArtifact,
   buildAbandonedArtifact,
   buildArtifact,
@@ -136,6 +137,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {string | null} headRef the head the snapshot read pinned, once it landed
  * @property {number} [commentId] the comment's id, once an upsert returned one
  * @property {import("./applicability.mjs").ExecutionContext} [applicability] the applicability context, once the classification derived it
+ * @property {import("./artifact.mjs").ArchitectureSection} [architecture] the retention-shaped architecture facts, once the evidence read landed — the outage rule: evidence before model means a run that dies red after the read still records it
  */
 /**
  * @typedef {object} RunResult
@@ -424,6 +426,18 @@ export async function reviewPullRequest({
         `${architecture.stale ? " — stale, verdict withheld as unknown" : ""}` +
         `${architecture.incompleteness !== null ? ` (${architecture.incompleteness.reason})` : ""}`,
     );
+  }
+  // The section is built once, at the read, and every later surface — the
+  // gate facts, the canonical record, the comment, the artifact, the red
+  // record — carries this same frozen object, so the surfaces cannot
+  // disagree: cross-surface identity by construction, never by
+  // re-derivation. Building it here is also the outage rule made real:
+  // evidence before model means a run that dies red after the read still
+  // records its facts.
+  const architectureFacts =
+    architecture === undefined ? undefined : architectureSection(architecture);
+  if (red !== undefined && architectureFacts !== undefined) {
+    red.architecture = architectureFacts;
   }
 
   // ── The intensity axis: a matched rule's strictness override becomes the
@@ -796,6 +810,19 @@ export async function reviewPullRequest({
       ledger: readsFromRecordedReads(recordedReads),
     },
     verification: verified.accounting,
+    // The aware family's sixth slice: its presence selects the six-gate
+    // table, and its verdict basis is the reader's own facts — pinnedHead
+    // straight from the frozen evidence, headSha the head this run judges.
+    ...(architectureFacts !== undefined
+      ? {
+          architecture: {
+            verdict: architectureFacts.verdict,
+            stale: architectureFacts.stale,
+            pinnedHead: architectureFacts.provenance.head.commit,
+            headSha,
+          },
+        }
+      : {}),
   });
   for (const result of report.failed) {
     io.info(`review: gate ${result.gate} failed — ${result.reason}`);
@@ -876,6 +903,7 @@ export async function reviewPullRequest({
     run: { state: "published", verdict: report.mayPublish && coverageComplete ? "pass" : "fail" },
     findings: canonicalFindings,
     coverage: outcome.coverage,
+    ...(architectureFacts !== undefined ? { architecture: architectureFacts } : {}),
   });
 
   // ── The cross-run reconciliation (ADR 004 decision 3) ──
@@ -943,6 +971,10 @@ export async function reviewPullRequest({
     withheldUnspannedCount: withheldUnspanned.length,
     withheldUnmatchedCount: withheldUnmatched.length,
     ...(reconciled !== undefined ? { resolvedFindings: reconciled.previous } : {}),
+    ...(architectureFacts !== undefined ? { architecture: architectureFacts } : {}),
+    ...(reconciled?.architecture !== undefined
+      ? { architectureNote: reconciled.architecture.note }
+      : {}),
     ...(status.label === "Partial" ? { partialReason: status.reason } : {}),
   });
   // The body that gets written: the prose plus the record block the next
@@ -1021,6 +1053,7 @@ export async function reviewPullRequest({
     phases: outcome.phaseLog,
     provenance: {},
     ...(applicabilityFact !== undefined ? { applicability: applicabilityFact } : {}),
+    ...(architectureFacts !== undefined ? { architecture: architectureFacts } : {}),
   });
 
   // The built record is validated against a read taken here — before the

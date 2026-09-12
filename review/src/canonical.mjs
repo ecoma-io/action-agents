@@ -17,6 +17,7 @@
  */
 
 import { SEVERITIES } from "./answer.mjs";
+import { ArtifactError, asArchitectureSection } from "./artifact.mjs";
 import { isDigest } from "./digest.mjs";
 import {
   findingFingerprint,
@@ -86,6 +87,7 @@ export class CanonicalResultError extends Error {}
  * @property {readonly CanonicalFinding[]} findings publication order preserved
  * @property {readonly CollapsedClaim[]} collapsed claims that shared a kept finding's identity key, in publication order
  * @property {import("./coverage.mjs").CoverageReport} [coverage] the read-coverage report, when the run carried one
+ * @property {import("./artifact.mjs").ArchitectureSection} [architecture] the retention-shaped architecture facts, when the run held evidence — the same section the artifact records, validated by the same validator (ADR 003: identity and counts persist; the full site lists live in the digest-referenced workflow artifact)
  */
 
 /**
@@ -116,6 +118,27 @@ function requireString(value, label) {
 }
 
 /**
+ * The architecture section through the artifact module's own validator,
+ * retyped so this constructor's refusal vocabulary stays closed — a record
+ * whose section does not validate is a `CanonicalResultError` like any
+ * other shape defect, so both the birth seam's belt and the record block's
+ * collapse-to-absent treat it identically.
+ *
+ * @param {unknown} v
+ * @returns {import("./artifact.mjs").ArchitectureSection}
+ */
+function architectureSlice(v) {
+  try {
+    return asArchitectureSection(v, "architecture");
+  } catch (cause) {
+    if (cause instanceof ArtifactError) {
+      throw new CanonicalResultError(cause instanceof Error ? cause.message : String(cause));
+    }
+    throw cause;
+  }
+}
+
+/**
  * Builds the one canonical result from a run's verified publication set.
  * Pure aside from nothing: the same input always yields the same frozen
  * result, so replaying an artifact's facts rebuilds it byte for byte. The
@@ -141,6 +164,7 @@ function requireString(value, label) {
  *     evidence?: { digest: string, excerpt: string },
  *   }>,
  *   coverage?: import("./coverage.mjs").CoverageReport,
+ *   architecture?: import("./artifact.mjs").ArchitectureSection,
  * }} input
  * @returns {CanonicalResult}
  */
@@ -150,6 +174,7 @@ export function createCanonicalResult({
   run,
   findings,
   coverage,
+  architecture,
 }) {
   if (typeof head !== "string" || !/^[0-9a-f]{7,40}$/.test(head)) {
     throw new CanonicalResultError(`head must be a git sha — got ${JSON.stringify(head)}`);
@@ -274,6 +299,10 @@ export function createCanonicalResult({
           ),
         }
       : {}),
+    // Additive: a record without one is the pre-architecture shape, and the
+    // section the aware family carries is the same frozen object the artifact
+    // records — cross-surface identity by construction, not by re-derivation.
+    ...(architecture !== undefined ? { architecture: architectureSlice(architecture) } : {}),
   });
 }
 

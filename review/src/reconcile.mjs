@@ -61,6 +61,33 @@ const labelled = (finding, reconciliation) => Object.freeze({ ...finding, reconc
 const unlabelled = (finding) => Object.freeze({ ...finding });
 
 /**
+ * The architecture fact that changed between two records of one pull
+ * request — the waiver-state change the run contract names as cross-run
+ * waiver time. A verdict or a waived-introduction count that moved is a
+ * fact about a different (base, head, law, now) tuple, never silent drift:
+ * the note says what moved, in code-composed words, and nothing else. The
+ * architecture facts never enter the finding-label vocabulary — this note
+ * is the only cross-run sentence they produce.
+ *
+ * @param {import("./artifact.mjs").ArchitectureSection} prior
+ * @param {import("./artifact.mjs").ArchitectureSection} current
+ * @returns {string | undefined} the note, when something moved
+ */
+function architectureNoteBetween(prior, current) {
+  /** @type {string[]} */
+  const moved = [];
+  if (prior.verdict !== current.verdict) {
+    moved.push(`verdict moved from '${prior.verdict}' to '${current.verdict}'`);
+  }
+  if (prior.counts.introducedWaived !== current.counts.introducedWaived) {
+    moved.push(
+      `waived introductions moved from ${String(prior.counts.introducedWaived)} to ${String(current.counts.introducedWaived)}`,
+    );
+  }
+  return moved.length === 0 ? undefined : moved.join("; ");
+}
+
+/**
  * Reconciles two canonical results of one pull request. `previous` may be
  * missing entirely — a first run reconciles against nothing — and a
  * previous result whose run state is not `published` counts as empty.
@@ -69,7 +96,7 @@ const unlabelled = (finding) => Object.freeze({ ...finding });
  *   previous?: import("./canonical.mjs").CanonicalResult | null,
  *   current: import("./canonical.mjs").CanonicalResult,
  * }} input
- * @returns {{ current: readonly ReconciledFinding[], previous: readonly ReconciledFinding[] }}
+ * @returns {{ current: readonly ReconciledFinding[], previous: readonly ReconciledFinding[], architecture?: { note: string } }}
  */
 export function reconcile({ previous, current }) {
   const priorRun = previous ?? null;
@@ -109,8 +136,21 @@ export function reconcile({ previous, current }) {
         })
       : [];
 
+  // The architecture note rides only when both records carry the section —
+  // a first aware run against a blind predecessor has no prior fact to
+  // compare, and a blind run against an aware predecessor keeps the
+  // published fact it can still see rendered from its own record.
+  const architecture =
+    priorRun !== null &&
+    priorRun.run.state === "published" &&
+    priorRun.architecture !== undefined &&
+    current.architecture !== undefined
+      ? architectureNoteBetween(priorRun.architecture, current.architecture)
+      : undefined;
+
   return Object.freeze({
     current: Object.freeze(currentSide),
     previous: Object.freeze(previousSide),
+    ...(architecture !== undefined ? { architecture: Object.freeze({ note: architecture }) } : {}),
   });
 }

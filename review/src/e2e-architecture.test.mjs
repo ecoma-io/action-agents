@@ -15,9 +15,13 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { DeterministicRefusalError } from "./refusal.mjs";
+import { architectureSection } from "./artifact.mjs";
+import { parseRecordBlock } from "./record.mjs";
+import { renderArchitectureCommentSection } from "./render.mjs";
 import {
   A_CONTENT,
   BASE,
+  artifactOf,
   driveEntrypoint,
   drainEntryTemps,
   drainWorkspaces,
@@ -27,6 +31,7 @@ import {
   readTurn,
   replayIo,
   scriptedChat,
+  snapshot,
 } from "./e2e.fixtures.mjs";
 import { reviewPullRequest } from "./run.mjs";
 
@@ -201,6 +206,40 @@ function commentPastMarker(forge) {
 }
 
 /**
+ * The comment's prose — past the marker line, cut before the embedded
+ * record block — so the section the body carries and the record the block
+ * carries are judged as the two surfaces they are.
+ *
+ * @param {ReturnType<typeof forgeStub>} forge
+ * @returns {string}
+ */
+function prosePastMarker(forge) {
+  const body = commentPastMarker(forge);
+  const at = body.indexOf("<!-- action-agents-record");
+  return at === -1 ? body : body.slice(0, at);
+}
+
+/**
+ * The aware run's comment is the blind run's with exactly the architecture
+ * section spliced in after the coverage line — nothing else moves, and the
+ * section is the renderer's own output over the section the run holds.
+ *
+ * @param {ReturnType<typeof forgeStub>} awareForge
+ * @param {ReturnType<typeof forgeStub>} blindForge
+ * @param {import("#core/architecture.mjs").ArchitectureEvidence | undefined} evidence the run's held evidence, when the aware run held any — `undefined` fails the splice loudly, never silently
+ */
+function expectSectionSplice(awareForge, blindForge, evidence) {
+  if (evidence === undefined) throw new Error("the aware run held no architecture evidence");
+  const aware = prosePastMarker(awareForge);
+  const blind = prosePastMarker(blindForge);
+  const section = renderArchitectureCommentSection({ section: architectureSection(evidence) });
+  const spliced = `\n${section}\n`;
+  expect(aware).toContain(spliced);
+  expect(aware.replace(spliced, "")).toBe(blind);
+  expect(aware.indexOf(section)).toBeGreaterThan(aware.indexOf("Changed files examined"));
+}
+
+/**
  * The run artifact's raw bytes — what a consumer's pipeline would upload.
  * A published run's record names no outcome prefix: `review-artifact-<head>`.
  *
@@ -212,6 +251,40 @@ function artifactBytes(workspace) {
 }
 
 /** @typedef {import("./run.mjs").RunResult} RunResult */
+
+/**
+ * The full aware replay over a workspace holding the recipe pair.
+ *
+ * @param {{ report?: string, manifest?: string, forge?: ReturnType<typeof forgeStub>, chat?: import("#core/chat.mjs").Chat }} [options]
+ * @returns {Promise<{ forge: ReturnType<typeof forgeStub>, result: RunResult }>}
+ */
+async function awareRun(options = {}) {
+  const workspace = workspaceWith({
+    report: options.report ?? envelope({ status: "findings", violations: [groundedViolation()] }),
+    manifest: options.manifest ?? manifest(1),
+  });
+  const forge = options.forge ?? forgeStub();
+  const { io } = replayIo(forge, options.chat ?? scriptedChat(CONCERN_SCRIPT()));
+  const result = await reviewPullRequest({
+    inputs: {
+      model: "review",
+      maxTurns: 5,
+      contextWindow: 128_000,
+      dryRun: false,
+      configPath: "",
+      architectureReport: ".archkeep/delta.json",
+    },
+    context: { owner: "acme", repo: "widgets", workspace },
+    pullRequestNumber: 7,
+    eventName: "pull_request",
+    event: {
+      action: "synchronize",
+      pull_request: { number: 7, base: { ref: "main", sha: BASE } },
+    },
+    io,
+  });
+  return { forge, result };
+}
 
 /** The scripted happy-path chat: one read turn, one confirming verdict. */
 const CONCERN_SCRIPT = () => [
@@ -264,7 +337,7 @@ describe("the architecture-report input: blind default", () => {
 });
 
 describe("the architecture-report input: aware run", () => {
-  it("reads the evidence before the first model call, holds it, and publishes identically", async () => {
+  it("reads the evidence before the first model call, holds it, and adds exactly the architecture section", async () => {
     const workspace = workspaceWith({ report: envelope(), manifest: manifest(0) });
     const forge = forgeStub();
     const chat = scriptedChat(CONCERN_SCRIPT());
@@ -300,12 +373,12 @@ describe("the architecture-report input: aware run", () => {
     const at = log.findIndex((line) => line.includes("architecture evidence"));
     expect(at).toBeGreaterThanOrEqual(0);
     expect(log.findIndex((line) => line.includes("expected file(s) read"))).toBeGreaterThan(at);
-    // The evidence changes nothing a reader or a projection could see: the
-    // published bytes equal the blind run's, and the artifact is not
-    // stamped this phase. The artifact comparison is entrypoint against
-    // entrypoint — the artifact is the entrypoint's write, so the aware
-    // side drives the same scenario through `run` over a fresh workspace
-    // holding the same recipe files.
+    // The evidence changes exactly what this phase says it changes: the
+    // comment gains the architecture section — the blind run's bytes plus
+    // that section, nothing else — and the artifact joins the aware family.
+    // The comment comparison is entrypoint-shaped prose against prose: the
+    // aware side drove `run` directly, so the splice is judged over the
+    // section both surfaces derive from the one frozen object.
     const blindWorkspace = makeWorkspace({ "src/a.mjs": A_CONTENT });
     const blindForge = forgeStub();
     const blind = await driveEntrypoint({
@@ -314,7 +387,7 @@ describe("the architecture-report input: aware run", () => {
       chat: scriptedChat(CONCERN_SCRIPT()),
     });
     expect(blind.ok).toBe(true);
-    expect(commentPastMarker(forge)).toBe(commentPastMarker(blindForge));
+    expectSectionSplice(forge, blindForge, result.architecture);
     const awareWorkspace = workspaceWith({ report: envelope(), manifest: manifest(0) });
     const aware = await driveEntrypoint({
       workspace: awareWorkspace,
@@ -324,10 +397,18 @@ describe("the architecture-report input: aware run", () => {
     });
     expect(aware.ok).toBe(true);
     expect(aware.result?.architecture?.verdict).toBe("pass");
-    expect(artifactBytes(awareWorkspace)).toBe(artifactBytes(blindWorkspace));
+    // The artifact stamps the aware bare family — 7 — carries the
+    // six-gate table with `architecture` appended after `verification`,
+    // and holds the section; the blind run's artifact stays on today's 5.
+    const awareRecord = artifactOf(awareWorkspace, `review-artifact-${HEAD}.json`);
+    expect(awareRecord.schemaVersion).toBe(7);
+    expect(awareRecord.gates).toHaveLength(6);
+    expect(awareRecord.gates.at(-1)).toMatchObject({ gate: "architecture", passed: true });
+    expect(awareRecord.architecture.verdict).toBe("pass");
+    expect(artifactOf(blindWorkspace, `review-artifact-${HEAD}.json`).schemaVersion).toBe(5);
   });
 
-  it("a stale report withholds its verdict as unknown and still publishes green", async () => {
+  it("a stale report withholds its verdict as unknown and publishes the review Partial", async () => {
     const workspace = workspaceWith({
       report: envelope({ head: "e".repeat(40) }),
       manifest: manifest(0),
@@ -357,9 +438,31 @@ describe("the architecture-report input: aware run", () => {
     expect(result.architecture?.stale).toBe(true);
     expect(result.architecture?.incompleteness?.reason).toBe("stale");
     expect(log.some((line) => line.includes("stale, verdict withheld as unknown"))).toBe(true);
+    // The withholder publishes, never hides: the run lands Partial, the
+    // banner's reason is the architecture gate's own sentence, and the
+    // artifact's sixth row is the one failure in the table — recorded
+    // `unknown` with the stale basis, never narrated as a verdict.
+    const body = commentPastMarker(forge);
+    expect(body.startsWith("> ⚠️ This review is partial:")).toBe(true);
+    expect(body).toContain("the architecture evidence is stale");
+    expect(body).toContain("pins a head other than the one this review judged");
+    const artifact = /** @type {any} */ (result.artifact);
+    expect(artifact.schemaVersion).toBe(7);
+    expect(artifact.gates).toHaveLength(6);
+    expect(
+      artifact.gates.find(
+        /**
+         * @param {{ gate: string }} gate
+         */
+        (gate) => gate.gate === "architecture",
+      ),
+    ).toMatchObject({
+      passed: false,
+    });
+    expect(artifact.architecture).toMatchObject({ verdict: "unknown", stale: true });
   });
 
-  it("a findings verdict is recorded, never enforced — the run publishes as it would blind", async () => {
+  it("a findings verdict is recorded, never enforced — the run's own verdict stands, the section says `fail`", async () => {
     const workspace = workspaceWith({
       report: envelope({ status: "findings" }),
       manifest: manifest(1),
@@ -385,9 +488,25 @@ describe("the architecture-report input: aware run", () => {
       io,
     });
     expect(result.outcome).toBe("published");
-    // The fail verdict is held as a fact and gates nothing this phase.
+    // The fail verdict is held as a fact: the architecture gate PASSES on
+    // it (evidence-established is not "found no problems"), the run's own
+    // posture stays Complete, and the section is the only place the fail
+    // is said — recorded, never enforced.
     expect(result.architecture?.verdict).toBe("fail");
     expect(result.architecture?.introduced).toHaveLength(1);
+    const artifact = /** @type {any} */ (result.artifact);
+    expect(artifact.schemaVersion).toBe(7);
+    expect(
+      artifact.gates.find(
+        /**
+         * @param {{ gate: string }} gate
+         */
+        (gate) => gate.gate === "architecture",
+      ),
+    ).toMatchObject({
+      passed: true,
+    });
+    expect(commentPastMarker(forge)).toContain("**Review** — Complete");
     const blindForge = forgeStub();
     const blind = await driveEntrypoint({
       workspace: makeWorkspace({ "src/a.mjs": A_CONTENT }),
@@ -395,45 +514,11 @@ describe("the architecture-report input: aware run", () => {
       chat: scriptedChat(CONCERN_SCRIPT()),
     });
     expect(blind.ok).toBe(true);
-    expect(commentPastMarker(forge)).toBe(commentPastMarker(blindForge));
+    expectSectionSplice(forge, blindForge, result.architecture);
   });
 });
 
 describe("the aware run's code-built derivations", () => {
-  /**
-   * The full aware replay over a workspace holding the recipe pair.
-   *
-   * @param {{ report?: string, manifest?: string, forge?: ReturnType<typeof forgeStub>, chat?: import("#core/chat.mjs").Chat }} [options]
-   * @returns {Promise<{ forge: ReturnType<typeof forgeStub>, result: RunResult }>}
-   */
-  async function awareRun(options = {}) {
-    const workspace = workspaceWith({
-      report: options.report ?? envelope({ status: "findings", violations: [groundedViolation()] }),
-      manifest: options.manifest ?? manifest(1),
-    });
-    const forge = options.forge ?? forgeStub();
-    const { io } = replayIo(forge, options.chat ?? scriptedChat(CONCERN_SCRIPT()));
-    const result = await reviewPullRequest({
-      inputs: {
-        model: "review",
-        maxTurns: 5,
-        contextWindow: 128_000,
-        dryRun: false,
-        configPath: "",
-        architectureReport: ".archkeep/delta.json",
-      },
-      context: { owner: "acme", repo: "widgets", workspace },
-      pullRequestNumber: 7,
-      eventName: "pull_request",
-      event: {
-        action: "synchronize",
-        pull_request: { number: 7, base: { ref: "main", sha: BASE } },
-      },
-      io,
-    });
-    return { forge, result };
-  }
-
   it("head sites ground the named file: the artifact's risk row rises, the published comment does not", async () => {
     // The one seam grounding is allowed to move: the per-file risk table
     // the artifact records. `src/a.mjs` matches no path rule (low/skim
@@ -447,8 +532,8 @@ describe("the aware run's code-built derivations", () => {
     );
     const row = (artifact.risk ?? []).find((entry) => entry.path === "src/a.mjs");
     expect(row).toMatchObject({ path: "src/a.mjs", risk: "high", lane: "deep" });
-    // The published surface stays the review's own: byte-identical to the
-    // blind run's comment, grounding or not.
+    // The published surface stays the review's own: the blind run's
+    // comment plus exactly the architecture section, grounding or not.
     const blindForge = forgeStub();
     const blind = await driveEntrypoint({
       workspace: makeWorkspace({ "src/a.mjs": A_CONTENT }),
@@ -456,7 +541,7 @@ describe("the aware run's code-built derivations", () => {
       chat: scriptedChat(CONCERN_SCRIPT()),
     });
     expect(blind.ok).toBe(true);
-    expect(commentPastMarker(forge)).toBe(commentPastMarker(blindForge));
+    expectSectionSplice(forge, blindForge, result.architecture);
   });
 
   it("the ADR a decision ref reaches is read at the pinned base, and its excerpt rides the prompt as evidence", async () => {
@@ -567,5 +652,132 @@ describe("the architecture-report input: red arms", () => {
       ),
     );
     expect(artifact.outcome).toMatchObject({ classification: "refused" });
+  });
+});
+
+describe("the aware family's published surfaces (work items D and F)", () => {
+  /** The head a mid-run move lands on — never the reviewed one. */
+  const MOVED = "f".repeat(40);
+
+  /** A chat that dies on its first call — the outage shape a provider flake writes. */
+  const OUTAGE_CHAT = () => ({
+    async complete() {
+      throw new Error("the provider never answered");
+    },
+  });
+
+  it("a moved head abandons the run with no comment; a foreign-pinned report publishes stale — the two never collide", async () => {
+    // The abandoned arm: the subject moved mid-run, so nothing was written
+    // and the record is the reduced shape it has always been — the 5, no
+    // section. Evidence the run held does not survive into a record of a
+    // head the run no longer judges: a moved subject abandons, never
+    // publishes stale.
+    const movedForge = forgeStub({
+      snapshotQueue: [snapshot(), snapshot({ head: { ref: "feature", sha: MOVED } })],
+    });
+    const moved = await awareRun({ forge: movedForge });
+    expect(moved.result.outcome).toBe("abandoned");
+    expect(movedForge.calls.upserts).toHaveLength(0);
+    const movedArtifact = moved.result.artifact;
+    expect(movedArtifact?.schemaVersion).toBe(5);
+    expect(movedArtifact && "architecture" in movedArtifact).toBe(false);
+
+    // The stale arm: coherent bytes pinned to a foreign head. The run
+    // still publishes — Partial, the stale sentence leading — and the
+    // section rides the comment saying `unknown`.
+    const stale = await awareRun({
+      report: envelope({ head: "e".repeat(40) }),
+      manifest: manifest(0),
+    });
+    expect(stale.result.outcome).toBe("published");
+    expect(stale.forge.calls.upserts).toHaveLength(1);
+    const staleBody = commentPastMarker(stale.forge);
+    expect(staleBody.startsWith("> ⚠️ This review is partial:")).toBe(true);
+    expect(staleBody).toContain("the architecture evidence is stale");
+  });
+
+  it("the section is one fact across surfaces: the artifact, the comment's record block and the run result name the same bytes", async () => {
+    const { forge, result } = await awareRun();
+    expect(result.outcome).toBe("published");
+    const evidence = /** @type {import("#core/architecture.mjs").ArchitectureEvidence} */ (
+      result.architecture
+    );
+    const expected = architectureSection(evidence);
+    // The artifact's section block.
+    expect(/** @type {any} */ (result.artifact).architecture).toEqual(expected);
+    // The comment's embedded record block, parsed back through the same
+    // canonical constructor the next run will read it with.
+    const record = parseRecordBlock(forge.calls.upserts[0]?.body ?? "");
+    expect(record?.architecture).toEqual(expected);
+    // And the rendered section is the renderer over the same object — the
+    // three surfaces cannot disagree because they never re-derive.
+    expect(commentPastMarker(forge)).toContain(
+      `\n${renderArchitectureCommentSection({ section: expected })}\n`,
+    );
+  });
+
+  it("a report path that leaves the workspace fails the run red before any model call", async () => {
+    // The confinement ceiling this action holds for every file it reads:
+    // the report is workspace-relative or it is not read at all. The
+    // refusal is the workspace's own typed answer, a plain error — the run
+    // ends `failed`, never a refusal that claims the path was judged.
+    const workspace = workspaceWith({ report: envelope(), manifest: manifest(0) });
+    const settled = await driveEntrypoint({
+      workspace,
+      forge: forgeStub(),
+      chat: {
+        async complete() {
+          throw new Error("the model was called on a run that should never have reached it");
+        },
+      },
+      extra: { "INPUT_ARCHITECTURE-REPORT": "../escape.json" },
+    });
+    expect(settled.ok).toBe(false);
+    expect(settled.cause).not.toBeInstanceOf(DeterministicRefusalError);
+    expect(settled.cause instanceof Error ? settled.cause.message : "").toMatch(
+      /outside the workspace/,
+    );
+  });
+
+  it("an artifact-path that leaves the workspace loses the artifact, never the comment", async () => {
+    // The write-side twin: the published comment stands, the artifact is
+    // the declared loss, and the reason names the confinement — the
+    // downgrade the green path has always taken for a failed record write.
+    const workspace = workspaceWith({ report: envelope(), manifest: manifest(0) });
+    const settled = await driveEntrypoint({
+      workspace,
+      forge: forgeStub(),
+      chat: scriptedChat(CONCERN_SCRIPT()),
+      extra: {
+        "INPUT_ARCHITECTURE-REPORT": ".archkeep/delta.json",
+        "INPUT_ARTIFACT-PATH": "../outside",
+      },
+    });
+    expect(settled.ok).toBe(true);
+    expect(settled.result?.outcome).toBe("published-without-artifact");
+    expect(settled.result?.reason).toMatch(/outside the workspace/);
+  });
+
+  it("an outage after the evidence read still lands the architecture facts in the red record", async () => {
+    // Evidence before model, made falsifiable: the provider dies on the
+    // first call, the run ends red — and the record the boundary writes
+    // carries the section, stamped into the aware red family (7), because
+    // the read happened before anything could fail.
+    const workspace = workspaceWith({
+      report: envelope({ status: "findings", violations: [groundedViolation()] }),
+      manifest: manifest(1),
+    });
+    const settled = await driveEntrypoint({
+      workspace,
+      forge: forgeStub(),
+      chat: OUTAGE_CHAT(),
+      extra: { "INPUT_ARCHITECTURE-REPORT": ".archkeep/delta.json" },
+    });
+    expect(settled.ok).toBe(false);
+    expect(settled.cause).not.toBeInstanceOf(DeterministicRefusalError);
+    const artifact = artifactOf(workspace, `review-artifact-failed-${HEAD}.json`);
+    expect(artifact.outcome).toMatchObject({ classification: "failed" });
+    expect(artifact.schemaVersion).toBe(7);
+    expect(artifact.architecture).toMatchObject({ verdict: "fail", stale: false });
   });
 });

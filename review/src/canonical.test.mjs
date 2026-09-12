@@ -14,6 +14,7 @@ import {
   createCanonicalResult,
   withRunPublication,
 } from "./canonical.mjs";
+import { ArtifactError } from "./artifact.mjs";
 import { isDigest } from "./digest.mjs";
 import { findingFingerprint, findingFingerprintV1 } from "./identity.mjs";
 import { DeterministicRefusalError } from "./refusal.mjs";
@@ -330,5 +331,143 @@ describe("buildCanonicalRecord", () => {
 
   it("lets a non-shape error travel untouched — the belt is not an exception sink", () => {
     expect(() => buildCanonicalRecord(/** @type {*} */ (null))).toThrow(TypeError);
+  });
+});
+
+describe("the architecture section's carry (ADR 003 — additive)", () => {
+  const HEAD = "9c9473e9227c09fbbf9a1bdd96fd3ea7cf8ffd81";
+  const BASE = "1d147e30f9e26e5f1e7d68b0e5a9e4d5c3b2a190";
+
+  /** A valid established section — the shape every aware surface carries. */
+  const section = (over = {}) =>
+    /** @type {import("./artifact.mjs").ArchitectureSection} */ (
+      structuredClone({
+        verdict: "fail",
+        stale: false,
+        unknownReason: null,
+        coverage: { complete: true, analyzedFiles: 4, notAnalyzedCount: 0, blindSpotCount: 0 },
+        policyChanged: false,
+        toolVersion: "0.29.0",
+        reportDigest: "a".repeat(64),
+        provenance: { head: { commit: HEAD }, base: { commit: BASE } },
+        policyFingerprints: { head: `sha256:${"1".repeat(64)}`, base: `sha256:${"2".repeat(64)}` },
+        counts: {
+          introduced: 1,
+          introducedWaived: 0,
+          resolved: 0,
+          unchanged: 2,
+          unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+        },
+        introduced: [
+          {
+            messageId: "module-boundary",
+            sourceProject: "widgets-a",
+            target: "widgets-b/src/index.mjs",
+            waived: false,
+            headCount: 1,
+            decisionRef: null,
+          },
+        ],
+        resolved: [],
+        renamePairs: [],
+        customRules: null,
+        occurrencesReduced: 0,
+        ...over,
+      })
+    );
+
+  it("is absent on a record built without one — the pre-architecture shape, byte for byte", () => {
+    expect("architecture" in build()).toBe(false);
+    expect(Object.keys(build()).sort()).toEqual([
+      "collapsed",
+      "findings",
+      "head",
+      "run",
+      "version",
+    ]);
+  });
+
+  it("carries the section beside the findings, deep-frozen, additive", () => {
+    const input = section();
+    const result = build({ architecture: input });
+    expect(result.architecture).toEqual(input);
+    expect(Object.isFrozen(result.architecture)).toBe(true);
+    expect(Object.isFrozen(result.architecture?.counts)).toBe(true);
+    expect(result.architecture).not.toBe(input); // re-validated, never trusted by reference
+    // The record's other arms are untouched by the carry — the key set grew
+    // by exactly one.
+    expect(Object.keys(result).sort()).toEqual([
+      "architecture",
+      "collapsed",
+      "findings",
+      "head",
+      "run",
+      "version",
+    ]);
+    // A JSON round trip is what the marker block spells; the section
+    // survives it unchanged.
+    expect(JSON.parse(JSON.stringify(result)).architecture).toEqual(section());
+  });
+
+  it("keeps the section out of the record's own vocabulary — it is a fact, not a state", () => {
+    // The section never joins the reconciliation vocabulary a finding
+    // carries; it rides beside the run facts, additive and inert.
+    const result = build({ architecture: section() });
+    expect("reconciliation" in (result.architecture ?? {})).toBe(false);
+    expect(result.findings[0]?.reconciliation).toBeUndefined();
+  });
+
+  it("retypes the validator's refusal into this constructor's vocabulary — never an ArtifactError", () => {
+    const attempt = () => build({ architecture: section({ verdict: "maybe" }) });
+    expect(attempt).toThrow(CanonicalResultError);
+    expect(attempt).not.toThrow(ArtifactError);
+    expect(attempt).toThrow(/architecture\.verdict 'maybe' is outside the vocabulary/);
+    // The exact-keys law holds through the carry too — the label spells the
+    // record's arm, not the artifact's.
+    expect(() => build({ architecture: section({ extra: 1 }) })).toThrow(
+      /^architecture has an unknown key 'extra'/,
+    );
+  });
+
+  it("flows through the birth seam as the typed refusal the red boundary records", () => {
+    const attempt = () =>
+      buildCanonicalRecord({
+        head: "9c9473e",
+        run: { state: "published", verdict: "pass" },
+        findings: [finding()],
+        architecture: section({ verdict: "unknown", unknownReason: null }),
+      });
+    expect(attempt).toThrow(DeterministicRefusalError);
+    expect(attempt).toThrow(/the run's record did not validate/);
+    expect(attempt).toThrow(/without saying which kind/);
+    try {
+      attempt();
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(DeterministicRefusalError);
+      expect(/** @type {Error} */ (cause).cause).toBeInstanceOf(CanonicalResultError);
+    }
+  });
+
+  it("carries the withheld shape as faithfully as the established one — unknown is a fact, not a defect", () => {
+    const withheld = build({
+      architecture: section({
+        verdict: "unknown",
+        stale: true,
+        unknownReason: "stale",
+        introduced: [],
+        counts: {
+          introduced: 1,
+          introducedWaived: 0,
+          resolved: 0,
+          unchanged: 2,
+          unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+        },
+      }),
+    });
+    expect(withheld.architecture?.verdict).toBe("unknown");
+    expect(withheld.architecture?.stale).toBe(true);
+    // The run's own verdict is untouched by the withheld section — the
+    // canonical states facts, it does not derive verdicts from them.
+    expect(withheld.run.verdict).toBe("pass");
   });
 });

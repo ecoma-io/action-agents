@@ -256,6 +256,7 @@ export async function run(inputs, context, io = {}) {
         reason,
         ...(red.commentId !== undefined ? { commentId: red.commentId } : {}),
         ...(red.applicability !== undefined ? { applicability: red.applicability } : {}),
+        ...(red.architecture !== undefined ? { architecture: red.architecture } : {}),
       });
       const file = writeRunArtifact({
         workspace: context.workspace,

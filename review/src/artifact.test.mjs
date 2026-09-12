@@ -11,6 +11,10 @@ import {
   ArtifactError,
   applicabilityArtifactSchemaVersion,
   applicabilitySection,
+  architectureApplicabilityArtifactSchemaVersion,
+  architectureArtifactSchemaVersion,
+  architectureSection,
+  asArchitectureSection,
   assertFreshArtifact,
   buildAbandonedArtifact,
   buildArtifact,
@@ -2269,5 +2273,409 @@ describe("buildRedArtifact", () => {
       grown[grownKey] = grownKey === "findings" || grownKey === "risk" ? [] : {};
       expect(() => serialiseArtifact(grown)).toThrow(ArtifactError);
     }
+  });
+});
+
+describe("the architecture family (7/8)", () => {
+  /** A valid established section — the reduction of a pinned, judged report. */
+  const section = (over = {}) =>
+    /** @type {import("./artifact.mjs").ArchitectureSection} */ (
+      structuredClone({
+        verdict: "pass",
+        stale: false,
+        unknownReason: null,
+        coverage: { complete: true, analyzedFiles: 2, notAnalyzedCount: 0, blindSpotCount: 0 },
+        policyChanged: false,
+        toolVersion: "0.29.0",
+        reportDigest: DIGEST,
+        provenance: { head: { commit: HEAD }, base: { commit: OTHER_HEAD } },
+        policyFingerprints: { head: `sha256:${"1".repeat(64)}`, base: `sha256:${"1".repeat(64)}` },
+        counts: {
+          introduced: 0,
+          introducedWaived: 0,
+          resolved: 0,
+          unchanged: 0,
+          unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+        },
+        introduced: [],
+        resolved: [],
+        renamePairs: [],
+        customRules: null,
+        occurrencesReduced: 0,
+        ...over,
+      })
+    );
+
+  /** A section with a withheld verdict — stale bytes pinned to a foreign head. */
+  const staleSection = () =>
+    section({
+      verdict: "unknown",
+      stale: true,
+      unknownReason: "stale",
+      provenance: { head: { commit: OTHER_HEAD }, base: { commit: OTHER_HEAD } },
+    });
+
+  /**
+   * The six-gate table the aware family's facts carry, architecture last —
+   * typed so the literal `gate` arms narrow to the closed `GateName`.
+   *
+   * @param {boolean} [architecturePassed]
+   * @returns {import("./gates.mjs").GateResult[]}
+   */
+  const sixGates = (architecturePassed = true) => [
+    { gate: "conclusion", passed: true },
+    { gate: "bound", passed: true },
+    { gate: "coverage", passed: true },
+    { gate: "provenance", passed: true },
+    { gate: "verification", passed: true },
+    {
+      gate: "architecture",
+      ...(architecturePassed
+        ? { passed: true }
+        : {
+            passed: false,
+            reason:
+              "the architecture evidence is stale — it pins a head other than the one this review judged, so its verdict is withheld as unknown",
+          }),
+    },
+  ];
+
+  it("stamps 7 bare and 8 with an applicability fact — the lockstep law's next pair", () => {
+    const bare = buildArtifact(facts({ architecture: section(), gates: sixGates() }));
+    expect(bare.schemaVersion).toBe(7);
+    expect(bare.schemaVersion).toBe(architectureArtifactSchemaVersion);
+    const withApplicability = buildArtifact(
+      facts({
+        architecture: section(),
+        gates: sixGates(),
+        applicability: applicabilitySection({
+          context: "automation",
+          applicable: true,
+          posture: "automation",
+          matchedRule: "release-prs",
+          basis: "rule",
+          inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+        }),
+      }),
+    );
+    expect(withApplicability.schemaVersion).toBe(8);
+    expect(withApplicability.schemaVersion).toBe(architectureApplicabilityArtifactSchemaVersion);
+    // And the blind families are untouched — the same facts, no section,
+    // keep today's numbers.
+    expect(buildArtifact(facts()).schemaVersion).toBe(5);
+    expect(
+      buildArtifact(
+        facts({
+          applicability: applicabilitySection({
+            context: "automation",
+            applicable: true,
+            posture: "automation",
+            matchedRule: "release-prs",
+            basis: "rule",
+            inputs: { association: "NONE", head: "same-repo", authorType: "bot-allowlisted" },
+          }),
+        }),
+      ).schemaVersion,
+    ).toBe(6);
+  });
+
+  it("the section selects the six-gate table — a five-entry table beside a section is refused", () => {
+    expect(buildArtifact(facts({ architecture: section(), gates: sixGates() })).gates).toHaveLength(
+      6,
+    );
+    expect(() => buildArtifact(facts({ architecture: section() }))).toThrow(
+      /run facts\.gates holds 5 entries, the declared set is 6/,
+    );
+  });
+
+  it("the gate entry must agree with the section's own basis — both directions", () => {
+    // An established section beside a failed gate row: two truths, one fact.
+    expect(() => buildArtifact(facts({ architecture: section(), gates: sixGates(false) }))).toThrow(
+      /architecture entry disagrees with the section/,
+    );
+    // A withheld section beside a passing gate row: the same disagreement.
+    expect(() =>
+      buildArtifact(facts({ architecture: staleSection(), gates: sixGates(true) })),
+    ).toThrow(/architecture entry disagrees with the section/);
+    // The agreeing withheld pair builds, gate failed, reason carried.
+    const withheld = buildArtifact(facts({ architecture: staleSection(), gates: sixGates(false) }));
+    expect(withheld.schemaVersion).toBe(7);
+    expect(withheld.gates.at(-1)).toMatchObject({ gate: "architecture", passed: false });
+  });
+
+  it("serialises round-trip with exact keys and byte determinism", () => {
+    const artifact = buildArtifact(facts({ architecture: section(), gates: sixGates() }));
+    const bytes = serialiseArtifact(artifact);
+    const round = JSON.parse(bytes);
+    expect(Object.keys(round).sort()).toEqual(
+      [
+        "architecture",
+        "coverage",
+        "findings",
+        "gates",
+        "headRef",
+        "outcome",
+        "phases",
+        "policy",
+        "provenance",
+        "pullRequest",
+        "repository",
+        "risk",
+        "schemaVersion",
+        "verification",
+      ].sort(),
+    );
+    expect(Object.keys(round.architecture).sort()).toEqual(
+      [
+        "coverage",
+        "counts",
+        "customRules",
+        "introduced",
+        "occurrencesReduced",
+        "policyChanged",
+        "policyFingerprints",
+        "provenance",
+        "renamePairs",
+        "reportDigest",
+        "resolved",
+        "stale",
+        "toolVersion",
+        "unknownReason",
+        "verdict",
+      ].sort(),
+    );
+    expect(serialiseArtifact(artifact)).toBe(bytes);
+    expect(JSON.parse(serialiseArtifact(/** @type {any} */ (structuredClone(artifact))))).toEqual(
+      round,
+    );
+  });
+
+  it("refuses a section the validator rejects — shape, vocabularies, caps, arithmetic", () => {
+    /** @param {(s: any) => any} mutate */
+    const build = (mutate) =>
+      buildArtifact(
+        facts({
+          architecture: mutate(section()),
+          gates: sixGates(),
+        }),
+      );
+    expect(() => build((s) => ((s.verdict = "maybe"), s))).toThrow(/verdict/);
+    expect(() => build((s) => ((s.extra = 1), s))).toThrow(/run facts\.architecture/);
+    expect(() => build((s) => ((s.unknownReason = "stale"), s))).toThrow(
+      /beside an unknown reason/,
+    );
+    expect(() => build((s) => ((s.verdict = "unknown"), s))).toThrow(/without saying which kind/);
+    expect(() => build((s) => ((s.reportDigest = BAD_DIGEST), s))).toThrow(/sha256/);
+    expect(() => build((s) => ((s.counts = { ...s.counts, introducedWaived: 1 }), s))).toThrow(
+      /more waivers than violations/,
+    );
+    expect(() =>
+      build(
+        (s) => (
+          (s.introduced = [
+            {
+              messageId: "m",
+              sourceProject: "a",
+              target: "b",
+              waived: true,
+              headCount: 1,
+              decisionRef: null,
+            },
+          ]),
+          s
+        ),
+      ),
+    ).toThrow(/introduced lists 1 waived items against a count of 0/);
+    expect(() =>
+      build((s) => ((s.introduced = Array.from({ length: 33 }, () => s.introduced[0])), s)),
+    ).toThrow(/identity cap/);
+    expect(() => build((s) => ((s.introduced = [{ messageId: "m" }]), s))).toThrow(
+      /introduced\[0\]/,
+    );
+    expect(() =>
+      build(
+        (s) => (
+          (s.customRules = {
+            findings: {
+              introduced: { count: 1, ruleIds: Array.from({ length: 17 }, () => "r") },
+              resolved: { count: 0, ruleIds: [] },
+              unchanged: { count: 0, ruleIds: [] },
+              unknown: { count: 0, ruleIds: [] },
+            },
+          }),
+          s
+        ),
+      ),
+    ).toThrow(/16-id cap/);
+    expect(() => build((s) => ((s.toolVersion = "x".repeat(201)), s))).toThrow(/documented cap/);
+  });
+
+  it("buildRedArtifact carries the section and joins the aware red family", () => {
+    const redInput = (over = {}) => ({
+      repository: "acme/widgets",
+      pullRequest: 41,
+      headRef: HEAD,
+      outcome: /** @type {"refused" | "failed"} */ ("failed"),
+      reason: "request to https://api.github.com failed: reset",
+      ...over,
+    });
+    // The outage rule: evidence that landed before the run died red rides
+    // the record, and the record joins the family its facts select.
+    const withSection = buildRedArtifact(redInput({ architecture: section() }));
+    expect(withSection.schemaVersion).toBe(7);
+    const both = buildRedArtifact(
+      redInput({ architecture: section(), applicability: "automation" }),
+    );
+    expect(both.schemaVersion).toBe(8);
+    expect(JSON.parse(serialiseArtifact(withSection)).architecture.verdict).toBe("pass");
+    // Without a section the red shapes keep today's 5 — a run that died
+    // before its evidence read is not architecture-aware.
+    expect(buildRedArtifact(redInput()).schemaVersion).toBe(5);
+    // And a malformed section refuses the red record too.
+    expect(() =>
+      buildRedArtifact(redInput({ architecture: section({ verdict: "maybe" }) })),
+    ).toThrow(ArtifactError);
+  });
+
+  it("architectureSection reduces the frozen evidence — identity and counts persist, caps applied", () => {
+    const evidence = /** @type {import("#core/architecture.mjs").ArchitectureEvidence} */ (
+      structuredClone({
+        verdict: "fail",
+        stale: false,
+        incompleteness: null,
+        provenance: {
+          head: { commit: HEAD, dirty: false },
+          base: { commit: OTHER_HEAD, dirty: true },
+        },
+        policyChanged: true,
+        provider: "node-workspace",
+        toolVersion: "0.29.0",
+        policyFingerprints: { head: `sha256:${"1".repeat(64)}`, base: `sha256:${"2".repeat(64)}` },
+        reportSha256: DIGEST,
+        introduced: [
+          {
+            messageId: "module-boundary",
+            sourceProject: "widgets-a",
+            target: "widgets-b/src/index.mjs",
+            targetIsSpecifier: false,
+            constraint: { decisionRef: "0009-share-through-facades", description: "no" },
+            waived: false,
+            waivedBy: null,
+            baseCount: 0,
+            headCount: 2,
+            baseSites: [],
+            headSites: [{ file: "src/a.mjs", line: 2, column: 1 }],
+            reason: null,
+            note: null,
+          },
+          {
+            messageId: "module-boundary",
+            sourceProject: "widgets-c",
+            target: "widgets-d/src/index.mjs",
+            targetIsSpecifier: false,
+            constraint: null,
+            waived: true,
+            waivedBy: {
+              path: "widgets-c/**",
+              messageId: "module-boundary",
+              reason: "split landing",
+              expiresAt: "2999-01-01",
+            },
+            baseCount: 0,
+            headCount: 1,
+            baseSites: [],
+            headSites: [{ file: "src/c.mjs", line: 4, column: 1 }],
+            reason: null,
+            note: null,
+          },
+        ],
+        resolved: [
+          {
+            messageId: "module-boundary",
+            sourceProject: "widgets-old",
+            target: "widgets-e/src/index.mjs",
+            targetIsSpecifier: false,
+            constraint: null,
+            waived: false,
+            waivedBy: null,
+            baseCount: 1,
+            headCount: 0,
+            baseSites: [{ file: "src/old.mjs", line: 1, column: 1 }],
+            headSites: [],
+            reason: null,
+            note: null,
+          },
+        ],
+        unchangedCount: 3,
+        introducedWaived: 1,
+        renamePairs: [],
+        customRules: null,
+        unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 1 },
+        occurrencesReduced: [
+          {
+            messageId: "module-boundary",
+            sourceProject: "widgets-f",
+            target: "widgets-g/src/index.mjs",
+            note: "4 at base, 2 at head",
+          },
+        ],
+        coverage: {
+          complete: false,
+          analyzedFiles: 9,
+          notAnalyzedCount: 2,
+          blindSpotCount: 1,
+          notes: [],
+        },
+      })
+    );
+    const reduced = architectureSection(evidence);
+    expect(reduced.verdict).toBe("fail");
+    expect(reduced.policyChanged).toBe(true);
+    expect(reduced.counts).toEqual({
+      introduced: 2,
+      introducedWaived: 1,
+      resolved: 1,
+      unchanged: 3,
+      unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 1 },
+    });
+    expect(reduced.introduced).toEqual([
+      {
+        messageId: "module-boundary",
+        sourceProject: "widgets-a",
+        target: "widgets-b/src/index.mjs",
+        waived: false,
+        headCount: 2,
+        decisionRef: "0009-share-through-facades",
+      },
+      {
+        messageId: "module-boundary",
+        sourceProject: "widgets-c",
+        target: "widgets-d/src/index.mjs",
+        waived: true,
+        headCount: 1,
+        decisionRef: null,
+      },
+    ]);
+    expect(reduced.resolved).toEqual([
+      {
+        messageId: "module-boundary",
+        sourceProject: "widgets-old",
+        target: "widgets-e/src/index.mjs",
+      },
+    ]);
+    expect(reduced.occurrencesReduced).toBe(1);
+    expect(Object.keys(reduced.counts)).not.toContain("unknown");
+    // The reduction is idempotent through the validator — the section the
+    // builder emits is the section the validator accepts, exactly.
+    expect(asArchitectureSection(JSON.parse(JSON.stringify(reduced)), "test")).toEqual(reduced);
+    // Producer over-long identity truncates deterministically, never refuses.
+    const firstEvidence = /** @type {import("#core/architecture.mjs").EvidenceItem} */ (
+      evidence.introduced[0]
+    );
+    const long = architectureSection({
+      ...evidence,
+      introduced: [{ ...firstEvidence, messageId: "x".repeat(500) }],
+    });
+    expect(long.introduced[0]?.messageId).toHaveLength(200);
   });
 });

@@ -352,3 +352,132 @@ describe("stored records across the full-span identity migration (#393)", () => 
     expect(out.current.map((f) => f.reconciliation)).toEqual(["new"]);
   });
 });
+
+describe("the architecture section in the embedded record", () => {
+  const HEAD = "9c9473e9227c09fbbf9a1bdd96fd3ea7cf8ffd81";
+  const BASE = "1d147e30f9e26e5f1e7d68b0e5a9e4d5c3b2a190";
+
+  /** A valid established section, as the aware run builds it. */
+  const section = (over = {}) =>
+    /** @type {import("./artifact.mjs").ArchitectureSection} */ (
+      structuredClone({
+        verdict: "fail",
+        stale: false,
+        unknownReason: null,
+        coverage: { complete: true, analyzedFiles: 4, notAnalyzedCount: 0, blindSpotCount: 0 },
+        policyChanged: false,
+        toolVersion: "0.29.0",
+        reportDigest: "a".repeat(64),
+        provenance: { head: { commit: HEAD }, base: { commit: BASE } },
+        policyFingerprints: { head: `sha256:${"1".repeat(64)}`, base: `sha256:${"2".repeat(64)}` },
+        counts: {
+          introduced: 1,
+          introducedWaived: 0,
+          resolved: 0,
+          unchanged: 2,
+          unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+        },
+        introduced: [
+          {
+            messageId: "module-boundary",
+            sourceProject: "widgets-a",
+            target: "widgets-b/src/index.mjs",
+            waived: false,
+            headCount: 1,
+            decisionRef: "0009-share-through-facades",
+          },
+        ],
+        resolved: [],
+        renamePairs: [],
+        customRules: null,
+        occurrencesReduced: 0,
+        ...over,
+      })
+    );
+
+  it("round-trips byte-stably — parse after embed, embed after parse", () => {
+    const record = run({ findings: [finding()], architecture: section() });
+    const block = embedRecordBlock(record);
+    expect(block).not.toContain("\n");
+    const parsed = parseRecordBlock(markerBody(record));
+    if (parsed === undefined) throw new Error("the aware published block did not parse");
+    expect(parsed.architecture).toEqual(section());
+    expect(embedRecordBlock(parsed)).toBe(block);
+    // The same record embeds the same bytes — fixed key order, no timestamps.
+    expect(embedRecordBlock(run({ findings: [finding()], architecture: section() }))).toBe(block);
+  });
+
+  it("appends the section after the payload's last arm — a blind record's bytes are untouched", () => {
+    // The additive law: the architecture key rides last, so a record
+    // without one spells exactly the payload this block always wrote —
+    // blind runs stay byte-identical, and old readers skip the new arm.
+    const blind = run({
+      findings: [finding()],
+      coverage: { covered: ["src/a.mjs"], uncovered: [], total: 1 },
+    });
+    expect(Object.keys(decode(embedRecordBlock(blind)))).toEqual([
+      "version",
+      "head",
+      "run",
+      "findings",
+      "coverage",
+    ]);
+    const aware = run({
+      findings: [finding()],
+      coverage: { covered: ["src/a.mjs"], uncovered: [], total: 1 },
+      architecture: section(),
+    });
+    expect(Object.keys(decode(embedRecordBlock(aware)))).toEqual([
+      "version",
+      "head",
+      "run",
+      "findings",
+      "coverage",
+      "architecture",
+    ]);
+  });
+
+  it("persists identity and counts, never report bytes — the retention row's comment half", () => {
+    const payload = decode(
+      embedRecordBlock(run({ findings: [finding()], architecture: section() })),
+    );
+    expect(payload.architecture.counts).toEqual(section().counts);
+    expect(payload.architecture.introduced[0]).toMatchObject({
+      messageId: "module-boundary",
+      sourceProject: "widgets-a",
+      waived: false,
+      decisionRef: "0009-share-through-facades",
+    });
+    // Nothing a report carries beyond the retention shape survives the
+    // carry — no site lists, no notes, no raw producer text.
+    expect(JSON.stringify(payload.architecture)).not.toContain("headSites");
+    expect(JSON.stringify(payload.architecture)).not.toContain("baseSites");
+    expect(JSON.stringify(payload.architecture)).not.toContain("expiresAt");
+  });
+
+  it("collapses a mangled section to absent — the next run is a first run, never a red one", () => {
+    const block = embedRecordBlock(run({ findings: [finding()], architecture: section() }));
+    const mangled = decode(block);
+    mangled.architecture.verdict = "maybe";
+    expect(parseRecordBlock(encode(mangled))).toBeUndefined();
+    const truncated = decode(block);
+    truncated.architecture.counts.introducedWaived = 5;
+    expect(parseRecordBlock(encode(truncated))).toBeUndefined();
+  });
+
+  it("reconciles against a previous aware record — the marker-head law holds with a section aboard", () => {
+    const own = comment(
+      50,
+      markerBody(run({ head: HEAD.slice(0, 7), findings: [finding()], architecture: section() })),
+    );
+    const recovered = previousRecord([own], "review", OWN_LOGINS);
+    expect(recovered?.head).toBe(HEAD.slice(0, 7));
+    expect(recovered?.architecture?.verdict).toBe("fail");
+    // And the section is not drift: a re-embedded recovery is the same block.
+    expect(embedRecordBlock(recovered ?? run())).toBe(
+      markerBody(
+        run({ head: HEAD.slice(0, 7), findings: [finding()], architecture: section() }),
+      ).split("\n")[2],
+    );
+  });
+});

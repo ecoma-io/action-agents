@@ -203,3 +203,165 @@ describe("reconcile", () => {
     expect(reconcile({ previous, current })).toEqual(reconcile({ previous, current }));
   });
 });
+
+describe("the architecture note between runs", () => {
+  const HEAD = "9c9473e9227c09fbbf9a1bdd96fd3ea7cf8ffd81";
+  const BASE = "1d147e30f9e26e5f1e7d68b0e5a9e4d5c3b2a190";
+
+  /** A valid established section; the counts arm is what the note reads. */
+  const section = (over = {}) =>
+    /** @type {import("./artifact.mjs").ArchitectureSection} */ (
+      structuredClone({
+        verdict: "fail",
+        stale: false,
+        unknownReason: null,
+        coverage: { complete: true, analyzedFiles: 4, notAnalyzedCount: 0, blindSpotCount: 0 },
+        policyChanged: false,
+        toolVersion: "0.29.0",
+        reportDigest: "a".repeat(64),
+        provenance: { head: { commit: HEAD }, base: { commit: BASE } },
+        policyFingerprints: { head: `sha256:${"1".repeat(64)}`, base: `sha256:${"2".repeat(64)}` },
+        counts: {
+          introduced: 2,
+          introducedWaived: 1,
+          resolved: 0,
+          unchanged: 2,
+          unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+        },
+        introduced: [],
+        resolved: [],
+        renamePairs: [],
+        customRules: null,
+        occurrencesReduced: 0,
+        ...over,
+      })
+    );
+
+  it("stays absent when nothing moved — no drift, no empty note", () => {
+    const out = reconcile({
+      previous: run({ findings: [finding()], architecture: section() }),
+      current: run({ findings: [finding()], architecture: section() }),
+    });
+    expect("architecture" in out).toBe(false);
+    expect(Object.keys(out)).toEqual(["current", "previous"]);
+  });
+
+  it("says it when the verdict moved — code-composed, both spellings named", () => {
+    const out = reconcile({
+      previous: run({ findings: [finding()], architecture: section() }),
+      current: run({
+        findings: [finding()],
+        architecture: section({
+          verdict: "pass",
+          counts: { ...section().counts, introducedWaived: 1 },
+        }),
+      }),
+    });
+    expect(out.architecture?.note).toBe("verdict moved from 'fail' to 'pass'");
+  });
+
+  it("says it when waived introductions moved — the waiver-state change, named", () => {
+    const out = reconcile({
+      previous: run({ findings: [finding()], architecture: section() }),
+      current: run({
+        findings: [finding()],
+        architecture: section({
+          counts: {
+            introduced: 2,
+            introducedWaived: 0,
+            resolved: 0,
+            unchanged: 2,
+            unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+          },
+        }),
+      }),
+    });
+    expect(out.architecture?.note).toBe("waived introductions moved from 1 to 0");
+  });
+
+  it("joins both movements in one sentence — semicolon, code's order", () => {
+    const out = reconcile({
+      previous: run({ findings: [finding()], architecture: section() }),
+      current: run({
+        findings: [finding()],
+        architecture: section({
+          verdict: "unknown",
+          stale: true,
+          unknownReason: "stale",
+          counts: {
+            introduced: 2,
+            introducedWaived: 0,
+            resolved: 0,
+            unchanged: 2,
+            unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+          },
+        }),
+      }),
+    });
+    expect(out.architecture?.note).toBe(
+      "verdict moved from 'fail' to 'unknown'; waived introductions moved from 1 to 0",
+    );
+  });
+
+  it("rides only when both records carry the section — blind on either side is not drift", () => {
+    // A first aware run against a blind predecessor.
+    expect(
+      reconcile({
+        previous: run({ findings: [finding()] }),
+        current: run({ findings: [finding()], architecture: section() }),
+      }).architecture,
+    ).toBeUndefined();
+    // A blind run against an aware predecessor.
+    expect(
+      reconcile({
+        previous: run({ findings: [finding()], architecture: section() }),
+        current: run({ findings: [finding()] }),
+      }).architecture,
+    ).toBeUndefined();
+    // No previous at all — a first run.
+    expect(
+      reconcile({ current: run({ findings: [finding()], architecture: section() }) }).architecture,
+    ).toBeUndefined();
+  });
+
+  it("ignores a predecessor that never published — an unpublished fact is not history", () => {
+    for (const state of ["refused", "abandoned", "skip", "failed"]) {
+      const out = reconcile({
+        previous: run({
+          run: { state, verdict: "unknown" },
+          findings: [],
+          architecture: section(),
+        }),
+        current: run({
+          findings: [finding()],
+          architecture: section({
+            verdict: "pass",
+            counts: {
+              introduced: 2,
+              introducedWaived: 0,
+              resolved: 0,
+              unchanged: 2,
+              unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+            },
+          }),
+        }),
+      });
+      expect(out.architecture).toBeUndefined();
+    }
+  });
+
+  it("keeps the note out of the finding-label vocabulary — facts never become labels", () => {
+    const out = reconcile({
+      previous: run({ findings: [finding()], architecture: section() }),
+      current: run({
+        findings: [finding()],
+        architecture: section({ verdict: "pass" }),
+      }),
+    });
+    expect(out.architecture?.note).toBe("verdict moved from 'fail' to 'pass'");
+    expect(out.current.map((f) => f.reconciliation)).toEqual(["persisting"]);
+    expect(out.previous.map((f) => f.reconciliation)).toEqual(["persisting"]);
+    // The note is frozen with its bundle — an explicit fact, never a mutated one.
+    expect(Object.isFrozen(out.architecture)).toBe(true);
+  });
+});
