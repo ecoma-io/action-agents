@@ -177,7 +177,11 @@ function violation(over = {}) {
       sourceProject: "triage",
       target: "#review/src/index.mjs",
       targetIsSpecifier: true,
-      constraint: "triage may not import review",
+      constraint: {
+        sourceTag: "scope:triage",
+        onlyDependOnLibsWithTags: ["scope:triage"],
+        description: "triage may not import review",
+      },
       baseCount: 0,
       headCount: 1,
       baseSites: [],
@@ -888,7 +892,11 @@ describe("normalization: the frozen evidence shape", () => {
       sourceProject: "triage",
       target: "#review/src/index.mjs",
       targetIsSpecifier: true,
-      constraint: "triage may not import review",
+      constraint: {
+        sourceTag: "scope:triage",
+        onlyDependOnLibsWithTags: ["scope:triage"],
+        description: "triage may not import review",
+      },
       waived: false,
       waivedBy: null,
       baseCount: 0,
@@ -898,14 +906,25 @@ describe("normalization: the frozen evidence shape", () => {
       reason: "absent at base",
       note: null,
     });
+    expect(Object.isFrozen(evidence.introduced[0]?.constraint)).toBe(true);
     expect(evidence.introduced[1]?.waived).toBe(true);
     expect(evidence.introduced[1]?.waivedBy).toEqual({
+      path: null,
+      messageId: null,
       expiresAt: "2999-01-01",
       reason: "waived in #12",
     });
     expect(evidence.introducedWaived).toBe(1);
     expect(evidence.unchangedCount).toBe(1);
-    expect(evidence.occurrencesReduced).toEqual(["occurrencesReduced"]);
+    expect(evidence.occurrencesReduced).toEqual([
+      {
+        messageId: "noRelativeOrAbsoluteImportsAcrossLibraries",
+        sourceProject: "triage",
+        target: "#review/src/index.mjs",
+        note: "occurrencesReduced",
+      },
+    ]);
+    expect(evidence.renamePairs).toEqual([]);
   });
 
   it("caps the site sample at twenty well-formed sites", () => {
@@ -1234,5 +1253,571 @@ describe("forward compatibility and determinism", () => {
         expect: { headSha: HEAD },
       }),
     ).toThrow(WorkspaceRefusal);
+  });
+});
+
+// ── The eleven-state delta matrix (design record §7) ───────────────────────
+//
+// One canned envelope per state of the campaign's eleven-state taxonomy, and
+// the assertion that the normalized evidence holds every pair distinct that
+// the recorded facts can honestly distinguish — with the one pair it cannot
+// pinned as such rather than papered over.
+
+/**
+ * A coherent verdict-carrying delta envelope over the given buckets — the
+ * summary counts exactly what the buckets hold, waived counted by hand.
+ *
+ * @param {{ status?: "ok" | "findings", violations?: { introduced: unknown[], resolved: unknown[], unchanged: unknown[], unknown: unknown[] }, waived?: number, over?: Record<string, unknown> }} [shape]
+ * @returns {string}
+ */
+function delta(shape = {}) {
+  const status = shape.status ?? "findings";
+  const violations = shape.violations ?? {
+    introduced: [violation()],
+    resolved: [],
+    unchanged: [],
+    unknown: [],
+  };
+  return envelope({
+    status,
+    exitCode: status === "findings" ? 1 : 0,
+    decision: { verdict: status === "findings" ? "fail" : "pass", reason: "" },
+    result: {
+      summary: {
+        introduced: violations.introduced.length,
+        introducedWaived: shape.waived ?? 0,
+        resolved: violations.resolved.length,
+        unchanged: violations.unchanged.length,
+        unknown: 0,
+      },
+      violations,
+    },
+    ...(shape.over ?? {}),
+  });
+}
+
+describe("the eleven-state delta matrix", () => {
+  /** The unchanged-debt item shape — present on both sides of the compare. */
+  const debt = (over = {}) =>
+    violation({
+      baseCount: 1,
+      headCount: 1,
+      baseSites: [{ file: "triage/src/index.mjs", line: 11, column: 1 }],
+      reason: null,
+      note: null,
+      ...over,
+    });
+
+  /** State 1 — a hard violation: one non-waived introduction, exit 1. */
+  const state1 = () => read({ manifest: manifest(1), report: delta() });
+
+  /** State 2 — a waived introduction: the same debt, accepted, exit 0. */
+  const state2 = () =>
+    read({
+      manifest: manifest(0),
+      report: delta({
+        status: "ok",
+        waived: 1,
+        violations: {
+          introduced: [
+            violation({
+              waived: true,
+              waivedBy: {
+                path: "triage/**",
+                messageId: "noRelativeOrAbsoluteImportsAcrossLibraries",
+                reason: "accepted while the split lands (#12)",
+                expiresAt: "2999-01-01",
+              },
+            }),
+          ],
+          resolved: [],
+          unchanged: [],
+          unknown: [],
+        },
+      }),
+    });
+
+  /**
+   * State 3 — an expired-waiver re-assertion. The producer's delta annotates
+   * only *active* waivers: an acceptance whose term lapsed leaves the entry
+   * `waived: false` with no row — the re-assertion rides the non-waived lane
+   * verbatim (measured: delta-classify's waiveAnnotation, pinned by
+   * Archkeep's own delta tests). The law-time fields that explain the event
+   * live on the waived lane (state 2) and in the prior run's record.
+   */
+  const state3 = () =>
+    read({
+      manifest: manifest(1),
+      report: delta({
+        violations: {
+          introduced: [violation({ reason: "absent at base" })],
+          resolved: [],
+          unchanged: [],
+          unknown: [],
+        },
+      }),
+    });
+
+  /** State 4 — known pre-existing debt: unchanged, exit 0. */
+  const state4 = () =>
+    read({
+      manifest: manifest(0),
+      report: delta({
+        status: "ok",
+        violations: { introduced: [], resolved: [], unchanged: [debt()], unknown: [] },
+      }),
+    });
+
+  /** State 5 — shrinking debt: unchanged with the producer's reduction note. */
+  const state5 = () =>
+    read({
+      manifest: manifest(0),
+      report: delta({
+        status: "ok",
+        violations: {
+          introduced: [],
+          resolved: [],
+          unchanged: [
+            debt({
+              baseCount: 4,
+              headCount: 2,
+              note: "occurrencesReduced: 4 at base, 2 at head — the violation still exists",
+            }),
+          ],
+          unknown: [],
+        },
+      }),
+    });
+
+  /** State 6 — a rename pair: one violation, two names, identical sites. */
+  const state6 = () =>
+    read({
+      manifest: manifest(1),
+      report: delta({
+        violations: {
+          introduced: [violation({ sourceProject: "review" })],
+          resolved: [
+            violation({
+              sourceProject: "triage-old",
+              baseCount: 1,
+              headCount: 0,
+              headSites: [],
+              baseSites: [{ file: "triage/src/index.mjs", line: 11, column: 1 }],
+              reason: null,
+            }),
+          ],
+          unchanged: [],
+          unknown: [],
+        },
+      }),
+    });
+
+  /**
+   * State 7 — intentional evolution: the constraint row that fired cites the
+   * record behind the exception, and the evidence carries the row verbatim.
+   */
+  const state7 = () =>
+    read({
+      manifest: manifest(1),
+      report: delta({
+        violations: {
+          introduced: [
+            violation({
+              constraint: {
+                sourceTag: "scope:triage",
+                onlyDependOnLibsWithTags: ["scope:triage"],
+                description: "triage may not import review",
+                decisionRef: "007-archkeep-runtime-evidence",
+              },
+            }),
+          ],
+          resolved: [],
+          unchanged: [],
+          unknown: [],
+        },
+      }),
+    });
+
+  /** State 8 — a policy-change artifact: the law moved, not the code. */
+  const state8 = () =>
+    read({
+      manifest: manifest(0),
+      report: delta({
+        status: "ok",
+        over: {
+          result: { policyChanged: true, head: { policyFingerprint: "fp-head-after" } },
+        },
+        violations: { introduced: [], resolved: [], unchanged: [debt()], unknown: [] },
+      }),
+    });
+
+  /** State 9 — a custom-finding introduction: waiverless by construction. */
+  const state9 = () =>
+    read({
+      manifest: manifest(1),
+      report: delta({
+        violations: { introduced: [], resolved: [], unchanged: [], unknown: [] },
+        over: {
+          result: {
+            summary: {
+              customFindings: { introduced: 1, resolved: 0, unchanged: 0, unknown: 0 },
+            },
+            customRules: {
+              findings: {
+                introduced: [
+                  {
+                    rule: "no-sql-in-view",
+                    ruleId: "custom/no-sql-in-view/queries",
+                    findingId: "q1",
+                    project: "review",
+                    message: "SQL in a view",
+                    baseCount: 0,
+                    headCount: 2,
+                    baseSites: [],
+                    headSites: [{ file: "review/src/view.mjs", line: 5, column: 1 }],
+                  },
+                ],
+                resolved: [],
+                unchanged: [],
+                unknown: [],
+              },
+            },
+          },
+        },
+      }),
+    });
+
+  /** State 10 — insufficient evidence: the run withheld its verdict, exit 3. */
+  const state10 = () => {
+    const withheld = JSON.parse(
+      envelope({
+        status: "no-verdict",
+        exitCode: 3,
+        decision: { verdict: "unknown", reason: "the graph could not be resolved" },
+        coverage: { complete: false, notAnalyzed: ["generated/"] },
+      }),
+    );
+    delete withheld.result;
+    return read({ manifest: manifest(3), report: JSON.stringify(withheld) });
+  };
+
+  /** State 11 — stale evidence: coherent bytes pinned to a different head. */
+  const state11 = () =>
+    read({
+      report: envelope({
+        result: { head: { provenance: { commit: OTHER, remote: "", dirty: false } } },
+      }),
+    });
+
+  /**
+   * What a renderer reads off evidence to tell one state from another. Every
+   * member is a recorded fact; none is derived meaning.
+   *
+   * @param {import("./architecture.mjs").ArchitectureEvidence} evidence
+   */
+  function signatureOf(evidence) {
+    return {
+      verdict: evidence.verdict,
+      stale: evidence.stale,
+      withheld: evidence.incompleteness === null ? null : evidence.incompleteness.reason,
+      introduced: evidence.introduced.length,
+      resolved: evidence.resolved.length,
+      unchanged: evidence.unchangedCount,
+      introducedWaived: evidence.introducedWaived,
+      renamePairs: evidence.renamePairs.length,
+      occurrencesReduced: evidence.occurrencesReduced.length,
+      customIntroduced:
+        evidence.customRules === null ? 0 : evidence.customRules.findings.introduced.count,
+      policyChanged: evidence.policyChanged,
+      decided: evidence.introduced.some(
+        (item) => item.constraint !== null && "decisionRef" in item.constraint,
+      ),
+      waivedRow: evidence.introduced.some((item) => item.waivedBy !== null),
+    };
+  }
+
+  it("holds every distinguishable state pair distinct, and pins the one it cannot", () => {
+    const states = [
+      { name: "1 hard violation", evidence: state1() },
+      { name: "2 waived introduction", evidence: state2() },
+      { name: "3 expired-waiver re-assertion", evidence: state3() },
+      { name: "4 known pre-existing debt", evidence: state4() },
+      { name: "5 shrinking debt", evidence: state5() },
+      { name: "6 rename pair", evidence: state6() },
+      { name: "7 intentional evolution", evidence: state7() },
+      { name: "8 policy-change artifact", evidence: state8() },
+      { name: "9 custom-finding introduction", evidence: state9() },
+      { name: "10 insufficient evidence", evidence: state10() },
+      { name: "11 stale evidence", evidence: state11() },
+    ];
+    const signatures = states.map(({ name, evidence }) => ({
+      name,
+      signature: JSON.stringify(signatureOf(evidence)),
+    }));
+    const duplicatePairs = [];
+    for (let i = 0; i < signatures.length; i += 1) {
+      for (let j = i + 1; j < signatures.length; j += 1) {
+        if (signatures[i]?.signature === signatures[j]?.signature) {
+          duplicatePairs.push(`${String(signatures[i]?.name)} ≡ ${String(signatures[j]?.name)}`);
+        }
+      }
+    }
+    // The one collision the producer's own design forces: states 1 and 3
+    // ride the same non-waived lane within a single envelope — Archkeep's
+    // delta annotates only active waivers, so an expired acceptance leaves
+    // no marker. The reader carries state 3 verbatim and refuses to
+    // manufacture a distinction the envelope does not record; the state-3
+    // story lives in the waived lane's law-time fields (state 2's expiresAt)
+    // and the run-contract's cross-run waiver-time sentence.
+    expect(duplicatePairs).toEqual(["1 hard violation ≡ 3 expired-waiver re-assertion"]);
+  });
+
+  it("2 vs 3: the waived lane and the verdict are the distinction", () => {
+    const waived = state2();
+    const reasserted = state3();
+    expect(waived.verdict).toBe("pass");
+    expect(reasserted.verdict).toBe("fail");
+    expect(waived.introducedWaived).toBe(1);
+    expect(reasserted.introducedWaived).toBe(0);
+    expect(waived.introduced[0]?.waived).toBe(true);
+    expect(reasserted.introduced[0]?.waived).toBe(false);
+    expect(waived.introduced[0]?.waivedBy).toEqual({
+      path: "triage/**",
+      messageId: "noRelativeOrAbsoluteImportsAcrossLibraries",
+      reason: "accepted while the split lands (#12)",
+      expiresAt: "2999-01-01",
+    });
+    expect(reasserted.introduced[0]?.waivedBy).toBeNull();
+  });
+
+  it("4 vs 5: the attached reduction fact is the distinction, never netted", () => {
+    const steady = state4();
+    const shrinking = state5();
+    expect(steady.unchangedCount).toBe(1);
+    expect(shrinking.unchangedCount).toBe(1);
+    expect(steady.occurrencesReduced).toEqual([]);
+    expect(shrinking.occurrencesReduced).toEqual([
+      {
+        messageId: "noRelativeOrAbsoluteImportsAcrossLibraries",
+        sourceProject: "triage",
+        target: "#review/src/index.mjs",
+        note: "occurrencesReduced: 4 at base, 2 at head — the violation still exists",
+      },
+    ]);
+    // A shrink improves and discloses; it is never a resolution and never
+    // offsets an introduction.
+    expect(shrinking.resolved).toEqual([]);
+    expect(shrinking.introduced).toEqual([]);
+  });
+
+  it("1 vs 6: the pairing fact is the distinction, and the raw buckets survive it", () => {
+    const hard = state1();
+    const renamed = state6();
+    expect(hard.renamePairs).toEqual([]);
+    expect(renamed.renamePairs).toHaveLength(1);
+    // Both sides stay in their raw buckets — the envelope's own arithmetic
+    // is the record; the pairing is disclosure beside it, never a netting.
+    expect(renamed.introduced).toHaveLength(1);
+    expect(renamed.resolved).toHaveLength(1);
+    expect(renamed.renamePairs[0]?.introduced.sourceProject).toBe("review");
+    expect(renamed.renamePairs[0]?.resolved.sourceProject).toBe("triage-old");
+    expect(renamed.renamePairs[0]?.introduced.headSites).toEqual(
+      renamed.renamePairs[0]?.resolved.baseSites,
+    );
+    // The paired members are the bucket members, not copies of them.
+    expect(renamed.renamePairs[0]?.introduced).toBe(renamed.introduced[0]);
+    expect(renamed.renamePairs[0]?.resolved).toBe(renamed.resolved[0]);
+  });
+
+  it("9 vs 1: the failing family is the distinction, and the custom lane has no waived arm", () => {
+    const custom = state9();
+    const hard = state1();
+    expect(custom.verdict).toBe("fail");
+    expect(custom.introduced).toEqual([]);
+    expect(custom.customRules?.findings.introduced.count).toBe(1);
+    expect(hard.introduced).toHaveLength(1);
+    expect(hard.customRules).toBeNull();
+    // Custom findings are waiverless by construction — suppressions key on
+    // messageIds custom rules do not carry — so the bucket facts are
+    // counts, ids and sites, and nothing else.
+    expect(Object.keys(custom.customRules?.findings.introduced ?? {}).sort()).toEqual([
+      "count",
+      "ruleIds",
+      "sites",
+    ]);
+  });
+
+  it("10 vs 11: the withholding reason and the stale flag are the distinction", () => {
+    const unresolvable = state10();
+    const stale = state11();
+    expect(unresolvable.verdict).toBe("unknown");
+    expect(stale.verdict).toBe("unknown");
+    expect(unresolvable.stale).toBe(false);
+    expect(unresolvable.incompleteness?.reason).toBe("incomplete");
+    expect(stale.stale).toBe(true);
+    expect(stale.incompleteness?.reason).toBe("stale");
+    expect(stale.incompleteness?.note).toContain(OTHER);
+  });
+
+  it("7: the constraint row carries the record reference verbatim, frozen", () => {
+    const evolution = state7();
+    expect(evolution.introduced[0]?.constraint).toEqual({
+      sourceTag: "scope:triage",
+      onlyDependOnLibsWithTags: ["scope:triage"],
+      description: "triage may not import review",
+      decisionRef: "007-archkeep-runtime-evidence",
+    });
+    expect(Object.isFrozen(evolution.introduced[0]?.constraint)).toBe(true);
+  });
+
+  it("8: the policy move is a recorded fact — flag, fingerprints, not code-caused", () => {
+    const artifact = state8();
+    expect(artifact.verdict).toBe("pass");
+    expect(artifact.policyChanged).toBe(true);
+    expect(artifact.policyFingerprints).toEqual({ head: "fp-head-after", base: "fp-base" });
+    expect(artifact.introduced).toEqual([]);
+  });
+});
+
+describe("rename-pair detection", () => {
+  /**
+   * Reads a findings delta over the given buckets with a hand-counted
+   * summary, the way every case does.
+   *
+   * @param {{ introduced?: unknown[], resolved?: unknown[] }} buckets
+   */
+  const pairDelta = ({ introduced = [], resolved = [] }) =>
+    read({
+      manifest: manifest(1),
+      report: delta({
+        violations: { introduced, resolved, unchanged: [], unknown: [] },
+      }),
+    });
+
+  it("pairs a move whose sites are byte-identical", () => {
+    const evidence = pairDelta({
+      introduced: [violation({ sourceProject: "review" })],
+      resolved: [
+        violation({
+          sourceProject: "triage-old",
+          baseCount: 1,
+          headCount: 0,
+          headSites: [],
+          baseSites: [{ file: "triage/src/index.mjs", line: 11 }],
+        }),
+      ],
+    });
+    expect(evidence.renamePairs).toHaveLength(1);
+  });
+
+  it("does not pair when the sites differ — a move is not a rewrite", () => {
+    const evidence = pairDelta({
+      introduced: [violation({ sourceProject: "review" })],
+      resolved: [
+        violation({
+          sourceProject: "triage-old",
+          baseCount: 1,
+          headCount: 0,
+          headSites: [],
+          baseSites: [{ file: "triage/src/other.mjs", line: 4 }],
+        }),
+      ],
+    });
+    expect(evidence.renamePairs).toEqual([]);
+  });
+
+  it("does not pair when both project identities moved — that is two changes", () => {
+    const evidence = pairDelta({
+      introduced: [violation({ sourceProject: "review", target: "#harmonise/src/index.mjs" })],
+      resolved: [
+        violation({
+          sourceProject: "triage-old",
+          target: "#core/src/index.mjs",
+          baseCount: 1,
+          headCount: 0,
+          headSites: [],
+          baseSites: [{ file: "triage/src/index.mjs", line: 11 }],
+        }),
+      ],
+    });
+    expect(evidence.renamePairs).toEqual([]);
+  });
+
+  it("does not pair an entry grown from base occurrences — its old name survives", () => {
+    const evidence = pairDelta({
+      introduced: [
+        violation({
+          sourceProject: "review",
+          baseCount: 1,
+          headCount: 2,
+          reason: "occurrence growth: 1 at base, 2 at head",
+          baseSites: [{ file: "triage/src/index.mjs", line: 11 }],
+        }),
+      ],
+      resolved: [
+        violation({
+          sourceProject: "triage-old",
+          baseCount: 2,
+          headCount: 0,
+          headSites: [],
+          baseSites: [
+            { file: "triage/src/index.mjs", line: 11 },
+            { file: "triage/src/index.mjs", line: 11 },
+          ],
+        }),
+      ],
+    });
+    expect(evidence.renamePairs).toEqual([]);
+    // The growth arm stays a plain introduction with its own reason.
+    expect(evidence.introduced[0]?.reason).toBe("occurrence growth: 1 at base, 2 at head");
+  });
+
+  it("does not pair when the constraints differ — identity moved, law did not follow", () => {
+    const evidence = pairDelta({
+      introduced: [
+        violation({
+          sourceProject: "review",
+          constraint: {
+            sourceTag: "scope:review",
+            onlyDependOnLibsWithTags: ["scope:review"],
+            description: "review may not import triage",
+          },
+        }),
+      ],
+      resolved: [
+        violation({
+          sourceProject: "triage-old",
+          baseCount: 1,
+          headCount: 0,
+          headSites: [],
+          baseSites: [{ file: "triage/src/index.mjs", line: 11 }],
+        }),
+      ],
+    });
+    expect(evidence.renamePairs).toEqual([]);
+  });
+
+  it("claims each resolved side at most once — one move, one pair", () => {
+    const evidence = pairDelta({
+      introduced: [
+        violation({ sourceProject: "review" }),
+        violation({
+          sourceProject: "review",
+          headSites: [{ file: "triage/src/deeper.mjs", line: 2 }],
+        }),
+      ],
+      resolved: [
+        violation({
+          sourceProject: "triage-old",
+          baseCount: 1,
+          headCount: 0,
+          headSites: [],
+          baseSites: [{ file: "triage/src/index.mjs", line: 11 }],
+        }),
+      ],
+    });
+    expect(evidence.renamePairs).toHaveLength(1);
+    // The unmatched introduction stays a plain finding.
+    expect(evidence.introduced).toHaveLength(2);
   });
 });

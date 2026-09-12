@@ -298,14 +298,26 @@ corpus evaluator can double it; never an ambient import.
    stale flag, both provenance commits and both `dirty` flags (carried
    disclosed; never silently trusted as clean), `policyChanged`, provider,
    `toolVersion`, `introduced[]` (messageId, sourceProject, target,
-   constraint, waived, waivedBy, headSites `{file, line}`, counts, note),
-   `resolved[]`, `unchanged` count, `introducedWaived`,
-   `customRules.findings.{introduced, resolved, unchanged, unknown}` bucket
+   `targetIsSpecifier`, `constraint` — the law row that fired, carried
+   structurally with its `decisionRef`, never collapsed to null — waived,
+   `waivedBy` — the covering suppression row's law-time fields verbatim:
+   path, messageId, reason, expiresAt — base/head counts and site samples,
+   reason, note), `resolved[]`, `unchanged` count, `introducedWaived`,
+   `renamePairs[]` (an introduced and a resolved entry over identical sites
+   differing in exactly one project identity — what a rename looks like in
+   a delta that does no rename matching; carried beside the raw buckets,
+   both kept verbatim, never netted), `customRules.findings.{introduced,
+resolved, unchanged, unknown}` bucket
    facts (counts, rule ids, sites — a separate bucket family that gates on
    introduced **with no waiver lane by construction**; a governed
    repository with wasm rules must never get an honest verdict over blind
    evidence), `unresolvable` counts (counts, never findings),
-   `occurrencesReduced` notes, coverage facts, capped verbatim notes.
+   `occurrencesReduced` facts (each attached to its unchanged item's
+   identity — messageId, sourceProject, target — with the producer's
+   verbatim note), coverage facts, capped verbatim notes. Normalization is
+   an identity over the envelope's own arithmetic and asserts it: every
+   lane count equals its raw bucket, and incoherence is a typed refusal,
+   never evidence.
    Delta envelopes are verified to carry no time-relative fields; a
    defensive strip of `*Ms`/`sampleTime`-shaped fields is retained for
    forward compatibility at negligible cost.
@@ -502,7 +514,11 @@ eight): hard violation (exit 1, non-waived introduced) / waived
 introduction (`introducedWaived` — a waived class this pull request grew:
 new debt under an existing acceptance, disclosed; a reviewer may
 legitimately care that a PR adds occurrences even under waiver) /
-expired-waiver re-assertion (law-time event, carried verbatim) / known
+expired-waiver re-assertion (law-time event, carried verbatim — the
+producer's delta annotates only _active_ waivers, so within one envelope
+this rides the non-waived lane, and its distinction from a hard violation
+lives in the waived lane's law-time fields and across runs, never in a
+marker the reader would have to invent) / known
 pre-existing debt (`unchanged`) / shrinking debt (`unchanged` +
 `occurrencesReduced` — a shrink is never a resolution; improvement
 direction, never netted against introduced) / rename pair

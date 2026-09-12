@@ -1,7 +1,7 @@
 {
   "captureExit": 0,
   "exitCode": 0,
-  "stdoutBytes": 2769,
+  "stdoutBytes": 3248,
   "stderrDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "repeatable": true,
   "envelope": {
@@ -27,7 +27,7 @@
       "complete": true,
       "projects": 2,
       "analyzedFiles": 2,
-      "imports": 0,
+      "imports": 1,
       "notAnalyzed": [],
       "blindSpots": [],
       "notes": []
@@ -46,7 +46,7 @@
           "remote": null
         },
         "policyFingerprint": "ac76c47705c0bb2624f93292a34f2d23275dd7acf6e5038a70cbc8878dd73671",
-        "records": 1,
+        "records": 2,
         "projects": 2
       },
       "head": {
@@ -56,15 +56,15 @@
           "dirty": false
         },
         "policyFingerprint": "ac76c47705c0bb2624f93292a34f2d23275dd7acf6e5038a70cbc8878dd73671",
-        "records": 0,
+        "records": 1,
         "projects": 2
       },
       "policyChanged": false,
       "summary": {
         "introduced": 0,
         "introducedWaived": 0,
-        "resolved": 1,
-        "unchanged": 0,
+        "resolved": 0,
+        "unchanged": 1,
         "unknown": 0,
         "unresolvable": {
           "introduced": 0,
@@ -75,17 +75,25 @@
       },
       "violations": {
         "introduced": [],
-        "resolved": [
+        "resolved": [],
+        "unchanged": [
           {
-            "classification": "resolved",
+            "classification": "unchanged",
             "messageId": "noRelativeOrAbsoluteImportsAcrossLibraries",
             "sourceProject": "b-lib",
             "target": "a-lib",
             "targetIsSpecifier": false,
             "constraint": null,
-            "baseCount": 1,
-            "headCount": 0,
+            "baseCount": 2,
+            "headCount": 1,
             "baseSites": [
+              {
+                "file": "b-lib/src/extra.mjs",
+                "line": 1,
+                "column": 19,
+                "specifier": "../../a-lib/src/index.mjs",
+                "kind": "static"
+              },
               {
                 "file": "b-lib/src/index.mjs",
                 "line": 1,
@@ -94,11 +102,19 @@
                 "kind": "static"
               }
             ],
-            "headSites": [],
+            "headSites": [
+              {
+                "file": "b-lib/src/index.mjs",
+                "line": 1,
+                "column": 19,
+                "specifier": "../../a-lib/src/index.mjs",
+                "kind": "static"
+              }
+            ],
+            "note": "occurrencesReduced: 2 at base, 1 at head — the violation still exists",
             "waived": false
           }
         ],
-        "unchanged": [],
         "unknown": []
       },
       "unresolvable": {
@@ -108,14 +124,11 @@
         "unknown": []
       },
       "classifications": [
-        "CHANGE",
-        "REPAIR"
+        "DRIFT"
       ],
       "affected": {
         "projects": [],
-        "boundaries": [
-          "b-lib>a-lib:static"
-        ],
+        "boundaries": [],
         "constraints": [],
         "decisions": []
       }
@@ -131,10 +144,10 @@
     "counts": {
       "introduced": 0,
       "introducedWaived": 0,
-      "resolved": 1,
-      "unchanged": 0,
+      "resolved": 0,
+      "unchanged": 1,
       "renamePairs": 0,
-      "occurrencesReduced": 0,
+      "occurrencesReduced": 1,
       "customFindings": null,
       "unresolvable": {
         "introduced": 0,

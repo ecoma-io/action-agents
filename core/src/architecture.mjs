@@ -69,6 +69,9 @@ const MAX_COVERAGE_NOTES = 16;
 /** How many occurrence-reduction notes survive into evidence. */
 const MAX_OCCURRENCE_NOTES = 16;
 
+/** How many rename pairs survive into evidence — disclosure, not a transcript. */
+const MAX_RENAME_PAIRS = 16;
+
 /** How many sites each normalized item keeps — a sample, never the full list. */
 const MAX_SITES_PER_ITEM = 20;
 
@@ -149,6 +152,16 @@ export class ArchitectureReaderError extends Error {
  * @property {number} line
  */
 
+/**
+ * The constraint row that condemns an item, carried verbatim as a frozen
+ * deep copy — null when the rule that fired names no row (the five
+ * specifier-decided message ids). The row is part of violation identity, and
+ * its `decisionRef` member is how a consumer reaches the record behind an
+ * intentional evolution; carried, never interpreted.
+ *
+ * @typedef {Record<string, unknown> | null} ConstraintRow
+ */
+
 /** A normalized violation item — the identity facts, counts and a site sample. */
 /**
  * @typedef {object} EvidenceItem
@@ -156,9 +169,9 @@ export class ArchitectureReaderError extends Error {
  * @property {string | null} sourceProject
  * @property {string | null} target
  * @property {boolean} targetIsSpecifier
- * @property {string | null} constraint
+ * @property {ConstraintRow} constraint
  * @property {boolean} waived
- * @property {{ expiresAt: string | null, reason: string | null } | null} waivedBy
+ * @property {{ path: string | null, messageId: string | null, reason: string | null, expiresAt: string | null } | null} waivedBy the covering suppression row's law-time fields, verbatim — null when the entry carries no row
  * @property {number} baseCount
  * @property {number} headCount
  * @property {EvidenceSite[]} baseSites
@@ -182,6 +195,33 @@ export class ArchitectureReaderError extends Error {
  * @property {number} count
  * @property {string[]} ruleIds
  * @property {EvidenceSite[]} sites
+ */
+
+/**
+ * One rename pair: an introduced entry and a resolved entry over identical
+ * sites that differ in exactly one project identity field — what a project or
+ * target rename looks like in a delta whose producer does no rename matching.
+ * Carried beside the raw buckets, never instead of them: both sides stay in
+ * `introduced` and `resolved`, so the envelope's own arithmetic survives and
+ * the pairing is additive disclosure, never a netting. A wash rendering
+ * ("1 introduced, 1 resolved") is exactly what this fact exists to prevent.
+ *
+ * @typedef {object} RenamePair
+ * @property {EvidenceItem} introduced the new-name side
+ * @property {EvidenceItem} resolved the old-name side
+ */
+
+/**
+ * One occurrence-reduction fact: an unchanged entry that shrank without
+ * resolving, with the identity the producer's verbatim note belongs to. A
+ * shrink is improvement direction, disclosed — never a resolution, and never
+ * netted against introduced counts.
+ *
+ * @typedef {object} OccurrenceReduction
+ * @property {string | null} messageId
+ * @property {string | null} sourceProject
+ * @property {string | null} target
+ * @property {string} note the producer's verbatim occurrencesReduced note
  */
 
 /** The coverage facts a run log or artifact may cite. */
@@ -220,9 +260,10 @@ export class ArchitectureReaderError extends Error {
  * @property {EvidenceItem[]} resolved resolved violations, in report order
  * @property {number} unchangedCount
  * @property {number} introducedWaived
+ * @property {RenamePair[]} renamePairs introduced+resolved entries over identical sites differing in one project identity — a move, never a wash; capped, both raw buckets kept verbatim
  * @property {{ findings: { introduced: CustomRuleBucketFacts, resolved: CustomRuleBucketFacts, unchanged: CustomRuleBucketFacts, unknown: CustomRuleBucketFacts } } | null} customRules null when the envelope declares no custom rules ran
  * @property {UnresolvableCounts} unresolvable
- * @property {string[]} occurrencesReduced verbatim notes from unchanged entries that shrank without resolving, capped
+ * @property {OccurrenceReduction[]} occurrencesReduced shrinking unchanged entries with their identity and the producer's verbatim note, capped
  * @property {CoverageFacts} coverage
  */
 
@@ -345,7 +386,7 @@ export function readArchitectureReport({ workspace, reportPath, manifestPath, ex
   if (payload === null) {
     return normalizeNoVerdictEvidence(envelope, expect, report.digest);
   }
-  return normalizeEvidence(envelope, payload, expect, report.digest);
+  return normalizeEvidence(envelope, payload, expect, report.digest, reportPath);
 }
 
 // ── The manifest: the precedence fact ─────────────────────────────────────
@@ -504,6 +545,7 @@ function incompleteEvidence(note, digest) {
     resolved: [],
     unchangedCount: 0,
     introducedWaived: 0,
+    renamePairs: [],
     customRules: null,
     unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
     occurrencesReduced: [],
@@ -926,15 +968,20 @@ function arrayBucket(block, name, blockName, reportPath) {
 
 /**
  * Normalizes a validated verdict-carrying envelope into the frozen evidence
- * shape, applying the staleness law on the way in.
+ * shape, applying the staleness law on the way in. The delta semantics land
+ * here: rename pairs over introduced×resolved identical sites, the waived
+ * lane's full suppression row, attached occurrence-reduction facts, and the
+ * reconciliation latch that makes normalization an identity over the
+ * envelope's own arithmetic.
  *
  * @param {Record<string, unknown>} envelope
  * @param {DeltaPayload} payload
  * @param {ArchitectureExpect} expect
  * @param {string} digest
+ * @param {string} reportPath
  * @returns {ArchitectureEvidence}
  */
-function normalizeEvidence(envelope, payload, expect, digest) {
+function normalizeEvidence(envelope, payload, expect, digest, reportPath) {
   const { result, violations } = payload;
   const baseline = /** @type {Record<string, unknown>} */ (result.baseline);
   const head = /** @type {Record<string, unknown>} */ (result.head);
@@ -943,6 +990,10 @@ function normalizeEvidence(envelope, payload, expect, digest) {
 
   const headProvenance = provenanceFacts(head.provenance);
   const stale = headProvenance.commit === null || headProvenance.commit !== expect.headSha;
+
+  const introduced = violations.introduced.map(normalizeItem);
+  const resolved = violations.resolved.map(normalizeItem);
+  const unchanged = violations.unchanged.map(normalizeItem);
 
   /** @type {ArchitectureEvidence} */
   const evidence = {
@@ -965,22 +1016,28 @@ function normalizeEvidence(envelope, payload, expect, digest) {
       base: typeof baseline.policyFingerprint === "string" ? baseline.policyFingerprint : null,
     },
     reportSha256: digest,
-    introduced: violations.introduced.map(normalizeItem),
-    resolved: violations.resolved.map(normalizeItem),
-    unchangedCount: violations.unchanged.length,
+    introduced,
+    resolved,
+    unchangedCount: unchanged.length,
     introducedWaived: violations.introduced.filter(
       (item) =>
         isPlainObject(item) && /** @type {Record<string, unknown>} */ (item).waived === true,
     ).length,
+    renamePairs: capped(detectRenamePairs(introduced, resolved), MAX_RENAME_PAIRS),
     customRules: normalizeCustomRules(payload.customRules),
     unresolvable: normalizeUnresolvable(payload.unresolvable),
     occurrencesReduced: capped(
-      stringArray(
-        violations.unchanged
-          .filter((item) => isPlainObject(item))
-          .map((item) => /** @type {Record<string, unknown>} */ (item).note)
-          .filter((note) => typeof note === "string" && note.length > 0),
-      ),
+      unchanged
+        .filter((item) => item.note !== null)
+        .map(
+          (item) =>
+            /** @type {OccurrenceReduction} */ ({
+              messageId: item.messageId,
+              sourceProject: item.sourceProject,
+              target: item.target,
+              note: /** @type {string} */ (item.note),
+            }),
+        ),
       MAX_OCCURRENCE_NOTES,
     ),
     coverage: {
@@ -991,6 +1048,8 @@ function normalizeEvidence(envelope, payload, expect, digest) {
       notes: capped(stringArray(coverage.notes), MAX_COVERAGE_NOTES),
     },
   };
+
+  assertNormalizationCoherent(evidence, payload, reportPath);
 
   // Staleness withholds: however coherent the bytes, evidence pinned to a
   // head this run does not review is unknown, and the note says where it is
@@ -1059,6 +1118,7 @@ function normalizeNoVerdictEvidence(envelope, expect, digest) {
       resolved: [],
       unchangedCount: 0,
       introducedWaived: 0,
+      renamePairs: [],
       customRules: null,
       unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
       occurrencesReduced: [],
@@ -1092,7 +1152,11 @@ function provenanceFacts(provenance) {
  * One violation item, normalized to the identity facts, both counts and a
  * site sample. Leaf shapes the protocol does not headline are carried as
  * null rather than refused — the refusal surface stays exactly the frozen
- * one.
+ * one. The two deltas this reader refuses to coarsen: the constraint row is
+ * carried structurally (it is identity), and a `waivedBy` row is carried
+ * whole — the producer writes the covering suppression row verbatim, and an
+ * acceptance is its path, its rule, its reason and its term, or it is not
+ * the acceptance it claims to be.
  *
  * @param {unknown} item
  * @returns {EvidenceItem}
@@ -1105,14 +1169,16 @@ function normalizeItem(item) {
     sourceProject: textOrNull(entry.sourceProject),
     target: textOrNull(entry.target),
     targetIsSpecifier: entry.targetIsSpecifier === true,
-    constraint: textOrNull(entry.constraint),
+    constraint: normalizeConstraint(entry.constraint),
     waived: entry.waived === true,
     waivedBy:
       waivedBy === null
         ? null
         : {
-            expiresAt: textOrNull(waivedBy.expiresAt),
+            path: textOrNull(waivedBy.path),
+            messageId: textOrNull(waivedBy.messageId),
             reason: textOrNull(waivedBy.reason),
+            expiresAt: textOrNull(waivedBy.expiresAt),
           },
     baseCount: isCount(entry.baseCount) ? entry.baseCount : 0,
     headCount: isCount(entry.headCount) ? entry.headCount : 0,
@@ -1121,6 +1187,41 @@ function normalizeItem(item) {
     reason: textOrNull(entry.reason),
     note: textOrNull(entry.note),
   };
+}
+
+/**
+ * The constraint row that fired, carried verbatim as a frozen deep copy —
+ * anything that is not a plain object records null. The row is untrusted
+ * evidence like every other fact here: copied and frozen, never interpreted.
+ *
+ * @param {unknown} constraint
+ * @returns {ConstraintRow}
+ */
+function normalizeConstraint(constraint) {
+  if (!isPlainObject(constraint)) return null;
+  return deepFreeze(/** @type {ConstraintRow} */ (verbatimCopy(constraint)));
+}
+
+/**
+ * A fresh deep copy of JSON-shaped content — plain objects and arrays kept,
+ * volatile time-relative keys stripped, primitives passed through. Used only
+ * for verbatim carries that must not alias untrusted input.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function verbatimCopy(value) {
+  if (Array.isArray(value)) return value.map(verbatimCopy);
+  if (isPlainObject(value)) {
+    /** @type {Record<string, unknown>} */
+    const copy = {};
+    for (const [key, nested] of Object.entries(value)) {
+      if (key === "sampleTime" || key.endsWith("Ms")) continue;
+      copy[key] = verbatimCopy(nested);
+    }
+    return copy;
+  }
+  return value;
 }
 
 /**
@@ -1142,6 +1243,186 @@ function normalizeSites(sites) {
     kept.push({ file, line });
   }
   return kept;
+}
+
+// ── Rename pairs: a move, never a wash ─────────────────────────────────────
+
+/**
+ * Pairs introduced and resolved entries that are one rename seen twice.
+ * Archkeep's delta does no rename matching — a project or target rename
+ * surfaces as one introduced entry at the new name and one resolved entry at
+ * the old name — so the reader derives the pairing from recorded facts
+ * alone: same violation identity, exactly one project identity field moved,
+ * and byte-identical site sets with equal counts on the facing sides.
+ *
+ * Greedy one-to-one in report order: each introduced entry claims at most
+ * the first unresolved match, and each resolved entry is claimed at most
+ * once. Both raw buckets keep every entry verbatim — the pairing is
+ * disclosure beside the arithmetic, never a netting of it.
+ *
+ * @param {EvidenceItem[]} introduced
+ * @param {EvidenceItem[]} resolved
+ * @returns {RenamePair[]}
+ */
+function detectRenamePairs(introduced, resolved) {
+  /** @type {RenamePair[]} */
+  const pairs = [];
+  const claimed = new Set();
+  for (const candidate of introduced) {
+    // Only a fresh introduction can be the new-name side: an entry grown
+    // from occurrences that already existed at base still has its old name
+    // present at head, so its counterpart is unchanged, not resolved.
+    if (candidate.baseCount !== 0) continue;
+    let match = null;
+    for (const [index, other] of resolved.entries()) {
+      if (claimed.has(index)) continue;
+      if (!isRenameOf(candidate, other)) continue;
+      match = { index, other };
+      break;
+    }
+    if (match === null) continue;
+    claimed.add(match.index);
+    pairs.push({ introduced: candidate, resolved: match.other });
+  }
+  return pairs;
+}
+
+/**
+ * Whether an introduced entry and a resolved entry are one violation that
+ * moved between names: same messageId, deep-equal constraint, same specifier
+ * flag, exactly one of the two project identity fields renamed (the other
+ * unchanged — both moving is not one rename), equal facing counts, and
+ * identical non-empty site sets over the facing sides.
+ *
+ * @param {EvidenceItem} introduced
+ * @param {EvidenceItem} resolved
+ * @returns {boolean}
+ */
+function isRenameOf(introduced, resolved) {
+  if (resolved.headCount !== 0) return false;
+  if (introduced.messageId === null || introduced.messageId !== resolved.messageId) return false;
+  if (!jsonEqual(introduced.constraint, resolved.constraint)) return false;
+  if (introduced.targetIsSpecifier !== resolved.targetIsSpecifier) return false;
+  const sourceRenamed =
+    introduced.sourceProject !== null &&
+    resolved.sourceProject !== null &&
+    introduced.sourceProject !== resolved.sourceProject;
+  const targetRenamed =
+    introduced.target !== null && resolved.target !== null && introduced.target !== resolved.target;
+  if (sourceRenamed === targetRenamed) return false;
+  if (sourceRenamed && introduced.target !== resolved.target) return false;
+  if (targetRenamed && introduced.sourceProject !== resolved.sourceProject) return false;
+  if (introduced.headCount !== resolved.baseCount) return false;
+  return sameSites(introduced.headSites, resolved.baseSites);
+}
+
+/**
+ * Whether two site samples are the same set of file+line pairs — the
+ * recorded facts of a rename are byte-identical sites, and an empty sample
+ * cannot establish identity.
+ *
+ * @param {EvidenceSite[]} left
+ * @param {EvidenceSite[]} right
+ * @returns {boolean}
+ */
+function sameSites(left, right) {
+  if (left.length === 0 || left.length !== right.length) return false;
+  /** @param {EvidenceSite[]} sites */
+  const keys = (sites) => new Set(sites.map((site) => `${site.file}:${String(site.line)}`));
+  const leftKeys = keys(left);
+  const rightKeys = keys(right);
+  if (leftKeys.size !== rightKeys.size) return false;
+  for (const key of leftKeys) {
+    if (!rightKeys.has(key)) return false;
+  }
+  return true;
+}
+
+/**
+ * Structural equality over JSON-shaped values, key order agnostic.
+ *
+ * @param {unknown} left
+ * @param {unknown} right
+ * @returns {boolean}
+ */
+function jsonEqual(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return (
+      left.length === right.length && left.every((value, index) => jsonEqual(value, right[index]))
+    );
+  }
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every((key) => key in right && jsonEqual(left[key], right[key]))
+    );
+  }
+  return false;
+}
+
+// ── The reconciliation latch ───────────────────────────────────────────────
+
+/**
+ * Asserts that normalization was an identity over the envelope's own
+ * arithmetic: every lane count equals its raw bucket, the waived count is
+ * the introduced lane's own annotation count, the custom and unresolvable
+ * facts equal their raw blocks, and every rename pair consumes a distinct
+ * member of both raw buckets. Nothing here can disagree on an envelope the
+ * validator admitted — it fires when this reader's own arithmetic is wrong,
+ * and that failure is a typed refusal, never evidence.
+ *
+ * @param {ArchitectureEvidence} evidence
+ * @param {DeltaPayload} payload
+ * @param {string} reportPath
+ * @returns {void}
+ */
+function assertNormalizationCoherent(evidence, payload, reportPath) {
+  const { violations, unresolvable, customRules } = payload;
+  const rawWaived = violations.introduced.filter(
+    (item) => isPlainObject(item) && /** @type {Record<string, unknown>} */ (item).waived === true,
+  ).length;
+  const introducedMembers = new Set(evidence.introduced);
+  const resolvedMembers = new Set(evidence.resolved);
+  const pairedIntroduced = new Set(evidence.renamePairs.map((pair) => pair.introduced));
+  const pairedResolved = new Set(evidence.renamePairs.map((pair) => pair.resolved));
+  const evidenceCustom = evidence.customRules;
+  let customCoherent = customRules === null && evidenceCustom === null;
+  if (customRules !== null && evidenceCustom !== null && isPlainObject(customRules.findings)) {
+    const findings = /** @type {Record<string, unknown>} */ (customRules.findings);
+    customCoherent = /** @type {BucketName[]} */ ([
+      "introduced",
+      "resolved",
+      "unchanged",
+      "unknown",
+    ]).every((name) => {
+      const raw = findings[name];
+      return Array.isArray(raw) && evidenceCustom.findings[name].count === raw.length;
+    });
+  }
+  const coherent =
+    evidence.introduced.length === violations.introduced.length &&
+    evidence.resolved.length === violations.resolved.length &&
+    evidence.unchangedCount === violations.unchanged.length &&
+    evidence.introducedWaived === rawWaived &&
+    evidence.unresolvable.introduced === unresolvable.introduced.length &&
+    evidence.unresolvable.resolved === unresolvable.resolved.length &&
+    evidence.unresolvable.unchanged === unresolvable.unchanged.length &&
+    evidence.unresolvable.unknown === unresolvable.unknown.length &&
+    customCoherent &&
+    pairedIntroduced.size === evidence.renamePairs.length &&
+    pairedResolved.size === evidence.renamePairs.length &&
+    [...pairedIntroduced].every((item) => introducedMembers.has(item)) &&
+    [...pairedResolved].every((item) => resolvedMembers.has(item));
+  if (!coherent) {
+    throw new ArchitectureReaderError(
+      reportPath,
+      "normalized into counts that do not reconcile with its own buckets — the reader's arithmetic failed and the evidence is withheld",
+      "validation",
+    );
+  }
 }
 
 /**
@@ -1181,6 +1462,11 @@ function normalizeCustomRules(customRules) {
 }
 
 /**
+ * One custom-rule bucket's capped facts. Rule ids come from `ruleId` on
+ * classified entries and fall back to `rule` on entries the classifier could
+ * not classify — both name the rule the finding belongs to, and an empty id
+ * list for a non-empty bucket would hide which family spoke.
+ *
  * @param {unknown} bucket
  * @returns {CustomRuleBucketFacts}
  */
@@ -1190,7 +1476,14 @@ function normalizeCustomBucket(bucket) {
     .filter(isPlainObject)
     .map((entry) => /** @type {Record<string, unknown>} */ (entry));
   const ruleIds = [
-    ...new Set(entries.map((entry) => textOrNull(entry.ruleId)).filter((id) => id !== null)),
+    ...new Set(
+      entries
+        .map((entry) => {
+          const id = textOrNull(entry.ruleId);
+          return id !== null ? id : textOrNull(entry.rule);
+        })
+        .filter((id) => id !== null),
+    ),
   ].sort();
   const sites = [];
   for (const entry of entries) {

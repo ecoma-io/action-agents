@@ -1,7 +1,7 @@
 {
   "captureExit": 0,
-  "exitCode": 0,
-  "stdoutBytes": 2769,
+  "exitCode": 1,
+  "stdoutBytes": 2818,
   "stderrDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "repeatable": true,
   "envelope": {
@@ -21,13 +21,13 @@
         "dirty": false
       }
     },
-    "status": "ok",
-    "exitCode": 0,
+    "status": "findings",
+    "exitCode": 1,
     "coverage": {
       "complete": true,
       "projects": 2,
       "analyzedFiles": 2,
-      "imports": 0,
+      "imports": 1,
       "notAnalyzed": [],
       "blindSpots": [],
       "notes": []
@@ -45,8 +45,8 @@
           "dirty": false,
           "remote": null
         },
-        "policyFingerprint": "ac76c47705c0bb2624f93292a34f2d23275dd7acf6e5038a70cbc8878dd73671",
-        "records": 1,
+        "policyFingerprint": "b1e127d017e528c537d7acb071e362e56c25dcac4ca40b9fe3e873ade24076ea",
+        "records": 0,
         "projects": 2
       },
       "head": {
@@ -55,15 +55,15 @@
           "remote": null,
           "dirty": false
         },
-        "policyFingerprint": "ac76c47705c0bb2624f93292a34f2d23275dd7acf6e5038a70cbc8878dd73671",
-        "records": 0,
+        "policyFingerprint": "b1e127d017e528c537d7acb071e362e56c25dcac4ca40b9fe3e873ade24076ea",
+        "records": 1,
         "projects": 2
       },
       "policyChanged": false,
       "summary": {
-        "introduced": 0,
+        "introduced": 1,
         "introducedWaived": 0,
-        "resolved": 1,
+        "resolved": 0,
         "unchanged": 0,
         "unknown": 0,
         "unresolvable": {
@@ -74,18 +74,18 @@
         }
       },
       "violations": {
-        "introduced": [],
-        "resolved": [
+        "introduced": [
           {
-            "classification": "resolved",
+            "classification": "introduced",
             "messageId": "noRelativeOrAbsoluteImportsAcrossLibraries",
             "sourceProject": "b-lib",
             "target": "a-lib",
             "targetIsSpecifier": false,
             "constraint": null,
-            "baseCount": 1,
-            "headCount": 0,
-            "baseSites": [
+            "baseCount": 0,
+            "headCount": 1,
+            "baseSites": [],
+            "headSites": [
               {
                 "file": "b-lib/src/index.mjs",
                 "line": 1,
@@ -94,10 +94,11 @@
                 "kind": "static"
               }
             ],
-            "headSites": [],
+            "reason": "absent at base",
             "waived": false
           }
         ],
+        "resolved": [],
         "unchanged": [],
         "unknown": []
       },
@@ -109,7 +110,7 @@
       },
       "classifications": [
         "CHANGE",
-        "REPAIR"
+        "VIOLATION"
       ],
       "affected": {
         "projects": [],
@@ -121,17 +122,17 @@
       }
     },
     "decision": {
-      "verdict": "pass"
+      "verdict": "fail"
     }
   },
   "reader": {
-    "verdict": "pass",
+    "verdict": "fail",
     "stale": false,
     "incompleteness": null,
     "counts": {
-      "introduced": 0,
+      "introduced": 1,
       "introducedWaived": 0,
-      "resolved": 1,
+      "resolved": 0,
       "unchanged": 0,
       "renamePairs": 0,
       "occurrencesReduced": 0,

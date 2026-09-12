@@ -22,7 +22,21 @@ const BASE = "b".repeat(40);
 test("the gate pins one golden per scenario, each named", () => {
   assert.deepEqual(
     SCENARIOS.map((scenario) => scenario.name),
-    ["pass", "findings", "resolved", "no-verdict", "no-envelope", "family"],
+    [
+      "pass",
+      "findings",
+      "resolved",
+      "no-verdict",
+      "no-envelope",
+      "family",
+      "unchanged",
+      "occurrence-growth",
+      "occurrence-reduction",
+      "rename-pair",
+      "waived",
+      "waiver-expired",
+      "policy-changed",
+    ],
   );
 });
 
@@ -36,6 +50,34 @@ test("an identical golden is not a divergence", () => {
     }),
     null,
   );
+});
+
+test("the reader half of a golden carries the eleven-state arithmetic", () => {
+  const root = mkdtempSync(join(tmpdir(), "arch-contract-test-"));
+  try {
+    const scenario = SCENARIOS.find((candidate) => candidate.name === "pass");
+    assert.notEqual(scenario, undefined);
+    const normalized = normalizeResult(/** @type {{ name: "pass" }} */ (scenario), {
+      root,
+      baseCommit: BASE,
+      headCommit: HEAD,
+      capture: { exit: 0, stdout: "" },
+      delta: { exitCode: 0, stdout: coherentEnvelope(0), stderr: "" },
+      repeatable: true,
+    });
+    assert.deepEqual(normalized.reader.counts, {
+      introduced: 0,
+      introducedWaived: 0,
+      resolved: 0,
+      unchanged: 0,
+      renamePairs: 0,
+      occurrencesReduced: 0,
+      customFindings: null,
+      unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("a tampered golden is a divergence naming the scenario", () => {
@@ -131,7 +173,21 @@ test("normalization substitutes run-relative facts and records the reader's verd
     assert.equal(normalized.envelope.workspace.provenance.commit, "@head-commit@");
     assert.equal(normalized.envelope.result.baseline.provenance.commit, "@base-commit@");
     assert.equal(normalized.envelope.result.baseline.path, "@tree@/base.json");
-    assert.deepEqual(normalized.reader, { verdict: "pass", stale: false, incompleteness: null });
+    assert.deepEqual(normalized.reader, {
+      verdict: "pass",
+      stale: false,
+      incompleteness: null,
+      counts: {
+        introduced: 0,
+        introducedWaived: 0,
+        resolved: 0,
+        unchanged: 0,
+        renamePairs: 0,
+        occurrencesReduced: 0,
+        customFindings: null,
+        unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+      },
+    });
     assert.ok(normalized.repeatable);
   } finally {
     rmSync(root, { recursive: true, force: true });

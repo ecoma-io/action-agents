@@ -128,6 +128,21 @@
   "reader": {
     "verdict": "fail",
     "stale": false,
-    "incompleteness": null
+    "incompleteness": null,
+    "counts": {
+      "introduced": 1,
+      "introducedWaived": 0,
+      "resolved": 0,
+      "unchanged": 0,
+      "renamePairs": 0,
+      "occurrencesReduced": 0,
+      "customFindings": null,
+      "unresolvable": {
+        "introduced": 0,
+        "resolved": 0,
+        "unchanged": 0,
+        "unknown": 0
+      }
+    }
   }
 }

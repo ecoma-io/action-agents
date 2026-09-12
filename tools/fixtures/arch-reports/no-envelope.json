@@ -11,6 +11,21 @@
     "incompleteness": {
       "reason": "incomplete",
       "note": "the report does not parse; the recorded step exit is 3"
+    },
+    "counts": {
+      "introduced": 0,
+      "introducedWaived": 0,
+      "resolved": 0,
+      "unchanged": 0,
+      "renamePairs": 0,
+      "occurrencesReduced": 0,
+      "customFindings": null,
+      "unresolvable": {
+        "introduced": 0,
+        "resolved": 0,
+        "unchanged": 0,
+        "unknown": 0
+      }
     }
   }
 }

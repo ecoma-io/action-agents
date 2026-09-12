@@ -43,12 +43,56 @@
 //               family mismatch in stderr — the same law the reader enforces
 //               one layer out, pinned here from the producer's side.
 //
+//   unchanged — the illegal import sits on BOTH sides of the compare: known
+//               pre-existing debt. Exit 0, one unchanged row, no note — the
+//               verdict is about what this change introduces, and this
+//               change introduces nothing.
+//
+//   occurrence-growth — the base holds one illegal import, the head two (a
+//               second file gains the same import): the same violation, more
+//               occurrences. Exit 1, one introduced row whose reason names
+//               the growth — the loud direction the producer pins.
+//
+//   occurrence-reduction — the base holds two illegal imports, the head one:
+//               the violation shrank without resolving. Exit 0, one unchanged
+//               row carrying the producer's verbatim occurrencesReduced note
+//               — a shrink is never a resolution.
+//
+//   rename-pair — the head renames the project (b-lib → c-lib, root kept), so
+//               the file, its import and its site stay byte-identical while
+//               the violation's source identity moves. Exit 1: one introduced
+//               row at the new name, one resolved row at the old name, over
+//               identical sites — the move the reader pairs and a wash
+//               rendering would hide.
+//
+//   waived    — the law carries a waiver for the importing file with a
+//               far-future term (2999): the same introduction `findings`
+//               shows, accepted. Exit 0, one introduced row annotated
+//               waived with the covering row verbatim — path, messageId,
+//               reason, expiresAt.
+//
+//   waiver-expired — the same trees and the same waiver, far-past term
+//               (2000). Exit 1, one introduced row with waived false and NO
+//               covering row — the producer annotates only active waivers,
+//               so the re-assertion rides the non-waived lane and the pair
+//               of goldens is the flip the run contract's waiver-time
+//               sentence is about.
+//
+//   policy-changed — the law itself moves between the sides: the base side
+//               was captured under a law that allowed b → a, the head judges
+//               under the law that forbids it. Exit 0, one unchanged row,
+//               policyChanged true with differing fingerprints — the debt is
+//               the law's artifact, not this change's.
+//
 // Beyond the byte diff, each scenario feeds its real output through the
 // reader with a manifest synthesized exactly as the recipe would write it,
 // and the golden records what the reader said: verdict, staleness,
-// incompleteness. A golden the reader cannot reproduce from the bytes that
-// produced it is a divergence, in either direction — the gate exists so
-// the frozen protocol and the pinned tool cannot drift apart unannounced.
+// incompleteness, and the derived counts (introduced, introducedWaived,
+// resolved, unchanged, renamePairs, occurrencesReduced, custom and
+// unresolvable counts) — the eleven-state arithmetic, pinned from the
+// producer's own bytes. A golden the reader cannot reproduce from the bytes
+// that produced it is a divergence, in either direction — the gate exists
+// so the frozen protocol and the pinned tool cannot drift apart unannounced.
 //
 // Determinism is checked, not hoped for: the pass scenario's delta runs
 // twice and the raw stdout bytes must be identical, and every commit the
@@ -81,9 +125,14 @@ const GIT_DATES = {
 
 // ── The fixture: one miniature workspace, judged from its own root ────────
 
-/** The project graph every scenario shares — the exempt-less variant omits the coverage block. */
-/** @param {{ exemptLaw: boolean }} options */
-function archkeepJson({ exemptLaw }) {
+/**
+ * The project graph every scenario shares — the exempt-less variant omits
+ * the coverage block, and `bName` re-names the b-lib project for the rename
+ * scenario (the root stays `b-lib`, so files and sites stay byte-identical).
+ *
+ * @param {{ exemptLaw: boolean, bName?: string }} options
+ */
+function archkeepJson({ exemptLaw, bName = "b-lib" }) {
   const coverage = exemptLaw
     ? `,\n  "coverage": {\n    "exempt": [\n      { "path": "module-boundaries.config.mjs", "reason": "the boundary law itself, owned by no project" }\n    ]\n  }`
     : "";
@@ -91,7 +140,7 @@ function archkeepJson({ exemptLaw }) {
 \n  "projects": {\
 \n    "declared": [\
 \n      { "name": "a-lib", "root": "a-lib", "tags": ["scope:a"] },\
-\n      { "name": "b-lib", "root": "b-lib", "tags": ["scope:b"] }\
+\n      { "name": "${bName}", "root": "b-lib", "tags": ["scope:b"] }\
 \n    ]\
 \n  }${coverage}\
 \n}\n`;
@@ -114,6 +163,50 @@ export const moduleBoundaryOptions = {
 };
 `;
 
+/**
+ * The law the base side of the policy-changed scenario was captured under:
+ * scope:b may depend on scope:a, so the illegal import below was legal when
+ * the baseline was taken.
+ */
+const PERMISSIVE_LAW = `\
+export const depConstraints = [
+  { sourceTag: "scope:a", onlyDependOnLibsWithTags: ["scope:a"], description: "a alone" },
+  {
+    sourceTag: "scope:b",
+    onlyDependOnLibsWithTags: ["scope:a", "scope:b"],
+    description: "b may depend on a",
+  },
+];
+export const moduleBoundaryOptions = {
+  allow: [],
+  buildTargets: [],
+  enforceBuildableLibDependency: false,
+  allowCircularSelfDependency: false,
+  checkDynamicDependenciesExceptions: [],
+  ignoredCircularDependencies: [],
+  banTransitiveDependencies: false,
+  checkNestedExternalImports: false,
+};
+`;
+
+/**
+ * The law with a waiver over the importing file, far-dated so the CLI's
+ * un-injectable clock cannot flip the term between machines: 2999 is always
+ * active, 2000 always expired.
+ *
+ * @param {string} expiresAt
+ */
+const waivedLaw = (expiresAt) => `${BOUNDARY_LAW}\
+export const boundarySuppressions = [
+  {
+    path: "b-lib/src/index.mjs",
+    messageId: "noRelativeOrAbsoluteImportsAcrossLibraries",
+    reason: "accepted while the split lands",
+    expiresAt: "${expiresAt}",
+  },
+];
+`;
+
 const MALFORMED_LAW =
   "export const depConstraints = [];\nexport const moduleBoundaryOptions = { allow: [] };\n";
 
@@ -134,6 +227,9 @@ const TSCONFIG = `\
 
 const CLEAN_B = "export const b = 2;\n";
 const ILLEGAL_B = 'import { a } from "../../a-lib/src/index.mjs";\nexport const b = 2;\n';
+/** The same illegal import in a second b-lib file — a second occurrence, not a second violation. */
+const ILLEGAL_EXTRA =
+  'import { a } from "../../a-lib/src/index.mjs";\nexport const extra = true;\n';
 
 // ── The scenarios ─────────────────────────────────────────────────────────
 
@@ -146,6 +242,12 @@ const ILLEGAL_B = 'import { a } from "../../a-lib/src/index.mjs";\nexport const 
  * @property {string} headA the a-lib content at the head commit
  * @property {"evidence" | "graph" | "none"} baseline which baseline the delta step reads
  * @property {boolean} malformedLaw whether the law is broken before the delta runs
+ * @property {string | undefined} baseGraphBName the name the BASE side's graph gives the b-lib root — the rename scenario's old name
+ * @property {string | undefined} headGraphBName the name the HEAD side's graph gives the b-lib root — the rename scenario's new name
+ * @property {string | undefined} baseLaw the base side's boundary law — omitted means the shared law
+ * @property {string | undefined} headLaw the head side's boundary law — omitted means the shared law
+ * @property {string | undefined} baseExtraB the b-lib/src/extra.mjs content at the base commit — omitted writes no file
+ * @property {string | undefined} headExtraB the b-lib/src/extra.mjs content at the head commit — omitted writes no file
  */
 
 /** @type {Scenario[]} */
@@ -202,6 +304,88 @@ export const SCENARIOS = [
     headB: CLEAN_B,
     headA: "export const a = 1;\n",
     baseline: "graph",
+    malformedLaw: false,
+  },
+  {
+    // Known pre-existing debt: the illegal import on both sides.
+    name: "unchanged",
+    graph: { exemptLaw: true },
+    baseB: ILLEGAL_B,
+    headB: ILLEGAL_B,
+    headA: "export const a = 1;\n",
+    baseline: "evidence",
+    malformedLaw: false,
+  },
+  {
+    // One occurrence at base, two at head: the same violation, grown.
+    name: "occurrence-growth",
+    graph: { exemptLaw: true },
+    baseB: ILLEGAL_B,
+    headB: ILLEGAL_B,
+    headExtraB: ILLEGAL_EXTRA,
+    headA: "export const a = 1;\n",
+    baseline: "evidence",
+    malformedLaw: false,
+  },
+  {
+    // Two occurrences at base, one at head: shrinking, never resolved.
+    name: "occurrence-reduction",
+    graph: { exemptLaw: true },
+    baseB: ILLEGAL_B,
+    baseExtraB: ILLEGAL_EXTRA,
+    headB: ILLEGAL_B,
+    headA: "export const a = 1;\n",
+    baseline: "evidence",
+    malformedLaw: false,
+  },
+  {
+    // The head renames the project, root kept: sites byte-identical, the
+    // violation's source identity moves.
+    name: "rename-pair",
+    graph: { exemptLaw: true },
+    baseGraphBName: "b-lib",
+    headGraphBName: "c-lib",
+    baseB: ILLEGAL_B,
+    headB: ILLEGAL_B,
+    headA: "export const a = 1;\n",
+    baseline: "evidence",
+    malformedLaw: false,
+  },
+  {
+    // The same introduction `findings` shows, under an active acceptance.
+    // The waiver law sits on BOTH sides, so the fingerprints agree and the
+    // only difference from `waiver-expired` is the term.
+    name: "waived",
+    graph: { exemptLaw: true },
+    baseB: CLEAN_B,
+    headB: ILLEGAL_B,
+    baseLaw: waivedLaw("2999-01-01T00:00:00Z"),
+    headLaw: waivedLaw("2999-01-01T00:00:00Z"),
+    headA: "export const a = 1;\n",
+    baseline: "evidence",
+    malformedLaw: false,
+  },
+  {
+    // The same trees and waiver, term lapsed long ago: the re-assertion.
+    name: "waiver-expired",
+    graph: { exemptLaw: true },
+    baseB: CLEAN_B,
+    headB: ILLEGAL_B,
+    baseLaw: waivedLaw("2000-01-01T00:00:00Z"),
+    headLaw: waivedLaw("2000-01-01T00:00:00Z"),
+    headA: "export const a = 1;\n",
+    baseline: "evidence",
+    malformedLaw: false,
+  },
+  {
+    // The law moved between the sides: the debt is the law's artifact.
+    name: "policy-changed",
+    graph: { exemptLaw: true },
+    baseB: ILLEGAL_B,
+    headB: ILLEGAL_B,
+    baseLaw: PERMISSIVE_LAW,
+    headA: "export const a = 1;\n",
+    baseline: "evidence",
     malformedLaw: false,
   },
 ];
@@ -293,7 +477,9 @@ export function runScenario(scenario) {
 /**
  * Writes the scenario's files for one side of the compare. The head side of
  * a malformed-law scenario commits the broken law — the refusal then judges
- * a clean tree, not a dirty one.
+ * a clean tree, not a dirty one. Per-side graph names, laws and extra files
+ * are the delta-semantics scenarios' levers: a side falls back to the shared
+ * fixture when its override is absent.
  *
  * @param {string} root
  * @param {Scenario} scenario
@@ -302,8 +488,12 @@ export function runScenario(scenario) {
 function writeTree(root, scenario, side) {
   mkdirSync(join(root, "a-lib", "src"), { recursive: true });
   mkdirSync(join(root, "b-lib", "src"), { recursive: true });
-  writeFileSync(join(root, "archkeep.json"), archkeepJson(scenario.graph));
-  writeFileSync(join(root, "module-boundaries.config.mjs"), BOUNDARY_LAW);
+  const bName =
+    side === "base" ? (scenario.baseGraphBName ?? "b-lib") : (scenario.headGraphBName ?? "b-lib");
+  writeFileSync(join(root, "archkeep.json"), archkeepJson({ ...scenario.graph, bName }));
+  const law =
+    side === "base" ? (scenario.baseLaw ?? BOUNDARY_LAW) : (scenario.headLaw ?? BOUNDARY_LAW);
+  writeFileSync(join(root, "module-boundaries.config.mjs"), law);
   writeFileSync(join(root, "tsconfig.base.json"), TSCONFIG);
   writeFileSync(
     join(root, "a-lib", "src", "index.mjs"),
@@ -313,6 +503,16 @@ function writeTree(root, scenario, side) {
     join(root, "b-lib", "src", "index.mjs"),
     side === "base" ? scenario.baseB : scenario.headB,
   );
+  const extra = side === "base" ? scenario.baseExtraB : scenario.headExtraB;
+  if (extra !== undefined) {
+    writeFileSync(join(root, "b-lib", "src", "extra.mjs"), extra);
+  } else {
+    // A side that does not declare the extra occurrence must not inherit it
+    // from the other side's write: the tree on disk is cumulative across the
+    // two writes, the commit is not. The shrink scenario's whole point is
+    // that the file is gone at head.
+    rmSync(join(root, "b-lib", "src", "extra.mjs"), { force: true });
+  }
   if (side === "head" && scenario.malformedLaw) {
     writeFileSync(join(root, "module-boundaries.config.mjs"), MALFORMED_LAW);
   }
@@ -353,7 +553,7 @@ function archkeep(cwd, args) {
  * @property {number} stdoutBytes
  * @property {string} stderrDigest sha256 over the path-normalized stderr
  * @property {unknown} envelope the normalized envelope, or null when the delta produced no JSON
- * @property {{ verdict: string, stale: boolean, incompleteness: { reason: string, note: string } | null }} reader
+ * @property {{ verdict: string, stale: boolean, incompleteness: { reason: string, note: string } | null, counts: { introduced: number, introducedWaived: number, resolved: number, unchanged: number, renamePairs: number, occurrencesReduced: number, customFindings: { introduced: number, resolved: number, unchanged: number, unknown: number } | null, unresolvable: { introduced: number, resolved: number, unchanged: number, unknown: number } } }} reader
  */
 
 /**
@@ -439,6 +639,27 @@ export function normalizeResult(scenario, run) {
       verdict: evidence.verdict,
       stale: evidence.stale,
       incompleteness: evidence.incompleteness,
+      // The derived counts — the eleven-state arithmetic, measured from the
+      // producer's own bytes through the reader's normalization. The
+      // envelope half above pins the rows these counts are counted from.
+      counts: {
+        introduced: evidence.introduced.length,
+        introducedWaived: evidence.introducedWaived,
+        resolved: evidence.resolved.length,
+        unchanged: evidence.unchangedCount,
+        renamePairs: evidence.renamePairs.length,
+        occurrencesReduced: evidence.occurrencesReduced.length,
+        customFindings:
+          evidence.customRules === null
+            ? null
+            : {
+                introduced: evidence.customRules.findings.introduced.count,
+                resolved: evidence.customRules.findings.resolved.count,
+                unchanged: evidence.customRules.findings.unchanged.count,
+                unknown: evidence.customRules.findings.unknown.count,
+              },
+        unresolvable: evidence.unresolvable,
+      },
     },
   };
 }

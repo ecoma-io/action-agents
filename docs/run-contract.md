@@ -505,6 +505,14 @@ bytes — and the envelope's exit code must equal the manifest's recorded
 exit, a mismatch being the typed refusal: a coin-flip read is not
 admissible.
 
+**Rename pairs.** Archkeep's delta does no rename matching — a project or
+target rename reads as one introduced entry at the new name plus one
+resolved entry at the old, over identical sites — so the reader's
+normalization derives that pairing from recorded facts and carries it
+beside the raw buckets, both of which keep every entry: a move is one
+reviewable item, never an introduced/resolved wash, and never netted
+against the envelope's own arithmetic.
+
 **Cross-run waiver time.** The architecture verdict is a fact about
 (base, head, law, now), re-judged per run; the same head can legitimately
 flip verdicts across runs when a waiver expires — a semantic,
