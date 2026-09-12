@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildPrompt } from "./prompt.mjs";
+import { buildPrompt, MAX_PR_BODY_BYTES } from "./prompt.mjs";
 
 /**
  * @param {Partial<import("./prompt.mjs").PromptParts>} [over]
@@ -297,5 +297,76 @@ describe("the posture tier", () => {
 
   it("absent under the standard posture, nothing rendered", () => {
     expect(systemOf(parts())).not.toContain("Review posture");
+  });
+});
+
+describe("the description bound (#527)", () => {
+  /**
+   * The pr-body evidence block out of a built user message — the block the
+   * fit estimate counts — from its begin marker to before its end marker.
+   *
+   * @param {string} body
+   * @returns {string}
+   */
+  function bodyBlock(body) {
+    const { messages } = buildPrompt(parts({ body }));
+    const user = /** @type {string} */ (messages[1]?.content);
+    const label = user.indexOf(" pr-body]");
+    if (label === -1) return "";
+    const start = user.lastIndexOf("[evidence:", label);
+    const end = user.indexOf("[end-evidence:", label);
+    return user.slice(start === -1 ? 0 : start, end === -1 ? undefined : end);
+  }
+
+  /**
+   * The block's content — everything after the begin-marker line, so the
+   * random per-run delimiter never defeats a byte comparison.
+   *
+   * @param {string} body
+   * @returns {string}
+   */
+  function bodyContent(body) {
+    const block = bodyBlock(body);
+    return block.slice(block.indexOf("\n") + 1);
+  }
+
+  it("carries a description within the bound whole", () => {
+    const body = "x".repeat(MAX_PR_BODY_BYTES);
+    const content = bodyContent(body);
+    expect(content).toBe(`${body}\n`);
+    expect(bodyBlock(body)).not.toContain("pr-body truncated");
+  });
+
+  it("cuts a description past the bound, marked, to the bytes the run sends (#527)", () => {
+    const body = `${"x".repeat(MAX_PR_BODY_BYTES)}then the growth that must not count`;
+    const block = bodyBlock(body);
+    expect(block).toContain(
+      `[pr-body truncated: ${String(MAX_PR_BODY_BYTES)} of ${String(body.length)} bytes shown]`,
+    );
+    // The block the estimate counts stays bounded no matter how far the
+    // description grew: begin marker + the bound's bytes + the mark.
+    expect(block.length).toBeLessThan(MAX_PR_BODY_BYTES + 200);
+  });
+
+  it("never splits a code point or a surrogate pair at the cut", () => {
+    // "€" is 3 UTF-8 bytes and "😀" a surrogate pair of two 3-byte
+    // sequences; MAX_PR_BODY_BYTES is not divisible by 3, so a raw byte cut
+    // would land mid-sequence. The kept text ends on whole code points.
+    const body = "€😀".repeat(2_000);
+    const block = bodyBlock(body);
+    expect(block).not.toContain("�");
+    const kept = block.slice(0, /** @type {number} */ (block.indexOf("\n[pr-body truncated:")));
+    expect(kept.endsWith("€") || kept.endsWith("😀")).toBe(true);
+  });
+
+  it("is deterministic: the same description builds the same content twice", () => {
+    const body = "context\n".repeat(3_000);
+    expect(bodyContent(body)).toBe(bodyContent(body));
+  });
+
+  it("an empty description still rides no block at all", () => {
+    const { messages } = buildPrompt(parts({ body: "" }));
+    const user = /** @type {string} */ (messages[1]?.content);
+    expect(user).not.toContain("pr-body");
   });
 });

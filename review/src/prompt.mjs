@@ -10,6 +10,13 @@
  * maintainer-set configuration and stay in the system message. The output
  * contract is stated here and enforced in code — stating it twice costs
  * tokens once.
+ *
+ * The description is conversation, not the review's subject: it rides whole
+ * up to `MAX_PR_BODY_BYTES` and cut-and-marked past it (#527), so a thread
+ * that grows cannot grow the fit estimate — the diff decides fit. The
+ * thread's comments never enter any prompt at all; the only comment bytes a
+ * run reads are the marker's own record block, after the loop, for
+ * reconciliation.
  */
 
 import { createEvidence } from "#core/untrusted.mjs";
@@ -43,13 +50,48 @@ const ADVERSARIAL_MODE =
 /** @typedef {import("#core/untrusted.mjs").Evidence} Evidence */
 
 /**
+ * The most description one prompt carries (#527): the same ceiling the
+ * config holds an instruction document to, because the description is
+ * context weaker than an instruction. Conversation must not decide the fit
+ * estimate — the diff and the documents do. A constant, not a knob: an
+ * input that could raise it would make the half-window budget a preference.
+ */
+export const MAX_PR_BODY_BYTES = 8 * 2 ** 10;
+
+/**
+ * Bounds the pull request's description to `MAX_PR_BODY_BYTES` UTF-8 bytes,
+ * cutting on whole code points — a lone surrogate half is corrupt text, not
+ * truncated text — and marking the cut inside the evidence block, in the
+ * wrapper's own `[… truncated: N of M bytes shown]` family. The wrapper's
+ * 64 KiB per-block cap stays the universal ceiling; this is the
+ * description's tighter one, and the estimate counts exactly the bounded
+ * bytes the run sends.
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+function boundPrBody(body) {
+  const total = Buffer.byteLength(body, "utf8");
+  if (total <= MAX_PR_BODY_BYTES) return body;
+  let kept = "";
+  let used = 0;
+  for (const char of body) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (used + size > MAX_PR_BODY_BYTES) break;
+    kept += char;
+    used += size;
+  }
+  return `${kept}\n[pr-body truncated: ${String(used)} of ${String(total)} bytes shown]`;
+}
+
+/**
  * @typedef {object} PromptParts
  * @property {string} repoName
  * @property {string} repoDescription
  * @property {string} baseSha
  * @property {string} headSha
  * @property {string} title attacker-authored
- * @property {string} body attacker-authored, "" allowed
+ * @property {string} body attacker-authored, "" allowed; carried whole up to MAX_PR_BODY_BYTES, cut and marked past it (#527)
  * @property {string} language BCP-47 tag for reviewer prose
  * @property {import("./config.mjs").Strictness} strictness
  * @property {import("./config.mjs").Strategy} strategy
@@ -131,7 +173,10 @@ export function buildPrompt(parts, evidence = createEvidence()) {
     }),
   ];
   userParts.push(evidence.wrap("pr-title", parts.title));
-  if (parts.body !== "") userParts.push(evidence.wrap("pr-body", parts.body));
+  // The bounded description: conversation rides as a bounded excerpt, so
+  // the fit estimate the headroom check judges is a function of the review
+  // subject — the diff and the documents — plus bounded metadata (#527).
+  if (parts.body !== "") userParts.push(evidence.wrap("pr-body", boundPrBody(parts.body)));
   for (const file of parts.reviewed) {
     userParts.push(
       file.patch === undefined

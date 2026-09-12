@@ -651,6 +651,7 @@ a ceiling an input could raise is a preference, not a ceiling:
 | findings per review             | 50                      | the answer declares more                                             |
 | message length                  | 1000 chars              | sanitiser truncation, visible                                        |
 | summary length                  | 300 chars               | sanitiser truncation, visible                                        |
+| pull request description        | 8 KiB                   | the description's evidence block is cut, marked (#527)               |
 | initial prompt budget           | half the context window | the assembled prompt would exceed it                                 |
 | verifier tool calls per finding | 40                      | the verifier's own loop has executed 40 calls for one finding        |
 | verifier evidence per finding   | 128 KiB                 | one finding's wrapped verifier results have carried 128 KiB in total |
@@ -661,7 +662,10 @@ counts it. Before the first model call, the fully assembled messages are
 estimated (see [the loop](#the-loop-and-the-prompt) for the estimator) and a
 prompt past half the configured window is refused, red, with the estimate
 named — a review that cannot fit is refused, not silently truncated into a
-smaller-looking one.
+smaller-looking one. The estimate counts what the run sends and nothing
+else: the documents, the diff patches, the title and the description's
+bounded excerpt. It is a function of the review's subject — the thread's
+comments never enter it (#527).
 
 Reaching the tool-call or cumulative-evidence ceiling ends the reading phase
 exactly as reaching `max-turns` does: the loop makes one finalisation request
@@ -680,8 +684,9 @@ Assembled in one order, then extended as the loop runs:
 2  custom    the instruction document, if it exists
 3  rules     every rule whose include matches a changed file, its document,
              in config order
-4  evidence  the pull request's title and body, the per-file diff patches,
-             then, as the loop runs, each tool result
+4  evidence  the pull request's title, its description cut and marked past
+             8 KiB (#527), the per-file diff patches, then, as the loop
+             runs, each tool result
 ```
 
 The tiers map onto the protocol's three roles exactly once, so no implementer
@@ -711,6 +716,14 @@ attacker-authored text, so they enter as wrapped evidence, below every
 instruction tier — not in the system message, however convenient that would
 be. The repository's name and description are maintainer-set configuration and
 stay in the system message.
+
+The description is bounded on top of that, because it is conversation, not
+the review's subject (#527): it rides whole up to 8 KiB — the same ceiling an
+instruction document lives under — and past that it is cut and marked inside
+its evidence block. A thread that grows cannot grow the fit estimate; the
+diff and the documents decide fit. The thread's comments never enter any
+prompt at all — the only comment bytes a run reads are the marker's own
+record block, after the loop, for reconciliation.
 
 One turn is one model response, and the accounting is exact:
 

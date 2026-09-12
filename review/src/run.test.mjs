@@ -821,6 +821,74 @@ describe("failure posture", () => {
     expect(forge.calls.upserts).toHaveLength(0);
   });
 
+  it("keeps a fitting diff reviewable when the description grows past the window (#527)", async () => {
+    // The description is the one conversation input the assembled prompt
+    // carries; grown without bound it flipped a same-diff review from
+    // reviewable to refused. The bound (MAX_PR_BODY_BYTES) holds the
+    // estimate to the bounded body the run actually sends, so the diff —
+    // the review's subject — decides fit again. Same diff, same window,
+    // a grown description: reviewable.
+    const forge = forgeStub({
+      snapshotOverride: snapshot({ body: "review context line\n".repeat(9_000) }),
+    });
+    const result = await reviewPullRequest({
+      inputs: { ...INPUTS, contextWindow: 20_000 },
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("a grown comment thread never moves the fit estimate (#527)", async () => {
+    // Comments are read once after the loop, for reconciliation, gated by
+    // the marker's own laws — no prompt byte ever carries them. A thread
+    // grown huge cannot flip a fitting diff into a refusal, and the
+    // bounded reconciliation read still happens (the own marker's record
+    // stays the load-bearing comment input).
+    const forge = forgeStub();
+    forge.listComments = async () => [
+      {
+        id: 91,
+        user: { login: "someone-else" },
+        created_at: "2026-09-12T16:00:00Z",
+        updated_at: "2026-09-12T16:00:00Z",
+        body: "foreign prose\n".repeat(20_000),
+      },
+      {
+        id: 92,
+        user: { login: "github-actions[bot]" },
+        created_at: "2026-09-12T16:30:00Z",
+        updated_at: "2026-09-12T16:30:00Z",
+        body: "an own comment with no marker — not this run's history",
+      },
+    ];
+    /** @type {string[]} */
+    const commentReads = [];
+    const listComments = forge.listComments.bind(forge);
+    forge.listComments = async (number) => {
+      commentReads.push(String(number));
+      return listComments(number);
+    };
+    const result = await reviewPullRequest({
+      inputs: { ...INPUTS, contextWindow: 20_000 },
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge),
+    });
+    expect(result.outcome).toBe("published");
+    // The thread is read post-loop only: once for reconciliation, once more
+    // inside the upsert's own marker search — never for the prompt.
+    expect(commentReads.length).toBeGreaterThanOrEqual(1);
+    expect(commentReads.every((read) => read === "7")).toBe(true);
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
   it("re-asks once after a natural stop, then accepts the corrected answer", async () => {
     let asks = 0;
     const forge = forgeStub();
