@@ -16,6 +16,7 @@ a link that goes nowhere.
 | [ADR 004 — canonical review result](adr/004-canonical-review-result.md)                   | The one source of truth a review projects from — identity, reconciliation; decision 4's gate is superseded      |
 | [ADR 005 — PR execution trust boundary](adr/005-pr-execution-trust-boundary.md)           | The accepted dogfood risk, its re-open conditions, and the fired-then-resolved condition 3                      |
 | [ADR 006 — merge enforcement is GitHub's](adr/006-code-scanning-merge-enforcement.md)     | Review produces, GitHub disposes: no gate, no check run; enforcement rides Code Scanning rulesets               |
+| [ADR 007 — runtime architecture evidence](adr/007-archkeep-runtime-evidence.md)           | Consumer-run Archkeep, a protocol-and-ceiling reader, records never enforces (#518's P0)                        |
 | [Audit: review-enforcement audit](audit/review-enforcement-audit.md)                      | Historical record of the review-enforcement program's audit phase                                               |
 | [Audit: review-enforcement final](audit/review-enforcement-final.md)                      | Historical record of the program's closure — the verdict law, the enforcement captures, the §11 risks           |
 | [Development: configuration](development/configuration.md)                                | The shared config-file mechanism — discovery, format, the resolved policy source, precedence                    |
