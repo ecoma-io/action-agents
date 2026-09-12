@@ -71,8 +71,8 @@ finding's anchor against real workspace bytes.
 
 Measured at v0.29.0 against source (not README):
 
-- **Frozen 1.0 semantic contract** (`doctrine/1-0-semantic-contract.md` in
-  the archkeep repository): 24 commands, exit codes 0/1/2/3, JSON envelope
+- **Frozen 1.0 semantic contract** (archkeep, under `docs/`:
+  `doctrine/1-0-semantic-contract.md`): 24 commands, exit codes 0/1/2/3, JSON envelope
   schemaVersion 2 enforced by a two-directional shape gate, nine read-only
   MCP tools.
 - **`check` is the sole enforcement authority**; **`delta` is the bounded
@@ -347,7 +347,7 @@ config-file byte-cap precedent — one lane, not a third).
   strictly additive-when-present: blind runs stay byte-identical, and the
   floor never bypasses the bound gate — deep lanes consume reading budget
   like any lane; a bound-gate interaction test is in P3's exit criteria.
-- **Artifact section** — schemaVersion-family bump, additive: the v7
+- **Artifact section** — schemaVersion-family bump, additive: the v6
   family carries the `architecture` block (basis: report digest over raw
   bytes, baseline digest, tool version, both commits, both policy
   fingerprints; verdict; stale flag; bounded facts). Retention (new
@@ -362,10 +362,10 @@ config-file byte-cap precedent — one lane, not a third).
   enforces exact length and order — a conditional row is unimplementable,
   and a `passed: true` for an unrun gate would violate I11's "a missing
   fact is never a pass". The implementable shape follows the v5→v6
-  precedent: architecture-blind runs emit the v6 family byte-identically
-  to today; architecture-aware runs emit a **v7 family** — six-gate table
+  precedent: architecture-blind runs emit the v5 family byte-identically
+  to today; architecture-aware runs emit a **v6 family** — six-gate table
   with `architecture` appended after `verification` — carrying the
-  architecture section. Reconciliation accepts v6 and v7 comment-embedded
+  architecture section. Reconciliation accepts v5 and v6 comment-embedded
   records side by side.
 - **Gate predicate (verbatim, lands in the run contract with P0)**: the
   `architecture` gate passes iff **evidence-established** — verdict ∈
@@ -439,10 +439,17 @@ analyzed files; any single archkeep step ≤30 s (the existing U-2 trigger
 threshold, reused verbatim); review latency growth ≤15 s (measured
 overhead vs a real review run: 1.3–6%); prompt architecture evidence ≤8
 KiB after reduction. Scaling ceiling: ~2.5 ms/file crosses the 30-s step
-budget near ~12k files — the recipe ships per-step timeouts +
-`continue-on-error` on the _delta_ step only, so a slow repository
-degrades to today's architecture-blind review rather than a red run, and
-the degraded outcome is recorded as architecture `unknown`, never pass.
+budget near ~12k files — the recipe ships per-step timeouts, and a step
+that busts its budget reddens the workflow before the review runs: law 2
+tolerates exactly {1,3}, so a killed or mis-wired step is a visible
+failure, never a silent one. `continue-on-error` is not a degradation
+mechanism — it would neutralize exactly the redness law 2 exists for and
+still land in the `absent-though-configured` arm: with the input
+configured, an absent report is deliberately never architecture-blind. A
+repository too slow for the budget turns the `architecture-report` input
+off and stays architecture-blind — degradation is a configuration
+decision, not a runtime path, and `unknown` stays reachable only through
+untrusted evidence (stale).
 
 Caching verdicts (measured): baseline reuse via `actions/cache` keyed by
 **(base commit, engine version)** — yes: `tool.version` is recorded inside
@@ -543,7 +550,7 @@ write-back API is used or proposed (§9).
 Each phase is its own issue + branch + draft pull request; contract and
 ADR edits land with the code they govern.
 
-- **P0 — contracts first (docs only).** Run-contract amendment: the v7
+- **P0 — contracts first (docs only).** Run-contract amendment: the v6
   record family (six-gate table, `architecture` after `verification`),
   the gate predicate verbatim, the reason taxonomy (`stale` /
   `incomplete` / `absent-though-configured`, + architecture-blind), the
@@ -575,7 +582,7 @@ ADR edits land with the code they govern.
   unresolvable-never-findings. Exit: all eleven states of §7
   distinguishable in records and comment.
 - **P3 — review flagship, and dogfood begins.** Prompt grounding + ADR
-  context via policyReader + risk/lanes grounding + artifact v7 family +
+  context via policyReader + risk/lanes grounding + artifact v6 family +
   declared gate + comment rendering + corpus scenarios + the adversarial
   security fixtures. Dogfood starts here, not at P6: the recipe runs on
   this repository's own pull requests first (the merge-preview risk is
@@ -710,10 +717,15 @@ anchoring, trusted-infra capture) instead of promising a false green.
   expiry legitimately records different verdict facts, and reconciliation
   treats a waiver-state change between runs as an explicit note, not
   drift.
-- **Degradation**: per-step timeouts and `continue-on-error` on the delta
-  step only degrade a slow repository to today's architecture-blind
-  review rather than a red run; the degraded outcome is recorded as
-  architecture `unknown`, never pass.
+- **Degradation**: per-step timeouts bound each archkeep step; a step
+  that busts its budget reddens the workflow before the review runs —
+  law 2 tolerates exactly {1,3}, and `continue-on-error` is not a
+  degradation mechanism: with the input configured, an absent report is
+  the `absent-though-configured` red arm, never architecture-blind, and
+  never `unknown`. A repository too slow for the budget disables the
+  `architecture-report` input — degradation is a configuration decision,
+  not a runtime path — and `unknown` stays reachable only through
+  untrusted evidence (stale).
 
 # 11. Panel resolutions
 
@@ -730,7 +742,7 @@ folded into this page:
 2. **Artifact section: bounded normalized facts + raw-byte digests —
    sustained**, with the retention split of §6.3.
 3. **Gate verdict law: evidence-established, never `verdict === pass` —
-   sustained**, mechanics corrected to the v7/v6 family shape (a
+   sustained**, mechanics corrected to the v6/v5 family shape (a
    conditional row is unimplementable against the frozen gate-table
    law).
 4. **P4 triage workspace reads: a deliberate posture change, not a plan
