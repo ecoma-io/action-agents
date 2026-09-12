@@ -1,0 +1,5 @@
+{
+  "content": "{\"findings\":[{\"severity\":\"nit\",\"kind\":\"style\",\"file\":\"src/widgets.js\",\"line\":3,\"message\":\"the cross-scope import is the boundary exception the pinned ADR accepts while the facade migration is underway; a pointer to that migration would keep the exception discoverable here\"}],\"summary\":\"One nit: the ADR-accepted boundary exception could name its migration.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

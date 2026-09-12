@@ -48,7 +48,8 @@
         "marker-forgery/cross-action-marker.test.mjs",
         "policy-tampering/tampered-instruction.test.mjs",
         "provider-boundary/control-byte-content.test.mjs",
-        "harmonise-adversarial/translation-injection.test.mjs"
+        "harmonise-adversarial/translation-injection.test.mjs",
+        "arch-report/hostile-envelope.test.mjs"
       ]
     },
     {

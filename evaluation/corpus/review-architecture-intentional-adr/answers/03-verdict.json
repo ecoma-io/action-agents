@@ -1,0 +1,5 @@
+{
+  "content": "{\"verdict\":\"confirmed\",\"kind\":\"style\",\"reason\":\"the import does cross the recorded boundary, and the pinned ADR accepts exactly this crossing for the migration window\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

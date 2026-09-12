@@ -30,6 +30,11 @@ import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
 import { DeterministicRefusalError, UnusableAnswerRefusalError } from "./refusal.mjs";
 
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
+import {
+  architectureRiskFloors,
+  collectDecisionRefs,
+  resolveAdrContext,
+} from "./architecture-grounding.mjs";
 import { normaliseReadPath, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
 import { createTools, TOOL_SPECS } from "./tools.mjs";
 import { classifyRisk } from "./risk.mjs";
@@ -85,7 +90,7 @@ export const UNUSABLE_ANSWER_BACKOFF_MS = 20_000;
  * @property {(branch: string) => Promise<{ sha: string }>} getRef resolves a branch tip, for the policy source
  * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestSnapshot>} getPullRequest
  * @property {(number: number) => Promise<import("#core/forge.mjs").PullRequestFile[]>} listPullRequestFiles
- * @property {(path: string) => Promise<{ content: string } | null>} getContents reads the resolved policy source
+ * @property {(path: string, opts?: { ref?: string }) => Promise<{ content: string } | null>} getContents reads the resolved policy source — and, when architecture evidence names decision refs, the ADRs at that same pinned ref
  * @property {(number: number) => Promise<import("#core/forge.mjs").CommentEntry[]>} listComments
  * @property {(number: number, body: string) => Promise<{ id: number }>} createComment
  * @property {(id: number, body: string) => Promise<void>} updateComment
@@ -508,9 +513,17 @@ export async function reviewPullRequest({
   // Per-file risk comes from the same deterministic classifier the plan
   // documents describe — one file per call, so each row is that file's
   // own plan. Config and classifier are the only inputs: nothing the
-  // model says can move a file between lanes.
+  // model says can move a file between lanes. Architecture evidence,
+  // when a run holds it, grounds a floor per named head site — code's
+  // decision again, additive-when-present: a blind run passes no floors
+  // and classifies exactly as it always has.
+  const architectureFloors =
+    architecture === undefined ? undefined : architectureRiskFloors(architecture);
   const lanes = assignLanes(
-    inventory.reviewed.map((file) => ({ path: file.filename, riskPlan: classifyRisk([file]) })),
+    inventory.reviewed.map((file) => ({
+      path: file.filename,
+      riskPlan: classifyRisk([file], architectureFloors),
+    })),
     { ...config, strictness: runStrictness },
   );
   const laneBudgets = laneBudget(lanes, inputs.maxTurns);
@@ -525,6 +538,18 @@ export async function reviewPullRequest({
   }
 
   const repository = await io.forge.getRepository();
+  // ── ADR context: the records behind intentional evolution, pinned ────────
+  // The decision refs the evidence's introduced items name, read through the
+  // policy forge at the resolved base tip — the same pin every config and
+  // document read rides, so a pull request cannot edit the ADRs that
+  // interpret its own diff. At most three, sorted; an absent ADR is a fact
+  // the prompt states as absent, never a guess. A reader that throws is an
+  // honest infrastructure failure and ends the run red, like any policy read.
+  const decisionRefs = architecture === undefined ? undefined : collectDecisionRefs(architecture);
+  const adrContext =
+    decisionRefs === undefined || decisionRefs.refs.length === 0
+      ? new Map()
+      : await resolveAdrContext({ reader: policy.getContents, refs: decisionRefs.refs });
   const { messages, evidence } = buildPrompt({
     repoName: `${context.owner}/${context.repo}`,
     repoDescription: repository.description,
@@ -545,6 +570,15 @@ export async function reviewPullRequest({
         : { name: runPosture, document: postureDocument },
     activeRules,
     ruleDocuments,
+    ...(architecture !== undefined && decisionRefs !== undefined
+      ? {
+          architecture: {
+            evidence: architecture,
+            adr: adrContext,
+            omittedRefs: decisionRefs.omitted,
+          },
+        }
+      : {}),
   });
 
   const workspace = createWorkspace({ root: context.workspace });

@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "kind": "review",
+  "repository": "ecoma-io/action-agents",
+  "model": "<recorded>",
+  "inputs": {
+    "dryRun": false,
+    "maxTurns": 30,
+    "contextWindow": 128000,
+    "configPath": "",
+    "architectureReport": ".archkeep/delta.json"
+  },
+  "event": {
+    "name": "pull_request",
+    "action": "synchronize",
+    "payload": {
+      "action": "synchronize",
+      "pull_request": {
+        "number": 4112,
+        "base": {
+          "ref": "main",
+          "sha": "0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
+        }
+      }
+    }
+  },
+  "thread": {
+    "type": "pr",
+    "number": 4112,
+    "title": "Widgets: render the rollup",
+    "body": "Adds the render helper over the rollup import. Synthetic description.",
+    "labels": []
+  },
+  "policy": {
+    "files": {
+      ".github/action-agents/review/review.json5": null,
+      ".github/action-agents/review/review.json": null,
+      ".github/action-agents/review/instruction.md": null,
+      "docs/adr/0009-share-through-facades.md": null
+    }
+  },
+  "headFiles": {
+    "src/widgets.js": "\"use strict\";\n\nimport { rollup } from \"widgets-b/src/index.mjs\";\n\nexport function render(items) {\n  if (items.length === 0) {\n    return \"\";\n  }\n  return rollup(items).join(\", \");\n}\n",
+    ".archkeep/run.json": "{\"exitCode\":1,\"stderrDigest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"base\":{\"capturePath\":\".archkeep/baseline.json\",\"commit\":\"0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d\"},\"head\":{\"commit\":\"e3a1c5d9b7f04e6a8c2d5b8f1a4d7c0e3b6a9d2f\"}}",
+    ".archkeep/delta.json": "{\"schemaVersion\":2,\"tool\":{\"name\":\"@ecoma-io/archkeep\",\"version\":\"0.29.0\"},\"command\":\"delta\",\"workspace\":{\"root\":\"/repo\",\"provider\":\"node-workspace\",\"marker\":\"package.json\",\"provenance\":{\"commit\":\"e3a1c5d9b7f04e6a8c2d5b8f1a4d7c0e3b6a9d2f\",\"dirty\":false}},\"status\":\"findings\",\"exitCode\":1,\"coverage\":{\"complete\":true,\"analyzedFiles\":1,\"notAnalyzed\":[],\"blindSpots\":[],\"notes\":[]},\"decision\":{\"verdict\":\"fail\"},\"result\":{\"policyChanged\":false,\"baseline\":{\"provenance\":{\"commit\":\"0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d\",\"dirty\":false},\"policyFingerprint\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"records\":0,\"projects\":2},\"head\":{\"provenance\":{\"commit\":\"e3a1c5d9b7f04e6a8c2d5b8f1a4d7c0e3b6a9d2f\",\"dirty\":false},\"policyFingerprint\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"records\":0,\"projects\":2},\"summary\":{\"introduced\":1,\"introducedWaived\":0,\"resolved\":0,\"unchanged\":0,\"unknown\":0,\"unresolvable\":{\"introduced\":0,\"resolved\":0,\"unchanged\":0,\"unknown\":0}},\"violations\":{\"introduced\":[{\"messageId\":\"onlyTagsConstraintViolation\",\"sourceProject\":\"scope:widgets-a\",\"target\":\"widgets-b/src/index.mjs\",\"targetIsSpecifier\":false,\"constraint\":{\"decisionRef\":\"0009-share-through-facades\",\"description\":\"widgets-a depends only on shared libraries\"},\"waived\":false,\"headCount\":1,\"headSites\":[{\"file\":\"src/widgets.js\",\"line\":3}]}],\"resolved\":[],\"unchanged\":[],\"unknown\":[]},\"unresolvable\":{\"introduced\":[],\"resolved\":[],\"unchanged\":[],\"unknown\":[]}}}"
+  },
+  "world": {
+    "getRepository": {
+      "defaultBranch": "main",
+      "name": "action-agents",
+      "description": "AI GitHub Actions for repository upkeep"
+    },
+    "getRef": {
+      "main": "5f1e7a2c9b8d4e6f0a3c5d7e9b1f2a4c6d8e0f2a"
+    },
+    "getPullRequest": {
+      "number": 4112,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "title": "Widgets: render the rollup",
+      "body": "Adds the render helper over the rollup import. Synthetic description.",
+      "mergeable": true,
+      "mergeableState": "clean",
+      "labels": [],
+      "head": {
+        "ref": "feat/synthetic-4112",
+        "sha": "e3a1c5d9b7f04e6a8c2d5b8f1a4d7c0e3b6a9d2f"
+      },
+      "base": {
+        "ref": "main",
+        "sha": "0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
+      }
+    },
+    "listPullRequestFiles": [
+      {
+        "filename": "src/widgets.js",
+        "status": "added",
+        "additions": 10,
+        "deletions": 0,
+        "patch": "@@ -0,0 +1,10 @@\n+\"use strict\";\n+\n+import { rollup } from \"widgets-b/src/index.mjs\";\n+\n+export function render(items) {\n+  if (items.length === 0) {\n+    return \"\";\n+  }\n+  return rollup(items).join(\", \");\n+}\n+"
+      }
+    ],
+    "listComments": [],
+    "whoami": {
+      "login": "github-actions[bot]"
+    }
+  }
+}

@@ -60,12 +60,12 @@ function manifest(exitCode) {
  * suite and the contract goldens pin — enough structure to validate and
  * normalize, nothing the wiring under test needs to interpret.
  *
- * @param {{ head?: string, status?: "ok" | "findings" }} [over]
+ * @param {{ head?: string, status?: "ok" | "findings", violations?: unknown[] }} [over]
  * @returns {string}
  */
 function envelope(over = {}) {
   const status = over.status ?? "ok";
-  const introduced = status === "findings" ? [violation()] : [];
+  const introduced = status === "findings" ? (over.violations ?? [violation()]) : [];
   const head = over.head ?? HEAD;
   return JSON.stringify({
     schemaVersion: 2,
@@ -121,6 +121,57 @@ function violation() {
   };
 }
 
+/** The ADR id a grounded violation's constraint row reaches. */
+const ADR_ID = "0009-share-through-facades";
+
+/** The ADR document as the pinned policy source serves it. */
+const ADR_TEXT = `---
+id: 0009-share-through-facades
+status: accepted
+---
+
+# ADR 0009: share through facades
+
+Widgets must reach each other only through the facade each owning scope
+exports; a direct import across scopes is a boundary violation even when
+the types line up.
+`;
+
+/**
+ * A violation carrying the two facts the derivations reach for: head sites
+ * naming a changed file (the risk floor's evidence) and a constraint row
+ * with a decision ref (the ADR context's reach).
+ *
+ * @returns {Record<string, unknown>}
+ */
+function groundedViolation() {
+  return {
+    ...violation(),
+    constraint: { decisionRef: ADR_ID, description: "widgets-a must not import widgets-b" },
+    headSites: [{ file: "src/a.mjs", line: 2 }],
+  };
+}
+
+/**
+ * A chat that serves the script like `scriptedChat` while keeping every
+ * request the run made — the evidence the prompt tests judge.
+ *
+ * @param {Array<{ content?: string, toolCalls?: Array<{ id: string, name: string, arguments: string }> }>} steps
+ * @returns {import("#core/chat.mjs").Chat & { requests: Array<{ messages?: Array<{ role?: string, content?: string | null }> } & Record<string, unknown>> }}
+ */
+function capturingChat(steps) {
+  const script = scriptedChat(steps);
+  /** @type {Array<{ messages?: Array<{ role?: string, content?: string | null }> } & Record<string, unknown>>} */
+  const requests = [];
+  return {
+    requests,
+    async complete(request) {
+      requests.push(request);
+      return script.complete(request);
+    },
+  };
+}
+
 /**
  * A workspace holding the reviewed file plus the architecture step's
  * leftovers — the recipe's `.archkeep/` pair.
@@ -160,6 +211,8 @@ function artifactBytes(workspace) {
   return readFileSync(join(workspace, ".review-artifact", `review-artifact-${HEAD}.json`), "utf8");
 }
 
+/** @typedef {import("./run.mjs").RunResult} RunResult */
+
 /** The scripted happy-path chat: one read turn, one confirming verdict. */
 const CONCERN_SCRIPT = () => [
   readTurn("src/a.mjs"),
@@ -175,9 +228,11 @@ describe("the architecture-report input: blind default", () => {
   it("a report sitting unnamed in the workspace changes nothing — comment and artifact bytes identical", async () => {
     // Two entrypoint drives of the same scripted scenario: one over a plain
     // workspace, one over a workspace that also holds the recipe's
-    // `.archkeep/` pair. The input is unset in both. If the mere presence
-    // of the files moved a single byte of either surface, the input would
-    // not be off when it claims to be off.
+    // `.archkeep/` pair — carrying the grounded shape (head sites, a
+    // decision ref) so the pin is that the STRONGEST evidence a blind run
+    // never reads moves nothing. The input is unset in both. If the mere
+    // presence of the files moved a single byte of either surface, the
+    // input would not be off when it claims to be off.
     const plainWorkspace = makeWorkspace({ "src/a.mjs": A_CONTENT });
     const plainForge = forgeStub();
     const plain = await driveEntrypoint({
@@ -185,7 +240,10 @@ describe("the architecture-report input: blind default", () => {
       forge: plainForge,
       chat: scriptedChat(CONCERN_SCRIPT()),
     });
-    const besideWorkspace = workspaceWith({ report: envelope(), manifest: manifest(0) });
+    const besideWorkspace = workspaceWith({
+      report: envelope({ status: "findings", violations: [groundedViolation()] }),
+      manifest: manifest(1),
+    });
     const besideForge = forgeStub();
     const besideFiles = await driveEntrypoint({
       workspace: besideWorkspace,
@@ -338,6 +396,107 @@ describe("the architecture-report input: aware run", () => {
     });
     expect(blind.ok).toBe(true);
     expect(commentPastMarker(forge)).toBe(commentPastMarker(blindForge));
+  });
+});
+
+describe("the aware run's code-built derivations", () => {
+  /**
+   * The full aware replay over a workspace holding the recipe pair.
+   *
+   * @param {{ report?: string, manifest?: string, forge?: ReturnType<typeof forgeStub>, chat?: import("#core/chat.mjs").Chat }} [options]
+   * @returns {Promise<{ forge: ReturnType<typeof forgeStub>, result: RunResult }>}
+   */
+  async function awareRun(options = {}) {
+    const workspace = workspaceWith({
+      report: options.report ?? envelope({ status: "findings", violations: [groundedViolation()] }),
+      manifest: options.manifest ?? manifest(1),
+    });
+    const forge = options.forge ?? forgeStub();
+    const { io } = replayIo(forge, options.chat ?? scriptedChat(CONCERN_SCRIPT()));
+    const result = await reviewPullRequest({
+      inputs: {
+        model: "review",
+        maxTurns: 5,
+        contextWindow: 128_000,
+        dryRun: false,
+        configPath: "",
+        architectureReport: ".archkeep/delta.json",
+      },
+      context: { owner: "acme", repo: "widgets", workspace },
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: {
+        action: "synchronize",
+        pull_request: { number: 7, base: { ref: "main", sha: BASE } },
+      },
+      io,
+    });
+    return { forge, result };
+  }
+
+  it("head sites ground the named file: the artifact's risk row rises, the published comment does not", async () => {
+    // The one seam grounding is allowed to move: the per-file risk table
+    // the artifact records. `src/a.mjs` matches no path rule (low/skim
+    // blind); the evidence's introduced head site raises it to high/deep —
+    // an unmapped messageId defaults high — and nothing the thread reads
+    // changes with it.
+    const { forge, result } = await awareRun();
+    expect(result.outcome).toBe("published");
+    const artifact = /** @type {{ risk?: Array<{ path: string, risk: string, lane: string }> }} */ (
+      result.artifact ?? {}
+    );
+    const row = (artifact.risk ?? []).find((entry) => entry.path === "src/a.mjs");
+    expect(row).toMatchObject({ path: "src/a.mjs", risk: "high", lane: "deep" });
+    // The published surface stays the review's own: byte-identical to the
+    // blind run's comment, grounding or not.
+    const blindForge = forgeStub();
+    const blind = await driveEntrypoint({
+      workspace: makeWorkspace({ "src/a.mjs": A_CONTENT }),
+      forge: blindForge,
+      chat: scriptedChat(CONCERN_SCRIPT()),
+    });
+    expect(blind.ok).toBe(true);
+    expect(commentPastMarker(forge)).toBe(commentPastMarker(blindForge));
+  });
+
+  it("the ADR a decision ref reaches is read at the pinned base, and its excerpt rides the prompt as evidence", async () => {
+    const chat = capturingChat(CONCERN_SCRIPT());
+    const { forge, result } = await awareRun({
+      forge: forgeStub({ documents: { [`docs/adr/${ADR_ID}.md`]: ADR_TEXT } }),
+      chat,
+    });
+    expect(result.outcome).toBe("published");
+    // The read went through the policy reader at the resolved base tip —
+    // the same pin every config and document read rides — never the head.
+    const policySha = "7".repeat(40);
+    expect(forge.calls.contents).toContainEqual({ path: `docs/adr/${ADR_ID}.md`, ref: policySha });
+    // And no read ever served the head or any other ref for the ADR.
+    for (const call of forge.calls.contents) {
+      if (call.path === `docs/adr/${ADR_ID}.md`) expect(call.ref).toBe(policySha);
+    }
+    // The prompt carries the facts as one evidence block: the system-side
+    // meaning paragraph, the section's ADR context, and the excerpt's own
+    // words (flattened to one line) — never a verdict to echo.
+    const messages = chat.requests[0]?.messages ?? [];
+    expect(messages).toHaveLength(2);
+    expect(String(messages[0]?.content)).toContain("Architecture evidence");
+    const user = String(messages[1]?.content);
+    expect(user).toContain(" architecture]");
+    expect(user).toContain("ADR context (read at the pinned base");
+    expect(user).toContain(`- ${ADR_ID}:`);
+    expect(user).toContain("Widgets must reach each other only through the");
+    expect(user).not.toContain(ADR_TEXT.slice(0, ADR_TEXT.indexOf("\n") + 1));
+  });
+
+  it("an absent ADR is recorded as absent — never guessed from the ref alone", async () => {
+    // The same grounded violation, a policy source that holds no ADR: the
+    // block names the absence, and the run still publishes green — an
+    // unreachable record is a fact, not a failure.
+    const chat = capturingChat(CONCERN_SCRIPT());
+    const { result } = await awareRun({ chat });
+    expect(result.outcome).toBe("published");
+    const user = String(chat.requests[0]?.messages?.[1]?.content ?? "");
+    expect(user).toContain(`- ${ADR_ID}: no ADR at the pinned base`);
   });
 });
 

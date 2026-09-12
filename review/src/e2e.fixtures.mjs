@@ -158,6 +158,7 @@ export function readTurn(path) {
  * @typedef {import("./run.mjs").ReviewForge & {
  *   calls: {
  *     pullRequests: string[],
+ *     contents: Array<{ path: string, ref: string | null }>,
  *     upserts: Array<{ op: string, id?: number, body?: string }>,
  *   },
  * }} RecordingForge
@@ -169,6 +170,8 @@ export function forgeStub(options = {}) {
   const calls = {
     /** @type {string[]} */
     pullRequests: [],
+    /** @type {Array<{ path: string, ref: string | null }>} */
+    contents: [],
     /** @type {Array<{ op: string, id?: number, body?: string }>} */
     upserts: [],
   };
@@ -189,7 +192,11 @@ export function forgeStub(options = {}) {
       if (branch !== "main") throw new Error(`unexpected ref lookup '${branch}'`);
       return { sha: "7".repeat(40) };
     },
-    async getContents(/** @type {string} */ path) {
+    async getContents(
+      /** @type {string} */ path,
+      /** @type {{ ref?: string } | undefined} */ opts,
+    ) {
+      calls.contents.push({ path, ref: opts?.ref ?? null });
       const documents = options.documents ?? {};
       if (documents[path] !== undefined) return { content: documents[path] };
       if (path.endsWith("review.json5")) {

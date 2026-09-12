@@ -1,0 +1,14 @@
+{
+  "outcome": "published",
+  "findings": [
+    {
+      "file": "src/widgets.js",
+      "line": 3,
+      "severity": "nit",
+      "valid": true
+    }
+  ],
+  "verdicts": {
+    "src/widgets.js:3": "confirmed"
+  }
+}

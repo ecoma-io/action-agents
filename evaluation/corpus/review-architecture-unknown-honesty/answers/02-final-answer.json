@@ -1,0 +1,5 @@
+{
+  "content": "{\"findings\":[],\"summary\":\"No findings on the changed lines; architecture was not established for this head, and the diff itself shows nothing to report.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

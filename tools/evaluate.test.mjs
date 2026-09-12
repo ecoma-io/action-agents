@@ -308,6 +308,52 @@ test("validateSnapshot refuses a review config path that points at a named file"
   );
 });
 
+test("validateSnapshot accepts an aware run's architecture knob when the recipe pair is recorded", () => {
+  const snapshot = structuredClone(VALID_REVIEW_SNAPSHOT);
+  snapshot["inputs"]["architectureReport"] = ".archkeep/delta.json";
+  snapshot["headFiles"][".archkeep/delta.json"] = "{}";
+  snapshot["headFiles"][".archkeep/run.json"] = '{"exitCode":1}';
+  assert.equal(validateSnapshot(snapshot, "entry")["kind"], "review");
+  // And the blind default: "" is as valid as absent.
+  const blind = structuredClone(VALID_REVIEW_SNAPSHOT);
+  blind["inputs"]["architectureReport"] = "";
+  assert.equal(validateSnapshot(blind, "entry")["kind"], "review");
+});
+
+test("validateSnapshot rejects an architecture knob that is not a string", () => {
+  const snapshot = structuredClone(VALID_REVIEW_SNAPSHOT);
+  snapshot["inputs"]["architectureReport"] = 0;
+  assert.match(
+    defectMessage(() => validateSnapshot(snapshot, "entry")),
+    /architectureReport is not a string/,
+  );
+});
+
+test("validateSnapshot rejects an aware run whose recipe pair is not recorded in headFiles", () => {
+  const noManifest = structuredClone(VALID_REVIEW_SNAPSHOT);
+  noManifest["inputs"]["architectureReport"] = ".archkeep/delta.json";
+  noManifest["headFiles"][".archkeep/delta.json"] = "{}";
+  assert.match(
+    defectMessage(() => validateSnapshot(noManifest, "entry")),
+    /does not record '\.archkeep\/run\.json'/,
+  );
+  // A zero-exit manifest without its report is the arm the run refuses
+  // red — the corpus cannot record it as a published replay.
+  const noReport = structuredClone(VALID_REVIEW_SNAPSHOT);
+  noReport["inputs"]["architectureReport"] = ".archkeep/delta.json";
+  noReport["headFiles"][".archkeep/run.json"] = '{"exitCode":0}';
+  assert.match(
+    defectMessage(() => validateSnapshot(noReport, "entry")),
+    /does not record it beside a zero-exit manifest/,
+  );
+  // A nonzero exit honestly leaves no envelope — manifest alone replays
+  // the unknown-evidence arm.
+  const nonzero = structuredClone(VALID_REVIEW_SNAPSHOT);
+  nonzero["inputs"]["architectureReport"] = ".archkeep/delta.json";
+  nonzero["headFiles"][".archkeep/run.json"] = '{"exitCode":3}';
+  assert.equal(validateSnapshot(nonzero, "entry")["kind"], "review");
+});
+
 test("validateExpected rejects an unknown verdict word and a malformed anchor", () => {
   const wrongVerdict = { findings: [], outcome: "published", verdicts: { "src/a.js:7": "maybe" } };
   assert.match(
@@ -560,8 +606,8 @@ test("loadCorpus refuses malformed JSON", async () => {
 test("evaluate replays the real corpus and clears every loose threshold", async () => {
   const result = await evaluate({ corpusRoot: CORPUS_ROOT });
   assert.deepEqual(result.defects, []);
-  assert.deepEqual(result.corpusCounts, { triage: 6, review: 7, harmonise: 3 });
-  assert.deepEqual(result.replayed, { triage: 6, review: 7, harmonise: 3 });
+  assert.deepEqual(result.corpusCounts, { triage: 6, review: 10, harmonise: 3 });
+  assert.deepEqual(result.replayed, { triage: 6, review: 10, harmonise: 3 });
   const byMetric = new Map(result.rows.map((row) => [row.metric, row]));
   const refusal = byMetric.get("triage refusal-rate");
   assert.ok(refusal && refusal.value !== null && Math.abs(refusal.value - 3 / 5) < 1e-12);
@@ -576,12 +622,15 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
   // The #479 dogfood FP fixtures (review-wrong-anchor-nit, review-false-import-fp)
   // carry the verbatim dogfood texts, so the quoted-evidence span gate withholds
   // their wrong findings before publication: 6 tp / 1 fp / 4 tn (only
-  // review-false-count-fp still publishes a wrong finding — no quoted span, by design).
+  // review-false-count-fp still publishes a wrong finding — no quoted span, by
+  // design). The three architecture-evidence entries add two true positives
+  // (the boundary concern and the ADR-weighed nit) and two confirmed verdicts;
+  // the unknown-honesty entry publishes clean.
   for (const [name, wanted] of [
-    ["review precision", 6 / 7],
+    ["review precision", 8 / 9],
     ["review false-positive-rate", 1 / 5],
     ["review severity-agreement", 1],
-    ["review verifier-agreement", 0.6],
+    ["review verifier-agreement", 5 / 7],
     ["review verification-accuracy", 1],
     ["review anchoring-integrity", 1],
   ]) {
@@ -596,7 +645,7 @@ test("evaluate replays the real corpus and clears every loose threshold", async 
     "harmonise.createTree": 2,
     "harmonise.upsertBranch": 2,
     "harmonise.upsertPullRequest": 2,
-    "review.createComment": 5,
+    "review.createComment": 8,
     "triage.addLabels": 3,
     "triage.createComment": 2,
   });

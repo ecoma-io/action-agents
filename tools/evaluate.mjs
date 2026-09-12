@@ -385,7 +385,9 @@ export function validateSnapshot(snapshot, entryName) {
       throw new CorpusDefect(`${where}.inputs.sourceLanguage is not a non-empty string`);
     }
   } else {
-    assertKeys(inputs, ["configPath", "contextWindow", "dryRun", "maxTurns"], `${where}.inputs`);
+    assertKeys(inputs, ["configPath", "contextWindow", "dryRun", "maxTurns"], `${where}.inputs`, [
+      "architectureReport",
+    ]);
     const configPath = inputs["configPath"];
     if (typeof configPath !== "string" || configPath !== "") {
       throw new CorpusDefect(
@@ -397,6 +399,40 @@ export function validateSnapshot(snapshot, entryName) {
     }
     if (typeof inputs["contextWindow"] !== "number" || inputs["contextWindow"] < 1) {
       throw new CorpusDefect(`${where}.inputs.contextWindow is not a positive number`);
+    }
+    // The architecture knob, optional exactly as the input is: "" replays a
+    // blind run; a path replays an aware one and names the report the
+    // recipe's step left beside its `run.json` manifest — the sibling
+    // convention the integration recipe pins. The manifest must always be
+    // recorded; the report itself only beside a zero exit, because the
+    // nonzero arms honestly leave no envelope.
+    if ("architectureReport" in inputs) {
+      const architectureReport = inputs["architectureReport"];
+      if (typeof architectureReport !== "string") {
+        throw new CorpusDefect(`${where}.inputs.architectureReport is not a string`);
+      }
+      if (architectureReport !== "") {
+        const headFiles = asRecord(record["headFiles"], `${where}.headFiles`);
+        const manifestPath = `${architectureReport.slice(0, architectureReport.lastIndexOf("/") + 1)}run.json`;
+        if (!(manifestPath in headFiles)) {
+          throw new CorpusDefect(
+            `${where}.inputs.architectureReport names '${architectureReport}', but headFiles does not record '${manifestPath}' — the recipe's manifest is the replay's precedence fact`,
+          );
+        }
+        let exitCode;
+        try {
+          exitCode = JSON.parse(/** @type {string} */ (headFiles[manifestPath])).exitCode;
+        } catch {
+          throw new CorpusDefect(
+            `${where}.headFiles['${manifestPath}'] does not parse as the recipe's manifest`,
+          );
+        }
+        if (exitCode === 0 && !(architectureReport in headFiles)) {
+          throw new CorpusDefect(
+            `${where}.inputs.architectureReport names '${architectureReport}', but headFiles does not record it beside a zero-exit manifest — the replay would not reproduce the run the entry claims`,
+          );
+        }
+      }
     }
   }
   // The corpus exists to replay real runs: a dry-run snapshot would replay a
@@ -1087,9 +1123,12 @@ export async function replayReview(entry) {
           contextWindow: inputs["contextWindow"],
           dryRun: inputs["dryRun"],
           configPath: inputs["configPath"],
-          // The corpus replays real runs; a real run always carries the
-          // architecture knob, off by default like every recorded run is.
-          architectureReport: "",
+          // The architecture knob replays what the recorded run carried: ""
+          // for a blind run, the recipe's report path for an aware one —
+          // its bytes and manifest already sit in the workspace headFiles
+          // built above.
+          architectureReport:
+            typeof inputs["architectureReport"] === "string" ? inputs["architectureReport"] : "",
           artifactPath: p.join("workspace", ".review-artifact"),
         },
         {

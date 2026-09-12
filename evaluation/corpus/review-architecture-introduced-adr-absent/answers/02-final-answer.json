@@ -1,0 +1,5 @@
+{
+  "content": "{\"findings\":[{\"severity\":\"concern\",\"kind\":\"correctness\",\"file\":\"src/widgets.js\",\"line\":3,\"message\":\"the import reaches straight into widgets-b source instead of the facade the owning scope exports, crossing the module boundary the pinned architecture run recorded for this exact line\"}],\"summary\":\"One concern: the boundary-crossing import the architecture evidence names.\"}",
+  "toolCalls": [],
+  "finishReason": "stop"
+}

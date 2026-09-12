@@ -370,3 +370,119 @@ describe("the description bound (#527)", () => {
     expect(user).not.toContain("pr-body");
   });
 });
+
+describe("the architecture evidence section", () => {
+  /**
+   * The smallest evidence the frozen reader can carry — one introduced
+   * violation with a site, verdict fail, everything else empty.
+   *
+   * @returns {import("#core/architecture.mjs").ArchitectureEvidence}
+   */
+  function evidence() {
+    return {
+      verdict: "fail",
+      stale: false,
+      incompleteness: null,
+      provenance: {
+        head: { commit: "a".repeat(40), dirty: false },
+        base: { commit: "b".repeat(40), dirty: false },
+      },
+      policyChanged: false,
+      provider: "node-workspace",
+      toolVersion: "0.29.0",
+      policyFingerprints: { head: `sha256:${"1".repeat(64)}`, base: `sha256:${"2".repeat(64)}` },
+      reportSha256: `sha256:${"3".repeat(64)}`,
+      introduced: [
+        {
+          messageId: "onlyTagsConstraintViolation",
+          sourceProject: "scope:widgets-a",
+          target: "widgets-b/src/index.mjs",
+          targetIsSpecifier: false,
+          constraint: null,
+          waived: false,
+          waivedBy: null,
+          baseCount: 0,
+          headCount: 1,
+          baseSites: [],
+          headSites: [{ file: "src/summary.js", line: 3 }],
+          reason: null,
+          note: null,
+        },
+      ],
+      resolved: [],
+      unchangedCount: 0,
+      introducedWaived: 0,
+      renamePairs: [],
+      occurrencesReduced: [],
+      customRules: null,
+      unresolvable: { introduced: 0, resolved: 0, unchanged: 0, unknown: 0 },
+      coverage: {
+        complete: true,
+        analyzedFiles: 2,
+        notAnalyzedCount: 0,
+        blindSpotCount: 0,
+        notes: [],
+      },
+    };
+  }
+
+  /**
+   * Parts carrying the evidence, over the file the site names.
+   *
+   * @param {Partial<import("./prompt.mjs").PromptParts>} [over]
+   * @returns {import("./prompt.mjs").PromptParts}
+   */
+  function awareParts(over = {}) {
+    return parts({
+      reviewed: [file("src/summary.js")],
+      lanes: [{ path: "src/summary.js", risk: "high", lane: "deep" }],
+      laneBudgets: { deep: 1, standard: 0, skim: 0 },
+      architecture: { evidence: evidence(), adr: null, omittedRefs: 0 },
+      ...over,
+    });
+  }
+
+  it("rides the user message as one wrapped block beside the changed files, before any attacker word", () => {
+    const { messages } = buildPrompt(awareParts({ title: "pr words", body: "body words" }));
+    const user = /** @type {string} */ (messages[1]?.content);
+    // The wrapper's begin marker carries the random per-run delimiter; the
+    // label is what identifies the block.
+    expect(user).toContain(" architecture]");
+    expect(user).toContain("[end-evidence:");
+    expect(user).toContain("verdict: fail");
+    // Order: after the changed-files list, before the title — evidence rides
+    // above every attacker-authored byte the message also carries.
+    const list = user.indexOf("- src/summary.js");
+    const block = user.indexOf(" architecture]");
+    const title = user.indexOf(" pr-title]");
+    expect(list).toBeGreaterThan(-1);
+    expect(list).toBeLessThan(block);
+    expect(block).toBeLessThan(title);
+  });
+
+  it("carries the system-side meaning paragraph exactly when the block rides", () => {
+    const system = systemOf(awareParts());
+    expect(system).toContain("Architecture evidence");
+    expect(system).toContain("not verdicts to echo");
+    expect(system).toContain("do not narrate architecture as reviewed, clean or violated");
+    expect(system.match(/Architecture evidence —/g) ?? []).toHaveLength(1);
+    // The meaning is system-side only; the user message carries the facts.
+    const { messages } = buildPrompt(awareParts());
+    expect(/** @type {string} */ (messages[1]?.content)).not.toContain("not verdicts to echo");
+  });
+
+  it("a blind prompt carries neither the block nor the paragraph, byte for byte", () => {
+    const blindParts = parts({
+      reviewed: [file("src/summary.js")],
+      lanes: [{ path: "src/summary.js", risk: "high", lane: "deep" }],
+      laneBudgets: { deep: 1, standard: 0, skim: 0 },
+    });
+    const blind = buildPrompt(blindParts);
+    expect(/** @type {string} */ (blind.messages[0]?.content)).not.toContain(
+      "Architecture evidence",
+    );
+    const user = /** @type {string} */ (blind.messages[1]?.content);
+    expect(user).not.toContain("architecture");
+    expect(user).not.toContain("verdict: fail");
+  });
+});

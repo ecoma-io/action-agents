@@ -143,10 +143,21 @@ const TEST_SEGMENTS = ["test", "tests", "spec", "specs", "__tests__"];
  * Classifies the changed files into a risk plan. Pure: no I/O, no clock, no
  * randomness — the same list always yields the same plan.
  *
+ * The second seam is the architecture floor, additive-when-present: a map
+ * from normalised path to the risk level validated architecture evidence
+ * grounds that file at (`architecture-grounding.mjs` builds it from
+ * introduced-violation head sites). A grounded file cannot land below its
+ * floor and gains one `architecture` signal naming why; nothing else about
+ * its plan moves, and a run with no floors — the architecture-blind default
+ * — classifies exactly as it always has, byte for byte. The floor is a
+ * reading assignment the lanes turn into attention; it is never a verdict
+ * and never a lane of its own.
+ *
  * @param {ChangedFile[]} files the forge's file list, in API order
+ * @param {ReadonlyMap<string, RiskLevel>} [floors] architecture evidence's per-path floors, keyed by `normalise`d path
  * @returns {RiskPlan}
  */
-export function classifyRisk(files) {
+export function classifyRisk(files, floors) {
   /** @type {Set<Lane>} */
   const laneSet = new Set(["correctness"]);
   /** @type {RiskLevel} */
@@ -170,6 +181,18 @@ export function classifyRisk(files) {
       if (!seen.has(key)) {
         seen.add(key);
         signals.push({ kind: rule.kind, path: context.path });
+      }
+    }
+    // The architecture floor, after the table: evidence that this file sits
+    // under an introduced boundary violation raises what the table said,
+    // never lowers it, and emits the signal that says why.
+    const floor = floors?.get(context.path);
+    if (floor !== undefined) {
+      if (RISK_RANK[floor] > RISK_RANK[fileRisk]) fileRisk = floor;
+      const key = `architecture\u0000${context.path}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        signals.push({ kind: "architecture", path: context.path });
       }
     }
     // The pinned promotion, and the only road to `critical`: one file that
@@ -288,12 +311,14 @@ function fileContext(filename) {
  * Posix-normalises a filename: backslashes fold to slashes, repeated slashes
  * collapse, and one leading `./` or `/` is dropped. A leading dot survives —
  * `.github` is a name, not a here-marker — so a top-level file is one with
- * no slash left in it.
+ * no slash left in it. Exported because the architecture floor keys its map
+ * by this exact normalisation — the floor must meet the path the classifier
+ * tests or it grounds nothing.
  *
  * @param {string} filename
  * @returns {string}
  */
-function normalise(filename) {
+export function normalise(filename) {
   return String(filename ?? "")
     .replace(/\\/g, "/")
     .replace(/\/+/g, "/")
