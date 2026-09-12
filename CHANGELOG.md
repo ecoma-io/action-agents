@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/ecoma-io/action-agents/compare/v0.13.1...v0.13.2) (2026-09-12)
+
+
+### Bug Fixes
+
+* **review:** retry the unusable answer once behind backoff and expose its refusal class ([#522](https://github.com/ecoma-io/action-agents/issues/522)) ([950d29e](https://github.com/ecoma-io/action-agents/commit/950d29e4a1d871454267cb3cc7d2b48401a0c8ac))
+
 ## [0.13.1](https://github.com/ecoma-io/action-agents/compare/v0.13.0...v0.13.1) (2026-09-11)
 
 
