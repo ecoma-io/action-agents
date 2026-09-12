@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import * as p from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { reviewPullRequest } from "./run.mjs";
 import { applicabilityArtifactSchemaVersion, serialiseArtifact } from "./artifact.mjs";
+import { reviewPullRequest, UNUSABLE_ANSWER_BACKOFF_MS } from "./run.mjs";
 import { contentDigest } from "./digest.mjs";
 import { OwnLoginsError } from "#core/comment.mjs";
 import { ChatError } from "#core/chat.mjs";
@@ -214,13 +214,15 @@ function capturingChat(finalAnswer) {
 /**
  * @param {import("./run.mjs").ReviewForge} forge
  * @param {import("#core/chat.mjs").Chat} [chat]
+ * @param {(ms: number) => Promise<void>} [sleep] records the backoff fact; never a real timer (the e2e law: no sleeps)
  * @returns {import("./run.mjs").Io}
  */
-function io(forge, chat = chatStub()) {
+function io(forge, chat = chatStub(), sleep = async () => {}) {
   return {
     forge,
     chat,
     now: () => 1_000,
+    sleep,
     info: () => undefined,
   };
 }
@@ -526,7 +528,13 @@ describe("dry run", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat: chatStub(), now: () => 0, info: (m) => logged.push(m) },
+      io: {
+        sleep: async () => {},
+        forge,
+        chat: chatStub(),
+        now: () => 0,
+        info: (m) => logged.push(m),
+      },
     });
     expect(result.outcome).toBe("dry-run");
     expect(forge.calls.upserts).toHaveLength(0);
@@ -556,7 +564,7 @@ describe("strictness policy and strategy", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     const body = forge.calls.upserts[0]?.body ?? "";
@@ -605,6 +613,7 @@ describe("strictness policy and strategy", () => {
       eventName: "pull_request",
       event: EVENT,
       io: {
+        sleep: async () => {},
         forge: forgeStub({ config: '{ strictness: "low" }' }),
         chat,
         now: () => 0,
@@ -687,11 +696,12 @@ describe("strictness policy and strategy", () => {
     expect(system).toContain("hypotheses pending");
   });
 });
-
 describe("failure posture", () => {
-  it("fails red on a twice-invalid final answer and writes nothing", async () => {
+  it("fails red on a thrice-invalid no-JSON final answer, backoff once, and writes nothing", async () => {
     const forge = forgeStub();
     const bad = chatStub("this is prose, not JSON");
+    /** @type {number[]} */
+    const backoffs = [];
     await expect(
       reviewPullRequest({
         inputs: INPUTS,
@@ -699,9 +709,61 @@ describe("failure posture", () => {
         pullRequestNumber: 7,
         eventName: "pull_request",
         event: EVENT,
-        io: io(forge, bad),
+        io: io(forge, bad, async (ms) => void backoffs.push(ms)),
+      }),
+    ).rejects.toThrow(/failed the output contract three times/);
+    // The bounded retry fired exactly once, with the run's own constant —
+    // a second backoff would mean the retry policy is unbounded (#516).
+    expect(backoffs).toEqual([UNUSABLE_ANSWER_BACKOFF_MS]);
+    expect(forge.calls.upserts).toHaveLength(0);
+  });
+
+  it("recovers a transient no-JSON final answer on the bounded retry and publishes", async () => {
+    const forge = forgeStub();
+    const flaky = readingChat([
+      { content: "this is prose, not JSON" },
+      { content: "still no JSON object here" },
+      { content: "and the re-ask held no JSON object either" },
+      {
+        content:
+          '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"}],"summary":"one concern"}',
+      },
+    ]);
+    /** @type {number[]} */
+    const backoffs = [];
+    const result = await reviewPullRequest({
+      inputs: INPUTS,
+      context: CONTEXT,
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: EVENT,
+      io: io(forge, flaky, async (ms) => void backoffs.push(ms)),
+    });
+    expect(result.outcome).toBe("published");
+    expect(backoffs).toEqual([UNUSABLE_ANSWER_BACKOFF_MS]);
+    expect(forge.calls.upserts).toHaveLength(1);
+  });
+
+  it("does not spend a second re-ask on a shaped-but-invalid answer", async () => {
+    const forge = forgeStub();
+    // The finding holds no `kind` — the contract failed on a shape, not on
+    // the absence of an object. One re-ask is the whole corrective budget.
+    const shaped = chatStub(
+      '{"findings":[{"severity":"concern","file":"src/a.mjs","line":2,"message":"no kind"}],"summary":"shapeless"}',
+    );
+    /** @type {number[]} */
+    const backoffs = [];
+    await expect(
+      reviewPullRequest({
+        inputs: INPUTS,
+        context: CONTEXT,
+        pullRequestNumber: 7,
+        eventName: "pull_request",
+        event: EVENT,
+        io: io(forge, shaped, async (ms) => void backoffs.push(ms)),
       }),
     ).rejects.toThrow(/failed the output contract twice/);
+    expect(backoffs).toEqual([]);
     expect(forge.calls.upserts).toHaveLength(0);
   });
 
@@ -719,7 +781,7 @@ describe("failure posture", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat: bad, now: () => 0, info: (m) => logged.push(m) },
+      io: { sleep: async () => {}, forge, chat: bad, now: () => 0, info: (m) => logged.push(m) },
     });
     // The answer contract's own law: an invalid finding drops individually,
     // named in the log with the line that does not exist — the run itself
@@ -777,7 +839,13 @@ describe("failure posture", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat: /** @type {any} */ (chatty), now: () => 0, info: () => undefined },
+      io: {
+        sleep: async () => {},
+        forge,
+        chat: /** @type {any} */ (chatty),
+        now: () => 0,
+        info: () => undefined,
+      },
     });
     expect(asks).toBe(2);
     expect(result.outcome).toBe("published");
@@ -833,7 +901,13 @@ describe("comment identity", () => {
         pullRequestNumber: 7,
         eventName: "pull_request",
         event: EVENT,
-        io: { forge, chat: chatStub(), now: () => 1_000, info: () => undefined },
+        io: {
+          sleep: async () => {},
+          forge,
+          chat: chatStub(),
+          now: () => 1_000,
+          info: () => undefined,
+        },
       }),
     ).rejects.toThrow(OwnLoginsError);
     expect(forge.calls.upserts).toEqual([]);
@@ -1420,7 +1494,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     // A refuted finding still counts — it published, as refuted.
@@ -1456,7 +1530,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => undefined },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => undefined },
     });
     expect(result.outcome).toBe("published");
     const row = result.canonical?.findings[0];
@@ -1492,7 +1566,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => undefined },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => undefined },
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "confirmed" });
@@ -1519,7 +1593,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => undefined },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => undefined },
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings[0]).toMatchObject({ lifecycle: "unresolved" });
@@ -1567,7 +1641,7 @@ describe("adversarial verification pass", () => {
         pullRequestNumber: 7,
         eventName: "pull_request",
         event: EVENT,
-        io: { forge, chat, now: () => 0, info: () => undefined },
+        io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => undefined },
       });
     } finally {
       writeFileSync(p.join(wsRoot, "src", "a.mjs"), A_CONTENT);
@@ -1614,7 +1688,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     expect(chat.calls).toHaveLength(3);
@@ -1637,7 +1711,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
@@ -1663,7 +1737,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     // Adversarial + high: every finding planned, one call each.
@@ -1699,7 +1773,13 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat: readChat, now: () => 0, info: (m) => logged.push(m) },
+      io: {
+        sleep: async () => {},
+        forge,
+        chat: readChat,
+        now: () => 0,
+        info: (m) => logged.push(m),
+      },
     });
     expect(result.outcome).toBe("published");
     // Read turn, final answer — the unplannable nit never earns a call.
@@ -1727,7 +1807,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => {} },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
     // A confirmed finding publishes.
@@ -1767,7 +1847,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     expect(forge.calls.upserts[0]?.body).toContain("no guard() definition");
@@ -1796,7 +1876,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => {} },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
     // Uncertain publishes as unresolved — marked unverified in place, never dropped.
@@ -1827,7 +1907,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     // Read turn, final answer, 40 investigation turns, one final ask.
@@ -1864,7 +1944,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     // Read, answer, two investigation turns, one final ask.
@@ -1956,7 +2036,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     const deciding = chat.calls[6] ?? [];
@@ -1989,7 +2069,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     // Read, answer, measure turn, three pad turns, the final ask.
@@ -2032,7 +2112,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => {} },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
     const refusals = (chat.calls[3] ?? []).map((message) => message.content ?? "");
@@ -2063,7 +2143,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => {} },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
     const verdict = JSON.stringify(chat.calls[2] ?? []);
@@ -2091,7 +2171,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     expect(forge.calls.upserts[0]?.body).toContain("off-by-one");
@@ -2123,7 +2203,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     expect(logged.some((line) => line.includes("broke the wire contract"))).toBe(true);
@@ -2155,7 +2235,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => {} },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
     // The refusal rode back as a tool error result the verifier saw.
@@ -2183,7 +2263,7 @@ describe("adversarial verification pass", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => {} },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => {} },
     });
     expect(result.outcome).toBe("published");
     expect(JSON.stringify(chat.calls[3] ?? [])).toContain("unknown tool 'delete_file'");
@@ -2204,7 +2284,13 @@ describe("evidence provenance", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat: chatStub(), now: () => 0, info: (m) => logged.push(m) },
+      io: {
+        sleep: async () => {},
+        forge,
+        chat: chatStub(),
+        now: () => 0,
+        info: (m) => logged.push(m),
+      },
     });
     expect(result.outcome).toBe("published");
     const body = forge.calls.upserts[0]?.body ?? "";
@@ -2231,6 +2317,7 @@ describe("evidence provenance", () => {
       eventName: "pull_request",
       event: EVENT,
       io: {
+        sleep: async () => {},
         forge,
         chat: chatStub(
           '{"findings":[{"severity":"concern","kind":"correctness","file":"src/a.mjs","line":2,"message":"off-by-one"},' +
@@ -2273,7 +2360,7 @@ describe("run gates", () => {
    * @param {(line: string) => void} info
    */
   function loggingIo(forge, chat, info) {
-    return { forge, chat, now: () => 0, info };
+    return { forge, chat, sleep: async () => {}, now: () => 0, info };
   }
 
   it("attributes a strict-coverage refusal to the coverage gate and still publishes partial", async () => {
@@ -2370,8 +2457,7 @@ describe("run gates", () => {
     const body = forge.calls.upserts[0]?.body ?? "";
     expect(body).toContain("**Review** — Complete");
   });
-
-  it("attributes a twice-invalid answer to the conclusion gate before any verification spend", async () => {
+  it("attributes a thrice-invalid answer to the conclusion gate before any verification spend", async () => {
     /** @type {string[]} */
     const logged = [];
     let completeCalls = 0;
@@ -2391,12 +2477,13 @@ describe("run gates", () => {
         event: EVENT,
         io: loggingIo(forge, /** @type {any} */ (chat), (line) => logged.push(line)),
       }),
-    ).rejects.toThrow(/failed the output contract twice/);
+    ).rejects.toThrow(/failed the output contract three times/);
     expect(logged).toContain("review: gate conclusion failed — the answer holds no JSON object");
-    // The loop's first ask and its one notice ask, then the conclusion gate's
-    // one re-ask: the refusal fires before validation, verification or
-    // publication spend a call.
-    expect(completeCalls).toBe(3);
+    // The loop's first ask and its one notice ask, then the conclusion
+    // gate's two re-asks — the second bounded and behind backoff (#516):
+    // the refusal fires before validation, verification or publication
+    // spend a call.
+    expect(completeCalls).toBe(4);
   });
 
   it("judges the post-drop set: at low strictness the gate sees the concern alone and the run completes", async () => {
@@ -3044,7 +3131,13 @@ describe("the untrusted-data ceiling (no steering)", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge: hostileForge, chat: hostileChat, now: () => 0, info: () => undefined },
+      io: {
+        sleep: async () => {},
+        forge: hostileForge,
+        chat: hostileChat,
+        now: () => 0,
+        info: () => undefined,
+      },
     });
     const honest = await reviewPullRequest({
       inputs: INPUTS,
@@ -3052,7 +3145,13 @@ describe("the untrusted-data ceiling (no steering)", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge: honestForge, chat: honestChat, now: () => 0, info: () => undefined },
+      io: {
+        sleep: async () => {},
+        forge: honestForge,
+        chat: honestChat,
+        now: () => 0,
+        info: () => undefined,
+      },
     });
 
     // Both runs publish, and the injected menu neither improves nor degrades.
@@ -3091,7 +3190,7 @@ describe("the untrusted-data ceiling (no steering)", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: () => undefined },
+      io: { sleep: async () => {}, forge, chat, now: () => 0, info: () => undefined },
     });
 
     expect(result.outcome).toBe("published");
@@ -3140,7 +3239,7 @@ describe("the untrusted-data ceiling (no steering)", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
 
     expect(result.outcome).toBe("published");
@@ -4388,6 +4487,7 @@ describe("the #411 withheld-span law", () => {
       eventName: "pull_request",
       event: EVENT,
       io: {
+        sleep: async () => {},
         forge,
         chat: readingChat([
           {
@@ -4484,7 +4584,7 @@ describe("the quoted-evidence span gate (#479)", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings).toEqual([]);
@@ -4533,7 +4633,7 @@ describe("the quoted-evidence span gate (#479)", () => {
       pullRequestNumber: 7,
       eventName: "pull_request",
       event: EVENT,
-      io: { forge, chat, now: () => 0, info: (m) => logged.push(m) },
+      io: { forge, chat, sleep: async () => {}, now: () => 0, info: (m) => logged.push(m) },
     });
     expect(result.outcome).toBe("published");
     expect(result.canonical?.findings).toHaveLength(1);
@@ -4585,8 +4685,7 @@ describe("the unusable provider-answer class (#499)", () => {
     expect(result.outcome).toBe("published");
     expect(forge.calls.upserts).toHaveLength(1);
   });
-
-  it("ends the run on the existing twice-failed refusal when the corrective re-ask is unusable too", async () => {
+  it("ends the run on the existing refusal after the bounded third try when the corrective re-ask is unusable too", async () => {
     const forge = forgeStub();
     let completeCalls = 0;
     const chat = {
@@ -4612,8 +4711,10 @@ describe("the unusable provider-answer class (#499)", () => {
         event: EVENT,
         io: io(forge, /** @type {any} */ (chat)),
       }),
-    ).rejects.toThrow(/failed the output contract twice/);
-    expect(completeCalls).toBe(3);
+    ).rejects.toThrow(/failed the output contract three times/);
+    // Ask, the notice ask, the corrective re-ask, and the bounded third
+    // try (#516) — then the refusal, still before any verification spend.
+    expect(completeCalls).toBe(4);
     expect(forge.calls.upserts).toHaveLength(0);
   });
 

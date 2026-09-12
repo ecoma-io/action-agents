@@ -256,6 +256,7 @@ describe("a red terminal writes no SARIF (#440, ADR 006)", () => {
       const cause = await run(readInputs(env), readContext(env), {
         forge: openForge(),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -291,6 +292,7 @@ describe("a red terminal writes no SARIF (#440, ADR 006)", () => {
           },
         }),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -357,6 +359,7 @@ describe("the class decides the record, never the message (#440)", () => {
           },
         }),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -388,6 +391,7 @@ describe("the class decides the record, never the message (#440)", () => {
           },
         }),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -431,6 +435,7 @@ describe("a coverage-accounting break is a defect, not a ceiling (#440)", () => 
           },
         }),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -600,6 +605,7 @@ describe("eligibility reads pre-ignore, the budget reads post-ignore (#440)", ()
           ],
         }),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(

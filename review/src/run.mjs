@@ -24,7 +24,7 @@ import {
   evaluateApplicability,
 } from "./applicability.mjs";
 import { loadConfigFile, validateConfig, loadDocuments } from "./config.mjs";
-import { DeterministicRefusalError } from "./refusal.mjs";
+import { DeterministicRefusalError, UnusableAnswerRefusalError } from "./refusal.mjs";
 
 import { buildInventory, selectActiveRules } from "./inventory.mjs";
 import { normaliseReadPath, parseDiffPaths, unifiedDiff } from "./coverage.mjs";
@@ -35,6 +35,7 @@ import { buildPrompt } from "./prompt.mjs";
 import { MAX_CALL_ARGUMENT_BYTES, runLoop, reaskFinalAnswer, estimateTokens } from "./loop.mjs";
 import { evaluateGate, evaluateGates } from "./gates.mjs";
 import { parseAnswer, validateAnswer } from "./answer.mjs";
+
 import {
   applyVerdicts,
   parseVerdict,
@@ -60,6 +61,16 @@ import {
   buildSkippedArtifact,
   withCommentId,
 } from "./artifact.mjs";
+/**
+ * The bounded wait before the one corrective re-ask of the no-JSON answer
+ * class (#516): long enough for a seconds-long provider flake to clear,
+ * short enough to stay invisible on a healthy run. A constant, not a knob —
+ * a retry policy a user tunes per repository is a policy nobody can reason
+ * about across repositories.
+ *
+ * @type {20_000}
+ */
+export const UNUSABLE_ANSWER_BACKOFF_MS = 20_000;
 
 /**
  * The forge operations one review run makes, listed so a test doubles only
@@ -100,6 +111,7 @@ export const PROMPT_HEADROOM = 0.5;
  * @property {ReviewForge} forge
  * @property {import("#core/chat.mjs").Chat} chat
  * @property {() => number} now epoch milliseconds
+ * @property {(ms: number) => Promise<void>} sleep the bounded backoff between corrective re-asks — a real timer in production, injected in tests (the e2e law: no sleeps)
  * @property {(message: string) => void} info
  */
 
@@ -520,18 +532,39 @@ export async function reviewPullRequest({
   );
 
   let parsed = parseAnswer(outcome.candidate);
+  let reasks = 0;
   if (!parsed.ok && outcome.naturalStopped) {
-    // The one re-ask: natural stops only, once, tools withheld inside.
+    // The corrective re-asks: natural stops only, tools withheld inside.
+    // The first re-ask answers every shaped defect once. A second, bounded
+    // re-ask behind it answers only the no-JSON class (#516) — the
+    // provider-flake shape a job re-run has always recovered, recovered
+    // here instead. A shaped-but-invalid answer (a missing key, a wrong
+    // shape) is deliberately not retried: asking a third time does not
+    // teach the model the contract, it spends a call learning nothing.
     io.info("review: the first answer failed the contract — asking once more");
-    const second = await reaskFinalAnswer({
-      chat: io.chat,
-      model: inputs.model,
-      transcript: outcome.transcript,
-    });
-    parsed = parseAnswer(second);
+    reasks++;
+    parsed = parseAnswer(
+      await reaskFinalAnswer({
+        chat: io.chat,
+        model: inputs.model,
+        transcript: outcome.transcript,
+      }),
+    );
+    if (!parsed.ok && parsed.defect === "the answer holds no JSON object") {
+      io.info("review: the re-asked answer held no JSON object too — retrying once after backoff");
+      await io.sleep(UNUSABLE_ANSWER_BACKOFF_MS);
+      reasks++;
+      parsed = parseAnswer(
+        await reaskFinalAnswer({
+          chat: io.chat,
+          model: inputs.model,
+          transcript: outcome.transcript,
+        }),
+      );
+    }
   }
-  // Gate `conclusion` — the output contract held after at most the one
-  // re-ask. The refusal fires here, before validation, verification or
+  // Gate `conclusion` — the output contract held after at most the two
+  // re-asks. The refusal fires here, before validation, verification or
   // publication spend a single further call against an answer that never
   // satisfied the contract.
   const answer = parsed.ok
@@ -546,9 +579,15 @@ export async function reviewPullRequest({
     // F-09's off-sheet arm: the model's final answer never satisfied the
     // contract, before validation, verification or publication spent a
     // further call — a deterministic refusal the red boundary records
-    // `refused` (#355), never a half-reviewed publication.
-    throw new DeterministicRefusalError(
-      `the final answer failed the output contract twice: ${conclusion.reason}`,
+    // `refused` (#355), never a half-reviewed publication. The no-JSON
+    // defect carries the subclass (#516): the boundary publishes its
+    // `refusal-class` output from it, the mechanically rerunnable cue.
+    const RefusalError =
+      !parsed.ok && parsed.defect === "the answer holds no JSON object"
+        ? UnusableAnswerRefusalError
+        : DeterministicRefusalError;
+    throw new RefusalError(
+      `the final answer failed the output contract ${reasks >= 2 ? "three times" : "twice"}: ${conclusion.reason}`,
     );
   }
 

@@ -60,6 +60,8 @@ outputs:
     description: Path to the review's SARIF projection, written under the runner's temp directory. Present after a published review whose SARIF write succeeded.
   artifact-file:
     description: Path on the runner to the machine-readable run record this run wrote — the exact file the write laid down, published at every terminal that declares a record, on a published review and on the red boundary's record alike. Empty when the terminal declares no record or the record write failed, and the run logs that it did.
+  refusal-class:
+    description: Set to `model-output-unusable` exactly when the run was refused because the provider's final answer held no JSON object on every attempt — the transient class a re-run recovers (#516). Branch on it to re-run mechanically. Unset on every other terminal, green or red.
 
 runs:
   using: node24

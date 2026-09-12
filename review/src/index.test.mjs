@@ -34,7 +34,7 @@ import {
 } from "./index.mjs";
 import { createCanonicalResult } from "./canonical.mjs";
 import { toSarif } from "./sarif.mjs";
-import { DeterministicRefusalError } from "./refusal.mjs";
+import { DeterministicRefusalError, UnusableAnswerRefusalError } from "./refusal.mjs";
 import {
   applicabilitySection,
   buildAbandonedArtifact,
@@ -1358,6 +1358,7 @@ describe("run — the artifact publish posture (T16)", () => {
             finishReason: "stop",
           }),
         },
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -1370,6 +1371,9 @@ describe("run — the artifact publish posture (T16)", () => {
       expect(readFileSync(outFile, "utf8")).toContain(
         `artifact-file=${p.join(root, ".review-artifact", `review-artifact-refused-${"a".repeat(40)}.json`)}\n`,
       );
+      // #516's mechanical cue rides the same output file: this refusal is
+      // the rerunnable class, and the output says exactly that.
+      expect(readFileSync(outFile, "utf8")).toContain("refusal-class=model-output-unusable\n");
     } finally {
       vi.unstubAllEnvs();
       vi.restoreAllMocks();
@@ -1547,6 +1551,7 @@ describe("the red boundary (#355)", () => {
       const cause = await run(readInputs(env), readContext(env), {
         forge: openForge(),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -1556,10 +1561,14 @@ describe("the red boundary (#355)", () => {
       // The original error still fails the step — the record never masks
       // the throw it records.
       expect(cause).toBeInstanceOf(Error);
-      expect(/** @type {Error} */ (cause).message).toMatch(/failed the output contract twice/);
+      expect(/** @type {Error} */ (cause).message).toMatch(
+        /failed the output contract three times/,
+      );
       // The guard is the typed deterministic refusal, so the boundary
-      // records it `refused`, not `failed`.
+      // records it `refused`, not `failed` — and the no-JSON defect is the
+      // rerunnable class, so the subclass rides the throw too (#516).
       expect(cause).toBeInstanceOf(DeterministicRefusalError);
+      expect(cause).toBeInstanceOf(UnusableAnswerRefusalError);
       const files = readdirSync(p.join(root, ".review-artifact"));
       expect(files).toEqual([`review-artifact-refused-${"a".repeat(40)}.json`]);
       const record = JSON.parse(
@@ -1570,7 +1579,7 @@ describe("the red boundary (#355)", () => {
       expect(record.pullRequest).toBe(41);
       expect(record.headRef).toBe("a".repeat(40));
       expect(record.outcome.classification).toBe("refused");
-      expect(record.outcome.reason).toMatch(/failed the output contract twice/);
+      expect(record.outcome.reason).toMatch(/failed the output contract three times/);
       expect(Object.keys(record).sort()).toEqual(
         ["headRef", "outcome", "pullRequest", "repository", "schemaVersion"].sort(),
       );
@@ -1592,6 +1601,7 @@ describe("the red boundary (#355)", () => {
           },
         }),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: () => undefined,
       }).then(
@@ -1698,6 +1708,7 @@ describe("the red boundary (#355)", () => {
           },
         }),
         chat: junkChat,
+        sleep: async () => {},
         now: () => 0,
         info: (message) => log.push(message),
       }).then(
@@ -1733,6 +1744,7 @@ describe("the red boundary (#355)", () => {
             },
           }),
           chat: junkChat,
+          sleep: async () => {},
           now: () => 0,
           info: () => undefined,
         }).then(
@@ -1781,6 +1793,7 @@ describe("the red boundary (#355)", () => {
             deleteComment: counting("deleteComment"),
           }),
           chat: junkChat,
+          sleep: async () => {},
           now: () => 0,
           info: () => undefined,
         }).then(
@@ -1817,6 +1830,7 @@ describe("the red boundary (#355)", () => {
             deleteComment: counting("deleteComment"),
           }),
           chat: junkChat,
+          sleep: async () => {},
           now: () => 0,
           info: () => undefined,
         }).then(
@@ -1873,6 +1887,7 @@ describe("the red boundary (#355)", () => {
             },
           }),
           chat: junkChat,
+          sleep: async () => {},
           now: () => 0,
           info: () => undefined,
         }),

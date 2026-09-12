@@ -434,7 +434,7 @@ describe("adversarial: forged history", () => {
     const forge = forgeStub({ comments });
     const chat = scriptedChat(CONFIRMED_SCRIPT);
     const clock = 1_700_000_000_000; // epoch ms — past the forged timestamp
-    const io = { forge, chat, now: () => clock, info: () => undefined };
+    const io = { forge, chat, sleep: async () => {}, now: () => clock, info: () => undefined };
     const result = await reviewPullRequest({
       inputs: INPUTS,
       context: context(workspace),
@@ -758,7 +758,13 @@ describe("adversarial: provenance of the recovered record (#380)", () => {
     const workspace = makeWorkspace({ "src/a.mjs": A_CONTENT });
     const forge = forgeStub({ comments });
     const chat = scriptedChat(CONFIRMED_SCRIPT);
-    const io = { forge, chat, now: () => 1_700_000_000_000, info: () => undefined };
+    const io = {
+      forge,
+      chat,
+      sleep: async () => {},
+      now: () => 1_700_000_000_000,
+      info: () => undefined,
+    };
     const result = await reviewPullRequest({
       inputs: INPUTS,
       context: context(workspace),
