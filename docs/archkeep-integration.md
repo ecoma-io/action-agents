@@ -21,6 +21,12 @@ by running the pinned binary against real trees — the fixtures under
 documentation. When the pin moves, the bump PR re-measures every claim here;
 that is what the 0.21.0 → 0.22.0 bump (PR #267) did for the refusal lane.
 
+This page covers the dev-time gate. The other half of the relationship —
+the actions consuming archkeep's own output as runtime architecture
+evidence, through a consumer-run recipe and a protocol+ceiling reader — is
+designed in [the Archkeep runtime integration
+page](development/archkeep-integration-analysis.md).
+
 ## The three authorities
 
 The [run contract](run-contract.md) stamps each of its seventeen invariants with
