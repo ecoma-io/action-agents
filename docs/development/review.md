@@ -756,7 +756,19 @@ One turn is one model response, and the accounting is exact:
   re-ask — same transcript, corrective instruction, tools withheld, logged.
   The re-ask is not a reading turn and cannot itself call tools; failing it is
   red. No re-ask follows a bound-driven finalisation — that request already
-  was the second chance.
+  was the second chance. Exactly one defect class earns one ask beyond that
+  (#516): a re-asked answer whose defect is still that it holds no JSON
+  object — no object to judge, not an object the run then disagreed with — is
+  asked once more behind a 20-second backoff (`UNUSABLE_ANSWER_BACKOFF_MS`,
+  slept through the injected `io.sleep`, a recorded no-op in tests), because
+  the class is empirically a transient provider flake a job re-run has always
+  recovered, and the run recovers it itself instead of billing a human the
+  re-run. A shaped defect — a missing key, a wrong shape — is deliberately
+  not retried: a third ask does not teach the model the contract, so the
+  first re-ask stays the shaped classes' whole corrective budget. The refusal
+  names its own count — three times on the retried path, twice otherwise —
+  and only the no-JSON refusal raises the `UnusableAnswerRefusalError`
+  subclass, which [the red boundary](#the-red-boundary) reads.
 
 The transcript is compacted before `context-window` is reached — when the
 token estimate crosses 80% of the window — deterministically, in code: the
@@ -937,7 +949,9 @@ rendering, on the defanged copy.
 
 If the final answer is structurally invalid — unparsable, wrong shape, unknown
 keys — the loop follows the re-ask rule of [the loop](#the-loop-and-the-prompt):
-one corrective request, tools withheld, logged; failing it, red. A provider
+one corrective request, tools withheld, logged — and, when the defect is that
+the answer holds no JSON object at all, the one bounded retry behind backoff
+(#516); failing those, red. A provider
 that keeps failing the contract is not something to hide behind a green check.
 
 ## Evidence provenance
@@ -1311,9 +1325,18 @@ one of two shapes:
 - `refused` — the throw carries the typed `DeterministicRefusalError`
   (`src/refusal.mjs`), the class of the run's own ceilings declining to act:
   a config that does not validate (F-02), the diff-line budget and the
-  prompt-headroom ceiling (F-11), and the twice-failed output contract
-  (F-09). Every one of these fires before the first repository write, so a
-  `refused` record can never name a comment.
+  prompt-headroom ceiling (F-11), and the failed output contract (F-09) —
+  twice-failed on a shaped defect, three-times-failed on the no-JSON class
+  after its one bounded retry (#516). Every one of these fires before the
+  first repository write, so a
+  `refused` record can never name a comment. One refusal publishes a
+  caller-facing cue beside its record (#516): a throw carrying the
+  `UnusableAnswerRefusalError` subclass — the provider's final answer held
+  no JSON object on every attempt, the transient class a job re-run
+  recovers — sets the `refusal-class` output to `model-output-unusable`, so
+  a consumer branches on the step output to re-run mechanically instead of
+  reading run logs; the output is unset on every other terminal, green or
+  red, so an empty value never reads as a lost record.
 - `failed` — every other undeclared throw: transport and auth, a policy
   resolution that fails (F-03), a reader-level config refusal, an absent or
   oversized posture document (the loader's own plain error — the posture
