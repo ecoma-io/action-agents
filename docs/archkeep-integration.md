@@ -11,11 +11,14 @@ run for "the guarantees hold" has committed the hollow-verdict shape the
 that mistake by accident.
 
 Recorded 2026-09-04 at pin `@ecoma-io/archkeep` **0.22.1**, re-measured
-claim-by-claim at pin **0.25.0** on 2026-09-05 (exact, no range; first
+claim-by-claim at pin **0.29.0** on 2026-09-12 (exact, no range; first
 recorded at 0.22.0, re-measured at the 0.22.1 bump — issue #280, the
 release closing ten organization-filed upstream issues; unchanged at the
-0.24.0 bump — issue #314 — and at this 0.25.0 bump — issue #348);
-owned by the repository maintainers. Every behavioral claim below was measured
+0.24.0 bump — issue #314 — and at the 0.25.0 bump — issue #348; the 0.27.0
+adoption — #465, with the extended canaries of #474 measured at it — left
+this page's recorded version at 0.25.0, and the 0.29.0 bump — issue #530 —
+closes that gap by re-measuring every claim); owned by the repository
+maintainers. Every behavioral claim below was measured
 by running the pinned binary against real trees — the fixtures under
 `tools/fixtures/` and purpose-built variants of them — not cited from
 documentation. When the pin moves, the bump PR re-measures every claim here;
@@ -84,7 +87,7 @@ not weaker — they are held by authorities that can actually witness them.
 
 ## The gate contract at the pin
 
-What a run of `archkeep check` at 0.25.0 does, measured. Three exits, and the
+What a run of `archkeep check` at 0.29.0 does, measured. Three exits, and the
 vocabulary mirrors the run contract's on purpose:
 
 | Exit | Run status   | Verdict   | What it means                                                                  |
@@ -137,15 +140,21 @@ project to `adr:001-core-boundary`, and the boundary rows may cite decisions
 too. The two citations are not symmetric when they fail to resolve: an
 unresolved decisionRef on a `depConstraints` row is reported
 (`result.unresolvedDecisionRefs`) and leaves the exit alone; the same miss on
-an intent row refuses the run (exit 3). The rationale is load-bearing: the
-intent is the law's citation of authority, and a law whose authority cannot be
-resolved cannot authorize a judgment — where a constraint row's citation is
-explanatory, and report-only is enough.
+an intent row rides the no-verdict lane — exit 3, reason "1 intent row cites a
+decisionRef that does not resolve", on a tree with nothing else failing. That
+lane is precedence, not absence: the findings lane is decided first, so a tree
+holding both a violation and an unresolved intent citation exits 1 with the
+miss still reported (`result.unresolvedDecisionRefs` names it, and
+`result.intent.unresolvedDecisionRefs` names the row). The rationale is
+load-bearing: the intent is the law's citation of authority, and a law whose
+authority cannot be resolved cannot authorize a judgment — where a constraint
+row's citation is explanatory, and report-only is enough.
 
 **Provenance.** The envelope carries `workspace.provenance`
-(`commit`, `dirty`, `remote`). Here `remote` is null — this repository wires
-no remote into the gate — and the field's presence, not its value, is the
-contract: a record of a judgment carries what tree it judged.
+(`commit`, `dirty`, `remote`). `remote` is derived from the first git remote
+the tree declares — the origin URL here, where the 0.25.0 recording measured
+null — and the field's presence, not its value, is the contract: a record of
+a judgment carries what tree it judged.
 
 ## Waivers and suppressions: what acceptance costs
 
@@ -255,13 +264,16 @@ re-pinning.
 
 ## Cost, and the U-2 trigger
 
-Measured at pin 0.25.0 (2026-09-05, local wall clock): the six arch-gate steps
-total ~6 seconds — boundary 1s, canary 2s, transport seam 1s, HTTP monopoly
-0.5s, forge monopoly 0.5s, action shape 0.5s (a 2026-09-04 `Verify`-run
-measurement at 0.22.1 recorded ~7s). The single `verify` job stands; there
-is nothing to parallelize at this cost. **Revisit trigger: any single arch
-gate exceeding 30 seconds** — measured per step, recorded here, re-checked
-whenever the pin moves or the job grows a step.
+Measured at pin 0.29.0 (2026-09-12, local wall clock): the six arch-gate
+steps total ~7 seconds — boundary 1.4s, canaries 4.3s (the edge pair 1.6s
+plus the extended set 2.7s, which joined the canary step with the 0.27.0
+adoption, #474), transport seam 0.8s, HTTP monopoly 0.3s, forge monopoly
+0.3s, action shape 0.2s (~6 seconds over six steps at the 0.25.0 recording,
+issue #348; a 2026-09-04 `Verify`-run measurement at 0.22.1 recorded ~7s).
+The single `verify` job stands; there is nothing to parallelize at this
+cost. **Revisit trigger: any single arch gate exceeding 30 seconds** —
+measured per step, recorded here, re-checked whenever the pin moves or the
+job grows a step.
 
 ## Keeping this page true
 
