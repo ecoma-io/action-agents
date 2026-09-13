@@ -1,0 +1,142 @@
+name: Architecture intelligence
+
+# Dogfood: the release-triggered Archkeep intelligence recipe this
+# repository's own guide ships — the dogfood copy P3 set the precedent for
+# (the evidence recipe in review.yml), with the same role: the guide
+# (docs/guides/architecture-intelligence.md, #554) is the recipe of record,
+# and this workflow is its drift canary. Without it, that recipe is prose
+# nothing executes — the first consumer to copy it would be the first run
+# it ever had.
+#
+# WHAT RUNS HERE, AND WHAT DELIBERATELY DOES NOT. Pinned Archkeep steps and
+# nothing else: `history --capture` appends to a snapshot series, then the
+# four descriptive reads (`health`, `report`, `debt`, `trajectory`) produce
+# their envelopes. No action from this repository is invoked — that is the
+# phase's design, not an omission: the descriptive surfaces answer questions
+# about the series across releases, not about one change, and no action
+# consumes them (the frozen reader refuses every family but `delta`, so
+# these reports cannot enter an action run even by accident). No model key
+# is read, no secret beyond the default token's reads is used.
+#
+# THE TRIGGER IS THE LAW THIS WORKFLOW DOGFOODS. Manual only, deliberately:
+# selective activation is the consumer's trigger choice (release, schedule,
+# or manual), and a recurring schedule on this repository is the
+# maintainer's call, not a campaign default. There is no `pull_request`
+# trigger and never will be — the per-pull-request noise budget stays at
+# zero, and the merge queue, the required checks (`ci-gate`,
+# `analysis-gate`) and every per-PR workflow are untouched by this file.
+#
+# THE HISTORY DIRECTORY IS THIS WORKFLOW'S, NOT AN ACTION'S. The snapshot
+# series lives in `.archkeep/history`, carried between runs in the cache
+# (clear, then restore — the series is exactly what the cache held, never a
+# mix with anything the checkout happens to contain). Capture deduplicates
+# by architecture identity: a run whose graph and law did not move writes
+# nothing, which is why this repository's tooling-and-docs churn costs the
+# series nothing. Snapshots are self-validating on read, so a corrupted
+# entry is a visible refusal, not silent rot. No action reads or writes
+# this directory, ever — the carried-storage shape is the guide's, and the
+# actions' runtime read surface stays exactly the `delta` report.
+#
+# NO EXIT TOLERANCE. Unlike the per-PR evidence recipe (whose five laws are
+# frozen in the run contract and which tolerates exactly delta's {1, 3}),
+# these commands are descriptive — none of them fails on findings — so a
+# nonzero exit means the run could not determine its answer, and it stays
+# red. An advisory job that degrades silently (`continue-on-error`,
+# `|| true`) is a hollow green, and the guide refuses it for consumers too.
+
+on:
+  workflow_dispatch:
+
+# The workflow-level floor grants nothing; the job below restates its one
+# read — a job-level `permissions` block REPLACES this one rather than
+# merging with it, so a job added later inherits read-only instead of
+# silently widening. This job writes nothing to GitHub: its only outputs
+# are workflow artifacts, and `upload-artifact` needs no grant at all.
+permissions: read-all
+
+jobs:
+  architecture-intelligence:
+    runs-on: ubuntu-latest
+    # The whole recipe measured ≈6.5 s on five steps on this repository at
+    # the 0.29.0 pin; ten minutes is generous headroom for a slow runner.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # The tree the series judges. `persist-credentials: false` is house
+      # style: this job holds no write surface for a token to reach. A
+      # snapshot captured from a dirty tree is disclosed as such, and a
+      # dispatch run checks out a clean ref by construction.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      # Consumer-pinned, exactly as the guide ships it and exactly as
+      # review.yml's evidence recipe pins it: the action never learns this
+      # ran, and the version pinned here is the one `pnpm arch:contract`
+      # measures the reader against, so the dogfood and the contract gate
+      # cannot drift apart.
+      - name: Install the pinned Archkeep
+        run: npm install --global @ecoma-io/archkeep@0.29.0
+
+      # The carried-storage shape, first half: whatever the checkout or a
+      # previous anything left under `.archkeep/history` is gone before the
+      # cache restores into it — the series is exactly what the cache held.
+      - name: Clear the history directory
+        run: rm -rf .archkeep/history
+
+      # The carried-storage shape, second half. A fresh key every run, so
+      # the post-job save always writes; the prefix restore picks up the
+      # most recent previous entry, which is the append-only carry. A first
+      # run finds no cache and starts the series here. Pinned like every
+      # third-party action in this tree; Renovate bumps both halves.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .archkeep/history
+          key: archkeep-history-${{ github.run_id }}
+          restore-keys: archkeep-history-
+
+      # Capture requires the directory to exist; a cache miss leaves it
+      # absent. An unchanged architecture writes nothing — the
+      # deduplication is the tool's, not the recipe's. No `||`, no
+      # `continue-on-error`: a failed capture is a red run.
+      - name: Capture the snapshot
+        run: |
+          mkdir -p .archkeep/history
+          archkeep history --capture .archkeep/history
+
+      # The reads, one step each so a refusal names its surface: health
+      # (the metric panel with trends), report (the composed governance
+      # document), debt (the aged ledger — this repository carries a
+      # tracked architecture-intent.json, which the ledger needs), and
+      # trajectory (the aggregate across transitions). Every step red on
+      # nonzero, per the header: descriptive commands have no findings
+      # exit, so red here means "could not determine", never "unhealthy".
+      - name: Read health
+        run: archkeep health .archkeep/history --format json --output .archkeep/intelligence/health.json
+      - name: Read report
+        run: archkeep report .archkeep/history --format json --output .archkeep/intelligence/report.json
+      - name: Read debt
+        run: archkeep debt .archkeep/history --format json --output .archkeep/intelligence/debt.json
+      - name: Read trajectory
+        run: archkeep trajectory .archkeep/history --format json --output .archkeep/intelligence/trajectory.json
+
+      # The series and the envelopes survive the runner, for every run,
+      # green or red. The same two load-bearing knobs the record uploads
+      # elsewhere carry (#378): `include-hidden-files: true`, because
+      # `.archkeep` is a hidden directory and upload-artifact prunes hidden
+      # files by default — the default matched zero files and still
+      # reported success — and `if-no-files-found: warn`, because a
+      # declared upload that lands nowhere must be loud.
+      - name: Upload the architecture intelligence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: architecture-intelligence
+          path: .archkeep/
+          include-hidden-files: true
+          if-no-files-found: warn
