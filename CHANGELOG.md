@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.14.0](https://github.com/ecoma-io/action-agents/compare/v0.13.2...v0.14.0) (2026-09-13)
+
+
+### Features
+
+* add the archkeep evidence reader boundary ([#535](https://github.com/ecoma-io/action-agents/issues/535)) ([#536](https://github.com/ecoma-io/action-agents/issues/536)) ([9e9a6ef](https://github.com/ecoma-io/action-agents/commit/9e9a6ef55163e5c7e51182863c9295b34e28c0d8))
+* **ci:** dogfood the architecture intelligence recipe in its own workflow (P5) ([#555](https://github.com/ecoma-io/action-agents/issues/555)) ([#557](https://github.com/ecoma-io/action-agents/issues/557)) ([35e5aae](https://github.com/ecoma-io/action-agents/commit/35e5aaef9c6936d333c94b6b6b0b95467300713e))
+* complete the delta semantics in the evidence reader ([#538](https://github.com/ecoma-io/action-agents/issues/538)) ([#541](https://github.com/ecoma-io/action-agents/issues/541)) ([2d945cc](https://github.com/ecoma-io/action-agents/commit/2d945ccb191de66b7f554db5175c1d89b6ec3f1c))
+* **review:** dogfood the archkeep evidence recipe in the review workflow (P3 slice 3/3) ([#549](https://github.com/ecoma-io/action-agents/issues/549)) ([61b497d](https://github.com/ecoma-io/action-agents/commit/61b497d9d6b571f4a7c27051d69e37ce301087c7))
+* **review:** ground the review in architecture evidence ([#546](https://github.com/ecoma-io/action-agents/issues/546)) ([42ab35f](https://github.com/ecoma-io/action-agents/commit/42ab35f7e1c73cf025aa36579d7eed3d4ef0939f))
+* **review:** record architecture evidence in the run's surfaces (P3 slice 2/3) ([#547](https://github.com/ecoma-io/action-agents/issues/547)) ([406e902](https://github.com/ecoma-io/action-agents/commit/406e90213eb3b681569a2404ab284c82c4dd5d22))
+
+
+### Bug Fixes
+
+* **harmonise:** pass the chunk position into translation prompts ([#517](https://github.com/ecoma-io/action-agents/issues/517)) ([#543](https://github.com/ecoma-io/action-agents/issues/543)) ([3112c63](https://github.com/ecoma-io/action-agents/commit/3112c63a9402d7fb9400267002a07d2fb8f9e3cf))
+* **review:** bound the description the fit estimate counts ([#527](https://github.com/ecoma-io/action-agents/issues/527)) ([#540](https://github.com/ecoma-io/action-agents/issues/540)) ([97ae55a](https://github.com/ecoma-io/action-agents/commit/97ae55aea88958c2cbd862b52b015c015a44dd9a))
+* **triage:** record per-attempt diagnostics on empty answers ([#521](https://github.com/ecoma-io/action-agents/issues/521)) ([#539](https://github.com/ecoma-io/action-agents/issues/539)) ([f6f22c1](https://github.com/ecoma-io/action-agents/commit/f6f22c1c70443953517c33e0b1173758328f9dc9))
+
 ## [0.13.2](https://github.com/ecoma-io/action-agents/compare/v0.13.1...v0.13.2) (2026-09-12)
 
 
