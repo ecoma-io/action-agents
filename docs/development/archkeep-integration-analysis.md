@@ -516,6 +516,35 @@ always carry evidence (the deepening is free relative to a real review
 run); large pull requests keep evidence — the capacity refusal stays red
 and recorded, unchanged.
 
+**The release-path budgets (P5, measured at the 0.29.0 pin, September
+2026).** The descriptive surfaces run in their own workflow on
+release/periodic/manual triggers ([the
+architecture-intelligence guide](../guides/architecture-intelligence.md))
+— none of it on the pull-request path above, whose invocation matrix is
+unchanged by P5. On this repository (5 projects, 181 analyzed files, 634
+imports):
+
+| Release-path step                    | Wall  | Output                                     |
+| ------------------------------------ | ----- | ------------------------------------------ |
+| `history --capture` (fresh identity) | 1.3 s | ≈2 KiB snapshot; nothing when deduplicated |
+| `health <dir>`                       | 1.3 s | 1.8 KiB envelope                           |
+| `report <dir>`                       | 1.4 s | 15.5 KiB envelope                          |
+| `debt <dir>`                         | 1.3 s | 1.7 KiB envelope                           |
+| `trajectory <dir>`                   | 1.3 s | 2.2 KiB envelope                           |
+
+≈6.5 s combined over five steps, every step far under the 30 s per-step
+ceiling. The dominant term is the tree scan every archkeep command
+performs; the snapshot count is a small addition — over a synthetic series
+on the contract-gate rig (12 vs 36 snapshots), no read moved by a tenth of
+a second and only the trend-bearing envelopes (`health`, `report`) grew in
+bytes, by their per-snapshot trend rows. Two measured facts the guide
+carries because a consumer meets them immediately: capture deduplicates by
+architecture identity — this repository's own P2–P4 commits (core, docs and
+workflow changes that never moved the graph or the law) measured as ONE
+snapshot, `0001-bfa8f331.json` — and `debt` refuses (exit 3, stderr-only)
+without a tracked `architecture-intent.json`, because the ledger needs the
+declared intent to compare against.
+
 # 7. Alternatives, steelmanned and rejected
 
 **"Call every archkeep feature" — rejected.** The matrix consumes delta +
@@ -646,7 +675,20 @@ ADR edits land with the code they govern.
 - **P5 — selective higher intelligence.** health/debt/trajectory behind
   release/architecture triggers, with history-dir guidance for consumers
   — the actions never write the history dir. Exit: selective activation,
-  measured budgets, no per-PR noise.
+  measured budgets, no per-PR noise. **P5's outcome** (#554, 2026-09-13):
+  landed as guidance plus dogfood with no action-internal runtime change —
+  the honest reading of §5's matrix (every action's consumer column is "—"
+  for these surfaces) and §7's rejection of their per-PR use. Selective
+  activation is a consumer-workflow shape: [the
+  architecture-intelligence guide](../guides/architecture-intelligence.md)
+  ships the release/periodic-trigger recipe — pinned install, a
+  consumer-owned history dir, the four reads, no exit tolerance — and this
+  repository's own `architecture-intelligence` workflow (#555) is its
+  dogfood copy, dispatch-triggered only so the per-PR noise budget stays
+  zero. Budgets measured at the 0.29.0 pin (§6.6's release-path rows); the
+  per-PR path is untouched — review's evidence steps, triage and harmonise
+  are exactly as P3/P4 left them. The two P5-deferred corpus scenarios stay
+  deferred (§8.1).
 - **P6 — feedback loop + dogfood completion.** Agent-observation
   recording conventions; dogfood completes across
   archkeep/loom/release-craft/action-agents with real architecture
@@ -696,10 +738,18 @@ no new framework and no new dependency:
   `security/fixtures/arch-report/` entry pins that no report byte reaches
   a published surface unsanitised even when the model obeys it.
 
-Scenario coverage: **15/15 designed, 13/15 executable by P3** — debt
-introduced and health regression are P5-deferred with fixtures designed
-now behind documented deferral notes; their delta-side proxies
-(occurrence growth/reduction) run in P2. Honest limits, stated rather
+Scenario coverage: **15/15 designed, 13/15 executable by P3** — and P5
+closes the deferral of the remaining two rather than executing it: debt
+introduced and health regression were designed as review runs over the
+debt ledger and the health trends, surfaces no action consumes — §5's
+matrix records "—" in every action's consumer column for them, §7
+rejected their per-pull-request use, and the frozen reader refuses every
+family but `delta`, so the corpus (which replays action runs) could never
+see these fixtures' evidence. Executing them would first need a
+consumption decision none of P0–P5 makes; the honest count stays 13/15
+until one does. The delta-side proxies (occurrence growth/reduction) run
+in P2's contract gate — the only fixtures for either scenario that ever
+landed. Honest limits, stated rather
 than papered over: the workflow recipe itself (base-commit worktree,
 pinned install, artifact upload) is untestable here and is dogfood
 territory; and tamper is undetectable at the reader by measurement — the

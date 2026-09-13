@@ -90,6 +90,16 @@ new word before code spells it (#529).
   only on [ADR 002](002-no-intelligence-layer.md)'s evidenced-consumer
   standard. Triage's API-only evidence posture is a recorded non-goal on
   [its development page](../development/triage.md).
+- The descriptive surfaces stay out of every action run (P5, #554,
+  2026-09-13): `health`, `report`, `debt` and `trajectory` over a
+  consumer-owned history directory activate only behind release, periodic
+  or manual triggers in the consumer's own workflow ([the architecture
+  intelligence guide](../guides/architecture-intelligence.md)); no action
+  reads or writes the history directory, no input carries these families,
+  and the frozen reader's family refusal keeps that mechanical — feed it
+  any of these envelopes and it is a red typed refusal, never a quiet
+  read. Per-pull-request runs are untouched: the actions' architecture
+  consumption remains exactly the `delta` envelope of decisions 1–3.
 
 ## Landing
 

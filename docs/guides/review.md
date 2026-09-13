@@ -846,6 +846,13 @@ bytes that disagree with the protocol — or with the manifest's recorded
 exit — refuse the run rather than guess. A report whose head is not the
 commit under review records `unknown`, never a verdict.
 
+The descriptive surfaces — `health`, `report`, `debt`, `trajectory` over a
+history directory your repository maintains — are a release-triggered
+concern the actions deliberately never consume: the reader above is frozen to
+the `delta` family and refuses every other. [The architecture-intelligence
+guide](architecture-intelligence.md) ships that recipe and the history-dir
+law.
+
 ---
 
 For the architecture this action is built to — the agent loop, the tool surface,
