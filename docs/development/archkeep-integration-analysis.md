@@ -141,6 +141,42 @@ the **raw bytes**, the baseline's sha256, `tool.version`, both policy
 fingerprints, and both provenance commits. Retention follows
 [ADR 003](../adr/003-evidence-retention.md) (new row lands with P0).
 
+**Agent-observation recording conventions (P6).** The observation layer of
+the table above is the one produced by agents and consumed by people, so it
+is the one that can rot into narrative. These conventions — restated on
+[the review guide's recipe page](../guides/review.md) where a consumer
+meets them — are how a recorded observation stays what the table says it
+is:
+
+1. **Recorded in the action's own surfaces, nowhere else.** An observation
+   is bytes the action itself emitted: the artifact's architecture section,
+   the marker-comment record block, the run's log lines. A summary written
+   outside those surfaces is prose, not a record, whatever it describes.
+2. **Cited from those bytes.** A later consumer of an observation cites the
+   artifact that carries it — run id, artifact name (which states the
+   outcome), the digest/commit/`schemaVersion` fields inside it — never a
+   remembered description of what it said. The P6 correction of §6.4 below
+   is the worked example: two narratives about the #549 window disagreed;
+   the archived artifacts settled which attempt ended in which state, and
+   neither narrative survived verbatim.
+3. **State-blind is a fact, not a gap.** Eligibility skips record reduced
+   schemaVersion-6 artifacts with no architecture section; refused and
+   failed runs record full schemaVersion-8 ones. Citing one as the other —
+   "the run saw no architecture evidence" from a skip, or "the evidence
+   reached review" from a red attempt — is exactly the drift these
+   conventions exist to prevent. Outcome and artifact shape travel
+   together or not at all.
+4. **Evidence in, never instruction out.** An observation feeds back into
+   the owning repository as quoted fact in an issue or pull request (the
+   org routing rule), never into a future run's prompt or policy as
+   anything a run obeys — the untrusted-input ceiling does not stop at
+   architecture bytes.
+5. **Promotion is a human-reviewed pull request.** The only channel from
+   observation to authority is the table's: a human merges law/origin text
+   (archkeep ADR 0007's sanctioned write-back channel — `origin` records
+   and ADR text, never an API). No run, workflow or action writes
+   architecture authority directly, and no such API is asked for (§9.3).
+
 # 5. Capability matrix
 
 Trigger classes: **AO** always-on when the consumer wires the recipe;
@@ -209,9 +245,13 @@ workspace:
     archkeep delta .archkeep/base.json --format json --output .archkeep/delta.json
     code=$?
     case $code in
-      1|3) echo "exit=$code" >> .archkeep/exit        # verdict-carrier exits: recorded
-            rm -f .archkeep/delta.json ;;             # law 1: no report survives a failed run
-      *)   exit $code ;;                              # law 2: everything else is red
+      1|3) printf 'exit=%s\n' "$code" >> .archkeep/exit ;;
+           # verdict-carrier exits: recorded, envelope kept — law 1 deletes
+           # only outside {1, 3}; deleting the exit-1 envelope lands every
+           # findings run in the report-absent `incomplete` lane and makes
+           # the established-`fail` state unreachable (P6 erratum: the
+           # original sketch deleted it here)
+      *)   rm -f .archkeep/delta.json; exit "$code" ;;
     esac
 - run: |                                   # law 5: manifest freshly written from the append-only exit file
     …assemble .archkeep/run.json…
@@ -223,13 +263,23 @@ workspace:
 **The five recipe laws (normative, land in P0):**
 
 1. **Clear, then delete.** The evidence directory is cleared before
-   capture, and the report file is deleted on any nonzero delta exit.
-   Archkeep leaves `--output` files untouched when a run dies before
-   building an envelope, so a pull-request-planted `.archkeep/delta.json`
-   would otherwise survive a failed delta and be read as Archkeep's
-   verdict — the one channel that makes the report bytes PR-supplied. The
-   exit file is append-only, so a plant can only ever contribute a nonzero
-   exit line: plants can make evidence look worse, never better.
+   capture, and the report file is deleted on any delta exit outside
+   `{1, 3}` — on `1` and `3` the envelope is the verdict carrier and
+   stays, because the reader pins the verdict to the manifest's recorded
+   exit beside the envelope's bytes, and a report deleted there lands
+   every findings run in the report-absent `incomplete` lane and makes
+   the established-`fail` state unreachable. (P6 erratum, #560: this
+   law and the sketch above originally said "any nonzero delta exit" —
+   deleting on exit 1 would destroy the very evidence a `fail` verdict
+   rides on. The shipped guide, the dogfood workflow and the reader all
+   landed the tolerated-exit shape; the run contract's copy of this law
+   is corrected in the same change.) Archkeep leaves `--output` files
+   untouched when a run dies before building an envelope, so a
+   pull-request-planted `.archkeep/delta.json` would otherwise survive a
+   failed delta and be read as Archkeep's verdict — the one channel that
+   makes the report bytes PR-supplied. The exit file is append-only, so
+   a plant can only ever contribute a nonzero exit line: plants can make
+   evidence look worse, never better.
 2. **Tolerate exactly {1, 3}.** Exit 1 (verdict: fail) and exit 3 (no
    verdict) are recorded, not red. Exit 2 — a usage error, a mis-wiring,
    not a verdict — and everything else redden the step.
@@ -436,9 +486,19 @@ config-file byte-cap precedent — one lane, not a third).
   architecture facts: the campaign's own pull requests (#546, #547, #549)
   were classified by triage's dogfood runs from title, body and measured
   size with no architecture input, and the facts themselves reached no
-  published review surface in the window (the recipe landed with #549,
-  whose two runs ended in eligibility skips whose reduced artifacts carry
-  no architecture section; #546 and #547 reviewed architecture-blind). The
+  published review surface in the window (#546 and #547 reviewed
+  architecture-blind; the recipe landed with #549, whose run ended in an
+  eligibility skip with a reduced, section-less artifact — but two of
+  that run's attempts reached the model with the full evidence chain:
+  their workflow artifacts carry schemaVersion-8 records with the
+  complete architecture section — verdict `pass`, `stale: false`, both
+  commits, both fingerprints, the report digest — and the
+  `review: architecture evidence pass` line in the run logs, verified
+  from the archived artifacts in P6, #560. A refused attempt (the
+  #544-class provider flake) and a failed attempt (a provider timeout)
+  publish no comment and no SARIF, which is why no _published_ surface
+  carried the facts — the P4 outcome stands on the publication lane, not
+  on the artifacts having been blind). The
   non-goal is recorded on [triage's development page](triage.md); the lever
   stands at promotion-later (§6.2, resolved above).
 - **Harmonise** is unchanged through P1–P3 (it reads through its own
@@ -763,13 +823,25 @@ anchoring, trusted-infra capture) instead of promising a false green.
    nothing binding the report to the baseline bytes it was computed
    against — probe-verified. Proposal: `result.baseline.digest` (sha256
    of the snapshot file bytes). Additive; turns chain-verification into
-   envelope-borne fact. Filed as archkeep#923.
+   envelope-borne fact. Filed as archkeep#923. **P6 fold-back**: still
+   open and unlanded (checked 2026-09-13) — archkeep 0.30.0 shipped
+   without it, so chain-verification remains consumer-side: recipe laws
+   1+5 plus the artifact's recorded digests. When it lands, the recipe
+   gains an envelope-borne check to cite — a follow-up lever whose
+   prerequisite is the deliberate pin bump off 0.29.0, not a recipe edit
+   now.
 2. **Commit pinning for `delta`, both sides primary** (class B/C —
    semantically incomplete for consumers). `change` pins its base
    (`base.commit` → `unproven`); `delta` has no staleness guard, so every
    consumer reimplements pinning, each slightly differently. Proposal:
    `--expect-head-sha` / `--expect-base-sha` producing the existing
-   unproven-style refusal on mismatch. Filed as archkeep#924.
+   unproven-style refusal on mismatch. Filed as archkeep#924. **P6
+   fold-back**: still open and unlanded (checked 2026-09-13) — head
+   pinning stays the reader's (`expect: { headSha }` plus the manifest's
+   recorded exit and commits). When it lands, the recipe can pass the
+   flag and the reader's `stale` classification gains an upstream twin —
+   same lever class as ask 1: pin-bump prerequisite, no recipe change
+   now.
 3. **Observation ingestion store — deliberately not filed.** The absence
    is incidental, but no dogfooded need exists; ADR 0007's sanctioned
    channel covers this campaign's loop. Filing now would propose surface
@@ -783,6 +855,28 @@ anchoring, trusted-infra capture) instead of promising a false green.
 6. **Watch item** — archkeep's byte-identity guarantee currently covers
    `check` only; if contract goldens ever need delta byte-identity pins,
    coordinate with that program rather than filing a duplicate.
+7. **Filed during P6 dogfood — `vue/compiler-sfc` resolution from the
+   install location** (archkeep#939, class B). Under a global install
+   outside the workspace, `src/analysis/vue.mjs` resolves
+   `vue/compiler-sfc` from archkeep's own install tree, so `.vue` files
+   measure as unanalyzed and `delta --capture` refuses (exit 3 ⇒ recipe
+   law 3 makes the run red). Verified on loom's tree: the recipe's
+   global-install shape is dead on a Vue workspace without a bridge —
+   `pnpm install --frozen-lockfile` plus `NODE_PATH` pointing at the
+   workspace's `node_modules` on the archkeep steps. The bridge is a
+   disclosed skew (the head worktree's compiler judges the baseline
+   tree), acceptable for review evidence because the reader records the
+   verdict without enforcing it; the loom dogfood copy carries it with
+   the skew named. The upstream fix — resolving the compiler from the
+   analyzed tree — would make the shipped recipe work verbatim on Vue
+   workspaces.
+8. **Fact, no ask — 0.30.0 shipped #932** ("capture baseline before
+   declaring change", closes archkeep#921): a delta-ordering fix the
+   0.29.0 pin does not carry. The dogfood evidence recorded by this
+   campaign was produced by 0.29.0 and matched its goldens, so nothing
+   here is invalidated; the fix is one more reason the eventual pin bump
+   is more than housekeeping. Recorded so the bump decision has its
+   facts in one place.
 
 # 10. Security and trust analysis
 
@@ -792,7 +886,8 @@ anchoring, trusted-infra capture) instead of promising a false green.
   would survive a failed delta and be read as Archkeep's verdict — the
   report bytes become PR-supplied in exactly the failure case. Closed
   structurally by recipe laws 1+5 (clear the evidence directory; delete
-  the report on nonzero exit; the manifest freshly written from an
+  the report on any delta exit outside `{1, 3}`; the manifest freshly
+  written from an
   append-only exit file — a plant can only make evidence look worse,
   never better), not probabilistically. Beyond that: the action validates
   shape and coherence, pins commits, digests everything, and — decisively

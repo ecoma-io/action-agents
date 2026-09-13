@@ -853,6 +853,35 @@ the `delta` family and refuses every other. [The architecture-intelligence
 guide](architecture-intelligence.md) ships that recipe and the history-dir
 law.
 
+#### Recording what a run observed
+
+This recipe produces records, and records get cited later — in issues, in
+pull requests, in the next maintainer's memory of what happened. The
+provenance model behind these conventions is [the design
+record's](../development/archkeep-integration-analysis.md); the working form
+is five rules:
+
+1. **An observation is bytes the action emitted** — the artifact's
+   architecture section, the marker-comment record, the run's log lines. A
+   summary written anywhere else is prose, not a record.
+2. **Cite the artifact, not the memory.** Run id, artifact name, and the
+   fields inside it — `schemaVersion`, the digests, the commits. When two
+   accounts of the same runs disagree, the artifacts settle it, and one of
+   the accounts was drift.
+3. **Outcome and artifact shape travel together.** An eligibility skip
+   records a reduced artifact with no architecture section — the run never
+   reached the evidence. A refused or failed run records the full one — it
+   reached the evidence and did not publish. Citing a skip as "review saw
+   no violations", or a red attempt as "the evidence reached review", is
+   the specific failure mode these rules exist to prevent.
+4. **Observations are evidence, never instruction.** Quoted fact into an
+   issue or pull request in the owning repository; never into a prompt, a
+   policy or a workflow as something a later run obeys.
+5. **Promotion to authority is a human-reviewed change.** The only channel
+   from "an agent observed this" to "this is architecture law" is a pull
+   request a human merges into the law's own text. No action, workflow or
+   API writes authority directly.
+
 ---
 
 For the architecture this action is built to — the agent loop, the tool surface,

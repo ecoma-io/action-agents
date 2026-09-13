@@ -428,13 +428,21 @@ and five of its lines are normative here — the words a consumer's copy is
 judged against:
 
 1. **Clear, then delete.** The evidence directory is cleared before
-   capture, and the report file is deleted on any nonzero delta exit.
-   Archkeep leaves `--output` files untouched when a run dies before
-   building an envelope, so a pull-request-planted report would otherwise
-   survive a failed delta and be read as Archkeep's verdict — the one
-   channel that makes the report bytes PR-supplied. The exit file is
-   append-only, so a plant can only ever contribute a nonzero exit line:
-   plants can make evidence look worse, never better.
+   capture, and the report file is deleted on any delta exit outside
+   `{1, 3}` — on `1` and `3` the envelope is the verdict carrier and
+   stays, because the reader pins the verdict to the manifest's recorded
+   exit beside the envelope's bytes, and a report deleted there would
+   land every findings run in the report-absent `incomplete` lane and
+   make the established-`fail` state unreachable. (The P0 wording of
+   this law said "any nonzero delta exit"; corrected against the landed
+   recipe in #560 — the shipped guide, the dogfood workflow and the
+   reader all landed the tolerated-exit shape.) Archkeep leaves
+   `--output` files untouched when a run dies before building an
+   envelope, so a pull-request-planted report would otherwise survive a
+   failed delta and be read as Archkeep's verdict — the one channel that
+   makes the report bytes PR-supplied. The exit file is append-only, so
+   a plant can only ever contribute a nonzero exit line: plants can make
+   evidence look worse, never better.
 2. **Tolerate exactly {1, 3}.** Exit 1 (verdict: fail) and exit 3 (no
    verdict) are recorded, not red. Exit 2 — a usage error, a mis-wiring,
    not a verdict — and everything else redden the step.
