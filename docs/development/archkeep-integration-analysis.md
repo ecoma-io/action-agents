@@ -270,7 +270,16 @@ lever, named:** the reader lands with review as consumer #1; if P4's
 triage consumption is not evidenced by dogfood, the doctrinally safer path
 is promotion-later — decided on evidence, per ADR 002's own standard. The
 module is a **constructor-injected seam** (like forge and chat) so the
-corpus evaluator can double it; never an ambient import.
+corpus evaluator can double it; never an ambient import. **Resolved by P4**
+(#550, 2026-09-13): the dogfood record carries no triage-relevant decision
+that review's architecture facts changed — the campaign's own pull requests
+(#546, #547, #549) triaged label-pure, and no channel connects the two
+actions — so the lever stands at **promotion-later**: the reader stays in
+`core/` on its content-kind case, which is caller-count independent, review
+its only consumer, and the question reopens only on [ADR
+002](../adr/002-no-intelligence-layer.md)'s evidenced-consumer standard —
+an issue that names the triage-relevant decision and the evidence that only
+architecture facts could carry it.
 
 `readArchitectureReport({ workspace, reportPath, manifestPath, expect })`
 →
@@ -421,7 +430,17 @@ config-file byte-cap precedent — one lane, not a third).
   epistemic-state fields from a small closed vocabulary mapped from delta
   facts — never a new GitHub-visible state. **Fallback, recorded**: if (b)
   fails, triage stays API-only (a documented non-goal) and the placement
-  lever of §6.2 moves to promotion-later.
+  lever of §6.2 moves to promotion-later. **P4's outcome** (#550,
+  2026-09-13): the fallback fired. Condition (b) failed on the dogfood
+  record — not one triage-relevant decision changed because of review's
+  architecture facts: the campaign's own pull requests (#546, #547, #549)
+  were classified by triage's dogfood runs from title, body and measured
+  size with no architecture input, and the facts themselves reached no
+  published review surface in the window (the recipe landed with #549,
+  whose two runs ended in eligibility skips whose reduced artifacts carry
+  no architecture section; #546 and #547 reviewed architecture-blind). The
+  non-goal is recorded on [triage's development page](triage.md); the lever
+  stands at promotion-later (§6.2, resolved above).
 - **Harmonise** is unchanged through P1–P3 (it reads through its own
   branch/API machinery — no workspace read, no posture change). P4
   explores documentation-vs-intent consistency (drift output as evidence

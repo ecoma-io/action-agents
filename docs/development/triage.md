@@ -601,6 +601,54 @@ against the sheet, and the comment is composed by code. The PR evaluators
 read more than the issue side — a snapshot, checks, review state — and
 mutate nothing either: evidence never grows the write surface.
 
+## Architecture evidence — a recorded non-goal
+
+Every fact a `triage` decision rests on is read through the API: the event
+payload, the policy at its pinned SHA, the label metadata GitHub holds, the
+per-file diff counts, the thread's live state. The working tree is never
+evidence — the checkout a workflow needs so the runner can find the action at
+`./triage` is not read by the action, and no report file a workflow step
+leaves beside the run reaches it, because no input names one. That is a
+posture, not an omission: the working tree under `pull_request` is untrusted
+input, and `review` accepts that exposure because its subject _is_ the tree —
+paying for it with the workspace ceiling, the frozen tool registry and the
+evidence framing that surround every read. `triage`'s decisions — labels from
+a closed sheet, a measured size rung, a code-composed signal — never need tree
+bytes, so it takes on none of the exposure.
+
+The Archkeep runtime-integration campaign (#518,
+[the design record](archkeep-integration-analysis.md)) named this the one
+deliberate posture change P4 could have made: where a report exists for the
+same event, architecture facts could have joined the model's evidence, label
+picks staying closed-sheet and new record facts epistemic-state fields from a
+closed vocabulary — never a new GitHub-visible state. P4 evaluated the design
+record's three conditions (#550), and the answer is no:
+
+1. **A docs-first posture change** — decided by this section, and the decision
+   is that the posture does not change.
+2. **Dogfood evidence that review's architecture facts ever changed a
+   triage-relevant decision** — none exists. The P3 dogfood window (pull
+   requests #546, #547, #549) holds a triage run on every campaign pull
+   request, each classifying from its own API evidence — `enhancement` and
+   the measured size rung — with no architecture input; and no channel
+   connects review's architecture facts to a triage decision, so none could
+   have changed one.
+3. **Acknowledgement as consumer #2 in the reader's placement argument** —
+   moot with the second condition failed.
+
+The recorded state is therefore: **`triage` is architecture-blind by design,
+and staying that way is a non-goal of this repository** — not deferred work,
+not a roadmap item. Architecture facts are `review`'s evidence, recorded in
+its artifact and comment and enforced by nobody
+([ADR 006](../adr/006-code-scanning-merge-enforcement.md)); `triage`'s labels
+speak about the thread, not about the law, and the placement lever of the
+architecture reader in `core/` stands at promotion-later, review its only
+consumer. The revisit trigger is
+[ADR 002](../adr/002-no-intelligence-layer.md)'s own standard: a concrete,
+evidenced triage-relevant decision that only architecture facts could have
+carried, filed as an issue naming the decision and the evidence. A roadmap
+hunch does not reopen this.
+
 ## What `triage` uses from `core/`
 
 | Module            | Kind     | What `triage` uses of it                                                                                                                         |

@@ -83,6 +83,13 @@ new word before code spells it (#529).
   the same artifact in two conditions, one numbering space, so no number
   may mean two shapes — with the design record corrected to the same
   numbers.
+- Decision 2's dogfood clause is resolved (P4, #550, 2026-09-13): the P3
+  dogfood record carries no triage-relevant decision that review's
+  architecture facts changed, so the reader stays single-consumer — review
+  — and the promotion question is parked at promotion-later, reopening
+  only on [ADR 002](002-no-intelligence-layer.md)'s evidenced-consumer
+  standard. Triage's API-only evidence posture is a recorded non-goal on
+  [its development page](../development/triage.md).
 
 ## Landing
 
