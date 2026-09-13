@@ -100,6 +100,18 @@ new word before code spells it (#529).
   any of these envelopes and it is a red typed refusal, never a quiet
   read. Per-pull-request runs are untouched: the actions' architecture
   consumption remains exactly the `delta` envelope of decisions 1–3.
+- The dogfood loop is closed on all four repositories (P6, #562,
+  2026-09-13): archkeep (#940), loom (#401) and release-craft (#326) run
+  the evidence recipe on their own pull requests at v0.14.0, each verified
+  by its wiring pull request's first architecture-aware run — the
+  `review: architecture evidence pass` log line and a schemaVersion-7
+  artifact with the full architecture section — and each with its verdict
+  recorded and nothing enforced: no repository's merge gates changed.
+  Wiring measured the consumer's real world back into the recipe:
+  provider-backed workspaces (Moon graphs, Vue trees) need the documented
+  bridge, and the observations that closed the loop are recorded by the
+  conventions of the design record §4 — bytes the actions emitted, cited
+  from their artifacts.
 
 ## Landing
 

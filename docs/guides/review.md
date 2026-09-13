@@ -740,6 +740,27 @@ consumer's copy is judged against them:
 5. **The manifest is freshly written** from the append-only exit file,
    overwriting any plant, at the end of the evidence steps.
 
+**Provider-backed workspaces need a bridge.** The recipe judges the pull
+request's head in a worktree of its own — a committed tree with no
+`node_modules` — so if your project graph or analyzers need a
+workspace-local tool, the global install alone dies at the capture:
+Archkeep's Moon provider looks for `moon` in the analyzed tree's
+`node_modules/.bin` and then on PATH, and neither answers; on a Vue tree
+`vue/compiler-sfc` resolves from Archkeep's own install location
+(archkeep#939) and every `.vue` file measures as unanalyzed. The exit is
+`3` — law 3 makes that a red run, correctly. The bridge: install the merge
+preview's own dependencies (`pnpm install --frozen-lockfile`), put its
+`node_modules/.bin` on PATH for the Archkeep steps, and — where a module
+rather than a binary is what fails to resolve — point `NODE_PATH` at its
+`node_modules`. Disclose the skew where you write the bridge: the merge
+preview's tooling judges both sides of the delta, so a pull request that
+bumps the tool judges the baseline with the new version — acceptable for
+review evidence because the verdict is recorded, never enforced, and both
+commits and both policy fingerprints stay pinned. Measured on the
+organization's own dogfood: two of the four repositories carry the Moon
+bridge, one carries Moon plus `vue/compiler-sfc`, and the static-map
+repository needs none.
+
 ```yaml
 on:
   pull_request:

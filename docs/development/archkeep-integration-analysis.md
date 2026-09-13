@@ -297,6 +297,28 @@ workspace:
 5. **The manifest is freshly written** from the append-only exit file,
    overwriting any plant, at the end of the evidence steps.
 
+**Provider-backed workspaces need a bridge (measured in P6 dogfood).** The
+recipe judges committed worktrees — trees with no `node_modules` — so a
+workspace whose project graph or analyzers need a workspace-local tool dies
+at the capture: Archkeep's Moon provider looks for `moon` in the analyzed
+tree's `node_modules/.bin` and then on PATH, and neither answers; on a Vue
+tree `vue/compiler-sfc` resolves from Archkeep's own install location
+(archkeep#939) and every `.vue` file measures as unanalyzed. The exit is 3
+— law 3 makes that a red run, correctly: the recipe's own laws hold; its
+global-install shape is what does not carry. The bridge, shipped in the
+guide and in every dogfood copy that needed it: install the merge preview's
+own dependencies (`pnpm install --frozen-lockfile`), put its
+`node_modules/.bin` on PATH for the Archkeep steps, and — where a module
+rather than a binary is what fails to resolve — point `NODE_PATH` at its
+`node_modules`. The skew is disclosed, never hidden: the merge preview's
+tooling judges both sides of the delta, so a pull request that bumps the
+tool judges the baseline with the new version — acceptable for review
+evidence because the verdict is recorded, never enforced, and both commits
+and both policy fingerprints stay pinned. Of the four dogfooded
+repositories, action-agents' static project map needs no bridge; archkeep
+and release-craft carry the Moon bridge; loom carries Moon plus
+`vue/compiler-sfc`.
+
 The manifest (`run.json`) shape:
 `{ exitCode, stderrDigest, base: { capturePath, commit }, head: { commit } }`.
 
@@ -754,7 +776,44 @@ ADR edits land with the code they govern.
   archkeep/loom/release-craft/action-agents with real architecture
   differences; upstream outcomes folded back. Exit: truth ≠ observation ≠
   inference ≠ decision ≠ mutation, all provenance-safe, demonstrated on
-  four repositories.
+  four repositories. **P6's outcome** (#562, 2026-09-13): landed. The
+  conventions are §4's and the guide's (#561); the dogfood recipe now runs
+  on all four repositories — this one since P3 (#549), archkeep (#940,
+  squash 97be8a44), loom (#401, squash 5ac88d0a), release-craft (#326,
+  squash 318b7181), each re-pinned to v0.14.0 (ae384f9f), the first
+  release carrying the `architecture-report` input. Every wiring was
+  verified by its own pull request's first architecture-aware run —
+  `review: architecture evidence pass` in the log and a schemaVersion-7
+  run artifact with the complete architecture section: action-agents #561
+  (run 34739677576, artifact `review-artifact-failed-1cdffa7…json`,
+  schemaVersion 8 — the applicability shape — verdict `pass`, `stale:
+false`, report digest over raw bytes); archkeep run 34752453370
+  (digest `db6eccfd…`); loom run 34752534173 (digest `d345d739…`,
+  produced through both bridges); release-craft run 34752467374 (digest
+  `e8eb3521…`). The exit criterion, per link, each repository, cited
+  from the bytes: **law** — each repository's boundary config and intent,
+  human-reviewed commits on its main; **evidence** — each wiring pull
+  request's `review-architecture-evidence` artifact, a schemaVersion-2
+  delta envelope with pinned base and head commits and the workspace's
+  own policy fingerprints (loom's is 1.24 MB over the full `.vue` tree);
+  **observation** — the schemaVersion-7/8 architecture section and log
+  line above, emitted by reader code from that evidence, labelled
+  non-authoritative; **inference** — every model phase in the window
+  ended in the #544-class provider timeout (documented on each pull
+  request from its artifact's `outcome` classification), so no inference
+  was published anywhere — the ceiling demonstrated under failure:
+  refused/failed runs publish no comment and no SARIF, and no future
+  published inference may do more than cite the recorded facts;
+  **decision and mutation** — the merges were the maintainer's queue
+  decisions against each repository's own ruleset, and across every run
+  in the campaign the actions' API mutations total the marker comment on
+  published runs alone — model output never composed an API call. Two
+  recipe-shape findings came out of the wiring and are recorded where a
+  consumer meets them: provider-backed workspaces need the bridge (§6.1
+  and the guide; the `vue/compiler-sfc` half is archkeep#939), and the
+  #520 trigger was evaluated — not fired: the five-law block and the
+  law-1 case-arm are byte-identical across all four dogfood copies,
+  zero law-missing mis-wirings; #520 stays open as the pointer.
 
 ## 8.1 Test strategy
 
