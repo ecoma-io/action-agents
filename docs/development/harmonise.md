@@ -795,6 +795,22 @@ Two caveats the implementation must settle before code:
 - **Suffix follows the branch key.** The advisory files must carry the same key the publishing branch is named by; if the branch scheme later moves to per-target-language branching, the suffix moves with it or the guarantee breaks.
 - **Same target from multiple sources still collides.** Two branches both translating `fr` write the same target's records — but that is genuine content overlap, not a spurious advisory collision, and is outside the common one-source-per-target case.
 
+## Design note — documentation-versus-intent consistency, deferred
+
+> **Status: explored, deferred — no runtime change (P4 of the Archkeep runtime integration, #518; #551).** The exploration ends in a deferral, and the deferral is the deliverable: no input, no pipeline stage and no evidence channel is added, and a run's behaviour is byte-identical to what it was before. It is recorded here with its reasons and its revisit trigger rather than left as silence.
+
+Archkeep can report where a repository's documentation and its intent records disagree — `drift` output ranks the law edits that would reconcile them. The P4 question was whether `harmonise` could carry that output as evidence of document staleness. Two hard lines bound any answer, set by [the integration design record](archkeep-integration-analysis.md): architecture authority is never rewritten from documentation, and mismatches surface as evidence and interpretation in the pull request the human merges. The mirror holds for this action too — `harmonise` never rewrites documentation from architecture authority: a mismatch it noticed would be reported, never repaired. On those lines the exploration lands on deferral, for four reasons.
+
+**A different judgment axis.** This action's correctness bar is per-language equivalence to the source document, never source truth. A stale source is propagated faithfully, by design: translation mirrors whatever the source says, and [the document set](#the-document-set) inventories pairs, not claims. Whether a document's content is still current is a judgment the pipeline has no machinery to make or to use — adding drift facts to the prompt would invite the model to editorialize off the one axis its output is judged on.
+
+**The evidence channel is a posture change.** A run reads everything through the Git APIs of its resolved policy source — [the policy source](#the-policy-source) pins every read to one SHA — and never reads the workspace checkout. Drift output exists only as a workflow artifact or workspace file, so consuming it would be this action's first working-tree read: exactly the posture change the design record fences behind three explicit conditions for `triage`, with no comparable case here to justify one.
+
+**No honest surface.** A documentation-versus-intent mismatch is about the source document, and the source is read-only in every run ([what `harmonise` never does](#what-harmonise-never-does)). Remediation is a human edit to that source — and where `review`'s architecture grounding already puts law facts in front of the human, that pull request is the surface which can actually carry the fix. A `harmonise` proposal cannot contain the correction, so it should not carry the finding.
+
+**No evidenced consumer.** The dogfood corpus is multilingual READMEs; architecture documentation in this organization is source-language-only, so no architecture document sits in a map today. That is [ADR 002](../adr/002-no-intelligence-layer.md)'s evidenced-consumer standard — the same bar the architecture reader's promotion is parked behind — and it is unmet: no decision a run makes would change if it knew the mismatch.
+
+The deferral reopens when a dogfooded repository has translated architecture documents in its map and suffers a real staleness event — an issue naming the decision only documentation-versus-intent facts could carry. Even then the two hard lines hold: the mismatch arrives as evidence and interpretation in the pull request the human merges, and the correction is a human edit to the source-language document, mirrored to translations by an ordinary run afterwards.
+
 ## The run record
 
 Every run leaves one machine-readable record of itself at the terminal point it
