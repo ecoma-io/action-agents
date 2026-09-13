@@ -43,18 +43,19 @@ re-worded description does not change the code under review. There is no
 All inputs listed below. Shared inputs are documented in the
 [development configuration page](../development/configuration.md).
 
-| Input                | Required | Default            | What it does                                              |
-| -------------------- | -------- | ------------------ | --------------------------------------------------------- |
-| `github-token`       | yes      | —                  | Token for GitHub API calls.                               |
-| `api-url`            | yes      | —                  | Base URL of an OpenAI-compatible endpoint.                |
-| `api-key`            | no       | —                  | Key for that endpoint. Leave unset for keyless endpoints. |
-| `model`              | yes      | —                  | Model id to ask.                                          |
-| `request-timeout-ms` | no       | `120000`           | Per-attempt timeout in milliseconds.                      |
-| `config-path`        | no       | `""`               | Override the config file location.                        |
-| `max-turns`          | no       | `30`               | Ceiling on agent turns.                                   |
-| `context-window`     | no       | `128000`           | Token budget of the configured model.                     |
-| `dry-run`            | no       | `false`            | Review and log, comment nothing.                          |
-| `artifact-path`      | no       | `.review-artifact` | Directory for the machine-readable run record.            |
+| Input                 | Required | Default            | What it does                                                                                                     |
+| --------------------- | -------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `github-token`        | yes      | —                  | Token for GitHub API calls.                                                                                      |
+| `api-url`             | yes      | —                  | Base URL of an OpenAI-compatible endpoint.                                                                       |
+| `api-key`             | no       | —                  | Key for that endpoint. Leave unset for keyless endpoints.                                                        |
+| `model`               | yes      | —                  | Model id to ask.                                                                                                 |
+| `request-timeout-ms`  | no       | `120000`           | Per-attempt timeout in milliseconds.                                                                             |
+| `config-path`         | no       | `""`               | Override the config file location.                                                                               |
+| `max-turns`           | no       | `30`               | Ceiling on agent turns.                                                                                          |
+| `context-window`      | no       | `128000`           | Token budget of the configured model.                                                                            |
+| `dry-run`             | no       | `false`            | Review and log, comment nothing.                                                                                 |
+| `artifact-path`       | no       | `.review-artifact` | Directory for the machine-readable run record.                                                                   |
+| `architecture-report` | no       | `""`               | Workspace path to an `archkeep delta` report, recorded as architecture evidence. Empty stays architecture-blind. |
 
 **`max-turns`**: the agent loop reads files (tools), reflects, and decides what
 to read next. Reaching the ceiling ends the review and says so in the comment;
@@ -394,7 +395,12 @@ records as a workflow artifact to keep them across runs:
 ```
 
 The record's `schemaVersion` is `5` for the bare family and `6` once an
-applicability policy is active. A breaking shape change moves the number —
+applicability policy is active. An architecture-aware run — one whose
+`architecture-report` input names a report — emits the same two shapes as
+`7` and `8`: the gate table gains `architecture` after `verification` and
+the record carries the architecture section, while architecture-blind runs
+stay on `5` and `6`, byte-identical to a run that never heard of Archkeep.
+A breaking shape change moves the number —
 the red-terminal shapes moved the bare family from `4` to `5`, green
 artifacts included — so tooling that consumes records should follow the
 family rather than hard-pin a number that cannot move. The
@@ -696,6 +702,149 @@ Keep the machine-readable record for every run, including failed ones.
     include-hidden-files: true
     if-no-files-found: warn
 ```
+
+### Architecture evidence — record an Archkeep delta
+
+`architecture-report` names the report a pinned Archkeep step left in the
+workspace, and the run records what it says as the architecture section of
+its artifact — recorded, never enforced: architecture violations do not
+become review findings, enter no SARIF, and flip no verdict. Empty — the
+default — keeps every run architecture-blind and byte-identical to today.
+
+The action neither spawns, installs nor imports Archkeep: the recipe below
+is yours, in your workflow, before the action runs. Five of its lines are
+normative — the [run contract](../run-contract.md) states them, and a
+consumer's copy is judged against them:
+
+1. **Clear, then delete.** The evidence directory is cleared before capture,
+   and the report file is deleted on any delta exit outside `{1, 3}` — the
+   exits where Archkeep died without a coherent envelope, which is the
+   planted-file channel: Archkeep leaves `--output` files untouched when a
+   run dies before building one, so stale bytes beside a dead run would
+   otherwise be read as its verdict. On `1` and `3` the envelope is the
+   verdict carrier and stays. The exit file is append-only, so a plant can
+   only ever contribute a nonzero exit line: plants can make evidence look
+   worse, never better.
+2. **Tolerate exactly `{1, 3}`.** Exit `1` (verdict: fail) and exit `3` (no
+   verdict) are recorded, not red. Exit `2` — a usage error, a mis-wiring,
+   not a verdict — and everything else redden the step.
+3. **Capture steps never `||`, never `continue-on-error`.** A failed capture
+   is a red run: evidence absent, review never starts. When a capture
+   flakes, the fix is never `continue-on-error: true` — that reopens the
+   planted-file channel law 1 closes.
+4. **The baseline commit is the live merge-base, fetched.** Never the
+   payload's `base.sha` alone — it can be stale, and a moved base makes the
+   delta attribute other people's merged changes to this pull request as
+   `introduced`: loud but wrong. The fetch strategy must make the commit
+   resolvable; `fetch-depth: 0` below is that.
+5. **The manifest is freshly written** from the append-only exit file,
+   overwriting any plant, at the end of the evidence steps.
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # Law 4: fetch-depth 0 makes the merge-base commit resolvable — a
+      # depth-1 checkout makes the baseline step dead on arrival.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # Pinned by you — the action never learns this ran.
+      - run: npm install --global @ecoma-io/archkeep@0.29.0
+
+      # Law 1, first half: clear planted evidence before capture.
+      - run: rm -rf .archkeep && mkdir .archkeep
+
+      # Laws 3-4: the baseline snapshot at the live merge-base of the pull
+      # request's head. Never add `|| true` or `continue-on-error` here: a
+      # failed capture is a red run, and the review never starts.
+      - name: Capture the baseline
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          base_sha="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")"
+          git worktree add --detach ../archkeep-base "$base_sha"
+          (cd ../archkeep-base && archkeep delta --capture --output "$GITHUB_WORKSPACE/.archkeep/base.json")
+          printf '%s\n' "$base_sha" > .archkeep/base-commit
+
+      # Laws 1-2: the delta at the pull request's head — the commit the
+      # action pins its expectation to. Judge it in a worktree of its own:
+      # the workspace checkout is the merge preview, and a report judged
+      # there pins a different head than the action expects, which reads as
+      # stale evidence on every run.
+      - name: Run the delta
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git worktree add --detach ../archkeep-head "$HEAD_SHA"
+          set +e
+          (cd ../archkeep-head && archkeep delta "$GITHUB_WORKSPACE/.archkeep/base.json" --format json --output "$GITHUB_WORKSPACE/.archkeep/delta.json") 2> .archkeep/delta.stderr
+          code=$?
+          set -e
+          case "$code" in
+            0) ;;
+            1|3) printf 'exit=%s\n' "$code" >> .archkeep/exit ;;
+            *) rm -f .archkeep/delta.json; exit "$code" ;;
+          esac
+
+      # Law 5: the manifest, freshly written from the append-only exit
+      # file. The last nonzero exit line wins — a plant can make evidence
+      # look worse, never better; an empty file means the step exited zero.
+      - name: Write the manifest
+        run: |
+          exit_code="$(grep -oE 'exit=[0-9]+' .archkeep/exit 2>/dev/null | cut -d= -f2 | grep -v '^0$' | tail -n 1)"
+          [ -n "$exit_code" ] || exit_code=0
+          jq -n \
+            --argjson exitCode "$exit_code" \
+            --arg stderrDigest "$(sha256sum .archkeep/delta.stderr | cut -d' ' -f1)" \
+            --arg baseCommit "$(cat .archkeep/base-commit)" \
+            --arg headCommit "$(git -C ../archkeep-head rev-parse HEAD)" \
+            '{exitCode: $exitCode, stderrDigest: $stderrDigest,
+              base: {capturePath: "base.json", commit: $baseCommit},
+              head: {commit: $headCommit}}' > .archkeep/run.json
+
+      - uses: ecoma-io/action-agents/review@v0.12
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          api-url: ${{ vars.LLM_API_URL }}
+          api-key: ${{ secrets.LLM_API_KEY }}
+          model: ${{ vars.LLM_MODEL }}
+          architecture-report: .archkeep/delta.json
+
+      # Evidence survives the runner: upload it for every run.
+      - name: Upload the Archkeep evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: review-architecture-evidence
+          path: .archkeep/
+          include-hidden-files: true
+          if-no-files-found: warn
+```
+
+The manifest (`run.json`) is read from beside the report — the sibling
+convention the input pins; the reader validates its recorded exit, and the
+rest of its fields are for the humans reading the uploaded evidence. What
+the run does with the pair: exit `0` records the verdict the envelope
+carries, exit `1` beside a findings envelope records `fail` with every
+introduced row, exit `3` records `unknown` with Archkeep's reason, and
+bytes that disagree with the protocol — or with the manifest's recorded
+exit — refuse the run rather than guess. A report whose head is not the
+commit under review records `unknown`, never a verdict.
 
 ---
 
