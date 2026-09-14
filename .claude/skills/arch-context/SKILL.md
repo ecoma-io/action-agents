@@ -183,8 +183,9 @@ answer is to surface it, never to ignore it.
 8. **Understand the surrounding governance surfaces when the facts need
    context.** These are descriptive, never gates — they do not report boundary
    findings:
-   `archkeep waivers` lists the term-bound suppressions a violation under review
-   may be covered by; `archkeep health` reports per-metric verdicts (unmeasured
+   `archkeep waivers` names every `boundarySuppressions` row — the waivers with
+   their terms and the permanent suppressions with what each hides; `archkeep
+health` reports per-metric verdicts (unmeasured
    is `unknown`/`not_applicable`, never zero); `archkeep debt <dir>` ages waivers,
    gaps and drift across snapshots; `archkeep fitness` (when the policy declares
    a `fitness` export) judges the workspace's named quality gates and exits 1
@@ -209,8 +210,16 @@ answer is to surface it, never to ignore it.
 
 ## Choosing the minimum sufficient set
 
-Run only what the change needs. The default is `context` (+ `--plan` for a
-code change). Add:
+First apply `arch-change`'s architecture-change classification (its DECLARE
+step): a change that is not an architecture change is trivial — run `check`
+once and stop there, with no baseline, no contract, and none of the machinery
+below. For workflow-bearing
+work the default is `context` (+ `--plan` for a code change). A boundary
+verdict produced under another repository's law — the dogfooding repo's own
+boundary law quoted into an issue or review here, for example — routes to the
+repo whose law produced it: this workspace's declared state is the only law
+that can judge this workspace, and a foreign finding is never overridden
+locally to dispose of it. Add:
 
 - `impact` — when the change alters a project others depend on (its API, its
   output, or its very existence).
@@ -222,23 +231,21 @@ code change). Add:
   the facts under the change involve a term-bound suppression, a quality claim,
   an aging ledger, a named quality gate, a decision reference, a stale model, or
   an undeclared one.
-- `report` — when the question is the whole governance picture at once rather
-  than one of those surfaces; it composes them into a single document and
-  reaches for the same numbers.
-- `check` — to see the current violation state (though `context --plan` already
-  reports it scoped for reporting).
+- `report` — when the question is the whole governance picture at once; it
+  composes those surfaces into a single document.
+- `check` — to see the current violation state.
 
 ## What to do if it fails
 
-- **Exit 3** — the run could not complete. This is NOT "clean"; it means Archkeep
-  could not reach a verdict. Check whether a workspace root, boundary config, or
-  project graph is missing or malformed. In a profile-selected workspace, every
-  command that reads a boundary law can exit 3 for the same reason `check`
-  can: an unknown profile name, an unknown `base`, a `base` cycle, or an
-  unreadable registry — none of those falls back to another law, on any
-  command. Do not "fix" it by changing `boundaryConfig` or passing a file
-  path; the value is a profile name, and the fix is the registry or the name,
-  not the command. Do not proceed as if the architecture is safe.
+- **Exit 3** — the run could not complete. Check whether a workspace root,
+  boundary config, or project graph is missing or malformed; in a
+  profile-selected workspace the profile-resolution failures step 2 lists
+  exit 3 on every command that reads a boundary law. Do not "fix" it by
+  changing `boundaryConfig` or passing a file path; the value is a profile
+  name, and the fix is the registry or the name, not the command. Exit 3 is
+  a STOP, not a warning to note and continue: no verdict exists,
+  `coverage.notAnalyzed` names the evidence that could not be analyzed, and
+  nothing downstream may claim clean.
 - **`drift` exit 3** — the intent comparison could not be verified (intent file
   unreadable, a boundary matched no observed project). Surface this in your
   change notes; the declared architecture is not confirmed.

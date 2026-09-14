@@ -11,18 +11,31 @@ run for "the guarantees hold" has committed the hollow-verdict shape the
 that mistake by accident.
 
 Recorded 2026-09-04 at pin `@ecoma-io/archkeep` **0.22.1**, re-measured
-claim-by-claim at pin **0.29.0** on 2026-09-12 (exact, no range; first
-recorded at 0.22.0, re-measured at the 0.22.1 bump — issue #280, the
-release closing ten organization-filed upstream issues; unchanged at the
-0.24.0 bump — issue #314 — and at the 0.25.0 bump — issue #348; the 0.27.0
-adoption — #465, with the extended canaries of #474 measured at it — left
-this page's recorded version at 0.25.0, and the 0.29.0 bump — issue #530 —
-closes that gap by re-measuring every claim); owned by the repository
-maintainers. Every behavioral claim below was measured
-by running the pinned binary against real trees — the fixtures under
-`tools/fixtures/` and purpose-built variants of them — not cited from
-documentation. When the pin moves, the bump PR re-measures every claim here;
-that is what the 0.21.0 → 0.22.0 bump (PR #267) did for the refusal lane.
+claim-by-claim at pin **0.29.0** on 2026-09-12, then at pin **0.30.0** on
+2026-09-15 (exact, no range; first recorded at 0.22.0, re-measured at the
+0.22.1 bump — issue #280, the release closing ten organization-filed
+upstream issues; unchanged at the 0.24.0 bump — issue #314 — and at the
+0.25.0 bump — issue #348; the 0.27.0 adoption — #465, with the extended
+canaries of #474 measured at it — left this page's recorded version at
+0.25.0, the 0.29.0 bump — issue #530 — closed that gap, and this 0.30.0
+bump — issue #569 — re-measures the page again); owned by the repository
+maintainers. The 0.30.0 re-measurement ran the pinned binary against the
+same real-trees approach this page is built on, and every claim held:
+`pnpm arch` clean, the edge canary pair, the extended set, the transport
+seam, the HTTP and forge monopoly checks, the action-shape check, and
+`pnpm arch:contract`'s 13 scenarios byte-identical against their goldens
+(no re-bless). The waivers-and-suppressions table was re-verified row by
+row against purpose-built trees: a live waiver still exits 1 with the
+violation annotated `waivedBy` and counted in `result.waived`; an expired
+waiver re-asserts as a plain violation without the annotation; a permanent
+suppression hides its finding; suppressing every rule that catches an edge
+still exits 0 with the edge visible only in `archkeep waivers`; and a
+stale row still exits 3 refusing the tree. Every behavioral claim below
+was measured by running the pinned binary against real trees — the
+fixtures under `tools/fixtures/` and purpose-built variants of them — not
+cited from documentation. When the pin moves, the bump PR re-measures
+every claim here; that is what the 0.21.0 → 0.22.0 bump (PR #267) did for
+the refusal lane.
 
 This page covers the dev-time gate. The other half of the relationship —
 the actions consuming archkeep's own output as runtime architecture
@@ -87,7 +100,7 @@ not weaker — they are held by authorities that can actually witness them.
 
 ## The gate contract at the pin
 
-What a run of `archkeep check` at 0.29.0 does, measured. Three exits, and the
+What a run of `archkeep check` at 0.30.0 does, measured. Three exits, and the
 vocabulary mirrors the run contract's on purpose:
 
 | Exit | Run status   | Verdict   | What it means                                                                  |
@@ -264,11 +277,14 @@ re-pinning.
 
 ## Cost, and the U-2 trigger
 
-Measured at pin 0.29.0 (2026-09-12, local wall clock): the six arch-gate
-steps total ~7 seconds — boundary 1.4s, canaries 4.3s (the edge pair 1.6s
-plus the extended set 2.7s, which joined the canary step with the 0.27.0
-adoption, #474), transport seam 0.8s, HTTP monopoly 0.3s, forge monopoly
-0.3s, action shape 0.2s (~6 seconds over six steps at the 0.25.0 recording,
+Measured at pin 0.30.0 (2026-09-15, local wall clock): the six arch-gate
+steps total ~8 seconds — boundary 1.6s, canaries 4.6s (the edge pair 1.7s
+plus the extended set 2.9s), transport seam 0.8s, HTTP monopoly 0.4s,
+forge monopoly 0.3s, action shape 0.2s (~7s at the 0.29.0 recording on
+2026-09-12 — boundary 1.4s, canaries 4.3s [the edge pair 1.6s plus the
+extended set 2.7s, which joined the canary step with the 0.27.0 adoption,
+#474], transport seam 0.8s, HTTP monopoly 0.3s, forge monopoly 0.3s,
+action shape 0.2s — and ~6 seconds over six steps at the 0.25.0 recording,
 issue #348; a 2026-09-04 `Verify`-run measurement at 0.22.1 recorded ~7s).
 The single `verify` job stands; there is nothing to parallelize at this
 cost. **Revisit trigger: any single arch gate exceeding 30 seconds** —
