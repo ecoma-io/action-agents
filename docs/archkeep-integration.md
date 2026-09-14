@@ -278,9 +278,14 @@ re-pinning.
 ## Cost, and the U-2 trigger
 
 Measured at pin 0.30.0 (2026-09-15, local wall clock): the six arch-gate
-steps total ~8 seconds — boundary 1.6s, canaries 4.6s (the edge pair 1.7s
-plus the extended set 2.9s), transport seam 0.8s, HTTP monopoly 0.4s,
-forge monopoly 0.3s, action shape 0.2s (~7s at the 0.29.0 recording on
+steps total ~11 seconds — boundary 3.0s, canaries 6.2s (the edge pair 2.0s
+plus the extended set 4.2s), transport seam 1.2s, HTTP monopoly 0.5s,
+forge monopoly 0.3s, action shape 0.1s (two-pass minima, each step timed
+as its bare command; the bump PR's first single-pass recording read ~8s —
+boundary 1.6s, canaries 4.6s [the edge pair 1.7s plus the extended set
+2.9s], transport 0.8s, HTTP 0.4s, forge 0.3s, shape 0.2s — so the wall
+clock varies meaningfully run to run on this machine, and every recording
+sits far under the trigger) (~7s at the 0.29.0 recording on
 2026-09-12 — boundary 1.4s, canaries 4.3s [the edge pair 1.6s plus the
 extended set 2.7s, which joined the canary step with the 0.27.0 adoption,
 #474], transport seam 0.8s, HTTP monopoly 0.3s, forge monopoly 0.3s,
