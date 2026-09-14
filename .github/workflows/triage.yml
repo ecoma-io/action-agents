@@ -83,7 +83,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
-          model: triage
+          model: glm-5.3-flash
           dry-run: false
 
       # The run record — event, thread, policy pin, the decision when one was
