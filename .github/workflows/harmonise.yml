@@ -82,7 +82,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token || github.token }}
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
-          model: harmonise
+          model: glm-5.3-flash
           source-language: en
           dry-run: ${{ inputs.dry-run || 'true' }}
 

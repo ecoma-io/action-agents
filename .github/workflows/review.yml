@@ -236,7 +236,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           api-url: ${{ secrets.ECOMA_LLM_BASE_URL }}
           api-key: ${{ secrets.ECOMA_LLM_API_KEY }}
-          model: review
+          model: glm-5.3
           # Live: publishes one upserted marker comment.
           dry-run: "false"
           # The evidence the recipe above left: the delta report, with the
