@@ -74,8 +74,13 @@ leave it sound must show the check green.
 
    - **Exit 0** — no violations found, every selected file analyzed, and — when
      an intent file exists and is tracked — the declared architecture agrees
-     with the observed graph. The number of files, projects, and imports
-     inspected is stated beside the verdict.
+     with the observed graph. Green over untracked files is honest only
+     because the envelope discloses the gap: `coverage.coverageGaps` (kind
+     `untracked-files`) names the files the gate did not judge; the files,
+     projects, and imports inspected are stated beside the verdict. A
+     non-empty gap row is NOT a clean claim — stage the files or stop (the
+     workflow's VERIFY stops on it; class D,
+     [docs/doctrine/agent-workflow-protocol.md](https://github.com/ecoma-io/archkeep/blob/main/docs/doctrine/agent-workflow-protocol.md)).
    - **Exit 1** — findings: boundary violations, intent findings (a forbidden
      relationship appeared, an allowed one went missing), waiver-entangled
      ones (a violation an active waiver accepts is still exit `1`, only moved
@@ -216,22 +221,22 @@ leave it sound must show the check green.
   checked and all complied — and "no findings" from a scoped run says nothing
   about the files outside its scope. **A permanent suppression is the one
   documented exception to "checked and complied."** A `boundarySuppressions`
-  row with no `expiresAt` removes a real violation from the findings entirely,
-  by design: exit 0 can mean the workspace is genuinely clean, or that it is
-  clean except for what is permanently suppressed, and `check`'s own output
-  does not distinguish the two — unlike a waiver (a row WITH `expiresAt`),
-  which stays a finding under "accepted violations" until its term lapses
-  rather than disappearing (`arch-review`, "Waivers / exceptions"). To tell
-  which "empty" a green run is, run `archkeep waivers`: it names every
-  `boundarySuppressions` row — a waiver with its term, a permanent suppression
-  with what it is hiding — the one surface that distinguishes the two. In a
-  profile workspace, a run that
-  reports unexpectedly green can also mean the law being enforced changed —
-  check the plugin options and the `--config`/`boundaryConfig` selector
-  against what was in effect when the change was made (the option-change
-  check `arch-review` step 2 runs), not only the code under review.
-- **UNKNOWN / INCOMPLETE never silently becomes PASS.** A coverage gap, an
-  unreadable file, a no-verdict intent, an unresolved profile — each withholds
+  row with no `expiresAt` removes a real violation from the findings entirely —
+  `check` is silent under it, so exit 0 can mean genuinely clean or clean
+  except for what is permanently suppressed. The workflow's VERIFY step runs
+  the `waivers` command on every green check — mandatory: the command
+  names every `boundarySuppressions` row, permanent suppressions included,
+  and the envelope splits them:
+  `result.suppressions[]` names the permanent rows (`expiresAt` is ABSENT, not
+  null), `result.waivers[]` the temporary ones (`expiresAt` + `remainingMs`),
+  `result.suppressed` counts the raw violations hidden (`arch-review`,
+  "Waivers / exceptions"). In a profile workspace, an unexpectedly green run
+  can also mean the law changed — check the plugin options and
+  `--config`/`boundaryConfig` against what was in effect when the change was
+  made (the law-naming rule in `arch-review`), not only the code under review.
+- **UNKNOWN / INCOMPLETE never silently becomes PASS.** An unreadable file, a
+  `notAnalyzed` coverage row, a no-verdict intent, an unresolved profile —
+  each withholds
   the verdict instead of folding into the green. An unresolved decision is the
   same rule in the agent's hands: `check` resolves each row's `decisionRef`
   against the ADR registry and names an unresolved one inline and under
@@ -273,7 +278,7 @@ absence means "no such fact here", never "checked and clean". What a future
 version folds into the same gate is decided by the same rule: an additional deterministic check makes the verdict complete,
 never merely louder.
 
-Sixteen descriptive commands sit **beside** the gate. `graph`, `diff`,
+The descriptive commands sit **beside** the gate. `graph`, `diff`,
 `drift`, `discover`, `reconcile`, `impact`, `explain`, `context`, `history`,
 `waivers`, `health`, `report`, `debt`, `provenance`, and `adr` each describe or
 propose against the same observed facts, and none of them exits 1 on its own
@@ -282,13 +287,17 @@ re-judging it, `health` reports per-metric verdicts where an unmeasured
 metric is `unknown`/`not_applicable`, never zero, and `adr` describes the
 recorded decisions — exit 3 only on an ADR-pattern id the registry does not
 know or an unreadable registry, never clean, but never a finding; a reverse
-lookup naming a rule id no ADR binds is a sentence with exit 0). Two of them
-still reach an exit code: `fitness` is the one descriptive command that exits
-1 on its own when a declared function `fail`s (`fail` → 1, `unknown` → 3), and
-a waived violation stays exit `1` in `check`, moved to the "accepted
-violations" section until its term lapses. Those two inform a verdict; the
-rest only inform the reader. A build fails on `check` and on `fitness`, and on
-nothing else.
+lookup naming a rule id no ADR binds is a sentence with exit 0). `fitness`,
+runnable beside the gate, is the one descriptive command that exits 1 on its
+own when a declared function `fail`s (`fail` → 1, `unknown` → 3), and a waived
+violation stays exit `1` in `check`, moved to the "accepted violations"
+section until its term lapses. A build fails on `check`, on `fitness`, on
+`delta` when the compare introduces an unwaived violation, on `change` when
+its reconciliation finds undeclared or unfulfilled consequences or a failed
+declared constraint (`unproven` is exit 3), and on `rules verify` when a
+declared rule fails — on nothing else
+([docs/reference/exit-codes.md](https://github.com/ecoma-io/archkeep/blob/main/docs/reference/exit-codes.md)
+owns the table).
 
 ## What to do if it fails
 

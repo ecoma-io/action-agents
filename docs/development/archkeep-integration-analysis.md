@@ -933,8 +933,11 @@ anchoring, trusted-infra capture) instead of promising a false green.
    declaring change", closes archkeep#921): a delta-ordering fix the
    0.29.0 pin does not carry. The dogfood evidence recorded by this
    campaign was produced by 0.29.0 and matched its goldens, so nothing
-   here is invalidated; the fix is one more reason the eventual pin bump
-   is more than housekeeping. Recorded so the bump decision has its
+   here is invalidated; the fix was one more reason the eventual pin bump
+   was more than housekeeping — and it landed: issue #569 pinned the
+   repository on `@ecoma-io/archkeep@0.30.0` (2026-09-15), with the
+   reader, the workflow recipes and the contract gate re-measured at the
+   new pin and every claim holding. Recorded so the bump decision has its
    facts in one place.
 
 # 10. Security and trust analysis
