@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/ecoma-io/action-agents/compare/v0.14.0...v0.15.0) (2026-09-19)
+
+
+### Features
+
+* **ci:** dogfood GLM model ids in the triage, harmonise and review runs ([#574](https://github.com/ecoma-io/action-agents/issues/574)) ([4cd7097](https://github.com/ecoma-io/action-agents/commit/4cd7097540065680073de1f7faaa0b0d889f3bc0))
+
 ## [0.14.0](https://github.com/ecoma-io/action-agents/compare/v0.13.2...v0.14.0) (2026-09-13)
 
 
