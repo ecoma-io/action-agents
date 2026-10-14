@@ -13,6 +13,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { readArchitectureReport } from "#core/architecture.mjs";
+import { createWorkspace } from "#core/workspace.mjs";
 
 import { DeterministicRefusalError } from "./refusal.mjs";
 import { architectureSection } from "./artifact.mjs";
@@ -142,6 +144,34 @@ exports; a direct import across scopes is a boundary violation even when
 the types line up.
 `;
 
+/** The base tip every policy read rides — the forging stub's `getRef("main")` answer. */
+const POLICY_SHA = "7".repeat(40);
+
+/** The ADR as the pinned base serves it — the base-only marker names the record's own words. */
+const ADR_BASE_TEXT = `---
+id: 0009-share-through-facades
+status: accepted
+---
+
+# ADR 0009: share through facades
+
+BASE-ONLY Widgets must reach each other only through the facade each owning
+scope exports; a direct import across scopes is a boundary violation even when
+the types line up.
+`;
+
+/** The candidate's rewrite — the variant a read at the head would surface, marker-named so it can never be mistaken for the base text. */
+const ADR_HEAD_TEXT = `---
+id: 0009-share-through-facades
+status: accepted
+---
+
+# ADR 0009: share through facades
+
+HEAD-ONLY Widgets may now reach into widget-b directly through the shared
+kernel package; the facade rule is relaxed for the kernel boundary.
+`;
+
 /**
  * A violation carrying the two facts the derivations reach for: head sites
  * naming a changed file (the risk floor's evidence) and a constraint row
@@ -190,6 +220,31 @@ function workspaceWith(files = {}) {
   if (files.manifest !== undefined) writes[".archkeep/run.json"] = files.manifest;
   if (files.report !== undefined) writes[".archkeep/delta.json"] = files.report;
   return makeWorkspace(writes);
+}
+
+/**
+ * The forging stub extended to serve the ADR by ref: the pinned base tip
+ * returns the base record, every other ref (the candidate's head) the
+ * rewrite — so a read at the wrong pin leaks the candidate's words into
+ * the run. ADR reads are recorded exactly like the stock stub records them.
+ *
+ * @returns {ReturnType<typeof forgeStub>}
+ */
+function adrByRefForge() {
+  const forge = forgeStub();
+  const baseGetContents = forge.getContents;
+  forge.getContents = async (
+    /** @type {string} */ path,
+    /** @type {{ ref?: string } | undefined} */ opts,
+  ) => {
+    if (path === `docs/adr/${ADR_ID}.md`) {
+      const ref = opts?.ref ?? null;
+      forge.calls.contents.push({ path, ref });
+      return { content: ref === POLICY_SHA ? ADR_BASE_TEXT : ADR_HEAD_TEXT };
+    }
+    return baseGetContents.call(forge, path, opts);
+  };
+  return forge;
 }
 
 /**
@@ -408,6 +463,58 @@ describe("the architecture-report input: aware run", () => {
     expect(artifactOf(blindWorkspace, `review-artifact-${HEAD}.json`).schemaVersion).toBe(5);
   });
 
+  it("the reader seam is the io boundary a caller can double", async () => {
+    // The double's payload must be evidence-shaped, so it comes from the
+    // real reader over the same recipe pair the run reads — the seam
+    // changes who produced the evidence, nothing about its bytes.
+    const workspace = workspaceWith({
+      report: envelope({ status: "findings", violations: [groundedViolation()] }),
+      manifest: manifest(1),
+    });
+    const server = readArchitectureReport({
+      workspace: createWorkspace({ root: workspace }),
+      reportPath: ".archkeep/delta.json",
+      manifestPath: ".archkeep/run.json",
+      expect: { headSha: HEAD },
+    });
+    const forge = forgeStub();
+    const chat = scriptedChat(CONCERN_SCRIPT());
+    const { io } = replayIo(forge, chat);
+    /** @type {import("#core/architecture.mjs").ReadArchitectureInput[]} */
+    const served = [];
+    io.readArchitectureReport = (input) => {
+      served.push(input);
+      return server;
+    };
+    const result = await reviewPullRequest({
+      inputs: {
+        model: "review",
+        maxTurns: 5,
+        contextWindow: 128_000,
+        dryRun: false,
+        configPath: "",
+        architectureReport: ".archkeep/delta.json",
+      },
+      context: { owner: "acme", repo: "widgets", workspace },
+      pullRequestNumber: 7,
+      eventName: "pull_request",
+      event: {
+        action: "synchronize",
+        pull_request: { number: 7, base: { ref: "main", sha: BASE } },
+      },
+      io,
+    });
+    expect(result.outcome).toBe("published");
+    // The seam is the read boundary: the run called the double — exactly
+    // once, with the head this run reviews — never the module reader.
+    expect(served).toHaveLength(1);
+    expect(served[0]?.expect).toEqual({ headSha: HEAD });
+    // And the published artifact's architecture section is the double's own
+    // evidence, verdict and report digest included — the injected reader's
+    // output is what the run held and published, end to end.
+    expect(/** @type {any} */ (result.artifact).architecture).toEqual(architectureSection(server));
+  });
+
   it("a stale report withholds its verdict as unknown and publishes the review Partial", async () => {
     const workspace = workspaceWith({
       report: envelope({ head: "e".repeat(40) }),
@@ -571,6 +678,34 @@ describe("the aware run's code-built derivations", () => {
     expect(user).toContain(`- ${ADR_ID}:`);
     expect(user).toContain("Widgets must reach each other only through the");
     expect(user).not.toContain(ADR_TEXT.slice(0, ADR_TEXT.indexOf("\n") + 1));
+  });
+
+  it("the ADR excerpt the prompt carries is the base text when the candidate ships a different version", async () => {
+    // The record differs by ref: the pinned base tip serves the policy's
+    // text, every other ref (the candidate's head) the rewrite. A run that
+    // read the ADR anywhere but the base tip would quote the rewrite — the
+    // prompt would carry the head's marker, and this test would fail.
+    const chat = capturingChat(CONCERN_SCRIPT());
+    const { forge, result } = await awareRun({ forge: adrByRefForge(), chat });
+    expect(result.outcome).toBe("published");
+    // The read rode the policy pin — the resolved base tip, never the head.
+    expect(forge.calls.contents).toContainEqual({
+      path: `docs/adr/${ADR_ID}.md`,
+      ref: POLICY_SHA,
+    });
+    for (const call of forge.calls.contents) {
+      if (call.path === `docs/adr/${ADR_ID}.md`) expect(call.ref).toBe(POLICY_SHA);
+    }
+    // The prompt's excerpt is the pinned record's own words — the base
+    // marker is there, and not a byte of the candidate's rewrite appears.
+    const messages = chat.requests[0]?.messages ?? [];
+    expect(messages).toHaveLength(2);
+    const user = String(messages[1]?.content);
+    expect(user).toContain("ADR context (read at the pinned base");
+    expect(user).toContain(`- ${ADR_ID}:`);
+    expect(user).toContain("BASE-ONLY");
+    const prompt = messages.map((message) => String(message?.content ?? "")).join("\n");
+    expect(prompt).not.toContain("HEAD-ONLY");
   });
 
   it("an absent ADR is recorded as absent — never guessed from the ref alone", async () => {
