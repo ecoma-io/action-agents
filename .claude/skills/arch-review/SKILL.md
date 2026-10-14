@@ -11,9 +11,10 @@ especially changes that touch cross-project imports, add dependencies, move
 code between projects, or modify anything that declares architecture
 (`module-boundaries.config.*`, a profiles registry, `architecture-intent.json`,
 project manifests, `docs/adr/` records).
-For a trivial edit (whitespace, comments, string constants in an isolated
-module), `arch-check` alone may suffice — this skill is for changes where the
-architecture consequences matter.
+Trivial work never routes here — that floor is `arch-change`/`arch-context`'s, not this
+skill's. With no baseline artifact on record (`.archkeep/base.json` absent, or no `change`
+verdict for this change), report INCOMPLETE, naming the missing artifacts — never a
+pass/fail verdict over unreconciled evidence.
 
 ## Why
 
@@ -41,7 +42,9 @@ green light. **Name the law the verdict depends on before reading it**: check
 whether the workspace enforces by file or by named profile (see `arch-context`,
 "Know which law is in effect"), and state which one the change was made
 against. A review that does not say which law it judged the change against
-cannot be reproduced. For a change whose architecture consequences matter,
+cannot be reproduced; a boundary verdict belonging to the dogfooding repo's own law
+(ecoma-io/archkeep, the arch-* skills' law) routes to the owning repo, never
+overridden locally. For a change whose architecture consequences matter,
 request the planning context too — it bundles the current architecture, policy
 with Intent, impact, current violations, drift, and verification commands in
 one document:
@@ -77,16 +80,16 @@ archkeep diff baseline.json --format json
 
 This shows added and removed edges, project changes, and — when a boundary
 config is available — rule-impact analysis for each changed edge. A diff with
-`--format json` provides the same data structured for programmatic use. If no
-baseline exists, this step is skipped and the review says so; a lack of a
-baseline is a coverage gap, not "no structural change".
+`--format json` provides the same data structured for programmatic use. No baseline
+artifact on record is not a skipped step with a said sentence — it is the review's
+INCOMPLETE refusal (When to use), never "no structural change".
 
 When a delta evidence baseline exists (captured at the base commit with
-`archkeep delta --capture --output delta-base.json`), it answers "what did
+`archkeep delta --capture --output .archkeep/base.json`), it answers "what did
 this change introduce" directly, as the review's evidence:
 
 ```
-archkeep delta delta-base.json --format json
+archkeep delta .archkeep/base.json --format json
 ```
 
 Every violation is classified introduced / resolved / unchanged / unknown,
@@ -135,7 +138,10 @@ workspace — including a profile that could not be resolved — and the review
 must say so instead of reporting "no findings". **Exit 1 or exit 3 blocks: the
 review must not approve the change, or call it mergeable, while either
 stands.** This is a hard rule, not a caveat satisfied by disclosure — naming a
-finding or a coverage gap in the review is not the same as clearing it.
+finding or a coverage gap in the review is not the same as clearing it. An
+exit 0 whose `coverage.coverageGaps` row is non-empty blocks the same way: the
+gate did not judge the whole universe, and `arch-check`'s VERIFY stop — stage
+the files or stop — applies here unchanged.
 
 **A scoped run must be disclosed as scoped, and disclosure alone does not earn
 approval.** Cycle and lazy-load rules judge the whole file graph, so a scoped
@@ -264,7 +270,7 @@ If the repository keeps snapshots, `archkeep history <dir>` names which of the
 recent transitions were architectural and which were policy or provider — useful
 when the change is the latest move in an evolution the review should connect.
 Snapshots do not appear on their own — they come from `--capture` runs the
-repository decided to make (`arch-context`, step 7). A review reports that no
+repository decided to make (`arch-context`, the history step). A review reports that no
 history exists rather than capturing one as a side effect of reviewing: the
 capture writes a file, and it would record the law as the change left it.
 
@@ -301,7 +307,12 @@ the repository is ungoverned, and the work of establishing a model is
 
 ### 11. Produce the review
 
-Report, each half with evidence:
+Report, each half with evidence. COMPLETE requires quoting the baseline identity
+(`.archkeep/base.json`), the `change` verdict (`reconciliation.verdict`), the
+event artifact path (`--event-out`), and — when the VERIFY waivers step found
+any — the suppression delta (a permanent row's findings a green `check` is
+silent about); quoting is the review's output, not a
+suggestion, and missing any one is the INCOMPLETE refusal — no pass/fail verdict:
 
 - **Architecture state**: whether the change is architectural; the projects and
   edges it added or removed (`diff`); the Intent comparison (`drift`);
@@ -311,14 +322,14 @@ Report, each half with evidence:
   `file:line:column`, the coverage gaps that withheld a verdict, and whether
   the change introduced, resolved, or is silent about each. Exit 1 or exit 3
   blocks (step 5) — do not report the change as mergeable while either stands.
-- **Coverage honesty**: any run that exited 3, any missing baseline, any
-  no-verdict intent. A review that cannot see part of the architecture says so.
+- **Coverage honesty**: any run that exited 3, any no-verdict intent — a review
+  that cannot see part of the architecture says so.
 
 ## Decision tree
 
 - **Did the architecture change?** (boundaries, dependencies, projects, provider)
   - **NO — and no Intent / policy / profile touch** → `context` → `check` →
-    verdict. Done.
+    verdict — COMPLETE only under step 11's bar.
   - **NO — but the Intent or policy (file or profile) changed** → `context` →
     `diff` (rule-impact) → re-`check` → `drift` → verdict. A profile change
     also means naming the profile that was in effect before and after, and
@@ -365,7 +376,6 @@ binds rule:X` is a different answer — it names a rule id the registry binds
   baseline exists, `archkeep delta <baseline> --format json` answers this
   directly: each violation is classified introduced, resolved, or unchanged
   (step 3). Otherwise compare the check output
-  against the baseline diff. If no baseline of either kind exists, the check
-  output shows the
-  current state but cannot distinguish new from pre-existing violations; the
-  review says which half that is.
+  against the baseline diff. No baseline of either kind is no reconciliation
+  evidence on record — the When-to-use refusal, INCOMPLETE — and "which half
+  is new" stays unanswered, never disclosed over an uncompared state.

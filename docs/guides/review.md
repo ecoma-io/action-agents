@@ -784,7 +784,7 @@ jobs:
           node-version: 24
 
       # Pinned by you — the action never learns this ran.
-      - run: npm install --global @ecoma-io/archkeep@0.29.0
+      - run: npm install --global @ecoma-io/archkeep@0.30.0
 
       # Law 1, first half: clear planted evidence before capture.
       - run: rm -rf .archkeep && mkdir .archkeep

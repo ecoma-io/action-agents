@@ -139,7 +139,7 @@ jobs:
           node-version: 24
 
       # Pinned by you, exactly as the review recipe pins it.
-      - run: npm install --global @ecoma-io/archkeep@0.29.0
+      - run: npm install --global @ecoma-io/archkeep@0.30.0
 
       # The series is carried in CI storage: clear, then restore, so the
       # directory is exactly what the cache held. A first run finds no cache

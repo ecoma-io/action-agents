@@ -168,7 +168,7 @@ jobs:
       # pinned here is the one `pnpm arch:contract` measures the reader
       # against, so the dogfood and the contract gate cannot drift apart.
       - name: Install the pinned Archkeep
-        run: npm install --global @ecoma-io/archkeep@0.29.0
+        run: npm install --global @ecoma-io/archkeep@0.30.0
 
       # Recipe law 1, first half: whatever a pull request planted under
       # `.archkeep/` is gone before anything writes there.

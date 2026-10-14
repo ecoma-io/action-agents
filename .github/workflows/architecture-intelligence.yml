@@ -81,7 +81,7 @@ jobs:
       # measures the reader against, so the dogfood and the contract gate
       # cannot drift apart.
       - name: Install the pinned Archkeep
-        run: npm install --global @ecoma-io/archkeep@0.29.0
+        run: npm install --global @ecoma-io/archkeep@0.30.0
 
       # The carried-storage shape, first half: whatever the checkout or a
       # previous anything left under `.archkeep/history` is gone before the
